@@ -1,0 +1,28 @@
+{
+  "name": "crowe-logic-desktop",
+  "productName": "Crowe Logic",
+  "version": "0.1.0",
+  "description": "Crowe Logic desktop: an agentic coding and reasoning console over the CroweLM gateway. Cross-platform (Windows, Linux, macOS).",
+  "main": "main.js",
+  "author": "Crowe Logic, Inc.",
+  "license": "LicenseRef-Proprietary",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.crowelogic.desktop",
+    "productName": "Crowe Logic",
+    "files": ["main.js", "preload.js", "renderer/**", "assets/**"],
+    "mac": { "icon": "assets/icon.icns", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage", "deb"], "category": "Development" }
+  }
+}
