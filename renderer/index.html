@@ -2,54 +2,79 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline';" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header id="bar">
-    <img id="avatar" src="../assets/avatar.png" alt="Crowe Logic" />
-    <div class="lockup">
-      <span class="crowe">Crowe</span><span class="logic">Logic</span>
-    </div>
+    <img id="mark" src="../assets/mark.png" alt="Crowe Logic" />
+    <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
+    <span class="tagline">Operator</span>
     <div class="spacer"></div>
-    <span id="model-badge" class="badge">crowelm-zenith</span>
-    <button id="settings-btn" class="ghost" title="Settings">Settings</button>
+    <span id="model-badge" class="badge">CroweLM</span>
+    <button id="settings-btn" class="ghost">Settings</button>
   </header>
 
-  <main id="transcript">
-    <div class="welcome">
-      <img class="welcome-mark" src="../assets/mark.svg" alt="" />
-      <h1>Crowe Logic</h1>
-      <p>Agentic reasoning and coding over the CroweLM gateway. Frontier models,
-         native tool calling, on Windows, Linux, and macOS.</p>
-      <p class="hint">Set your token in Settings, then ask anything.</p>
-    </div>
+  <main id="workbench">
+    <!-- Left: the agent -->
+    <section id="agent">
+      <div id="transcript">
+        <div class="welcome">
+          <img class="welcome-face" src="../assets/face.png" alt="Crowe Logic" />
+          <h1>Crowe Logic</h1>
+          <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right.</p>
+          <div class="chips">
+            <button class="chip">List the files here and summarize the project</button>
+            <button class="chip">Run the test suite and report failures</button>
+            <button class="chip">Open the CroweLM docs in the browser</button>
+          </div>
+        </div>
+      </div>
+      <form id="composer" autocomplete="off">
+        <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <!-- Right: the workspace -->
+    <section id="workspace">
+      <div class="tabs">
+        <button class="tab active" data-pane="term">Terminal</button>
+        <button class="tab" data-pane="browser">Browser</button>
+        <button class="tab" data-pane="files">Files</button>
+        <div class="spacer"></div>
+        <span id="cwd" class="cwd"></span>
+      </div>
+
+      <div class="pane active" id="pane-term">
+        <div id="term-out"></div>
+        <div id="term-line"><span id="term-prompt">$</span>
+          <input id="term-in" type="text" placeholder="type a command, Enter to run" spellcheck="false" />
+        </div>
+      </div>
+
+      <div class="pane" id="pane-browser">
+        <div class="urlbar">
+          <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
+          <button id="url-go" class="ghost">Go</button>
+        </div>
+        <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
+      </div>
+
+      <div class="pane" id="pane-files">
+        <div id="files-tree"></div>
+        <pre id="files-view"></pre>
+      </div>
+    </section>
   </main>
 
-  <form id="composer" autocomplete="off">
-    <textarea id="input" rows="1" placeholder="Ask Crowe Logic..."></textarea>
-    <button id="send" type="submit">Send</button>
-  </form>
-
-  <!-- Settings -->
   <div id="settings" class="modal hidden">
     <div class="modal-card">
       <h2>Settings</h2>
-      <label>Gateway URL
-        <input id="cfg-base" type="text" placeholder="https://..." />
-      </label>
-      <label>Model
-        <input id="cfg-model" type="text" placeholder="crowelm-zenith" />
-      </label>
-      <label>Token (Crowe ID or API key)
-        <input id="cfg-token" type="password" placeholder="paste to update; leave blank to keep" />
-      </label>
-      <div class="row">
-        <button id="cfg-save" class="primary">Save</button>
-        <button id="cfg-cancel" class="ghost">Cancel</button>
-      </div>
+      <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
+      <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
+      <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
+      <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>
   </div>
