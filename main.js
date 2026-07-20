@@ -17,6 +17,7 @@ const DEFAULTS = {
   token: "",
   cwd: os.homedir(),
   autoApprove: false,     // when true, file edits apply without review
+  autonomy: "execute",    // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all)
   mcpServers: {},         // { name: { command, args, env } }
 };
 
@@ -190,6 +191,9 @@ async function proposeEdit(filePath, newContent) {
 async function execTool(name, args) {
   try {
     if (name && name.startsWith("mcp__")) return await mcpCall(name, args);
+    const tier = loadConfig().autonomy || "execute";
+    if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
+    if (name === "write_file" && tier === "readonly") return `blocked: file writes are disabled in read-only autonomy mode.`;
     if (name === "run_shell") {
       const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
       if (m) { const t = resolvePath(m[1].trim().replace(/^["']|["']$/g, "")); if (fs.existsSync(t) && fs.statSync(t).isDirectory()) { CWD = t; return `cwd -> ${CWD}`; } return `cd: no such directory: ${t}`; }
@@ -269,14 +273,14 @@ ipcMain.handle("crowe:fs:read", (_e, p) => { try { return { content: fs.readFile
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 ipcMain.handle("crowe:set-config", async (_e, patch) => {
   const c = saveConfig(patch || {});
   if (patch && patch.cwd) CWD = patch.cwd;
   if (patch && patch.mcpServers) await mcpConnectAll();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
@@ -308,6 +312,7 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.j
 
 // ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
 function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }
+function setAutonomy(tier) { saveConfig({ autonomy: tier }); buildMenu(); relayMenu("autonomy:" + tier); }
 function toggleWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return createWindow();
   if (mainWindow.isVisible() && mainWindow.isFocused()) mainWindow.hide();
@@ -334,6 +339,7 @@ function createTray() {
 
 function buildMenu() {
   const mac = process.platform === "darwin";
+  const tier = loadConfig().autonomy || "execute";
   const crowe = (label, action, accel) => ({ label, accelerator: accel, click: () => { showWindow(); relayMenu(action); } });
   const template = [
     ...(mac ? [{ role: "appMenu" }] : []),
@@ -351,6 +357,12 @@ function buildMenu() {
       crowe("Terminal", "pane:term", "CmdOrCtrl+1"),
       crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
       crowe("Files", "pane:files", "CmdOrCtrl+3"),
+      { type: "separator" },
+      { label: "Autonomy", submenu: [
+        { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
+        { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },
+        { label: "Execute (shell + writes)", type: "radio", checked: tier === "execute", click: () => setAutonomy("execute") },
+      ] },
       { type: "separator" },
       { role: "reload" }, { role: "toggleDevTools" },
       { type: "separator" },
