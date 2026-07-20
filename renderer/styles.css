@@ -117,3 +117,30 @@ button.primary:hover { background: var(--gold); }
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .modal-card .row { display: flex; gap: 10px; margin-top: 18px; }
 .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+.hidden { display: none !important; }
+.badge.alt { color: var(--blue); }
+
+/* Terminal container */
+#pane-term { background: var(--term-bg); padding: 6px 4px 4px 8px; }
+#term { flex: 1; min-height: 0; }
+
+/* Edit review card */
+.editcard { border: 1px solid var(--line); border-radius: 9px; margin: 10px 0; overflow: hidden; background: var(--panel); }
+.editcard.applied { border-color: #3f7a3f; } .editcard.rejected { border-color: #b06b5a; opacity: 0.8; }
+.ec-head { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--line); }
+.ec-title { font-weight: 600; font-size: 12.5px; } .ec-path { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.ec-diff { font-family: var(--mono); font-size: 12px; max-height: 260px; overflow: auto; background: #fffdf7; }
+.dl { padding: 0 10px; white-space: pre-wrap; word-break: break-word; }
+.dl.add { background: #e6f4e6; color: #1f5c1f; } .dl.del { background: #fae7e1; color: #8a3320; } .dl.ctx { color: var(--muted); }
+.ec-actions { display: flex; gap: 8px; padding: 9px 11px; border-top: 1px solid var(--line); }
+.ec-actions .approve { background: var(--ink); color: var(--cream); border: none; border-radius: 7px; padding: 5px 14px; font-weight: 600; cursor: pointer; }
+.ec-actions .approve:hover { background: #3f7a3f; }
+.ec-actions .reject { background: transparent; border: 1px solid var(--line); color: var(--ink); border-radius: 7px; padding: 5px 14px; cursor: pointer; }
+.ec-actions .reject:hover { border-color: #b06b5a; color: #8a3320; }
+.ec-status { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* Settings extras */
+.modal-card .chk { display: flex; align-items: center; gap: 8px; }
+.modal-card .chk input { width: auto; }
+.modal-card textarea { width: 100%; font-family: var(--mono); font-size: 12px; background: var(--cream);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }

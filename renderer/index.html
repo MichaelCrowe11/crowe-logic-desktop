@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -11,22 +12,22 @@
     <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
     <span class="tagline">Operator</span>
     <div class="spacer"></div>
+    <span id="mcp-badge" class="badge alt hidden"></span>
     <span id="model-badge" class="badge">CroweLM</span>
     <button id="settings-btn" class="ghost">Settings</button>
   </header>
 
   <main id="workbench">
-    <!-- Left: the agent -->
     <section id="agent">
       <div id="transcript">
         <div class="welcome">
           <img class="welcome-face" src="../assets/face.png" alt="Crowe Logic" />
           <h1>Crowe Logic</h1>
-          <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right.</p>
+          <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
           <div class="chips">
             <button class="chip">List the files here and summarize the project</button>
             <button class="chip">Run the test suite and report failures</button>
-            <button class="chip">Open the CroweLM docs in the browser</button>
+            <button class="chip">Add a docstring to the top of the Makefile</button>
           </div>
         </div>
       </div>
@@ -36,7 +37,6 @@
       </form>
     </section>
 
-    <!-- Right: the workspace -->
     <section id="workspace">
       <div class="tabs">
         <button class="tab active" data-pane="term">Terminal</button>
@@ -46,12 +46,7 @@
         <span id="cwd" class="cwd"></span>
       </div>
 
-      <div class="pane active" id="pane-term">
-        <div id="term-out"></div>
-        <div id="term-line"><span id="term-prompt">$</span>
-          <input id="term-in" type="text" placeholder="type a command, Enter to run" spellcheck="false" />
-        </div>
-      </div>
+      <div class="pane active" id="pane-term"><div id="term"></div></div>
 
       <div class="pane" id="pane-browser">
         <div class="urlbar">
@@ -74,11 +69,17 @@
       <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
+      <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
+      <label>MCP servers (JSON: {"name":{"command":"...","args":[...]}})
+        <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
+      </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>
   </div>
 
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

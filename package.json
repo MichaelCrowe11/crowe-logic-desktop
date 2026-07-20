@@ -1,8 +1,8 @@
 {
   "name": "crowe-logic-desktop",
   "productName": "Crowe Logic",
-  "version": "0.1.0",
-  "description": "Crowe Logic desktop: an agentic coding and reasoning console over the CroweLM gateway. Cross-platform (Windows, Linux, macOS).",
+  "version": "0.2.0",
+  "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway — chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
   "author": "Crowe Logic, Inc.",
   "license": "LicenseRef-Proprietary",
@@ -13,6 +13,11 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux"
   },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
@@ -20,7 +25,7 @@
   "build": {
     "appId": "com.crowelogic.desktop",
     "productName": "Crowe Logic",
-    "files": ["main.js", "preload.js", "renderer/**", "assets/**"],
+    "files": ["main.js", "preload.js", "mcp-demo-server.js", "renderer/**", "assets/**", "node_modules/@xterm/**", "node_modules/node-pty/**", "node_modules/node-gyp-build/**"],
     "mac": { "icon": "assets/icon.icns", "target": ["dmg", "zip"] },
     "win": { "target": ["nsis"] },
     "linux": { "target": ["AppImage", "deb"], "category": "Development" }
