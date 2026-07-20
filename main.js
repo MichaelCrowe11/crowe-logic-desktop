@@ -63,6 +63,7 @@ async function refreshToken() {
 async function gatewayChat(messages, tools, _retried) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "No token set. Open Settings and paste your Crowe ID token." };
+  const t0 = Date.now();
   try {
     const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, {
       method: "POST",
@@ -73,7 +74,8 @@ async function gatewayChat(messages, tools, _retried) {
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
-    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || cfg.model };
+    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || cfg.model,
+             usage: data.usage || {}, elapsedMs: Date.now() - t0 };
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}` }; }
 }
 
@@ -201,16 +203,28 @@ async function execTool(name, args) {
   } catch (e) { return `error: ${String(e).slice(0, 300)}`; }
 }
 
+// Rough per-1M-token cost for the CroweLM daily driver (gpt-5.6 class), for the
+// HUD/status bar. Display only; not billing.
+const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
+
 // ─── Agentic loop ────────────────────────────────────────────────────────────
 ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
   const send = (ev) => evt.sender.send("crowe:agent:event", ev);
   let msgs = messages.slice();
+  let assistantText = "";
+  let totIn = 0, totOut = 0, totMs = 0;
   for (let round = 0; round < 12; round++) {
     const r = await gatewayChat(msgs, allTools());
     if (r.error) { send({ type: "error", text: r.error }); return { done: true }; }
-    if (r.content) send({ type: "assistant", text: r.content });
+    // Telemetry for the HUD / status bar.
+    const u = r.usage || {}, pin = u.prompt_tokens || 0, pout = u.completion_tokens || 0;
+    totIn += pin; totOut += pout; totMs += r.elapsedMs || 0;
+    send({ type: "telemetry", promptTokens: totIn, completionTokens: totOut, elapsedMs: totMs,
+      tps: r.elapsedMs ? Math.round((pout / r.elapsedMs) * 1000) : 0,
+      lastMs: r.elapsedMs || 0, cost: totIn * RATE_IN + totOut * RATE_OUT });
+    if (r.content) { assistantText += (assistantText ? "\n\n" : "") + r.content; send({ type: "assistant", text: r.content }); }
     const calls = r.tool_calls || [];
-    if (!calls.length) { send({ type: "final" }); return { done: true }; }
+    if (!calls.length) break;
     msgs.push({ role: "assistant", content: r.content || "", tool_calls: calls });
     for (const tc of calls) {
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
@@ -219,8 +233,11 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
       send({ type: "tool_result", name: tc.function?.name, result: String(result).slice(0, 4000) });
       msgs.push({ role: "tool", tool_call_id: tc.id, name: tc.function?.name, content: String(result) });
     }
+    if (round === 11) send({ type: "final", note: "reached the tool-round limit" });
   }
-  send({ type: "final", note: "reached the tool-round limit" });
+  // Persist the turn to the current session.
+  try { persistSession([...messages, { role: "assistant", content: assistantText }]); } catch {}
+  send({ type: "final" });
   return { done: true };
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
@@ -262,6 +279,32 @@ ipcMain.handle("crowe:set-config", async (_e, patch) => {
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
+
+// ─── Session persistence ─────────────────────────────────────────────────────
+function sessionsDir() { const d = path.join(app.getPath("userData"), "sessions"); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
+let currentSession = null;
+function newSessionId() { return "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7); }
+function persistSession(messages) {
+  if (!messages || !messages.length) return;
+  if (!currentSession) currentSession = newSessionId();
+  const firstUser = messages.find((m) => m.role === "user");
+  const title = String(firstUser?.content || "Untitled").replace(/\s+/g, " ").slice(0, 60);
+  fs.writeFileSync(path.join(sessionsDir(), currentSession + ".json"),
+    JSON.stringify({ id: currentSession, title, updatedAt: Date.now(), messages }, null, 2));
+}
+ipcMain.handle("crowe:sessions:list", () => {
+  try {
+    return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
+      try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8")); return { id: d.id, title: d.title, updatedAt: d.updatedAt, current: d.id === currentSession }; } catch { return null; }
+    }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch { return []; }
+});
+ipcMain.handle("crowe:sessions:load", (_e, id) => {
+  try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title }; }
+  catch (e) { return { error: String(e) }; }
+});
+ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); return { id: currentSession }; });
+ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {} if (currentSession === id) currentSession = null; return { ok: true }; });
 
 // ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
 function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }

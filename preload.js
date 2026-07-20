@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld("crowe", {
     onData: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
   },
   fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p) },
+  // Conversation history (persisted on disk in the main process).
+  sessions: {
+    list: () => ipcRenderer.invoke("crowe:sessions:list"),
+    load: (id) => ipcRenderer.invoke("crowe:sessions:load", id),
+    new: () => ipcRenderer.invoke("crowe:sessions:new"),
+    delete: (id) => ipcRenderer.invoke("crowe:sessions:delete", id),
+  },
   onBrowserNavigate: (cb) => { const h = (_e, url) => cb(url); ipcRenderer.on("crowe:browser:navigate", h); return () => ipcRenderer.removeListener("crowe:browser:navigate", h); },
   // Native menu / tray / global-shortcut actions: new-chat, palette, focus-composer, toggle-theme, pane:term|browser|files.
   onMenuAction: (cb) => { const h = (_e, a) => cb(a); ipcRenderer.on("crowe:menu", h); return () => ipcRenderer.removeListener("crowe:menu", h); },
