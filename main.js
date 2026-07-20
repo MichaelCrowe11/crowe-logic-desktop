@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -263,9 +263,69 @@ ipcMain.handle("crowe:set-config", async (_e, patch) => {
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
+// ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
+function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }
+function toggleWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return createWindow();
+  if (mainWindow.isVisible() && mainWindow.isFocused()) mainWindow.hide();
+  else { mainWindow.show(); mainWindow.focus(); }
+}
+function showWindow() { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); else { mainWindow.show(); mainWindow.focus(); } }
+
+let tray = null;
+function createTray() {
+  try {
+    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "mark.png")).resize({ width: 18, height: 18 });
+    tray = new Tray(img);
+    tray.setToolTip("Crowe Logic");
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: "Show Crowe Logic", click: showWindow },
+      { label: "New Chat", click: () => { showWindow(); relayMenu("new-chat"); } },
+      { label: "Quick Ask", accelerator: "CmdOrCtrl+Shift+Space", click: () => { showWindow(); relayMenu("focus-composer"); } },
+      { type: "separator" },
+      { label: "Quit Crowe Logic", role: "quit" },
+    ]));
+    tray.on("click", toggleWindow);
+  } catch { /* tray optional */ }
+}
+
+function buildMenu() {
+  const mac = process.platform === "darwin";
+  const crowe = (label, action, accel) => ({ label, accelerator: accel, click: () => { showWindow(); relayMenu(action); } });
+  const template = [
+    ...(mac ? [{ role: "appMenu" }] : []),
+    { label: "File", submenu: [
+      crowe("New Chat", "new-chat", "CmdOrCtrl+N"),
+      { type: "separator" },
+      mac ? { role: "close" } : { role: "quit" },
+    ] },
+    { role: "editMenu" },
+    { label: "View", submenu: [
+      crowe("Command Palette", "palette", "CmdOrCtrl+K"),
+      crowe("Focus Composer", "focus-composer", "CmdOrCtrl+L"),
+      crowe("Toggle Dark Mode", "toggle-theme", "CmdOrCtrl+Shift+D"),
+      { type: "separator" },
+      crowe("Terminal", "pane:term", "CmdOrCtrl+1"),
+      crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
+      crowe("Files", "pane:files", "CmdOrCtrl+3"),
+      { type: "separator" },
+      { role: "reload" }, { role: "toggleDevTools" },
+      { type: "separator" },
+      { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" },
+      { type: "separator" }, { role: "togglefullscreen" },
+    ] },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(async () => {
   createWindow();
+  buildMenu();
+  createTray();
+  try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
