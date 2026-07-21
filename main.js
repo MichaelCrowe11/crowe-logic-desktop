@@ -403,7 +403,7 @@ function showWindow() { if (!mainWindow || mainWindow.isDestroyed()) createWindo
 let tray = null;
 function createTray() {
   try {
-    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "mark.png")).resize({ width: 18, height: 18 });
+    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png")).resize({ width: 18, height: 18 });
     tray = new Tray(img);
     tray.setToolTip("Crowe Logic");
     tray.setContextMenu(Menu.buildFromTemplate([

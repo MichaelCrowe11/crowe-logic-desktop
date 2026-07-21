@@ -26,8 +26,16 @@ function addUser(text) {
 function addAssistant() {
   clearWelcome();
   const wrap = document.createElement("div"); wrap.className = "msg assistant";
-  wrap.innerHTML = `<div class="who"><img class="m" src="../assets/mark.png" alt="Crowe Logic" /></div><div class="body"></div>`;
-  transcript.appendChild(wrap); return wrap.querySelector(".body");
+  wrap.innerHTML = `<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"></div>`;
+  transcript.appendChild(wrap);
+  const body = wrap.querySelector(".body");
+  const markEl = wrap.querySelector(".who-mark");
+  if (window.CroweMark) body._mark = CroweMark.mount(markEl, { state: "rest" });
+  return body;
+}
+function mountWelcomeMark() {
+  const wm = transcript.querySelector(".welcome-mark");
+  if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
 }
 function renderText(body, text) {
   let p = body.querySelector("p.said"); if (!p) { p = document.createElement("p"); p.className = "said streaming"; body.prepend(p); }
@@ -120,6 +128,7 @@ async function send(text) {
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";
+  const mark = body._mark; if (mark) mark.setState("reasoning");
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
@@ -128,6 +137,7 @@ async function send(text) {
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
     else if (ev.type === "tool_call") {
       showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool";
+      if (mark) mark.ping();
     }
     else if (ev.type === "tool_result") {
       if (!/^blocked:/.test(String(ev.result || ""))) { if (ev.name === "run_shell") acts.cmds++; else if (ev.name === "write_file") acts.edits++; else acts.tools++; }
@@ -137,7 +147,7 @@ async function send(text) {
     else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
     else if (ev.type === "error") addError(body, ev.text);
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
   const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });
@@ -162,7 +172,7 @@ function showPane(name) {
 }
 
 // ── Terminal (xterm + PTY) ──
-let term = null, fit = null, ptyStarted = false;
+let term = null, fit = null;
 function fitTerm() { if (fit && term) { try { fit.fit(); window.crowe.pty.resize({ cols: term.cols, rows: term.rows }); } catch {} } }
 async function initTerm() {
   term = new Terminal({ fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace", fontSize: 12.5, cursorBlink: true,
@@ -171,7 +181,6 @@ async function initTerm() {
   term.open($("term")); fit.fit();
   const r = await window.crowe.pty.start({ cols: term.cols, rows: term.rows });
   if (!r || r.ok === false) { term.write("\r\n  PTY unavailable in this build.\r\n"); return; }
-  ptyStarted = true;
   window.crowe.pty.onData((d) => term.write(d));
   term.onData((d) => window.crowe.pty.input(d));
 }
@@ -246,6 +255,7 @@ function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
   $("theme-btn").textContent = dark ? "Light" : "Dark";
   try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+  if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
 $("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
 try { applyTheme(localStorage.getItem("crowe-theme") === "dark"); } catch {}
@@ -265,7 +275,7 @@ const drawer = $("sessions-drawer");
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips();
+  transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.add("hidden");
   sessionCost = 0; runCost = 0;
@@ -305,7 +315,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); const s = b.querySelector("p.said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark(); }
 }
 
 // ── Git / version control pane ──
@@ -451,6 +461,7 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
+  if (window.CroweMark) { CroweMark.mount($("mark"), { state: "rest" }); mountWelcomeMark(); }
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");

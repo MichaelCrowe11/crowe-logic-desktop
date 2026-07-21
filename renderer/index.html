@@ -8,7 +8,7 @@
 </head>
 <body>
   <header id="bar">
-    <img id="mark" src="../assets/mark.png" alt="Crowe Logic" />
+    <span id="mark" role="img" aria-label="Crowe Logic"></span>
     <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
     <span class="tagline">Operator</span>
     <div class="spacer"></div>
@@ -64,7 +64,7 @@
       <section id="agent">
         <div id="transcript">
           <div class="welcome">
-            <img class="welcome-mark" src="../assets/mark.png" alt="Crowe Logic" />
+            <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
             <h1>Crowe Logic</h1>
             <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
             <div class="chips">
@@ -160,6 +160,7 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="mark.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
