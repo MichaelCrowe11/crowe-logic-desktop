@@ -43,7 +43,10 @@ function showThinking(body) {
 let lastCard = null;
 function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
-  const arg = ev.name === "run_shell" ? (ev.args.command || "") : ev.name === "open_url" ? (ev.args.url || "") : (ev.args.path || JSON.stringify(ev.args));
+  const arg = ev.name === "run_shell" ? (ev.args.command || "")
+    : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "search" ? (ev.args.pattern || "")
+    : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
   card.innerHTML = `<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">${esc(label || "tool")}</span><span class="tc-arg">${esc(arg)}</span></div>`;
   body.appendChild(card); lastCard = card; transcript.scrollTop = transcript.scrollHeight;

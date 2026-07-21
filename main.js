@@ -219,23 +219,9 @@ async function mcpCall(fullName, args) {
   return JSON.stringify(r).slice(0, 8000);
 }
 
-// ─── Built-in tools ──────────────────────────────────────────────────────────
-const BUILTIN_TOOLS = [
-  { type: "function", function: { name: "run_shell", description: "Run a shell command in the workspace and return its output.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
-  { type: "function", function: { name: "read_file", description: "Read a UTF-8 text file (path may be relative to the workspace).", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "write_file", description: "Create or overwrite a UTF-8 text file. The user reviews the diff before it is applied.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
-  { type: "function", function: { name: "list_dir", description: "List entries in a directory (defaults to the workspace).", parameters: { type: "object", properties: { path: { type: "string" } } } } },
-  { type: "function", function: { name: "open_url", description: "Open a URL in the in-app browser pane.", parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
-];
-function allTools() { return [...BUILTIN_TOOLS, ...Object.values(MCP).flatMap((s) => s.tools)]; }
-
+// ─── Agent harness (tools, system prompt, loop) — see harness.js ─────────────
+const harness = require("./harness");
 function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.homedir()); return path.isAbsolute(p) ? p : path.join(CWD, p); }
-function runShell(command, timeoutMs = 60000) {
-  return new Promise((resolve) => {
-    exec(command, { cwd: CWD, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, shell: process.env.SHELL || "/bin/zsh" },
-      (err, stdout, stderr) => resolve(((stdout || "") + (stderr || "")).slice(0, 40000) || (err ? `(exit ${err.code ?? 1})` : "(no output)")));
-  });
-}
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
 let editSeq = 0; const pendingEdits = new Map();
@@ -266,67 +252,33 @@ async function proposeEdit(filePath, newContent) {
   return `the user REJECTED the edit to ${filePath}; do not reapply it unless they ask`;
 }
 
-async function execTool(name, args) {
-  try {
-    if (name && name.startsWith("mcp__")) return await mcpCall(name, args);
-    const tier = loadConfig().autonomy || "execute";
-    if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
-    if (name === "write_file" && tier === "readonly") return `blocked: file writes are disabled in read-only autonomy mode.`;
-    if (name === "run_shell") {
-      const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
-      if (m) { const t = resolvePath(m[1].trim().replace(/^["']|["']$/g, "")); if (fs.existsSync(t) && fs.statSync(t).isDirectory()) { CWD = t; return `cwd -> ${CWD}`; } return `cd: no such directory: ${t}`; }
-      return await runShell(args.command);
-    }
-    if (name === "read_file") return fs.readFileSync(resolvePath(args.path), "utf8").slice(0, 60000);
-    if (name === "write_file") return await proposeEdit(args.path, args.content ?? "");
-    if (name === "list_dir") return fs.readdirSync(resolvePath(args.path), { withFileTypes: true }).map((d) => (d.isDirectory() ? d.name + "/" : d.name)).join("\n");
-    if (name === "open_url") { let u = args.url; if (!/^https?:\/\//.test(u)) u = "https://" + u; if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); return `opened ${u}`; }
-    return `unknown tool: ${name}`;
-  } catch (e) { return `error: ${String(e).slice(0, 300)}`; }
-}
-
 // Rough per-1M-token cost for the CroweLM daily driver (gpt-5.6 class), for the
 // HUD/status bar. Display only; not billing.
 const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
 
-// ─── Agentic loop ────────────────────────────────────────────────────────────
+// ─── Agentic loop (delegates to harness.js) ──────────────────────────────────
+const harnessCtx = {
+  getCwd: () => CWD,
+  setCwd: (p) => { CWD = p; },
+  loadConfig,
+  proposeEdit,
+  mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
+  mcpCall,
+  openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  rateIn: RATE_IN, rateOut: RATE_OUT,
+};
 let agentRun = { aborted: false, controller: null };
 ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentRun.controller && agentRun.controller.abort(); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
-  const send = (ev) => evt.sender.send("crowe:agent:event", ev);
   agentRun = { aborted: false, controller: null };
-  let msgs = messages.slice();
-  let assistantText = "";
-  let totIn = 0, totOut = 0, totMs = 0, capped = false;
-  for (let round = 0; round < 12; round++) {
-    if (agentRun.aborted) { send({ type: "stopped" }); break; }
-    agentRun.controller = new AbortController();
-    const r = await gatewayChat(msgs, allTools(), false, agentRun.controller.signal);
-    if (r && r.aborted) { send({ type: "stopped" }); break; }
-    if (r.error) { send({ type: "error", text: r.error }); return { done: true }; }
-    // Telemetry for the HUD / status bar.
-    const u = r.usage || {}, pin = u.prompt_tokens || 0, pout = u.completion_tokens || 0;
-    totIn += pin; totOut += pout; totMs += r.elapsedMs || 0;
-    send({ type: "telemetry", promptTokens: totIn, completionTokens: totOut, elapsedMs: totMs,
-      tps: r.elapsedMs ? Math.round((pout / r.elapsedMs) * 1000) : 0,
-      lastMs: r.elapsedMs || 0, cost: totIn * RATE_IN + totOut * RATE_OUT });
-    if (r.content) { assistantText += (assistantText ? "\n\n" : "") + r.content; send({ type: "assistant", text: r.content }); }
-    const calls = r.tool_calls || [];
-    if (!calls.length) break;
-    msgs.push({ role: "assistant", content: r.content || "", tool_calls: calls });
-    for (const tc of calls) {
-      if (agentRun.aborted) break;
-      let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
-      send({ type: "tool_call", name: tc.function?.name, args: a });
-      const result = await execTool(tc.function?.name, a);
-      send({ type: "tool_result", name: tc.function?.name, result: String(result).slice(0, 4000) });
-      msgs.push({ role: "tool", tool_call_id: tc.id, name: tc.function?.name, content: String(result) });
-    }
-    if (round === 11) capped = true;
-  }
+  const result = await harness.runAgent(harnessCtx, messages.slice(), {
+    gatewayChat: (msgs, tools, signal) => gatewayChat(msgs, tools, false, signal),
+    send: (ev) => evt.sender.send("crowe:agent:event", ev),
+    isAborted: () => agentRun.aborted,
+    setController: (c) => { agentRun.controller = c; },
+  });
   // Persist the turn to the current session.
-  try { persistSession([...messages, { role: "assistant", content: assistantText }]); } catch {}
-  send({ type: "final", note: capped ? "reached the tool-round limit" : undefined });
+  try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
   return { done: true };
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
