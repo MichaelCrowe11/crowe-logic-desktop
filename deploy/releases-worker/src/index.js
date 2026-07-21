@@ -69,7 +69,7 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
       <div class="card">
         <h2>macOS</h2>
         <span class="meta">Apple Silicon dmg</span>
-        <p>Open the dmg and drag Crowe Logic to Applications. Signed and notarized.</p>
+        <p>Open the dmg and drag Crowe Logic to Applications. First launch: right-click the app and choose Open, then Open again. The build is signed but not yet notarized, so that step is expected once.</p>
         <a class="btn" href="/desktop/${VERSION}/CroweLogic-${VERSION}-arm64.dmg">Download for macOS</a>
       </div>
       <div class="card">
