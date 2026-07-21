@@ -1,6 +1,6 @@
 // Crowe Logic release site: branded download page at "/", installer objects
 // streamed from the crowe-releases R2 bucket under /desktop/* and /brand/*.
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 
 const PAGE = `<!DOCTYPE html>
 <html lang="en">

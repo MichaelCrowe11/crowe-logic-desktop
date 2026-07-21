@@ -1,7 +1,7 @@
 {
   "name": "crowe-logic-desktop",
   "productName": "Crowe Logic",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway. Chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
   "author": {
@@ -31,6 +31,7 @@
     "productName": "Crowe Logic",
     "files": [
       "main.js",
+      "harness.js",
       "preload.js",
       "mcp-demo-server.js",
       "renderer/**",
