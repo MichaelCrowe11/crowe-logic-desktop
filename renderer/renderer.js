@@ -30,12 +30,19 @@ function addAssistant() {
   transcript.appendChild(wrap); return wrap.querySelector(".body");
 }
 function renderText(body, text) {
-  let p = body.querySelector("p.said"); if (!p) { p = document.createElement("p"); p.className = "said"; body.prepend(p); }
+  let p = body.querySelector("p.said"); if (!p) { p = document.createElement("p"); p.className = "said streaming"; body.prepend(p); }
+  const t = body.querySelector(".thinking"); if (t) t.remove();
   p.innerHTML = md(text); transcript.scrollTop = transcript.scrollHeight;
+}
+function showThinking(body) {
+  if (body.querySelector(".thinking") || body.querySelector("p.said")) return;
+  const t = document.createElement("div"); t.className = "thinking";
+  t.innerHTML = '<span class="tdot"></span><span>working</span>';
+  body.appendChild(t); transcript.scrollTop = transcript.scrollHeight;
 }
 let lastCard = null;
 function addToolCard(body, ev) {
-  const card = document.createElement("div"); card.className = "toolcard";
+  const card = document.createElement("div"); card.className = "toolcard running";
   const arg = ev.name === "run_shell" ? (ev.args.command || "") : ev.name === "open_url" ? (ev.args.url || "") : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
   card.innerHTML = `<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">${esc(label || "tool")}</span><span class="tc-arg">${esc(arg)}</span></div>`;
@@ -43,7 +50,17 @@ function addToolCard(body, ev) {
 }
 function fillToolResult(ev) {
   if (!lastCard) return;
-  const r = document.createElement("div"); r.className = "tc-result"; r.textContent = ev.result || ""; lastCard.appendChild(r);
+  const result = String(ev.result || "");
+  lastCard.classList.remove("running");
+  lastCard.classList.add(/error|failed|exception|traceback/i.test(result) ? "fail" : "ok");
+  const r = document.createElement("div"); r.className = "tc-result"; r.textContent = result;
+  const lines = result.split("\n");
+  if (lines.length > 3 || result.length > 160) {
+    r.classList.add("collapsed");
+    r.title = "Click to expand";
+    r.addEventListener("click", () => r.classList.toggle("collapsed"));
+  }
+  lastCard.appendChild(r);
   transcript.scrollTop = transcript.scrollHeight;
 }
 function addEditProposal(body, ev) {
@@ -51,38 +68,70 @@ function addEditProposal(body, ev) {
   const rows = ev.diff.map((d) => `<div class="dl ${d.t === '+' ? 'add' : d.t === '-' ? 'del' : 'ctx'}">${esc((d.t === ' ' ? '  ' : d.t + ' ') + d.s)}</div>`).join("");
   card.innerHTML = `<div class="ec-head"><span class="ec-title">Proposed edit</span><span class="ec-path">${esc(ev.path)}</span></div>
     <div class="ec-diff">${rows}</div>
-    <div class="ec-actions"><button class="approve">Approve</button><button class="reject">Reject</button></div>`;
-  body.appendChild(card); transcript.scrollTop = transcript.scrollHeight;
+    <div class="ec-actions"><button class="approve">Approve</button><button class="reject">Reject</button><span class="ec-hint">a approve · r reject</span></div>`;
+  card.tabIndex = 0;
+  body.appendChild(card); card.focus(); transcript.scrollTop = transcript.scrollHeight;
   const done = (ok) => { window.crowe.edit.decide(ev.id, ok); card.querySelector(".ec-actions").innerHTML = `<span class="ec-status">${ok ? "applied" : "rejected"}</span>`; card.classList.add(ok ? "applied" : "rejected"); };
   card.querySelector(".approve").onclick = () => done(true);
   card.querySelector(".reject").onclick = () => done(false);
+  card.addEventListener("keydown", (e) => {
+    if (card.dataset.decided) return;
+    const k = e.key.toLowerCase();
+    if (k === "a") { card.dataset.decided = "1"; done(true); }
+    else if (k === "r") { card.dataset.decided = "1"; done(false); }
+  });
 }
 function addError(body, text) { const e = document.createElement("div"); e.className = "err"; e.textContent = text; body.appendChild(e); }
 
+let running = false;
+let sessionCost = 0, runCost = 0;
+function fmtCost(c) { return "$" + (c || 0).toFixed(4); }
+function updateHud(ev) {
+  runCost = ev.cost || 0;
+  $("hud-tok").textContent = `${ev.promptTokens || 0} / ${ev.completionTokens || 0} tok`;
+  $("hud-tps").textContent = ev.tps ? `${ev.tps} tok/s` : "";
+  $("hud-cost").textContent = fmtCost(sessionCost + runCost);
+}
+function setRunning(on) {
+  running = on;
+  $("send").classList.toggle("hidden", on);
+  $("stop").classList.toggle("hidden", !on);
+  $("hud-status").textContent = on ? "running" : "idle";
+}
+function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
 async function send(text) {
-  if (!text.trim()) return;
+  if (!text.trim() || running) return;
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";
+  showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
     if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; renderText(body, runText); }
-    else if (ev.type === "tool_call") addToolCard(body, ev);
+    else if (ev.type === "assistant_delta") { runText += ev.text || ""; renderText(body, runText); }
+    else if (ev.type === "telemetry") updateHud(ev);
+    else if (ev.type === "tool_call") { showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool"; }
     else if (ev.type === "tool_result") fillToolResult(ev);
     else if (ev.type === "edit_proposal") addEditProposal(body, ev);
+    else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
     else if (ev.type === "error") addError(body, ev.text);
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); }
+  try { await window.crowe.agent.run(messages); } finally { off(); sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  const t = body.querySelector(".thinking"); if (t) t.remove();
+  const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });
-  else if (!body.querySelector("p.said, .err")) body.innerHTML = '<p class="said hint">(done — see the workspace)</p>';
+  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">(done — see the workspace)</p>';
   refreshStatus();
 }
+$("stop").addEventListener("click", () => window.crowe.agent.stop());
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input.value); } });
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
-document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => send(c.textContent)));
+function bindChips() { document.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
+bindChips();
+const WELCOME_HTML = transcript.innerHTML;
 
 // ── Tabs ──
-document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showPane(t.dataset.pane)));
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => switchPane(t.dataset.pane)));
 function showPane(name) {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.pane === name));
   document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + name));
@@ -155,9 +204,190 @@ $("cfg-save").addEventListener("click", async () => {
   modal.classList.add("hidden"); refreshStatus(); loadTree($("cfg-cwd").value.trim() || undefined);
 });
 
+// ── Resizable split ──
+const divider = $("divider"), workbench = $("workbench");
+divider.addEventListener("mousedown", (e) => {
+  e.preventDefault(); divider.classList.add("dragging");
+  const move = (ev) => {
+    const rect = workbench.getBoundingClientRect();
+    const px = Math.min(Math.max(ev.clientX - rect.left, 300), rect.width - 320);
+    workbench.style.setProperty("--split", px + "px");
+  };
+  const up = () => { divider.classList.remove("dragging"); fitTerm();
+    window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+});
+
+// ── Dark mode ──
+function applyTheme(dark) {
+  document.body.classList.toggle("dark", dark);
+  $("theme-btn").textContent = dark ? "Light" : "Dark";
+  try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+}
+$("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
+try { applyTheme(localStorage.getItem("crowe-theme") === "dark"); } catch {}
+
+// ── Cmd+Enter to send ──
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(input.value); }
+});
+
+// ── Pane switching (rail + tabs stay in sync; git loads on demand) ──
+function setRailActive(pane) { document.querySelectorAll(".rail-btn[data-pane]").forEach((x) => x.classList.toggle("active", x.dataset.pane === pane)); }
+function switchPane(name) { showPane(name); setRailActive(name); if (name === "git") loadGit(); }
+document.querySelectorAll(".rail-btn[data-pane]").forEach((b) => b.addEventListener("click", () => switchPane(b.dataset.pane)));
+
+// ── New chat + sessions drawer ──
+const drawer = $("sessions-drawer");
+async function newChat() {
+  await window.crowe.sessions.new();
+  messages.length = 0;
+  transcript.innerHTML = WELCOME_HTML; bindChips();
+  input.value = ""; input.style.height = "auto"; input.focus();
+  drawer.classList.add("hidden");
+  sessionCost = 0; runCost = 0;
+  $("hud-cost").textContent = fmtCost(0); $("hud-tok").textContent = "0 / 0 tok"; $("hud-tps").textContent = "";
+}
+$("rail-new").addEventListener("click", newChat);
+$("sess-new").addEventListener("click", newChat);
+$("rail-sessions").addEventListener("click", () => {
+  const willShow = drawer.classList.contains("hidden");
+  drawer.classList.toggle("hidden", !willShow);
+  if (willShow) renderSessions();
+});
+async function renderSessions() {
+  const list = await window.crowe.sessions.list();
+  const el = $("sess-list"); el.innerHTML = "";
+  if (!list.length) { el.innerHTML = '<div class="sess-empty">No saved sessions yet.</div>'; return; }
+  for (const s of list) {
+    const row = document.createElement("div"); row.className = "sess-row" + (s.current ? " current" : "");
+    const when = new Date(s.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(s.title || "Untitled")}</div><div class="sess-when">${esc(when)}</div></div><button class="sess-del" title="Delete">Delete</button>`;
+    row.addEventListener("click", (e) => { if (e.target.closest(".sess-del")) return; loadSession(s.id); });
+    row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation(); await window.crowe.sessions.delete(s.id); renderSessions(); });
+    el.appendChild(row);
+  }
+}
+async function loadSession(id) {
+  const r = await window.crowe.sessions.load(id);
+  if (r.error) return;
+  messages.length = 0; for (const m of (r.messages || [])) messages.push(m);
+  rebuildTranscript();
+  renderSessions();
+}
+function rebuildTranscript() {
+  transcript.innerHTML = "";
+  let any = false;
+  for (const m of messages) {
+    if (m.role === "user") { addUser(m.content); any = true; }
+    else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); const s = b.querySelector("p.said"); if (s) s.classList.remove("streaming"); any = true; }
+  }
+  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+}
+
+// ── Git / version control pane ──
+$("git-refresh").addEventListener("click", loadGit);
+$("git-commit-btn").addEventListener("click", doCommit);
+$("git-msg").addEventListener("keydown", (e) => { if (e.key === "Enter") doCommit(); });
+async function loadGit() {
+  const s = await window.crowe.git.status();
+  const fl = $("git-files"), br = $("git-branch"), diff = $("git-diff");
+  if (!s.repo) { br.textContent = "no repo"; fl.innerHTML = '<div class="git-empty">This workspace is not a git repository.</div>'; diff.textContent = ""; return; }
+  br.textContent = s.branch;
+  fl.innerHTML = "";
+  if (!s.files.length) { fl.innerHTML = '<div class="git-empty">Working tree clean.</div>'; diff.textContent = ""; return; }
+  for (const f of s.files) {
+    const row = document.createElement("div"); row.className = "git-row";
+    const code = f.staged ? f.index : (f.untracked ? "?" : (f.work || "M"));
+    const cls = f.staged ? "staged" : f.untracked ? "untracked" : "mod";
+    row.innerHTML = `<span class="git-x ${cls}">${esc(code)}</span><span class="git-path">${esc(f.path)}</span><button class="git-act">${f.staged ? "Unstage" : "Stage"}</button>`;
+    row.addEventListener("click", (e) => { if (e.target.closest(".git-act")) return; showDiff(f); });
+    row.querySelector(".git-act").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const res = f.staged ? await window.crowe.git.unstage(f.path) : await window.crowe.git.stage(f.path);
+      if (res && res.error) { br.textContent = s.branch + " (" + res.error + ")"; return; }
+      loadGit();
+    });
+    fl.appendChild(row);
+  }
+}
+async function showDiff(f) {
+  document.querySelectorAll(".git-row").forEach((r) => r.classList.remove("sel"));
+  const d = await window.crowe.git.diff(f.path, f.staged);
+  $("git-diff").innerHTML = colorizeDiff(typeof d === "string" ? d : (d && d.out) || "");
+}
+function colorizeDiff(text) {
+  return String(text).split("\n").map((l) => {
+    const c = (l[0] === "+" && !l.startsWith("+++")) ? "add" : (l[0] === "-" && !l.startsWith("---")) ? "del" : l.startsWith("@@") ? "hunk" : "ctx";
+    return `<div class="dl ${c}">${esc(l) || "&nbsp;"}</div>`;
+  }).join("");
+}
+async function doCommit() {
+  const msg = $("git-msg").value.trim(); if (!msg) return;
+  const r = await window.crowe.git.commit(msg);
+  if (r && r.error) { $("git-branch").textContent = r.error; return; }
+  $("git-msg").value = ""; loadGit();
+}
+
+// ── Autonomy pill ──
+function setAutonomyBadge(tier) {
+  document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.tier === tier));
+  $("autonomy").dataset.tier = tier;
+}
+document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListener("click", async () => {
+  await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
+}));
+
+// ── Command palette (Cmd+K) ──
+const PAL_ACTIONS = [
+  { label: "New chat", run: newChat },
+  { label: "Sessions", run: () => $("rail-sessions").click() },
+  { label: "Terminal", run: () => switchPane("term") },
+  { label: "Browser", run: () => switchPane("browser") },
+  { label: "Files", run: () => switchPane("files") },
+  { label: "Version control (git)", run: () => switchPane("git") },
+  { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
+  { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
+  { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
+  { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
+  { label: "Settings", run: () => $("settings-btn").click() },
+];
+async function selAutonomy(t) { await window.crowe.setConfig({ autonomy: t }); setAutonomyBadge(t); }
+const palette = $("palette"), palInput = $("pal-input"), palList = $("pal-list");
+function openPalette() { palette.classList.remove("hidden"); palInput.value = ""; renderPal(""); palInput.focus(); }
+function closePalette() { palette.classList.add("hidden"); }
+function renderPal(q) {
+  palList.innerHTML = "";
+  PAL_ACTIONS.filter((a) => a.label.toLowerCase().includes(q.toLowerCase())).forEach((a, i) => {
+    const d = document.createElement("div"); d.className = "pal-row" + (i === 0 ? " sel" : ""); d.textContent = a.label;
+    d.addEventListener("click", () => { closePalette(); a.run(); });
+    palList.appendChild(d);
+  });
+}
+palInput.addEventListener("input", () => renderPal(palInput.value));
+palInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePalette();
+  else if (e.key === "Enter") { const first = palList.querySelector(".pal-row"); if (first) first.click(); }
+});
+palette.addEventListener("click", (e) => { if (e.target === palette) closePalette(); });
+$("rail-palette").addEventListener("click", openPalette);
+$("rail-settings").addEventListener("click", () => $("settings-btn").click());
+document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); } });
+
+// ── Menu / tray / global-summon bus (previously fired into the void) ──
+window.crowe.onMenuAction((a) => {
+  if (a === "new-chat") newChat();
+  else if (a === "focus-composer") input.focus();
+  else if (a === "palette") openPalette();
+  else if (a === "toggle-theme") applyTheme(!document.body.classList.contains("dark"));
+  else if (a && a.startsWith("pane:")) switchPane(a.slice(5));
+  else if (a && a.startsWith("autonomy:")) setAutonomyBadge(a.slice(9));
+});
+
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
-  await refreshStatus(); loadTree();
+  const c = await refreshStatus(); loadTree();
+  setAutonomyBadge((c && c.autonomy) || "edit");
   await initTerm();
 })();

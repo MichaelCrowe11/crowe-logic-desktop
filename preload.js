@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("crowe", {
   // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|final|error}.
   agent: {
     run: (messages) => ipcRenderer.invoke("crowe:agent:run", { messages }),
+    stop: () => ipcRenderer.invoke("crowe:agent:stop"),
     onEvent: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:agent:event", h); return () => ipcRenderer.removeListener("crowe:agent:event", h); },
   },
   chat: (messages) => ipcRenderer.invoke("crowe:chat", { messages }),
@@ -18,6 +19,17 @@ contextBridge.exposeInMainWorld("crowe", {
     onData: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
   },
   fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p) },
+  // Version control (git, run in the workspace).
+  git: {
+    status: () => ipcRenderer.invoke("crowe:git:status"),
+    diff: (path, staged) => ipcRenderer.invoke("crowe:git:diff", { path, staged }),
+    stage: (path) => ipcRenderer.invoke("crowe:git:stage", { path }),
+    unstage: (path) => ipcRenderer.invoke("crowe:git:unstage", { path }),
+    commit: (message) => ipcRenderer.invoke("crowe:git:commit", { message }),
+    log: () => ipcRenderer.invoke("crowe:git:log"),
+    branches: () => ipcRenderer.invoke("crowe:git:branches"),
+    checkout: (branch) => ipcRenderer.invoke("crowe:git:checkout", { branch }),
+  },
   // Conversation history (persisted on disk in the main process).
   sessions: {
     list: () => ipcRenderer.invoke("crowe:sessions:list"),

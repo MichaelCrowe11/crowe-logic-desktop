@@ -12,12 +12,12 @@ let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
 
 const DEFAULTS = {
-  baseUrl: "https://foundry-control-plane-production.up.railway.app",
+  baseUrl: "https://api.crowelogic.com",
   model: "crowelm",
   token: "",
   cwd: os.homedir(),
   autoApprove: false,     // when true, file edits apply without review
-  autonomy: "execute",    // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all)
+  autonomy: "edit",       // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all). Safe default: edit.
   mcpServers: {},         // { name: { command, args, env } }
 };
 
@@ -61,7 +61,7 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
-async function gatewayChat(messages, tools, _retried) {
+async function gatewayChat(messages, tools, _retried, signal) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "No token set. Open Settings and paste your Crowe ID token." };
   const t0 = Date.now();
@@ -70,14 +70,15 @@ async function gatewayChat(messages, tools, _retried) {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
       body: JSON.stringify({ model: cfg.model, messages, tools: tools || undefined }),
+      signal,
     });
-    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true); }
+    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal); }
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
     return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || cfg.model,
              usage: data.usage || {}, elapsedMs: Date.now() - t0 };
-  } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}` }; }
+  } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
 
 // ─── MCP client (stdio, newline-delimited JSON-RPC) ──────────────────────────
@@ -212,13 +213,19 @@ async function execTool(name, args) {
 const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
 
 // ─── Agentic loop ────────────────────────────────────────────────────────────
+let agentRun = { aborted: false, controller: null };
+ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentRun.controller && agentRun.controller.abort(); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
   const send = (ev) => evt.sender.send("crowe:agent:event", ev);
+  agentRun = { aborted: false, controller: null };
   let msgs = messages.slice();
   let assistantText = "";
   let totIn = 0, totOut = 0, totMs = 0;
   for (let round = 0; round < 12; round++) {
-    const r = await gatewayChat(msgs, allTools());
+    if (agentRun.aborted) { send({ type: "stopped" }); break; }
+    agentRun.controller = new AbortController();
+    const r = await gatewayChat(msgs, allTools(), false, agentRun.controller.signal);
+    if (r && r.aborted) { send({ type: "stopped" }); break; }
     if (r.error) { send({ type: "error", text: r.error }); return { done: true }; }
     // Telemetry for the HUD / status bar.
     const u = r.usage || {}, pin = u.prompt_tokens || 0, pout = u.completion_tokens || 0;
@@ -231,6 +238,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
     if (!calls.length) break;
     msgs.push({ role: "assistant", content: r.content || "", tool_calls: calls });
     for (const tc of calls) {
+      if (agentRun.aborted) break;
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
       send({ type: "tool_call", name: tc.function?.name, args: a });
       const result = await execTool(tc.function?.name, a);
@@ -269,6 +277,49 @@ ipcMain.handle("crowe:fs:list", (_e, dir) => {
   } catch (e) { return { cwd: target, entries: [], error: String(e) }; }
 });
 ipcMain.handle("crowe:fs:read", (_e, p) => { try { return { content: fs.readFileSync(resolvePath(p), "utf8").slice(0, 200000) }; } catch (e) { return { error: String(e) }; } });
+
+// ─── Git (version control) ───────────────────────────────────────────────────
+function gitRun(argStr) {
+  return new Promise((resolve) => {
+    exec(`git ${argStr}`, { cwd: CWD, timeout: 20000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
+  });
+}
+function gitWritesBlocked() { return (loadConfig().autonomy || "edit") === "readonly"; }
+function shq(p) { return "'" + String(p == null ? "" : p).replace(/'/g, "'\\''") + "'"; }
+ipcMain.handle("crowe:git:status", async () => {
+  const probe = await gitRun("rev-parse --is-inside-work-tree");
+  if (!probe.ok) return { repo: false, cwd: CWD };
+  const branch = (await gitRun("rev-parse --abbrev-ref HEAD")).out.trim() || "(detached)";
+  const raw = await gitRun("status --porcelain=v1");
+  const files = raw.out.split("\n").filter(Boolean).map((l) => ({
+    index: l[0], work: l[1], path: l.slice(3),
+    staged: l[0] !== " " && l[0] !== "?", untracked: l[0] === "?",
+  }));
+  return { repo: true, branch, files, cwd: CWD };
+});
+ipcMain.handle("crowe:git:diff", async (_e, { path: p, staged }) => {
+  const r = await gitRun(`diff ${staged ? "--staged " : ""}-- ${shq(p || ".")}`);
+  return r.out || r.err || "(no textual diff)";
+});
+ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`add -- ${shq(p)}`); });
+ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`restore --staged -- ${shq(p)}`); });
+ipcMain.handle("crowe:git:commit", async (_e, { message }) => {
+  if (gitWritesBlocked()) return { error: "read-only autonomy" };
+  if (!message || !message.trim()) return { error: "empty commit message" };
+  const r = await gitRun(`commit -m ${shq(message)}`);
+  return { ok: r.ok, out: (r.out || "") + (r.err || "") };
+});
+ipcMain.handle("crowe:git:log", async () => {
+  const r = await gitRun('log -20 --pretty=format:"%h%x1f%an%x1f%ar%x1f%s"');
+  return r.out.split("\n").filter(Boolean).map((l) => { const [hash, author, when, subject] = l.split(""); return { hash, author, when, subject }; });
+});
+ipcMain.handle("crowe:git:branches", async () => {
+  const cur = (await gitRun("rev-parse --abbrev-ref HEAD")).out.trim();
+  const r = await gitRun("branch --format=%(refname:short)");
+  return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
+});
+ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`checkout ${shq(branch)}`); });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {

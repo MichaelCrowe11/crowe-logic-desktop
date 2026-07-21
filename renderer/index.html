@@ -12,56 +12,127 @@
     <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
     <span class="tagline">Operator</span>
     <div class="spacer"></div>
+    <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
+      <button class="seg-btn" data-tier="readonly">Read</button>
+      <button class="seg-btn" data-tier="edit">Edit</button>
+      <button class="seg-btn" data-tier="execute">Execute</button>
+    </div>
     <span id="mcp-badge" class="badge alt hidden"></span>
     <span id="model-badge" class="badge">CroweLM</span>
+    <button id="theme-btn" class="ghost" title="Toggle dark mode">Dark</button>
     <button id="settings-btn" class="ghost">Settings</button>
   </header>
 
-  <main id="workbench">
-    <section id="agent">
-      <div id="transcript">
-        <div class="welcome">
-          <img class="welcome-face" src="../assets/face.png" alt="Crowe Logic" />
-          <h1>Crowe Logic</h1>
-          <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
-          <div class="chips">
-            <button class="chip">List the files here and summarize the project</button>
-            <button class="chip">Run the test suite and report failures</button>
-            <button class="chip">Add a docstring to the top of the Makefile</button>
+  <div id="shell">
+    <nav id="rail">
+      <button class="rail-btn" id="rail-new" title="New chat">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="rail-btn" id="rail-sessions" title="Sessions">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-btn active" data-pane="term" title="Terminal">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="browser" title="Browser">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="files" title="Files">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="git" title="Version control">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="9" r="2"/><path d="M7 9v6M17 11c0 3.2-3.5 3-6 3"/></svg>
+      </button>
+      <div class="spacer"></div>
+      <button class="rail-btn" id="rail-palette" title="Command palette (Cmd+K)">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
+      </button>
+      <button class="rail-btn" id="rail-settings" title="Settings">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M17.5 6.5l-2 2M8.5 15.5l-2 2"/></svg>
+      </button>
+    </nav>
+
+    <aside id="sessions-drawer" class="drawer hidden">
+      <div class="drawer-head"><span>Sessions</span><button id="sess-new" class="ghost sm">New</button></div>
+      <div id="sess-list" class="sess-list"></div>
+    </aside>
+
+    <main id="workbench">
+      <section id="agent">
+        <div id="transcript">
+          <div class="welcome">
+            <img class="welcome-face" src="../assets/face.png" alt="Crowe Logic" />
+            <h1>Crowe Logic</h1>
+            <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
+            <div class="chips">
+              <button class="chip">List the files here and summarize the project</button>
+              <button class="chip">Run the test suite and report failures</button>
+              <button class="chip">Show me the git changes and stage the ones that look right</button>
+            </div>
           </div>
         </div>
-      </div>
-      <form id="composer" autocomplete="off">
-        <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
-        <button id="send" type="submit">Send</button>
-      </form>
-    </section>
-
-    <section id="workspace">
-      <div class="tabs">
-        <button class="tab active" data-pane="term">Terminal</button>
-        <button class="tab" data-pane="browser">Browser</button>
-        <button class="tab" data-pane="files">Files</button>
-        <div class="spacer"></div>
-        <span id="cwd" class="cwd"></span>
-      </div>
-
-      <div class="pane active" id="pane-term"><div id="term"></div></div>
-
-      <div class="pane" id="pane-browser">
-        <div class="urlbar">
-          <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
-          <button id="url-go" class="ghost">Go</button>
+        <form id="composer" autocomplete="off">
+          <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
+          <button id="send" type="submit">Send</button>
+          <button id="stop" type="button" class="hidden">Stop</button>
+        </form>
+        <div id="hud">
+          <span id="hud-model">CroweLM</span>
+          <span class="hud-sep"></span>
+          <span id="hud-status">idle</span>
+          <span class="spacer"></span>
+          <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
+          <span id="hud-tps"></span>
+          <span id="hud-cost" title="estimated cost this session">$0.0000</span>
         </div>
-        <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
-      </div>
+      </section>
 
-      <div class="pane" id="pane-files">
-        <div id="files-tree"></div>
-        <pre id="files-view"></pre>
-      </div>
-    </section>
-  </main>
+      <div id="divider"></div>
+
+      <section id="workspace">
+        <div class="tabs">
+          <button class="tab active" data-pane="term">Terminal</button>
+          <button class="tab" data-pane="browser">Browser</button>
+          <button class="tab" data-pane="files">Files</button>
+          <button class="tab" data-pane="git">Git</button>
+          <div class="spacer"></div>
+          <span id="cwd" class="cwd"></span>
+        </div>
+
+        <div class="pane active" id="pane-term"><div id="term"></div></div>
+
+        <div class="pane" id="pane-browser">
+          <div class="urlbar">
+            <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
+            <button id="url-go" class="ghost">Go</button>
+          </div>
+          <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
+        </div>
+
+        <div class="pane" id="pane-files">
+          <div id="files-tree"></div>
+          <pre id="files-view"></pre>
+        </div>
+
+        <div class="pane" id="pane-git">
+          <div class="git-head">
+            <span class="git-branch-wrap">on <span id="git-branch">-</span></span>
+            <div class="spacer"></div>
+            <button id="git-refresh" class="ghost sm">Refresh</button>
+          </div>
+          <div class="git-body">
+            <div id="git-files" class="git-files"></div>
+            <pre id="git-diff" class="git-diff"></pre>
+          </div>
+          <div class="git-commit">
+            <input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" />
+            <button id="git-commit-btn" class="primary sm">Commit</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div id="settings" class="modal hidden">
     <div class="modal-card">
@@ -75,6 +146,13 @@
       </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
+    </div>
+  </div>
+
+  <div id="palette" class="modal hidden">
+    <div class="palette-card">
+      <input id="pal-input" type="text" placeholder="Type a command..." spellcheck="false" />
+      <div id="pal-list" class="pal-list"></div>
     </div>
   </div>
 

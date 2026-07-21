@@ -1,7 +1,7 @@
 {
   "name": "crowe-logic-desktop",
   "productName": "Crowe Logic",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway — chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
   "author": "Crowe Logic, Inc.",
@@ -26,7 +26,17 @@
     "appId": "com.crowelogic.desktop",
     "productName": "Crowe Logic",
     "files": ["main.js", "preload.js", "mcp-demo-server.js", "renderer/**", "assets/**", "node_modules/@xterm/**", "node_modules/node-pty/**", "node_modules/node-gyp-build/**"],
-    "mac": { "icon": "assets/icon.icns", "target": ["dmg", "zip"] },
+    "mac": {
+      "icon": "assets/icon.icns",
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "identity": "Michael Crowe (6QLMV9UCPP)",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "notarize": { "teamId": "6QLMV9UCPP" }
+    },
     "win": { "target": ["nsis"] },
     "linux": { "target": ["AppImage", "deb"], "category": "Development" }
   }
