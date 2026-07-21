@@ -25,8 +25,13 @@ const DEFAULTS = {
 
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
 function loadConfig() {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configPath(), "utf8")) }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const cfg = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configPath(), "utf8")) };
+    // Guard: a stale localhost/loopback gateway URL (a dev artifact) must never
+    // brick a member install — fall back to the real gateway.
+    if (/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)\b/i.test(cfg.baseUrl || "")) cfg.baseUrl = DEFAULTS.baseUrl;
+    return cfg;
+  } catch { return { ...DEFAULTS }; }
 }
 function saveConfig(patch) {
   const merged = { ...loadConfig(), ...patch };

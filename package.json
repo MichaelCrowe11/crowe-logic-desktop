@@ -1,7 +1,7 @@
 {
   "name": "crowe-logic-desktop",
   "productName": "Crowe Logic",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway — chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
   "author": { "name": "Crowe Logic, Inc.", "email": "michael@crowelogic.com" },
@@ -39,6 +39,21 @@
       "notarize": { "teamId": "6QLMV9UCPP" }
     },
     "win": { "target": ["nsis"] },
-    "linux": { "target": ["AppImage", "deb"], "category": "Development" }
+    "linux": { "target": ["AppImage", "deb"], "category": "Development" },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2"
+      ]
+    }
   }
 }
