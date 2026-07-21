@@ -26,7 +26,7 @@ function addUser(text) {
 function addAssistant() {
   clearWelcome();
   const wrap = document.createElement("div"); wrap.className = "msg assistant";
-  wrap.innerHTML = `<div class="who"><img src="../assets/face.png" alt="Crowe Logic" /></div><div class="body"></div>`;
+  wrap.innerHTML = `<div class="who"><img class="m" src="../assets/mark.png" alt="Crowe Logic" /></div><div class="body"></div>`;
   transcript.appendChild(wrap); return wrap.querySelector(".body");
 }
 function renderText(body, text) {
@@ -86,6 +86,18 @@ function addError(body, text) { const e = document.createElement("div"); e.class
 let running = false;
 let sessionCost = 0, runCost = 0;
 function fmtCost(c) { return "$" + (c || 0).toFixed(4); }
+function addColophon(body, a, tok, cost) {
+  if (!a.cmds && !a.edits && !a.tools && !tok) return;
+  const parts = [];
+  if (a.cmds) parts.push(a.cmds === 1 ? "1 command" : a.cmds + " commands");
+  if (a.edits) parts.push(a.edits === 1 ? "1 edit" : a.edits + " edits");
+  if (a.tools) parts.push(a.tools === 1 ? "1 tool call" : a.tools + " tool calls");
+  const fmtTok = tok >= 1000 ? (tok / 1000).toFixed(1) + "k" : String(tok);
+  const el = document.createElement("div");
+  el.className = "colophon";
+  el.innerHTML = `<span>${esc(parts.join(" · ") || "no workspace actions")}</span><span>${esc(fmtTok)} tok · ${esc(fmtCost(cost))}</span>`;
+  body.appendChild(el);
+}
 function updateHud(ev) {
   runCost = ev.cost || 0;
   $("hud-tok").textContent = `${ev.promptTokens || 0} / ${ev.completionTokens || 0} tok`;
@@ -105,22 +117,29 @@ async function send(text) {
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";
+  let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
     if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; renderText(body, runText); }
     else if (ev.type === "assistant_delta") { runText += ev.text || ""; renderText(body, runText); }
-    else if (ev.type === "telemetry") updateHud(ev);
-    else if (ev.type === "tool_call") { showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool"; }
-    else if (ev.type === "tool_result") fillToolResult(ev);
+    else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
+    else if (ev.type === "tool_call") {
+      showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool";
+    }
+    else if (ev.type === "tool_result") {
+      if (!/^blocked:/.test(String(ev.result || ""))) { if (ev.name === "run_shell") acts.cmds++; else if (ev.name === "write_file") acts.edits++; else acts.tools++; }
+      fillToolResult(ev);
+    }
     else if (ev.type === "edit_proposal") addEditProposal(body, ev);
     else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
     else if (ev.type === "error") addError(body, ev.text);
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  try { await window.crowe.agent.run(messages); } finally { off(); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
   const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });
-  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">(done — see the workspace)</p>';
+  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
+  addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
 $("stop").addEventListener("click", () => window.crowe.agent.stop());
@@ -331,9 +350,17 @@ async function doCommit() {
 }
 
 // ── Autonomy pill ──
+const TIER_HINT = {
+  readonly: "Ask anything. Read-only: it can look, not touch.",
+  edit: "Ask anything. It can edit files, with your review.",
+  execute: "Ask anything. It can run commands and edit files.",
+};
 function setAutonomyBadge(tier) {
   document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.tier === tier));
   $("autonomy").dataset.tier = tier;
+  document.body.dataset.tier = tier;
+  input.placeholder = TIER_HINT[tier] || "Ask Crowe Logic to do something...";
+  try { localStorage.setItem("crowe-tier", tier); } catch {}
 }
 document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListener("click", async () => {
   await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
@@ -421,6 +448,7 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
+  try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
