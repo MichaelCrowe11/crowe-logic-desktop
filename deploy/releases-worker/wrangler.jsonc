@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crowe-releases",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "crowe-releases" }
+  ],
+  "observability": { "enabled": true }
+}
