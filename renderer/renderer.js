@@ -101,6 +101,7 @@ function setRunning(on) {
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
 async function send(text) {
   if (!text.trim() || running) return;
+  if (!authed) { showSignInPrompt(); return; }
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";
@@ -384,10 +385,44 @@ window.crowe.onMenuAction((a) => {
   else if (a && a.startsWith("autonomy:")) setAutonomyBadge(a.slice(9));
 });
 
+// ── Crowe ID sign-in ──
+let authed = false;
+async function refreshAuth() {
+  const { user } = await window.crowe.auth.status();
+  const btn = $("signin"), badge = $("userbadge");
+  authed = Boolean(user && user.email);
+  if (authed) {
+    btn.classList.add("hidden");
+    badge.textContent = user.tier ? `${user.email} · ${user.tier}` : user.email;
+    badge.classList.remove("hidden");
+  } else { btn.classList.remove("hidden"); badge.classList.add("hidden"); }
+  return authed;
+}
+async function doSignIn() {
+  const btn = $("signin"); const prev = btn.textContent;
+  btn.textContent = "Opening browser..."; btn.disabled = true;
+  const r = await window.crowe.auth.login();
+  btn.disabled = false; btn.textContent = prev;
+  if (r && r.ok) { await refreshAuth(); return true; }
+  const b = addAssistant(); addError(b, r && r.error ? `Sign-in failed: ${r.error}` : "Sign-in failed.");
+  return false;
+}
+function showSignInPrompt() {
+  clearWelcome();
+  const b = addAssistant();
+  b.innerHTML = '<p class="said">Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.</p>';
+  const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
+  btn.style.marginTop = "8px"; btn.addEventListener("click", doSignIn);
+  b.appendChild(btn); transcript.scrollTop = transcript.scrollHeight;
+}
+$("signin").addEventListener("click", doSignIn);
+$("userbadge").addEventListener("click", async () => { await window.crowe.auth.logout(); await refreshAuth(); });
+
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
+  await refreshAuth();
   await initTerm();
 })();

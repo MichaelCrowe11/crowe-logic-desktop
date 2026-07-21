@@ -197,6 +197,12 @@ button.primary:hover { background: var(--gold); }
 #wv { background: var(--panel); }
 .modal-card input, .modal-card textarea, #url-in, #input { color: var(--ink); }
 
+/* ── Crowe ID sign-in ── */
+#signin { color: var(--gold); border-color: var(--gold); }
+#signin:hover { background: var(--gold); color: var(--cream); }
+#userbadge { cursor: pointer; }
+#userbadge:hover { border-color: var(--gold); color: var(--gold); }
+
 /* ── Glass-box HUD (live cost + progress) ── */
 #hud { display: flex; align-items: center; gap: 10px; padding: 5px 14px; border-top: 1px solid var(--line);
   background: var(--panel); font-family: var(--mono); font-size: 11px; color: var(--muted); }

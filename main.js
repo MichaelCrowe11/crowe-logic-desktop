@@ -2,10 +2,12 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const http = require("http");
+const crypto = require("crypto");
 const { spawn, exec } = require("child_process");
 
 let pty = null;
@@ -48,22 +50,85 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
-// ─── Gateway (with token auto-refresh on 401) ────────────────────────────────
+// ─── Crowe ID auth (OAuth2 Authorization Code + PKCE, loopback redirect) ──────
+// Public client `crowe-cli` must allow the loopback redirect http://127.0.0.1/*
+// and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
+const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
+const CROWE_ID_CLIENT = "crowe-cli";
+const AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
+function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
+function persistTokens(d) {
+  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
+  try { fs.mkdirSync(path.dirname(AUTH_JSON), { recursive: true }); fs.writeFileSync(AUTH_JSON, JSON.stringify({ access_token: d.access_token, refresh_token: d.refresh_token }, null, 2), { mode: 0o600 }); } catch {}
+}
+function currentUser() {
+  const c = loadConfig(); if (!c.token) return null;
+  const p = decodeJwt(c.token);
+  return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "", tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
+}
 async function refreshToken() {
+  const cfg = loadConfig();
+  let refresh = cfg.refreshToken;
+  if (!refresh) { try { refresh = JSON.parse(fs.readFileSync(AUTH_JSON, "utf8")).refresh_token; } catch {} }
+  if (!refresh) return null;
   try {
-    const auth = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config/crowe-logic/auth.json"), "utf8"));
-    if (!auth.refresh_token) return null;
-    const body = new URLSearchParams({ grant_type: "refresh_token", client_id: "crowe-cli", refresh_token: auth.refresh_token });
-    const r = await fetch("https://id.crowelogic.com/realms/crowe/protocol/openid-connect/token", {
-      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
+    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
     const d = await r.json();
-    if (d.access_token) { saveConfig({ token: d.access_token }); return d.access_token; }
+    if (d.access_token) { persistTokens(d); return d.access_token; }
   } catch { /* noop */ }
   return null;
 }
+function signIn() {
+  return new Promise((resolve) => {
+    const verifier = b64url(crypto.randomBytes(32));
+    const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
+    const state = b64url(crypto.randomBytes(16));
+    let redirect = "", settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const server = http.createServer(async (req, res) => {
+      const u = new URL(req.url, "http://127.0.0.1");
+      if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
+      const code = u.searchParams.get("code"), st = u.searchParams.get("state");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f5f1e8;color:#1f1d18;text-align:center;padding-top:14vh"><h2 style="color:#b7791f;font-family:Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      try { server.close(); } catch {}
+      if (!code || st !== state) return finish({ error: "sign-in was cancelled" });
+      try {
+        const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
+        const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+        const d = await r.json();
+        if (d.access_token) { persistTokens(d); return finish({ ok: true, user: currentUser() }); }
+        return finish({ error: d.error_description || d.error || "token exchange failed" });
+      } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
+    });
+    server.on("error", (e) => finish({ error: "local server error: " + String(e).slice(0, 120) }));
+    server.listen(0, "127.0.0.1", () => {
+      redirect = `http://127.0.0.1:${server.address().port}/callback`;
+      const authUrl = `${CROWE_ID}/protocol/openid-connect/auth?` + new URLSearchParams({
+        client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
+        redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
+      }).toString();
+      shell.openExternal(authUrl);
+    });
+    setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
+  });
+}
+ipcMain.handle("crowe:auth:login", () => signIn());
+ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(AUTH_JSON); } catch {} return { ok: true }; });
+ipcMain.handle("crowe:auth:status", async () => {
+  let u = currentUser();
+  if (u && u.exp) {
+    const expMs = u.exp * 1000, now = Date.now();
+    if (expMs < now) { const t = await refreshToken(); u = t ? currentUser() : null; }  // expired: refresh or sign out
+    else if (expMs < now + 60000) { refreshToken(); }                                    // near expiry: refresh in background
+  }
+  return { user: u };
+});
 async function gatewayChat(messages, tools, _retried, signal) {
   const cfg = loadConfig();
-  if (!cfg.token) return { error: "No token set. Open Settings and paste your Crowe ID token." };
+  if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
   const t0 = Date.now();
   try {
     const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, {
@@ -113,7 +178,7 @@ function mcpConnect(name, spec) {
     proc.on("exit", () => { delete MCP[name]; });
     (async () => {
       try {
-        await srv.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "crowe-logic", version: "0.2" } });
+        await srv.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "crowe-logic", version: app.getVersion() } });
         srv.notify("notifications/initialized", {});
         const list = await srv.request("tools/list", {});
         srv.tools = (list.tools || []).map((t) => ({
@@ -220,7 +285,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
   agentRun = { aborted: false, controller: null };
   let msgs = messages.slice();
   let assistantText = "";
-  let totIn = 0, totOut = 0, totMs = 0;
+  let totIn = 0, totOut = 0, totMs = 0, capped = false;
   for (let round = 0; round < 12; round++) {
     if (agentRun.aborted) { send({ type: "stopped" }); break; }
     agentRun.controller = new AbortController();
@@ -245,11 +310,11 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
       send({ type: "tool_result", name: tc.function?.name, result: String(result).slice(0, 4000) });
       msgs.push({ role: "tool", tool_call_id: tc.id, name: tc.function?.name, content: String(result) });
     }
-    if (round === 11) send({ type: "final", note: "reached the tool-round limit" });
+    if (round === 11) capped = true;
   }
   // Persist the turn to the current session.
   try { persistSession([...messages, { role: "assistant", content: assistantText }]); } catch {}
-  send({ type: "final" });
+  send({ type: "final", note: capped ? "reached the tool-round limit" : undefined });
   return { done: true };
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));

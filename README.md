@@ -25,9 +25,10 @@ npm install
 npm start
 ```
 
-Then open **Settings**, paste your Crowe ID token (or API key), pick a model
-(default `crowelm-zenith`, the frontier tier), and chat. The token is stored in
-the app's userData config (mode 600) and never leaves the main process.
+Click **Sign in with Crowe ID** and complete sign-in in your browser (OAuth2
+Authorization Code + PKCE). Your Pro entitlement unlocks the full CroweLM tiers.
+Tokens are stored in the app's userData config (mode 600) and never leave the
+main process; the renderer only ever sees your decoded email and tier.
 
 ## Build installers
 
@@ -41,7 +42,7 @@ npm run build:linux   # AppImage + deb
 
 - `main.js` — window + the gateway bridge. Holds the token; POSTs to
   `{baseUrl}/api/gateway/chat`, forwarding `tools` and returning `tool_calls`.
-- `preload.js` — exposes `window.crowe.{chat,getConfig,setConfig}` (contextIsolation on, nodeIntegration off).
+- `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig}` (contextIsolation on, nodeIntegration off).
 - `renderer/` — the Crowe editorial UI (cream/ink/gold, Fraunces/Inter), chat
   loop, tool-call cards, settings.
 - `assets/` — Crowe Logic avatar + mark + app icon.
@@ -53,11 +54,18 @@ the app to execute; results go back as `tool` messages. The gateway forwards the
 definitions and returns the calls but does not execute them, so the app keeps
 full control. This is the capability power users asked for.
 
-## Roadmap (scaffold -> product)
+## Shipped (v0.4.0)
 
-- Streaming responses + a live reasoning strip.
-- The agentic edit-run-verify loop with reviewable diffs and one-key approve/reject.
-- Graduated autonomy tiers (read-only / edit / execute) surfaced in the UI.
-- A built-in terminal and file tree; MCP client support.
-- Crowe ID OIDC sign-in (replace the paste-a-token step).
-- Auto-update via electron-updater.
+- Crowe ID sign-in (OAuth2 Authorization Code + PKCE) — no token pasting.
+- Agentic tool loop with reviewable edit diffs (approve/reject) and a Stop button.
+- Graduated autonomy tiers (read-only / edit / execute) in the header.
+- Activity rail, sessions browser, and a built-in git version-control pane.
+- Real PTY terminal, in-app browser, file tree; MCP client support.
+- Glass-box HUD (live tokens / cost / tok-s) and a Cmd+K command palette.
+
+## Roadmap
+
+- Streaming token responses + a live reasoning strip.
+- Total Rewind: checkpoint code + shell + chat, one-click restore.
+- Syntax highlighting + copy on code blocks; per-hunk git staging.
+- Auto-update via electron-updater; Windows code-signing.

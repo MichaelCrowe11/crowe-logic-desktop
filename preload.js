@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld("crowe", {
     onEvent: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:agent:event", h); return () => ipcRenderer.removeListener("crowe:agent:event", h); },
   },
   chat: (messages) => ipcRenderer.invoke("crowe:chat", { messages }),
+  // Crowe ID sign-in (OAuth2 PKCE, browser-based).
+  auth: {
+    login: () => ipcRenderer.invoke("crowe:auth:login"),
+    logout: () => ipcRenderer.invoke("crowe:auth:logout"),
+    status: () => ipcRenderer.invoke("crowe:auth:status"),
+  },
   // Approve/reject a proposed file edit.
   edit: { decide: (id, approved) => ipcRenderer.invoke("crowe:edit:decide", { id, approved }) },
   // Real PTY terminal.
