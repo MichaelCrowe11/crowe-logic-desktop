@@ -103,8 +103,14 @@ function signIn() {
         return finish({ error: d.error_description || d.error || "token exchange failed" });
       } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
     });
-    server.on("error", (e) => finish({ error: "local server error: " + String(e).slice(0, 120) }));
-    server.listen(0, "127.0.0.1", () => {
+    // Must match the crowe-cli client's registered loopback redirect URIs.
+    const PORTS = [8765, 9275];
+    let pIdx = 0;
+    server.on("error", (e) => {
+      if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
+      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+    });
+    server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
       const authUrl = `${CROWE_ID}/protocol/openid-connect/auth?` + new URLSearchParams({
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
@@ -112,6 +118,7 @@ function signIn() {
       }).toString();
       shell.openExternal(authUrl);
     });
+    server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
 }
