@@ -113,8 +113,9 @@ function mountWelcomeMark() {
   if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
 }
 function renderText(body, text) {
-  // .said is a <div>: markdown emits block elements a <p> could not contain.
-  let p = body.querySelector(".said"); if (!p) { p = document.createElement("div"); p.className = "said streaming"; body.prepend(p); }
+  // Static render (history/rebuild). .said is a <div>: markdown emits block
+  // elements a <p> could not contain. Appended: replies read chronologically.
+  let p = body.querySelector(".said"); if (!p) { p = document.createElement("div"); p.className = "said streaming"; body.appendChild(p); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
   p.innerHTML = md(text); scrollBottom();
 }
@@ -138,16 +139,26 @@ const TG_DRAW = {
 };
 const THINKERS = Object.keys(TG_DRAW);
 let thinkerIdx = Math.floor(Date.now() / 1000) % THINKERS.length;
-function thinkerSvg() {
-  const kind = THINKERS[thinkerIdx++ % THINKERS.length];
-  return `<svg class="tg tg-${kind}" viewBox="0 0 24 24" aria-hidden="true">${TG_DRAW[kind]()}</svg>`;
+function thinkerSvg(kind) {
+  const k = kind && TG_DRAW[kind] ? kind : THINKERS[thinkerIdx++ % THINKERS.length];
+  return `<svg class="tg tg-${k}" viewBox="0 0 24 24" aria-hidden="true">${TG_DRAW[k]()}</svg>`;
 }
-function showThinking(body) {
-  if (body.querySelector(".thinking") || body.querySelector(".said")) return;
-  const t = document.createElement("div"); t.className = "thinking";
-  t.innerHTML = thinkerSvg() + "<span>working</span>";
+// The glyph tracks the block stage: what the operator is doing right now.
+function toolGlyph(name) {
+  if (name === "run_shell") return ["meshwork", "executing"];
+  if (name === "write_file" || name === "edit_file") return ["facet", "editing"];
+  if (name === "open_url") return ["iris", "browsing"];
+  if (name && name.startsWith("mcp__")) return ["hexbloom", "calling " + name.split("__")[1]];
+  return ["mycelial", "retrieving"];
+}
+// One indicator per message body; it moves to the bottom and morphs per stage.
+function showThinking(body, kind, label) {
+  let t = body.querySelector(".thinking");
+  if (!t) { t = document.createElement("div"); t.className = "thinking"; }
+  t.innerHTML = thinkerSvg(kind) + `<span>${esc(label || "working")}</span>`;
   body.appendChild(t); scrollBottom();
 }
+function hideThinking(body) { const t = body.querySelector(".thinking"); if (t) t.remove(); }
 let lastCard = null;
 function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
@@ -237,27 +248,55 @@ async function send(text) {
   const body = addAssistant(); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
+  // Chronological streaming: each burst of text gets its own block appended
+  // after the tool cards that produced it, revealed character by character.
+  let curSaid = null, curText = "", shownLen = 0, typerOn = false;
+  const finishSaid = () => {
+    if (!curSaid) return;
+    curSaid.innerHTML = md(curText); curSaid.classList.remove("streaming");
+    curSaid = null; curText = ""; shownLen = 0; scrollBottom();
+  };
+  const typeTick = () => {
+    if (!curSaid || shownLen >= curText.length) { typerOn = false; return; }
+    const backlog = curText.length - shownLen;
+    shownLen += Math.max(1, Math.ceil(backlog / 28)); // catch-up pacing
+    curSaid.innerHTML = md(curText.slice(0, shownLen));
+    scrollBottom();
+    requestAnimationFrame(typeTick);
+  };
+  const pushText = (txt, burst) => {
+    if (!txt) return;
+    hideThinking(body);
+    if (!curSaid) {
+      curSaid = document.createElement("div"); curSaid.className = "said streaming";
+      body.appendChild(curSaid); curText = ""; shownLen = 0;
+    }
+    curText += (burst && curText ? "\n\n" : "") + txt;
+    if (!typerOn) { typerOn = true; requestAnimationFrame(typeTick); }
+  };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
-    if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; renderText(body, runText); }
-    else if (ev.type === "assistant_delta") { runText += ev.text || ""; renderText(body, runText); }
+    if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; pushText(ev.text, true); }
+    else if (ev.type === "assistant_delta") { runText += ev.text || ""; pushText(ev.text || "", false); }
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
     else if (ev.type === "tool_call") {
-      showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool";
+      finishSaid(); addToolCard(body, ev);
+      const [g, gl] = toolGlyph(ev.name); showThinking(body, g, gl);
+      $("hud-status").textContent = ev.name || "tool";
       if (mark) mark.ping();
     }
     else if (ev.type === "tool_result") {
       if (!/^blocked:/.test(String(ev.result || ""))) { if (ev.name === "run_shell") acts.cmds++; else if (ev.name === "write_file") acts.edits++; else acts.tools++; }
       fillToolResult(ev);
+      showThinking(body, "convergent", "reasoning");
     }
-    else if (ev.type === "edit_proposal") addEditProposal(body, ev);
-    else if (ev.type === "route") { addRouteNode(body, ev); if (ev.model) $("hud-model").textContent = ev.model; }
-    else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
-    else if (ev.type === "error") addError(body, ev.text);
+    else if (ev.type === "edit_proposal") { finishSaid(); hideThinking(body); addEditProposal(body, ev); }
+    else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "convergent", "reasoning"); if (ev.model) $("hud-model").textContent = ev.model; }
+    else if (ev.type === "stopped") { finishSaid(); hideThinking(body); addStopped(body); }
+    else if (ev.type === "error") { finishSaid(); hideThinking(body); addError(body, ev.text); }
   });
   try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
-  const t = body.querySelector(".thinking"); if (t) t.remove();
-  const said = body.querySelector(".said"); if (said) said.classList.remove("streaming");
+  finishSaid(); hideThinking(body);
   if (runText) messages.push({ role: "assistant", content: runText });
   else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
   addColophon(body, acts, runTok, spentCost);
