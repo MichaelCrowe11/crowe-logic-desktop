@@ -765,9 +765,12 @@ async function renderPlugins() {
 
 // ── Auto-update banner (consent-first: never downloads without a click) ──
 const updBanner = $("update-banner"), ubText = $("ub-text"), ubAction = $("ub-action");
+function refitTermIfVisible() { if (document.querySelector("#pane-term.active") || (typeof drawerOpen === "function" && drawerOpen())) fitTerm(); }
 function renderUpdate(s) {
-  if (!s || s.status === "idle" || s.status === "current" || s.status === "dev") { updBanner.classList.add("hidden"); return; }
+  const wasHidden = updBanner.classList.contains("hidden");
+  if (!s || s.status === "idle" || s.status === "current" || s.status === "dev") { updBanner.classList.add("hidden"); if (!wasHidden) refitTermIfVisible(); return; }
   updBanner.classList.remove("hidden");
+  if (wasHidden) refitTermIfVisible();
   if (s.status === "available") { ubText.textContent = `Update ${s.version} is available.`; ubAction.textContent = "Download"; ubAction.disabled = false; }
   else if (s.status === "downloading") { ubText.textContent = `Downloading update… ${s.percent || 0}%`; ubAction.textContent = "Downloading"; ubAction.disabled = true; }
   else if (s.status === "ready") { ubText.textContent = `Update ${s.version} is ready.`; ubAction.textContent = "Restart to update"; ubAction.disabled = false; }
@@ -779,7 +782,7 @@ ubAction.addEventListener("click", async () => {
   else if (t === "Restart to update") await window.crowe.update.install();
   else if (t === "Retry") await window.crowe.update.check();
 });
-$("ub-dismiss").addEventListener("click", () => updBanner.classList.add("hidden"));
+$("ub-dismiss").addEventListener("click", () => { updBanner.classList.add("hidden"); refitTermIfVisible(); });
 if (window.crowe.update) {
   window.crowe.update.onChange(renderUpdate);
   window.crowe.update.state().then(renderUpdate);

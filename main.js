@@ -614,6 +614,7 @@ function buildMenu() {
 // Manual-consent flow: check on launch + on demand, tell the renderer when an
 // update is available, download only when the user asks, install on quit.
 let updateState = { status: "idle", version: "", notes: "" };
+let updateUserInitiated = false; // errors only surface for checks the user asked for
 function relayUpdate() { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:update", updateState); }
 function setupAutoUpdate() {
   if (!autoUpdater || !app.isPackaged) return;   // dev/unsigned runs never self-update
@@ -623,10 +624,15 @@ function setupAutoUpdate() {
   autoUpdater.on("update-not-available", () => { updateState = { status: "current", version: app.getVersion(), notes: "" }; relayUpdate(); });
   autoUpdater.on("download-progress", (p) => { updateState = { ...updateState, status: "downloading", percent: Math.round(p.percent) }; relayUpdate(); });
   autoUpdater.on("update-downloaded", (info) => { updateState = { status: "ready", version: info.version, notes: updateState.notes }; relayUpdate(); });
-  autoUpdater.on("error", (e) => { updateState = { status: "error", message: String(e).slice(0, 200) }; relayUpdate(); });
+  autoUpdater.on("error", (e) => {
+    // A silent launch check that 404s (unseeded channel) or fails offline must
+    // not raise a red-herring banner on every start. Only surface user-asked errors.
+    if (!updateUserInitiated) return;
+    updateState = { status: "error", message: String(e).slice(0, 200) }; relayUpdate();
+  });
   setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 4000);
 }
-ipcMain.handle("crowe:update:check", async () => { if (!autoUpdater || !app.isPackaged) return { status: "dev" }; try { await autoUpdater.checkForUpdates(); } catch (e) { return { status: "error", message: String(e).slice(0, 200) }; } return updateState; });
+ipcMain.handle("crowe:update:check", async () => { if (!autoUpdater || !app.isPackaged) return { status: "dev" }; updateUserInitiated = true; try { await autoUpdater.checkForUpdates(); } catch (e) { return { status: "error", message: String(e).slice(0, 200) }; } return updateState; });
 ipcMain.handle("crowe:update:download", async () => { if (!autoUpdater) return { error: "unavailable" }; try { await autoUpdater.downloadUpdate(); } catch (e) { return { error: String(e).slice(0, 200) }; } return { ok: true }; });
 ipcMain.handle("crowe:update:install", () => { if (autoUpdater) autoUpdater.quitAndInstall(); return { ok: true }; });
 ipcMain.handle("crowe:update:state", () => updateState);
