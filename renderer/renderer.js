@@ -230,7 +230,8 @@ function addRouteNode(body, ev) {
 }
 async function send(text) {
   if (!text.trim() || running) return;
-  if (!authed) { showSignInPrompt(); return; }
+  // Re-validate live: a token that expired since launch must not eat the turn.
+  if (!(await refreshAuth())) { showSignInPrompt(); return; }
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";

@@ -495,6 +495,12 @@ app.whenReady().then(async () => {
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
+  // Keep the Crowe ID session fresh while the app runs: refresh proactively
+  // before expiry so a long-lived window never silently loses the harness.
+  setInterval(() => {
+    const u = currentUser();
+    if (u && u.exp && u.exp * 1000 < Date.now() + 5 * 60 * 1000) refreshToken();
+  }, 4 * 60 * 1000);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });
