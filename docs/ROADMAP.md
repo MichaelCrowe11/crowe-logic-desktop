@@ -45,8 +45,9 @@ stable; sign-in, routing, plugins, and the workbench all work end to end.
 
 | Gap | Why it blocks public | Size |
 |---|---|---|
-| Code signing + notarization (mac), signing (win) | Gatekeeper/SmartScreen warnings kill trust at download | days (needs Apple/MS certs) |
-| Auto-update (electron-updater → R2) | can't ship fixes to installed users | days |
+| ~~mac code signing + notarization~~ ✅ DONE (0.9.0) | — app is Notarized Developer ID, auto-notarize hook wired | done |
+| Windows signing cert | SmartScreen warning kills trust | needs MS/EV cert (user) |
+| Auto-update (electron-updater → R2) | can't ship fixes to installed users | days — NEXT |
 | Windows/Linux parity builds + smoke | half the audience | days |
 | Crash reporting + minimal telemetry | flying blind post-launch | 1-2 days |
 | First-run onboarding (sign-up → sign-in → first task) | funnel dies without it | 2-3 days |
