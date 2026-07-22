@@ -191,7 +191,14 @@ async function initTerm() {
   window.crowe.pty.onData((d) => term.write(d));
   term.onData((d) => window.crowe.pty.input(d));
 }
-window.addEventListener("resize", () => { if (document.querySelector("#pane-term.active")) fitTerm(); });
+let resizeFitFrame = 0;
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(resizeFitFrame);
+  resizeFitFrame = requestAnimationFrame(() => {
+    clampWorkbenchSplit();
+    if (document.querySelector("#pane-term.active")) fitTerm();
+  });
+});
 
 // ── Browser ──
 const wv = $("wv"), urlIn = $("url-in");
@@ -255,12 +262,30 @@ $("cfg-save").addEventListener("click", async () => {
 
 // ── Resizable split ──
 const divider = $("divider"), workbench = $("workbench");
+const MIN_AGENT_WIDTH = 300, MIN_WORKSPACE_WIDTH = 320;
+function clampSplit(requested) {
+  const rect = workbench.getBoundingClientRect();
+  const shellRight = workbench.parentElement.getBoundingClientRect().right;
+  const availableWidth = Math.max(0, shellRight - rect.left);
+  const dividerWidth = divider.getBoundingClientRect().width || 5;
+  const max = Math.max(0, availableWidth - dividerWidth - MIN_WORKSPACE_WIDTH);
+  const min = Math.min(MIN_AGENT_WIDTH, max);
+  return Math.min(Math.max(requested, min), max);
+}
+function setWorkbenchSplit(requested) {
+  const px = clampSplit(requested);
+  workbench.style.setProperty("--split", px + "px");
+  return px;
+}
+function clampWorkbenchSplit() {
+  const current = parseFloat(workbench.style.getPropertyValue("--split"));
+  if (Number.isFinite(current)) setWorkbenchSplit(current);
+}
 divider.addEventListener("mousedown", (e) => {
   e.preventDefault(); divider.classList.add("dragging");
   const move = (ev) => {
     const rect = workbench.getBoundingClientRect();
-    const px = Math.min(Math.max(ev.clientX - rect.left, 300), rect.width - 320);
-    workbench.style.setProperty("--split", px + "px");
+    setWorkbenchSplit(ev.clientX - rect.left);
   };
   const up = () => { divider.classList.remove("dragging"); fitTerm();
     window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
@@ -424,7 +449,7 @@ function setSpace(name) {
     else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
   } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
   else if (name === "cultivation") SURFACES.cultivation.classList.remove("hidden");
-  if (showWb) setTimeout(fitTerm, 30);
+  if (showWb) setTimeout(() => { clampWorkbenchSplit(); fitTerm(); }, 30);
   try { localStorage.setItem("crowe-space", name); } catch {}
 }
 document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
