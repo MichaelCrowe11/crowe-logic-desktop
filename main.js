@@ -45,7 +45,7 @@ let mainWindow = null;
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#f5f1e8", title: "Crowe Logic",
+    backgroundColor: "#f7f3ea", title: "Crowe Logic",
     icon: path.join(__dirname, "assets", "icon.icns"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -97,7 +97,7 @@ function signIn() {
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const code = u.searchParams.get("code"), st = u.searchParams.get("state");
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f5f1e8;color:#1f1d18;text-align:center;padding-top:14vh"><h2 style="color:#b7791f;font-family:Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f7f3ea;color:#1a1714;text-align:center;padding-top:14vh"><h2 style="color:#96702c;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
       try { server.close(); } catch {}
       if (!code || st !== state) return finish({ error: "sign-in was cancelled" });
       try {
@@ -127,7 +127,7 @@ function signIn() {
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
 }
-ipcMain.handle("crowe:auth:login", () => signIn());
+ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(AUTH_JSON); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:auth:status", async () => {
   let u = currentUser();
@@ -138,22 +138,23 @@ ipcMain.handle("crowe:auth:status", async () => {
   }
   return { user: u };
 });
-async function gatewayChat(messages, tools, _retried, signal) {
+async function gatewayChat(messages, tools, _retried, signal, model) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
+  const useModel = model || cfg.model;
   const t0 = Date.now();
   try {
     const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify({ model: cfg.model, messages, tools: tools || undefined }),
+      body: JSON.stringify({ model: useModel, messages, tools: tools || undefined }),
       signal,
     });
-    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal); }
+    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal, model); }
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
-    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || cfg.model,
+    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel,
              usage: data.usage || {}, elapsedMs: Date.now() - t0 };
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
@@ -219,23 +220,9 @@ async function mcpCall(fullName, args) {
   return JSON.stringify(r).slice(0, 8000);
 }
 
-// ─── Built-in tools ──────────────────────────────────────────────────────────
-const BUILTIN_TOOLS = [
-  { type: "function", function: { name: "run_shell", description: "Run a shell command in the workspace and return its output.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } },
-  { type: "function", function: { name: "read_file", description: "Read a UTF-8 text file (path may be relative to the workspace).", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "write_file", description: "Create or overwrite a UTF-8 text file. The user reviews the diff before it is applied.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } },
-  { type: "function", function: { name: "list_dir", description: "List entries in a directory (defaults to the workspace).", parameters: { type: "object", properties: { path: { type: "string" } } } } },
-  { type: "function", function: { name: "open_url", description: "Open a URL in the in-app browser pane.", parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
-];
-function allTools() { return [...BUILTIN_TOOLS, ...Object.values(MCP).flatMap((s) => s.tools)]; }
-
+// ─── Agent harness (tools, system prompt, loop) — see harness.js ─────────────
+const harness = require("./harness");
 function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.homedir()); return path.isAbsolute(p) ? p : path.join(CWD, p); }
-function runShell(command, timeoutMs = 60000) {
-  return new Promise((resolve) => {
-    exec(command, { cwd: CWD, timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, shell: process.env.SHELL || "/bin/zsh" },
-      (err, stdout, stderr) => resolve(((stdout || "") + (stderr || "")).slice(0, 40000) || (err ? `(exit ${err.code ?? 1})` : "(no output)")));
-  });
-}
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
 let editSeq = 0; const pendingEdits = new Map();
@@ -266,67 +253,64 @@ async function proposeEdit(filePath, newContent) {
   return `the user REJECTED the edit to ${filePath}; do not reapply it unless they ask`;
 }
 
-async function execTool(name, args) {
-  try {
-    if (name && name.startsWith("mcp__")) return await mcpCall(name, args);
-    const tier = loadConfig().autonomy || "execute";
-    if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
-    if (name === "write_file" && tier === "readonly") return `blocked: file writes are disabled in read-only autonomy mode.`;
-    if (name === "run_shell") {
-      const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
-      if (m) { const t = resolvePath(m[1].trim().replace(/^["']|["']$/g, "")); if (fs.existsSync(t) && fs.statSync(t).isDirectory()) { CWD = t; return `cwd -> ${CWD}`; } return `cd: no such directory: ${t}`; }
-      return await runShell(args.command);
-    }
-    if (name === "read_file") return fs.readFileSync(resolvePath(args.path), "utf8").slice(0, 60000);
-    if (name === "write_file") return await proposeEdit(args.path, args.content ?? "");
-    if (name === "list_dir") return fs.readdirSync(resolvePath(args.path), { withFileTypes: true }).map((d) => (d.isDirectory() ? d.name + "/" : d.name)).join("\n");
-    if (name === "open_url") { let u = args.url; if (!/^https?:\/\//.test(u)) u = "https://" + u; if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); return `opened ${u}`; }
-    return `unknown tool: ${name}`;
-  } catch (e) { return `error: ${String(e).slice(0, 300)}`; }
-}
-
 // Rough per-1M-token cost for the CroweLM daily driver (gpt-5.6 class), for the
 // HUD/status bar. Display only; not billing.
 const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
 
-// ─── Agentic loop ────────────────────────────────────────────────────────────
+// ─── Agentic loop (delegates to harness.js) ──────────────────────────────────
+// ─── Model catalog (public endpoint; drives dynamic routing) ─────────────────
+// Cached so the router reads it per-turn without a network hop. Refreshed on
+// startup, after sign-in, and on a timer. If it can't be fetched the router
+// falls back to the default model, so a missing catalog never breaks a turn.
+let catalogCache = { models: [], at: 0 };
+// Roles the router understands; the Home surface shows how each resolves today.
+const ROUTED_ROLES = ["cultivation", "coding", "reasoning", "long-context"];
+function resolveRoles() {
+  const dflt = loadConfig().model || "crowelm";
+  const out = {};
+  for (const role of ROUTED_ROLES) {
+    const dynamic = harness.catalogModelForRole(catalogCache.models, role);
+    const bridge = harness.BRIDGE_ROLE_MODEL[role];
+    out[role] = dynamic ? { model: dynamic, source: "catalog" }
+      : bridge ? { model: bridge, source: "bridge" }
+      : { model: dflt, source: "default" };
+  }
+  return out;
+}
+ipcMain.handle("crowe:catalog:get", () => ({ models: catalogCache.models, at: catalogCache.at, resolved: resolveRoles(), defaultModel: loadConfig().model || "crowelm" }));
+async function fetchCatalog() {
+  try {
+    const base = loadConfig().baseUrl.replace(/\/$/, "");
+    const resp = await fetch(`${base}/api/gateway/catalog`, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data && Array.isArray(data.models)) catalogCache = { models: data.models, at: Date.now() };
+  } catch { /* keep last good; the router degrades to the default model */ }
+}
+
+const harnessCtx = {
+  getCwd: () => CWD,
+  setCwd: (p) => { CWD = p; },
+  loadConfig,
+  proposeEdit,
+  mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
+  mcpCall,
+  openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  getCatalog: () => catalogCache.models,
+  rateIn: RATE_IN, rateOut: RATE_OUT,
+};
 let agentRun = { aborted: false, controller: null };
 ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentRun.controller && agentRun.controller.abort(); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
-  const send = (ev) => evt.sender.send("crowe:agent:event", ev);
   agentRun = { aborted: false, controller: null };
-  let msgs = messages.slice();
-  let assistantText = "";
-  let totIn = 0, totOut = 0, totMs = 0, capped = false;
-  for (let round = 0; round < 12; round++) {
-    if (agentRun.aborted) { send({ type: "stopped" }); break; }
-    agentRun.controller = new AbortController();
-    const r = await gatewayChat(msgs, allTools(), false, agentRun.controller.signal);
-    if (r && r.aborted) { send({ type: "stopped" }); break; }
-    if (r.error) { send({ type: "error", text: r.error }); return { done: true }; }
-    // Telemetry for the HUD / status bar.
-    const u = r.usage || {}, pin = u.prompt_tokens || 0, pout = u.completion_tokens || 0;
-    totIn += pin; totOut += pout; totMs += r.elapsedMs || 0;
-    send({ type: "telemetry", promptTokens: totIn, completionTokens: totOut, elapsedMs: totMs,
-      tps: r.elapsedMs ? Math.round((pout / r.elapsedMs) * 1000) : 0,
-      lastMs: r.elapsedMs || 0, cost: totIn * RATE_IN + totOut * RATE_OUT });
-    if (r.content) { assistantText += (assistantText ? "\n\n" : "") + r.content; send({ type: "assistant", text: r.content }); }
-    const calls = r.tool_calls || [];
-    if (!calls.length) break;
-    msgs.push({ role: "assistant", content: r.content || "", tool_calls: calls });
-    for (const tc of calls) {
-      if (agentRun.aborted) break;
-      let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
-      send({ type: "tool_call", name: tc.function?.name, args: a });
-      const result = await execTool(tc.function?.name, a);
-      send({ type: "tool_result", name: tc.function?.name, result: String(result).slice(0, 4000) });
-      msgs.push({ role: "tool", tool_call_id: tc.id, name: tc.function?.name, content: String(result) });
-    }
-    if (round === 11) capped = true;
-  }
+  const result = await harness.runAgent(harnessCtx, messages.slice(), {
+    gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
+    send: (ev) => evt.sender.send("crowe:agent:event", ev),
+    isAborted: () => agentRun.aborted,
+    setController: (c) => { agentRun.controller = c; },
+  });
   // Persist the turn to the current session.
-  try { persistSession([...messages, { role: "assistant", content: assistantText }]); } catch {}
-  send({ type: "final", note: capped ? "reached the tool-round limit" : undefined });
+  try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
   return { done: true };
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
@@ -402,7 +386,8 @@ ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBl
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
-    mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
+    mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
+    version: require("./package.json").version };
 });
 ipcMain.handle("crowe:set-config", async (_e, patch) => {
   const c = saveConfig(patch || {});
@@ -451,7 +436,7 @@ function showWindow() { if (!mainWindow || mainWindow.isDestroyed()) createWindo
 let tray = null;
 function createTray() {
   try {
-    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "mark.png")).resize({ width: 18, height: 18 });
+    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png")).resize({ width: 18, height: 18 });
     tray = new Tray(img);
     tray.setToolTip("Crowe Logic");
     tray.setContextMenu(Menu.buildFromTemplate([
@@ -487,6 +472,7 @@ function buildMenu() {
       crowe("Files", "pane:files", "CmdOrCtrl+3"),
       { type: "separator" },
       { label: "Autonomy", submenu: [
+        { label: "Plan (explore read-only, then propose a plan)", type: "radio", checked: tier === "plan", click: () => setAutonomy("plan") },
         { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
         { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },
         { label: "Execute (shell + writes)", type: "radio", checked: tier === "execute", click: () => setAutonomy("execute") },
@@ -508,6 +494,7 @@ app.whenReady().then(async () => {
   createTray();
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
+  fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });

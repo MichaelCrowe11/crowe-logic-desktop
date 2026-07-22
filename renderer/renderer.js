@@ -26,8 +26,16 @@ function addUser(text) {
 function addAssistant() {
   clearWelcome();
   const wrap = document.createElement("div"); wrap.className = "msg assistant";
-  wrap.innerHTML = `<div class="who"><img src="../assets/face.png" alt="Crowe Logic" /></div><div class="body"></div>`;
-  transcript.appendChild(wrap); return wrap.querySelector(".body");
+  wrap.innerHTML = `<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"></div>`;
+  transcript.appendChild(wrap);
+  const body = wrap.querySelector(".body");
+  const markEl = wrap.querySelector(".who-mark");
+  if (window.CroweMark) body._mark = CroweMark.mount(markEl, { state: "rest" });
+  return body;
+}
+function mountWelcomeMark() {
+  const wm = transcript.querySelector(".welcome-mark");
+  if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
 }
 function renderText(body, text) {
   let p = body.querySelector("p.said"); if (!p) { p = document.createElement("p"); p.className = "said streaming"; body.prepend(p); }
@@ -43,7 +51,10 @@ function showThinking(body) {
 let lastCard = null;
 function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
-  const arg = ev.name === "run_shell" ? (ev.args.command || "") : ev.name === "open_url" ? (ev.args.url || "") : (ev.args.path || JSON.stringify(ev.args));
+  const arg = ev.name === "run_shell" ? (ev.args.command || "")
+    : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "search" ? (ev.args.pattern || "")
+    : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
   card.innerHTML = `<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">${esc(label || "tool")}</span><span class="tc-arg">${esc(arg)}</span></div>`;
   body.appendChild(card); lastCard = card; transcript.scrollTop = transcript.scrollHeight;
@@ -86,6 +97,18 @@ function addError(body, text) { const e = document.createElement("div"); e.class
 let running = false;
 let sessionCost = 0, runCost = 0;
 function fmtCost(c) { return "$" + (c || 0).toFixed(4); }
+function addColophon(body, a, tok, cost) {
+  if (!a.cmds && !a.edits && !a.tools && !tok) return;
+  const parts = [];
+  if (a.cmds) parts.push(a.cmds === 1 ? "1 command" : a.cmds + " commands");
+  if (a.edits) parts.push(a.edits === 1 ? "1 edit" : a.edits + " edits");
+  if (a.tools) parts.push(a.tools === 1 ? "1 tool call" : a.tools + " tool calls");
+  const fmtTok = tok >= 1000 ? (tok / 1000).toFixed(1) + "k" : String(tok);
+  const el = document.createElement("div");
+  el.className = "colophon";
+  el.innerHTML = `<span>${esc(parts.join(" · ") || "no workspace actions")}</span><span>${esc(fmtTok)} tok · ${esc(fmtCost(cost))}</span>`;
+  body.appendChild(el);
+}
 function updateHud(ev) {
   runCost = ev.cost || 0;
   $("hud-tok").textContent = `${ev.promptTokens || 0} / ${ev.completionTokens || 0} tok`;
@@ -99,35 +122,51 @@ function setRunning(on) {
   $("hud-status").textContent = on ? "running" : "idle";
 }
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
+function addRouteNode(body, ev) {
+  const label = ev.expert && ev.expert !== "operator" ? `${ev.expert} · ${ev.model}` : (ev.model || "operator");
+  const el = document.createElement("div"); el.className = "routecard";
+  el.innerHTML = `<span class="rc-dot"></span><span class="rc-label">routed to ${esc(label)}</span>`;
+  body.appendChild(el); transcript.scrollTop = transcript.scrollHeight;
+}
 async function send(text) {
   if (!text.trim() || running) return;
   if (!authed) { showSignInPrompt(); return; }
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; input.style.height = "auto";
   const body = addAssistant(); let runText = "";
+  const mark = body._mark; if (mark) mark.setState("reasoning");
+  let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
     if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; renderText(body, runText); }
     else if (ev.type === "assistant_delta") { runText += ev.text || ""; renderText(body, runText); }
-    else if (ev.type === "telemetry") updateHud(ev);
-    else if (ev.type === "tool_call") { showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool"; }
-    else if (ev.type === "tool_result") fillToolResult(ev);
+    else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
+    else if (ev.type === "tool_call") {
+      showThinking(body); addToolCard(body, ev); $("hud-status").textContent = ev.name || "tool";
+      if (mark) mark.ping();
+    }
+    else if (ev.type === "tool_result") {
+      if (!/^blocked:/.test(String(ev.result || ""))) { if (ev.name === "run_shell") acts.cmds++; else if (ev.name === "write_file") acts.edits++; else acts.tools++; }
+      fillToolResult(ev);
+    }
     else if (ev.type === "edit_proposal") addEditProposal(body, ev);
+    else if (ev.type === "route") { addRouteNode(body, ev); if (ev.model) $("hud-model").textContent = ev.model; }
     else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
     else if (ev.type === "error") addError(body, ev.text);
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
   const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });
-  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">(done — see the workspace)</p>';
+  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
+  addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
 $("stop").addEventListener("click", () => window.crowe.agent.stop());
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input.value); } });
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
-function bindChips() { document.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
+function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
 
@@ -140,20 +179,26 @@ function showPane(name) {
 }
 
 // ── Terminal (xterm + PTY) ──
-let term = null, fit = null, ptyStarted = false;
+let term = null, fit = null;
 function fitTerm() { if (fit && term) { try { fit.fit(); window.crowe.pty.resize({ cols: term.cols, rows: term.rows }); } catch {} } }
 async function initTerm() {
   term = new Terminal({ fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace", fontSize: 12.5, cursorBlink: true,
     theme: { background: "#17150f", foreground: "#e9e2cf", cursor: "#c9a227", selectionBackground: "#3a352a" } });
   fit = new FitAddon.FitAddon(); term.loadAddon(fit);
-  term.open($("term")); fit.fit();
+  term.open($("term")); try { fit.fit(); } catch { /* hidden at init (non-chat space); refit on show */ }
   const r = await window.crowe.pty.start({ cols: term.cols, rows: term.rows });
   if (!r || r.ok === false) { term.write("\r\n  PTY unavailable in this build.\r\n"); return; }
-  ptyStarted = true;
   window.crowe.pty.onData((d) => term.write(d));
   term.onData((d) => window.crowe.pty.input(d));
 }
-window.addEventListener("resize", () => { if (document.querySelector("#pane-term.active")) fitTerm(); });
+let resizeFitFrame = 0;
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(resizeFitFrame);
+  resizeFitFrame = requestAnimationFrame(() => {
+    clampWorkbenchSplit();
+    if (document.querySelector("#pane-term.active")) fitTerm();
+  });
+});
 
 // ── Browser ──
 const wv = $("wv"), urlIn = $("url-in");
@@ -176,7 +221,17 @@ async function loadTree(dir) {
 }
 
 // ── Status (cwd + MCP) ──
-function setCwd(c) { if (c) $("cwd").textContent = c; }
+function abbrevPath(p) {
+  if (!p) return "";
+  let s = String(p).replace(/\/+$/, "");
+  const home = "/Users/"; // abbreviate the home prefix to ~ when present
+  const m = s.match(/^\/Users\/[^/]+(\/.*)?$/);
+  if (m) s = "~" + (m[1] || "");
+  const parts = s.split("/").filter(Boolean);
+  if (parts.length > 3) s = (s[0] === "~" ? "~/…/" : "…/") + parts.slice(-2).join("/");
+  return s;
+}
+function setCwd(c) { if (c) { $("cwd").textContent = c; const w = $("ws-path"); if (w) { w.textContent = abbrevPath(c); w.title = c; } } }
 async function refreshStatus() {
   const c = await window.crowe.getConfig();
   setCwd(c.cwd);
@@ -207,12 +262,30 @@ $("cfg-save").addEventListener("click", async () => {
 
 // ── Resizable split ──
 const divider = $("divider"), workbench = $("workbench");
+const MIN_AGENT_WIDTH = 300, MIN_WORKSPACE_WIDTH = 320;
+function clampSplit(requested) {
+  const rect = workbench.getBoundingClientRect();
+  const shellRight = workbench.parentElement.getBoundingClientRect().right;
+  const availableWidth = Math.max(0, shellRight - rect.left);
+  const dividerWidth = divider.getBoundingClientRect().width || 5;
+  const max = Math.max(0, availableWidth - dividerWidth - MIN_WORKSPACE_WIDTH);
+  const min = Math.min(MIN_AGENT_WIDTH, max);
+  return Math.min(Math.max(requested, min), max);
+}
+function setWorkbenchSplit(requested) {
+  const px = clampSplit(requested);
+  workbench.style.setProperty("--split", px + "px");
+  return px;
+}
+function clampWorkbenchSplit() {
+  const current = parseFloat(workbench.style.getPropertyValue("--split"));
+  if (Number.isFinite(current)) setWorkbenchSplit(current);
+}
 divider.addEventListener("mousedown", (e) => {
   e.preventDefault(); divider.classList.add("dragging");
   const move = (ev) => {
     const rect = workbench.getBoundingClientRect();
-    const px = Math.min(Math.max(ev.clientX - rect.left, 300), rect.width - 320);
-    workbench.style.setProperty("--split", px + "px");
+    setWorkbenchSplit(ev.clientX - rect.left);
   };
   const up = () => { divider.classList.remove("dragging"); fitTerm();
     window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
@@ -224,6 +297,7 @@ function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
   $("theme-btn").textContent = dark ? "Light" : "Dark";
   try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+  if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
 $("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
 try { applyTheme(localStorage.getItem("crowe-theme") === "dark"); } catch {}
@@ -243,7 +317,7 @@ const drawer = $("sessions-drawer");
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips();
+  transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.add("hidden");
   sessionCost = 0; runCost = 0;
@@ -283,7 +357,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); const s = b.querySelector("p.said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark(); }
 }
 
 // ── Git / version control pane ──
@@ -331,23 +405,170 @@ async function doCommit() {
 }
 
 // ── Autonomy pill ──
+const TIER_HINT = {
+  plan: "Describe a task. It explores read-only, then writes a plan to approve.",
+  readonly: "Ask anything. Read-only: it can look, not touch.",
+  edit: "Ask anything. It can edit files, with your review.",
+  execute: "Ask anything. It can run commands and edit files.",
+};
 function setAutonomyBadge(tier) {
   document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.tier === tier));
   $("autonomy").dataset.tier = tier;
+  document.body.dataset.tier = tier;
+  input.placeholder = TIER_HINT[tier] || "Ask Crowe Logic to do something...";
+  try { localStorage.setItem("crowe-tier", tier); } catch {}
 }
 document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListener("click", async () => {
   await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
 }));
 
+// ── Spaces: Chat · Projects · Studio · Cultivation ──
+// One operator thread underneath; a space is how much surface you see. Chat is
+// today's workbench. Projects adds the grouped nav + Home control surface.
+// Studio and Cultivation are launch surfaces that funnel into the same thread.
+const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), studio: $("surface-studio"), cultivation: $("surface-cultivation") };
+let projLane = "home";
+const LANES = {
+  sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
+  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending — lands with the crowe-nimbus training API." },
+  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending — /api/gateway/evals is on the nimbus roadmap." },
+  deployments: { title: "Deployments", sub: "Every model the gateway serves, with its routing flags." },
+  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
+};
+function setSpace(name) {
+  document.body.dataset.space = name;
+  document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.space === name));
+  const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
+  workbench.classList.toggle("hidden", !showWb);
+  $("rail").classList.toggle("hidden", name !== "chat");
+  if (name !== "chat") drawer.classList.add("hidden");
+  $("space-nav").classList.toggle("hidden", name !== "projects");
+  Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
+  if (name === "projects" && !showWb) {
+    if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
+    else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
+  } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
+  else if (name === "cultivation") SURFACES.cultivation.classList.remove("hidden");
+  if (showWb) setTimeout(() => { clampWorkbenchSplit(); fitTerm(); }, 30);
+  try { localStorage.setItem("crowe-space", name); } catch {}
+}
+document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
+document.querySelectorAll("#space-nav .sn-item").forEach((b) => b.addEventListener("click", () => {
+  projLane = b.dataset.lane;
+  document.querySelectorAll("#space-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
+  setSpace("projects");
+}));
+
+function ago(ts) {
+  if (!ts) return "never";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 2) return "just now";
+  if (m < 90) return m + "m ago";
+  const h = Math.round(m / 60);
+  return h < 36 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+async function refreshHome() {
+  const [cat, sess, cfg] = await Promise.all([window.crowe.catalog.get(), window.crowe.sessions.list(), window.crowe.getConfig()]);
+  const hs = $("home-sessions"); hs.innerHTML = "";
+  if (!sess.length) hs.innerHTML = '<div class="card-empty">No sessions yet. Start one above.</div>';
+  for (const s of sess.slice(0, 4)) {
+    const row = document.createElement("button"); row.type = "button"; row.className = "krow";
+    row.innerHTML = `<span class="k">${esc(s.title || "Untitled")}</span><span class="v dim">${esc(ago(s.updatedAt))}</span>`;
+    row.addEventListener("click", async () => { await loadSession(s.id); setSpace("chat"); });
+    hs.appendChild(row);
+  }
+  const hr = $("home-routing"); hr.innerHTML = "";
+  for (const [role, r] of Object.entries(cat.resolved || {}))
+    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(role)}</span><span class="v">${esc(r.model)}<em class="src">${esc(r.source)}</em></span></div>`);
+  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}<em class="src">operator</em></span></div>`);
+  let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
+  $("home-gateway").innerHTML = `
+    <div class="kv"><span class="k">endpoint</span><span class="v">${esc(host)}</span></div>
+    <div class="kv"><span class="k">signed in</span><span class="v">${authed ? "yes" : "no"}</span></div>
+    <div class="kv"><span class="k">catalog</span><span class="v">${cat.models.length ? esc(ago(cat.at)) : "unreachable"}</span></div>`;
+  const featured = cat.models.filter((m) => m && m.featured).length;
+  const roled = cat.models.filter((m) => m && m.role).length;
+  $("home-models").innerHTML = `
+    <div class="kv"><span class="k">in catalog</span><span class="v">${cat.models.length}</span></div>
+    <div class="kv"><span class="k">featured</span><span class="v">${featured || "none yet"}</span></div>
+    <div class="kv"><span class="k">role-tagged</span><span class="v">${roled || "none yet"}</span></div>
+    <div class="kv"><span class="k">health</span><span class="v dim">endpoint pending</span></div>`;
+  $("ss-gw").classList.toggle("ok", cat.models.length > 0);
+  $("ss-cat").textContent = cat.models.length ? `catalog · ${cat.models.length} models` : "catalog · unreachable";
+  $("ss-tier").textContent = "tier · " + (document.body.dataset.tier || "edit");
+  $("ss-ver").textContent = cfg.version ? "v" + cfg.version : "";
+}
+let laneGen = 0; // stale async renders must not write into a newer lane
+async function renderLane(lane) {
+  const gen = ++laneGen;
+  const info = LANES[lane] || { title: lane, sub: "" };
+  $("lane-title").textContent = info.title; $("lane-sub").textContent = info.sub;
+  const body = $("lane-body"); body.innerHTML = "";
+  if (lane === "sessions") {
+    const list = await window.crowe.sessions.list();
+    if (gen !== laneGen) return;
+    if (!list.length) { body.innerHTML = '<div class="card-empty">No saved sessions yet.</div>'; return; }
+    for (const s of list) {
+      const row = document.createElement("div"); row.className = "sess-row lane-sess" + (s.current ? " current" : "");
+      const when = new Date(s.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(s.title || "Untitled")}</div><div class="sess-when">${esc(when)}</div></div><button class="sess-del" title="Delete">Delete</button>`;
+      row.addEventListener("click", async (e) => { if (e.target.closest(".sess-del")) return; await loadSession(s.id); setSpace("chat"); });
+      row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation(); await window.crowe.sessions.delete(s.id); if (projLane === "sessions") renderLane("sessions"); });
+      body.appendChild(row);
+    }
+  } else if (lane === "deployments") {
+    const cat = await window.crowe.catalog.get();
+    if (gen !== laneGen) return;
+    if (!cat.models.length) { body.innerHTML = '<div class="card-empty">Catalog unreachable. Check the gateway URL in Settings.</div>'; return; }
+    for (const m of cat.models) {
+      if (!m) continue;
+      const flags = [m.featured ? "featured" : "", m.role || "", m.available === false ? "offline" : "", m.gateway_tool_calling === false ? "no-tools" : ""].filter(Boolean);
+      body.insertAdjacentHTML("beforeend", `<div class="mrow"><span class="m-id">${esc(m.model || m.id || "?")}</span><span class="m-name">${esc(m.display || m.display_name || "")}</span><span class="m-flags">${flags.map((f) => `<em>${esc(f)}</em>`).join("")}</span></div>`);
+    }
+  } else {
+    body.innerHTML = `<span class="pending">${esc(info.pending || "wire pending")}</span>`;
+  }
+}
+$("home-composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("home-input").value.trim(); if (!t) return;
+  setSpace("chat");
+  // Seed the chat composer first: send() clears it only after its running/auth
+  // guards pass, so an early return leaves the draft visible instead of lost.
+  input.value = t;
+  send(t);
+  $("home-input").value = "";
+});
+$("studio-film").addEventListener("click", (e) => {
+  // Never inject keystrokes into the live PTY — a foregrounded vim/REPL would
+  // receive them as commands. Copy instead; the user pastes at their prompt.
+  const btn = e.currentTarget;
+  navigator.clipboard.writeText("psynth").catch(() => {});
+  btn.textContent = "Copied — paste at the prompt";
+  setTimeout(() => { btn.textContent = "Copy psynth · open Terminal"; }, 2400);
+  setSpace("chat"); switchPane("term");
+});
+$("studio-music").addEventListener("click", () => {
+  setSpace("chat");
+  input.value = "Compose with Talon: ";
+  input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+});
+document.querySelectorAll(".cult-chip").forEach((c) => c.addEventListener("click", () => { setSpace("chat"); send(c.textContent); }));
+
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
-  { label: "New chat", run: newChat },
-  { label: "Sessions", run: () => $("rail-sessions").click() },
-  { label: "Terminal", run: () => switchPane("term") },
-  { label: "Browser", run: () => switchPane("browser") },
-  { label: "Files", run: () => switchPane("files") },
-  { label: "Version control (git)", run: () => switchPane("git") },
+  { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
+  { label: "Space: Chat", run: () => setSpace("chat") },
+  { label: "Space: Projects", run: () => setSpace("projects") },
+  { label: "Space: Studio", run: () => setSpace("studio") },
+  { label: "Space: Cultivation", run: () => setSpace("cultivation") },
+  { label: "Sessions", run: () => { setSpace("chat"); $("rail-sessions").click(); } },
+  { label: "Terminal", run: () => { setSpace("chat"); switchPane("term"); } },
+  { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
+  { label: "Files", run: () => { setSpace("chat"); switchPane("files"); } },
+  { label: "Version control (git)", run: () => { setSpace("chat"); switchPane("git"); } },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
+  { label: "Autonomy: Plan", run: () => selAutonomy("plan") },
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
   { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
   { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
@@ -377,11 +598,11 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 
 // ── Menu / tray / global-summon bus (previously fired into the void) ──
 window.crowe.onMenuAction((a) => {
-  if (a === "new-chat") newChat();
-  else if (a === "focus-composer") input.focus();
+  if (a === "new-chat") { setSpace("chat"); newChat(); }
+  else if (a === "focus-composer") { setSpace("chat"); input.focus(); }
   else if (a === "palette") openPalette();
   else if (a === "toggle-theme") applyTheme(!document.body.classList.contains("dark"));
-  else if (a && a.startsWith("pane:")) switchPane(a.slice(5));
+  else if (a && a.startsWith("pane:")) { setSpace("chat"); switchPane(a.slice(5)); }
   else if (a && a.startsWith("autonomy:")) setAutonomyBadge(a.slice(9));
 });
 
@@ -421,8 +642,11 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
+  if (window.CroweMark) { CroweMark.mount($("mark"), { state: "rest" }); mountWelcomeMark(); }
+  try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
+  try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
   await initTerm();
 })();

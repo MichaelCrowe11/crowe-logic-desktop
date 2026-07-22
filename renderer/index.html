@@ -8,11 +8,20 @@
 </head>
 <body>
   <header id="bar">
-    <img id="mark" src="../assets/mark.png" alt="Crowe Logic" />
+    <span id="mark" role="img" aria-label="Crowe Logic"></span>
     <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
     <span class="tagline">Operator</span>
+    <div id="spaces" class="seg spaces" title="Spaces: where you are working">
+      <button class="seg-btn active" data-space="chat">Chat</button>
+      <button class="seg-btn" data-space="projects">Projects</button>
+      <button class="seg-btn" data-space="studio">Studio</button>
+      <button class="seg-btn" data-space="cultivation">Cultivation</button>
+    </div>
+    <span class="ws-sep" aria-hidden="true"></span>
+    <span id="ws-path" class="ws-path" title="Workspace folder"></span>
     <div class="spacer"></div>
     <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
+      <button class="seg-btn" data-tier="plan">Plan</button>
       <button class="seg-btn" data-tier="readonly">Read</button>
       <button class="seg-btn" data-tier="edit">Edit</button>
       <button class="seg-btn" data-tier="execute">Execute</button>
@@ -20,7 +29,7 @@
     <span id="mcp-badge" class="badge alt hidden"></span>
     <span id="model-badge" class="badge">CroweLM</span>
     <button id="signin" class="ghost">Sign in with Crowe ID</button>
-    <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID — click to sign out"></span>
+    <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID. Click to sign out."></span>
     <button id="theme-btn" class="ghost" title="Toggle dark mode">Dark</button>
     <button id="settings-btn" class="ghost">Settings</button>
   </header>
@@ -60,11 +69,96 @@
       <div id="sess-list" class="sess-list"></div>
     </aside>
 
+    <nav id="space-nav" class="space-nav hidden">
+      <span class="sn-group">Operate</span>
+      <button class="sn-item active" data-lane="home">Home</button>
+      <button class="sn-item" data-lane="sessions">Sessions</button>
+      <span class="sn-group">Work</span>
+      <button class="sn-item" data-lane="deepwork">Deep work</button>
+      <span class="sn-group">Models</span>
+      <button class="sn-item" data-lane="training">Training</button>
+      <button class="sn-item" data-lane="evals">Evals</button>
+      <button class="sn-item" data-lane="deployments">Deployments</button>
+      <span class="sn-group">Data</span>
+      <button class="sn-item" data-lane="storage">Storage</button>
+    </nav>
+
+    <section id="surface-home" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Projects</h1><p class="sh-sub">Coding, development, and research — run by the operator.</p></header>
+        <form id="home-composer" class="surface-composer" autocomplete="off">
+          <input id="home-input" type="text" placeholder="Start a task — it opens in Chat, routed to the right expert..." spellcheck="false" />
+          <button type="submit" class="primary sm">Send</button>
+        </form>
+        <div class="cards">
+          <div class="card"><div class="card-h">Recent sessions</div><div id="home-sessions" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Routing · CroweLM</div><div id="home-routing" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Gateway</div><div id="home-gateway" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Models</div><div id="home-models" class="card-b"></div></div>
+        </div>
+        <div class="surface-status">
+          <span id="ss-gw"><span class="ss-dot"></span>gateway</span>
+          <span id="ss-cat"></span>
+          <span class="spacer"></span>
+          <span id="ss-tier"></span>
+          <span id="ss-ver"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="surface-lane" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1 id="lane-title"></h1><p id="lane-sub" class="sh-sub"></p></header>
+        <div id="lane-body"></div>
+      </div>
+    </section>
+
+    <section id="surface-studio" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Crowe Logic Studio</h1><p class="sh-sub">The creative house — film, music, and the studio itself, under one roof.</p></header>
+        <div class="cards">
+          <div class="card lane-card">
+            <div class="card-h">Film · Parallel Synth</div>
+            <p>Terminal timeline editor for film, audio, and generated media. Arrangement lanes, session grid, command palette.</p>
+            <button id="studio-film" class="ghost sm">Copy psynth · open Terminal</button>
+          </div>
+          <div class="card lane-card">
+            <div class="card-h">Music · Talon</div>
+            <p>Crowe Talon composes and produces through the gateway. Describe the piece; the operator carries it.</p>
+            <button id="studio-music" class="ghost sm">Compose with Talon</button>
+          </div>
+          <div class="card lane-card">
+            <div class="card-h">Crowe Studio</div>
+            <p>Design and brand production. The desktop bridge is on the roadmap.</p>
+            <span class="pending">wire pending · 0.7.x</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="surface-cultivation" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Questions here route to crowelm-grower, the mycology expert.</p></header>
+        <div class="chips surface-chips">
+          <button class="chip cult-chip">Plan an oyster substrate recipe for a 10-bag run, with sterilization steps</button>
+          <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
+          <button class="chip cult-chip">Set fruiting conditions for lion's mane in a Martha tent this week</button>
+        </div>
+        <div class="cards" style="margin-top: 18px;">
+          <div class="card lane-card">
+            <div class="card-h">Crowe Sense telemetry</div>
+            <p>Live grow-room sensors and farmlog outcomes, on this surface.</p>
+            <span class="pending">wire pending · 0.8</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <main id="workbench">
       <section id="agent">
         <div id="transcript">
           <div class="welcome">
-            <img class="welcome-face" src="../assets/face.png" alt="Crowe Logic" />
+            <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
             <h1>Crowe Logic</h1>
             <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
             <div class="chips">
@@ -160,6 +254,8 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="mark-geometry.js"></script>
+  <script src="mark.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
