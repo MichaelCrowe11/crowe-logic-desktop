@@ -8,20 +8,95 @@ const input = $("input");
 const messages = [];
 
 function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+// Markdown for the operator's replies. Escape-first, then structure: the input
+// is untrusted model output, so every character passes esc() before any HTML
+// is assembled, and links only ever carry http(s) hrefs.
+function inlineMd(s) {
+  // Code spans are lifted out first so no later pass can rewrite their insides,
+  // then restored at the end. \x00 can't occur in esc()'d text we produce.
+  const codes = [];
+  s = s.replace(/\x00/g, "");
+  s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return "\x00" + (codes.length - 1) + "\x00"; });
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"']+)\)/g, '<a class="mdlink" href="$2">$1</a>');
+  s = s.replace(/(^|[^"'>=\w])(https?:\/\/[^\s<>"')\]]+)/g, '$1<a class="mdlink" href="$2">$2</a>');
+  s = s.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|\W)\*(\S(?:[^*\n]*\S)?)\*(?=\W|$)/g, "$1<em>$2</em>");
+  s = s.replace(/~~([^~]+)~~/g, "<s>$1</s>");
+  return s.replace(/\x00(\d+)\x00/g, (_, i) => "<code>" + codes[+i] + "</code>");
+}
+function mdBlocks(t) {
+  const lines = t.split("\n");
+  const out = [], para = [];
+  const flush = () => { if (para.length) { out.push("<p>" + para.map(inlineMd).join("<br>") + "</p>"); para.length = 0; } };
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    let m;
+    if (!l.trim()) { flush(); i++; continue; }
+    if ((m = l.match(/^(#{1,4})\s+(.*)$/))) { flush(); const n = m[1].length; out.push(`<h${n}>${inlineMd(m[2])}</h${n}>`); i++; continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { flush(); out.push("<hr>"); i++; continue; }
+    if (/^&gt;\s?/.test(l)) {
+      flush(); const q = [];
+      while (i < lines.length && /^&gt;\s?/.test(lines[i])) { q.push(inlineMd(lines[i].replace(/^&gt;\s?/, ""))); i++; }
+      out.push("<blockquote>" + q.join("<br>") + "</blockquote>"); continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) {
+      flush(); const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { items.push("<li>" + inlineMd(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>"); i++; }
+      out.push("<ul>" + items.join("") + "</ul>"); continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(l)) {
+      flush(); const items = [];
+      const start = parseInt(l.match(/^\s*(\d+)/)[1], 10) || 1;
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { items.push("<li>" + inlineMd(lines[i].replace(/^\s*\d+[.)]\s+/, "")) + "</li>"); i++; }
+      out.push(`<ol${start !== 1 ? ` start="${start}"` : ""}>` + items.join("") + "</ol>"); continue;
+    }
+    if (/^\|.*\|/.test(l) && i + 1 < lines.length && /^\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+      flush();
+      const cells = (s) => s.replace(/^\||\|$/g, "").split("|").map((c) => inlineMd(c.trim()));
+      const head = cells(l); i += 2;
+      const rows = [];
+      while (i < lines.length && /^\|.*\|/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+      out.push("<table><thead><tr>" + head.map((c) => `<th>${c}</th>`).join("") + "</tr></thead><tbody>"
+        + rows.map((r) => "<tr>" + r.map((c) => `<td>${c}</td>`).join("") + "</tr>").join("") + "</tbody></table>");
+      continue;
+    }
+    para.push(l); i++;
+  }
+  flush();
+  return out.join("");
+}
 function md(s) {
   const parts = String(s).split(/```/);
   return parts.map((chunk, i) => {
-    if (i % 2 === 1) return `<pre>${esc(chunk.replace(/^\w*\n/, ""))}</pre>`;
-    return esc(chunk).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+    if (i % 2 === 1) {
+      const m = chunk.match(/^([\w+-]*)\n/);
+      const lang = m && m[1] ? esc(m[1]) : "";
+      return `<pre${lang ? ` data-lang="${lang}"` : ""}><code>${esc(chunk.replace(/^[\w+-]*\n/, ""))}</code></pre>`;
+    }
+    return mdBlocks(esc(chunk));
   }).join("");
 }
 function clearWelcome() { const w = transcript.querySelector(".welcome"); if (w) w.remove(); }
+
+// Follow the stream only while the user is at the bottom; never yank them back
+// down while they are reading scrollback.
+let pinned = true;
+transcript.addEventListener("scroll", () => { pinned = transcript.scrollTop + transcript.clientHeight >= transcript.scrollHeight - 48; });
+function scrollBottom(force) { if (force || pinned) transcript.scrollTop = transcript.scrollHeight; }
+// Links in replies open in the app's own browser pane, not the OS browser.
+transcript.addEventListener("click", (e) => {
+  const a = e.target.closest("a.mdlink"); if (!a) return;
+  e.preventDefault();
+  navigate(a.getAttribute("href"));
+  showPane("browser");
+});
 
 function addUser(text) {
   clearWelcome();
   const wrap = document.createElement("div"); wrap.className = "msg user";
   wrap.innerHTML = `<div class="who"><div class="u">You</div></div><div class="body"><p>${esc(text)}</p></div>`;
-  transcript.appendChild(wrap); transcript.scrollTop = transcript.scrollHeight;
+  transcript.appendChild(wrap); pinned = true; scrollBottom(true);
 }
 function addAssistant() {
   clearWelcome();
@@ -38,15 +113,40 @@ function mountWelcomeMark() {
   if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
 }
 function renderText(body, text) {
-  let p = body.querySelector("p.said"); if (!p) { p = document.createElement("p"); p.className = "said streaming"; body.prepend(p); }
+  // .said is a <div>: markdown emits block elements a <p> could not contain.
+  let p = body.querySelector(".said"); if (!p) { p = document.createElement("div"); p.className = "said streaming"; body.prepend(p); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
-  p.innerHTML = md(text); transcript.scrollTop = transcript.scrollHeight;
+  p.innerHTML = md(text); scrollBottom();
+}
+// ── Thinking glyphs: the eight tournament directions as animated states ──
+// The primary mark stays the corporate hex cube; these are cognition, not
+// identity. Fixed brand palette (Royal Blue / Logic Gold), one per turn.
+const TG_B = "#2E5CB8", TG_G = "#D4A62A";
+const TG_HEX8 = "12,4 18.9,8 18.9,16 12,20 5.1,16 5.1,8";
+const TG_HEX3 = "12,9 14.6,10.5 14.6,13.5 12,15 9.4,13.5 9.4,10.5";
+const TG_SPOKES = [[12, 8.5, 12, 4.5], [15, 10.3, 18.5, 8.3], [15, 13.8, 18.5, 15.8], [12, 15.5, 12, 19.5], [9, 13.8, 5.5, 15.8], [9, 10.3, 5.5, 8.3]];
+function tgLines(w, extra) { return TG_SPOKES.map((p) => `<line x1="${p[0]}" y1="${p[1]}" x2="${p[2]}" y2="${p[3]}" stroke="${TG_B}" stroke-width="${w}" stroke-linecap="round"${extra || ""}/>`).join(""); }
+const TG_DRAW = {
+  meridian: () => `<polygon points="${TG_HEX8}" fill="none" stroke="${TG_B}" stroke-width="1.5" opacity=".35"/><g fill="${TG_B}"><circle cx="18.9" cy="8" r="1.6"/><circle cx="18.9" cy="16" r="1.6"/><circle cx="12" cy="20" r="1.6"/><circle cx="5.1" cy="16" r="1.6"/><circle cx="5.1" cy="8" r="1.6"/></g><g class="a"><circle cx="12" cy="4" r="2.2" fill="${TG_G}"/></g><circle cx="12" cy="12" r="1.9" fill="${TG_G}"/>`,
+  iris: () => `<polygon points="12,3.5 19.4,7.8 19.4,16.3 12,20.5 4.6,16.3 4.6,7.8" fill="${TG_B}"/><polygon points="12,7 16.3,9.5 16.3,14.5 12,17 7.7,14.5 7.7,9.5" fill="var(--panel)"/><polygon class="a" points="${TG_HEX3}" fill="${TG_G}"/>`,
+  coalesce: () => `<g class="a" fill="${TG_B}"><polygon points="12,3.5 10.3,9.1 13.7,9.1"/><polygon points="19.4,7.8 13.7,9.1 15.4,12"/><polygon points="19.4,16.3 15.4,12 13.7,14.9"/><polygon points="12,20.5 13.7,14.9 10.3,14.9"/><polygon points="4.6,16.3 10.3,14.9 8.6,12"/><polygon points="4.6,7.8 8.6,12 10.3,9.1"/></g><circle cx="12" cy="12" r="2" fill="${TG_G}"/>`,
+  convergent: () => `<polygon points="${TG_HEX8}" fill="none" stroke="${TG_B}" stroke-width="1.3" opacity=".3"/><g class="a" fill="${TG_B}"><circle cx="12" cy="4" r="1.9"/><circle cx="18.9" cy="8" r="1.9"/><circle cx="18.9" cy="16" r="1.9"/><circle cx="12" cy="20" r="1.9"/><circle cx="5.1" cy="16" r="1.9"/><circle cx="5.1" cy="8" r="1.9"/></g><circle cx="12" cy="12" r="2.2" fill="${TG_G}"/>`,
+  hexbloom: () => `<g class="a">${tgLines(3.2)}<circle cx="12" cy="12" r="1.8" fill="${TG_G}"/><circle cx="12" cy="3.4" r="1.1" fill="${TG_G}"/><circle cx="19.4" cy="16.4" r="1.1" fill="${TG_G}"/><circle cx="4.6" cy="16.4" r="1.1" fill="${TG_G}"/></g>`,
+  mycelial: () => `${tgLines(1.6)}<polygon points="${TG_HEX3}" fill="${TG_G}"/>`,
+  meshwork: () => `<polygon class="a" style="transform-box:view-box;transform-origin:9px 12px" points="9,5.5 14.6,8.8 14.6,15.3 9,18.5 3.4,15.3 3.4,8.8" fill="none" stroke="${TG_B}" stroke-width="2"/><polygon class="o" style="transform-box:view-box;transform-origin:16.5px 12px" points="16.5,7 20.8,9.5 20.8,14.5 16.5,17 12.2,14.5 12.2,9.5" fill="none" stroke="${TG_G}" stroke-width="2"/>`,
+  facet: () => `<polygon points="12,12 12,3.5 19.4,7.8" fill="${TG_B}"/><polygon points="12,12 19.4,7.8 19.4,16.3" fill="${TG_G}"/><polygon points="12,12 19.4,16.3 12,20.5" fill="${TG_B}"/><polygon points="12,12 12,20.5 4.6,16.3" fill="${TG_G}"/><polygon points="12,12 4.6,16.3 4.6,7.8" fill="${TG_B}"/><polygon points="12,12 4.6,7.8 12,3.5" fill="${TG_G}"/>`,
+};
+const THINKERS = Object.keys(TG_DRAW);
+let thinkerIdx = Math.floor(Date.now() / 1000) % THINKERS.length;
+function thinkerSvg() {
+  const kind = THINKERS[thinkerIdx++ % THINKERS.length];
+  return `<svg class="tg tg-${kind}" viewBox="0 0 24 24" aria-hidden="true">${TG_DRAW[kind]()}</svg>`;
 }
 function showThinking(body) {
-  if (body.querySelector(".thinking") || body.querySelector("p.said")) return;
+  if (body.querySelector(".thinking") || body.querySelector(".said")) return;
   const t = document.createElement("div"); t.className = "thinking";
-  t.innerHTML = '<span class="tdot"></span><span>working</span>';
-  body.appendChild(t); transcript.scrollTop = transcript.scrollHeight;
+  t.innerHTML = thinkerSvg() + "<span>working</span>";
+  body.appendChild(t); scrollBottom();
 }
 let lastCard = null;
 function addToolCard(body, ev) {
@@ -57,7 +157,7 @@ function addToolCard(body, ev) {
     : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
   card.innerHTML = `<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">${esc(label || "tool")}</span><span class="tc-arg">${esc(arg)}</span></div>`;
-  body.appendChild(card); lastCard = card; transcript.scrollTop = transcript.scrollHeight;
+  body.appendChild(card); lastCard = card; scrollBottom();
 }
 function fillToolResult(ev) {
   if (!lastCard) return;
@@ -72,7 +172,7 @@ function fillToolResult(ev) {
     r.addEventListener("click", () => r.classList.toggle("collapsed"));
   }
   lastCard.appendChild(r);
-  transcript.scrollTop = transcript.scrollHeight;
+  scrollBottom();
 }
 function addEditProposal(body, ev) {
   const card = document.createElement("div"); card.className = "editcard";
@@ -81,7 +181,7 @@ function addEditProposal(body, ev) {
     <div class="ec-diff">${rows}</div>
     <div class="ec-actions"><button class="approve">Approve</button><button class="reject">Reject</button><span class="ec-hint">a approve · r reject</span></div>`;
   card.tabIndex = 0;
-  body.appendChild(card); card.focus(); transcript.scrollTop = transcript.scrollHeight;
+  body.appendChild(card); card.focus(); scrollBottom();
   const done = (ok) => { window.crowe.edit.decide(ev.id, ok); card.querySelector(".ec-actions").innerHTML = `<span class="ec-status">${ok ? "applied" : "rejected"}</span>`; card.classList.add(ok ? "applied" : "rejected"); };
   card.querySelector(".approve").onclick = () => done(true);
   card.querySelector(".reject").onclick = () => done(false);
@@ -126,7 +226,7 @@ function addRouteNode(body, ev) {
   const label = ev.expert && ev.expert !== "operator" ? `${ev.expert} · ${ev.model}` : (ev.model || "operator");
   const el = document.createElement("div"); el.className = "routecard";
   el.innerHTML = `<span class="rc-dot"></span><span class="rc-label">routed to ${esc(label)}</span>`;
-  body.appendChild(el); transcript.scrollTop = transcript.scrollHeight;
+  body.appendChild(el); scrollBottom();
 }
 async function send(text) {
   if (!text.trim() || running) return;
@@ -156,9 +256,9 @@ async function send(text) {
   });
   try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
-  const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
+  const said = body.querySelector(".said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });
-  else if (!body.querySelector("p.said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
+  else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
@@ -355,7 +455,7 @@ function rebuildTranscript() {
   let any = false;
   for (const m of messages) {
     if (m.role === "user") { addUser(m.content); any = true; }
-    else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); const s = b.querySelector("p.said"); if (s) s.classList.remove("streaming"); any = true; }
+    else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
   if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark(); }
 }
@@ -634,7 +734,7 @@ function showSignInPrompt() {
   b.innerHTML = '<p class="said">Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.</p>';
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.style.marginTop = "8px"; btn.addEventListener("click", doSignIn);
-  b.appendChild(btn); transcript.scrollTop = transcript.scrollHeight;
+  b.appendChild(btn); scrollBottom();
 }
 $("signin").addEventListener("click", doSignIn);
 $("userbadge").addEventListener("click", async () => { await window.crowe.auth.logout(); await refreshAuth(); });

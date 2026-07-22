@@ -1,0 +1,84 @@
+<!doctype html><meta charset="utf-8"><title>crowe_definitive_thinking_mark</title><style>:root{--text-primary:#1a1714;--text-secondary:#6b6457;--text-muted:#8a8274;--surface-0:#f7f3ea;--surface-1:#fbf8f1;--surface-2:#fffdf7;--border:rgba(26,23,20,.14);--border-strong:rgba(26,23,20,.25);--radius:8px;--font-sans:Inter,system-ui,sans-serif;--font-mono:ui-monospace,Menlo,monospace}body{background:var(--surface-0);margin:24px;font-family:var(--font-sans)}</style>
+<h2 class="sr-only">The definitive Crowe Logic thinking mark: a hexagonal blue and gold rotor that breathes, collapsing toward a point and blooming to a clean six-point star while reasoning, and pulsing a gold ring on each tool call, shown on cream and dark surfaces.</h2>
+<style>
+.rig{display:flex;flex-direction:column;gap:14px;padding:8px 0}
+.stages{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.stage{border-radius:14px;display:flex;align-items:center;justify-content:center;padding:22px;min-height:190px;position:relative}
+.stage.cream{background:#f5f1e8;border:1px solid rgba(31,29,24,.12)}
+.stage.dark{background:#14120e;border:1px solid rgba(233,226,207,.14)}
+.mark{width:132px;height:132px;overflow:visible}
+.rotor{transform-box:view-box;transform-origin:60px 60px}
+.breath{transform-box:view-box;transform-origin:60px 60px}
+.arm{transform-box:view-box;transform-origin:60px 60px}
+.ping{transform-box:view-box;transform-origin:60px 60px;opacity:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes bIdle{0%,100%{transform:scale(.965)}50%{transform:scale(1.02)}}
+@keyframes bReason{0%{transform:scale(.46)}42%{transform:scale(1.09)}66%{transform:scale(.82)}100%{transform:scale(.46)}}
+@keyframes goldRecede{0%{opacity:.92}42%{opacity:.08}70%{opacity:.5}100%{opacity:.92}}
+@keyframes armWob{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.16)}}
+@keyframes toolPing{0%{transform:scale(.42);opacity:.9}100%{transform:scale(2.5);opacity:0}}
+@keyframes corePop{0%,100%{transform:scale(1)}40%{transform:scale(1.55)}}
+.stage[data-state=idle] .rotor{animation:spin 46s linear infinite}
+.stage[data-state=idle] .breath{animation:bIdle 5s ease-in-out infinite}
+.stage[data-state=idle] .gold-arm{opacity:.9}
+.stage[data-state=reasoning] .rotor{animation:spin 7.5s linear infinite}
+.stage[data-state=reasoning] .breath{animation:bReason 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage[data-state=reasoning] .gold-arm{animation:goldRecede 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage[data-state=reasoning] .arm{animation:armWob 1.75s ease-in-out infinite}
+.stage.ping .ping{animation:toolPing .78s cubic-bezier(.16,1,.3,1)}
+.stage.ping .core{animation:corePop .52s cubic-bezier(.16,1,.3,1)}
+.cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;font-family:var(--font-mono);font-size:11px;color:#6b6457}
+.dark .cap{color:#8f897a}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.controls .sp{flex:1}
+.note{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)}
+@media(prefers-reduced-motion:reduce){.rotor,.breath,.arm,.gold-arm{animation:none!important}.stage[data-state=idle] .gold-arm,.stage[data-state=reasoning] .gold-arm{opacity:.6}}
+</style>
+<div class="rig">
+  <div class="stages">
+    <div class="stage cream" data-state="idle" id="c"><div class="cap">on paper</div></div>
+    <div class="stage dark" data-state="idle" id="d"><div class="cap" style="color:#8f897a">on the machine</div></div>
+  </div>
+  <div class="controls">
+    <button onclick="S('idle')">Idle</button>
+    <button onclick="S('reasoning')">Reasoning</button>
+    <button onclick="tool()">Tool call</button>
+    <button onclick="demo()">Run a turn</button>
+    <span class="sp"></span>
+    <span class="note" id="note">breathing bloom</span>
+  </div>
+</div>
+<script>
+(function(){
+var blue="#0054b2", gold="#c9a227", gold2="#e0c15a";
+function arm(angle,r0,r1,w,color,cls){
+  var a=(angle-90)*Math.PI/180;
+  var x1=(60+Math.cos(a)*r0).toFixed(2),y1=(60+Math.sin(a)*r0).toFixed(2);
+  var x2=(60+Math.cos(a)*r1).toFixed(2),y2=(60+Math.sin(a)*r1).toFixed(2);
+  var delay=(angle/360*-1.75).toFixed(2);
+  return '<line class="arm '+cls+'" x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+color+'" stroke-width="'+w+'" stroke-linecap="round" style="animation-delay:'+delay+'s"/>';
+}
+function build(){
+  var blueArms="",goldArms="",hex=[],ring=[],i,a;
+  for(i=0;i<6;i++) blueArms+=arm(i*60,14,42,6,blue,"blue-arm");
+  for(i=0;i<6;i++) goldArms+=arm(30+i*60,12,29,4.5,gold,"gold-arm");
+  for(i=0;i<6;i++){a=(i*60-90)*Math.PI/180;hex.push((60+Math.cos(a)*13).toFixed(1)+","+(60+Math.sin(a)*13).toFixed(1));}
+  for(i=0;i<6;i++){a=(i*60-90)*Math.PI/180;ring.push((60+Math.cos(a)*46).toFixed(1)+","+(60+Math.sin(a)*46).toFixed(1));}
+  return '<svg class="mark" viewBox="0 0 120 120" aria-label="Crowe Logic thinking mark">'
+    +'<polygon class="ping" points="'+ring.join(" ")+'" fill="none" stroke="'+gold+'" stroke-width="2"/>'
+    +'<g class="rotor"><g class="breath">'+goldArms+blueArms
+    +'<g class="core"><polygon points="'+hex.join(" ")+'" fill="'+blue+'"/>'
+    +'<polygon points="'+hex.join(" ")+'" fill="none" stroke="'+gold2+'" stroke-width="1.5"/>'
+    +'<circle cx="60" cy="60" r="4.2" fill="'+gold+'"/></g>'
+    +'</g></g></svg>';
+}
+var stages=[document.getElementById("c"),document.getElementById("d")];
+stages.forEach(function(s){s.insertAdjacentHTML("afterbegin",build());});
+window.S=function(st){stages.forEach(function(s){s.dataset.state=st;});document.getElementById("note").textContent=st==="reasoning"?"reasoning · bloom to clean star":st==="idle"?"idle · calm breath":"tool · ring pulse";};
+window.tool=function(){stages.forEach(function(s){s.classList.remove("ping");void s.offsetWidth;s.classList.add("ping");});document.getElementById("note").textContent="tool · ring pulse";};
+var T=[];
+window.demo=function(){T.forEach(clearTimeout);T=[];S("reasoning");
+  [[1000,tool],[1900,function(){S("reasoning");}],[2800,tool],[3700,function(){S("reasoning");}],[4500,tool],[5400,function(){S("idle");}]].forEach(function(p){T.push(setTimeout(p[1],p[0]));});};
+setTimeout(demo,500);
+})();
+</script>

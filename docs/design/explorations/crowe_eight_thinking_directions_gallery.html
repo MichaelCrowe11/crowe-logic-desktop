@@ -1,0 +1,47 @@
+<!doctype html><meta charset="utf-8"><title>crowe_eight_thinking_directions_gallery</title><style>:root{--text-primary:#1a1714;--text-secondary:#6b6457;--text-muted:#8a8274;--surface-0:#f7f3ea;--surface-1:#fbf8f1;--surface-2:#fffdf7;--border:rgba(26,23,20,.14);--border-strong:rgba(26,23,20,.25);--radius:8px;--font-sans:Inter,system-ui,sans-serif;--font-mono:ui-monospace,Menlo,monospace}body{background:var(--surface-0);margin:24px;font-family:var(--font-sans)}</style>
+<h2 class="sr-only">Gallery of the eight Crowe Logic thinking-mark directions from the design tournament, each a static hex-based glyph with its perceptual principle and reasoning-state motion.</h2>
+<style>
+.g8{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:8px 0}
+@media(max-width:560px){.g8{grid-template-columns:repeat(2,1fr)}}
+.c8{background:#f5f1e8;border:1px solid rgba(26,23,20,.12);border-radius:12px;padding:14px 12px;text-align:center}
+.c8 .mk{width:58px;height:58px;margin:0 auto 8px;display:block}
+.c8 h4{font-family:Georgia,serif;font-weight:600;font-size:13px;color:#1a1714;margin:0 0 2px}
+.c8 .dir{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:#96702c;text-transform:uppercase;letter-spacing:.4px}
+.c8 .mo{font-size:10.5px;color:#6b6457;line-height:1.4;margin-top:6px}
+</style>
+<div class="g8" id="g8"></div>
+<script>
+(function(){
+var B="#1a53b0",B2="#2E5AAD",G="#c9a227",Gd="#b8893a";
+function hpts(cx,cy,r){var p=[];for(var i=0;i<6;i++){var a=(i*60-90)*Math.PI/180;p.push((cx+Math.cos(a)*r).toFixed(1)+","+(cy+Math.sin(a)*r).toFixed(1));}return p.join(" ");}
+function node(cx,cy,r,f){return '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="'+f+'"/>';}
+function verts(cx,cy,r){var p=[];for(var i=0;i<6;i++){var a=(i*60-90)*Math.PI/180;p.push([cx+Math.cos(a)*r,cy+Math.sin(a)*r]);}return p;}
+function svg(inner){return '<svg class="mk" viewBox="0 0 120 120" aria-hidden="true">'+inner+'</svg>';}
+var draws={
+meridian:function(){var v=verts(60,60,40),s='<polygon points="'+hpts(60,60,40)+'" fill="none" stroke="'+B+'" stroke-width="2" opacity=".35"/>';v.forEach(function(p,i){s+=node(p[0],p[1],i===0?6:3.6,i===0?G:B);});return svg(s+node(60,60,5,G));},
+iris:function(){return svg('<polygon points="'+hpts(60,60,42)+'" fill="'+B2+'"/><polygon points="'+hpts(60,60,26)+'" fill="#f5f1e8"/><polygon points="'+hpts(60,60,15)+'" fill="'+G+'"/>');},
+coalesce:function(){var v=verts(60,60,44),s="";v.forEach(function(p){s+='<polygon points="60,60 '+(p[0]).toFixed(1)+','+(p[1]).toFixed(1)+' '+((p[0]+60)/2).toFixed(1)+','+((p[1]+60)/2-9).toFixed(1)+'" fill="'+B+'" opacity=".9"/>';});return svg(s+'<polygon points="'+hpts(60,60,14)+'" fill="'+G+'"/>');},
+convergent:function(){var v=verts(60,60,40),s='<polygon points="'+hpts(60,60,40)+'" fill="none" stroke="'+B+'" stroke-width="1.5" opacity=".3"/>';v.forEach(function(p){s+=node(p[0],p[1],5,B);});return svg(s+node(60,60,6,G));},
+hexbloom:function(){var v=verts(60,60,42),s="";v.forEach(function(p){var a=Math.atan2(p[1]-60,p[0]-60);s+='<line x1="'+(60+Math.cos(a)*16).toFixed(1)+'" y1="'+(60+Math.sin(a)*16).toFixed(1)+'" x2="'+(60+Math.cos(a)*38).toFixed(1)+'" y2="'+(60+Math.sin(a)*38).toFixed(1)+'" stroke="'+B+'" stroke-width="6" stroke-linecap="round"/>';s+=node(p[0],p[1],3.2,G);});return svg(s+node(60,60,5,G));},
+mycelial:function(){var v=verts(60,60,44),s="";v.forEach(function(p){var a=Math.atan2(p[1]-60,p[0]-60);s+='<line x1="'+(60+Math.cos(a)*13).toFixed(1)+'" y1="'+(60+Math.sin(a)*13).toFixed(1)+'" x2="'+(60+Math.cos(a)*42).toFixed(1)+'" y2="'+(60+Math.sin(a)*42).toFixed(1)+'" stroke="'+B+'" stroke-width="2.6"/>';s+=node(60+Math.cos(a)*30,60+Math.sin(a)*30,2.6,G);});return svg(s+'<polygon points="'+hpts(60,60,13)+'" fill="'+G+'"/>');},
+meshwork:function(){return svg('<polygon points="'+hpts(46,60,26)+'" fill="none" stroke="'+B+'" stroke-width="5"/><polygon points="'+hpts(78,60,22)+'" fill="none" stroke="'+G+'" stroke-width="5"/>');},
+facet:function(){var v=verts(60,60,42),s="";for(var i=0;i<6;i++){var a=v[i],b=v[(i+1)%6];s+='<polygon points="60,60 '+a[0].toFixed(1)+','+a[1].toFixed(1)+' '+b[0].toFixed(1)+','+b[1].toFixed(1)+'" fill="'+(i%2?B2:B)+'" opacity="'+(i%2?.75:.95)+'"/>';}return svg(s+'<polygon points="'+hpts(60,60,42)+'" fill="none" stroke="'+G+'" stroke-width="1.6"/>');}
+};
+var items=[
+["Meridian","phase-sweep","meridian","A bright locus sweeps the hex ring; progress you can watch."],
+["Hex Iris","aperture","iris","A hexagonal iris narrows: attention as focus."],
+["Coalesce","assembly","coalesce","Petals loosen and lock: thought as construction."],
+["Convergent Hex","orbital","convergent","Six nodes gather to the core: coming to a conclusion."],
+["Hexbloom","breathing-bloom","hexbloom","Deep breath then bloom: living cognition (the shipped one)."],
+["Mycelial Pulse","organic","mycelial","Gold packets travel the branches: signal through mycelium."],
+["Meshwork","precision-gear","meshwork","Interlocked cogs step in detents: engineered reliability."],
+["Facet-Fold","origami","facet","Facets fold around the ring: working through dimensions."]
+];
+var g=document.getElementById("g8");
+items.forEach(function(it){
+  var c=document.createElement("div");c.className="c8";
+  c.innerHTML=draws[it[2]]()+'<h4>'+it[0]+'</h4><div class="dir">'+it[1]+'</div><div class="mo">'+it[3]+'</div>';
+  g.appendChild(c);
+});
+})();
+</script>

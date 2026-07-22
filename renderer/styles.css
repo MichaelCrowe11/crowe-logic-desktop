@@ -129,6 +129,33 @@ body.dark .welcome-mark { filter: drop-shadow(0 12px 32px rgba(0,0,0,.5)); }
 .msg .body { flex: 1; min-width: 0; }
 .msg.assistant .body { border-left: 2px solid var(--tier); padding-left: 18px; }
 .msg .body p { margin: 0 0 8px; white-space: pre-wrap; word-wrap: break-word; }
+
+/* ── Chat markdown (assistant replies) ── */
+.said { word-wrap: break-word; }
+.said h1, .said h2, .said h3, .said h4 { font-family: var(--display); font-weight: 600;
+  line-height: 1.3; margin: 14px 0 6px; }
+.said h1 { font-size: 17.5px; } .said h2 { font-size: 16px; }
+.said h3 { font-size: 14.5px; } .said h4 { font-size: 13.5px; }
+.said > :first-child { margin-top: 0; }
+.said ul, .said ol { margin: 4px 0 10px; padding-left: 22px; }
+.said li { margin: 3px 0; }
+.said li::marker { color: var(--gold-deep); }
+body.dark .said li::marker { color: var(--gold); }
+.said blockquote { margin: 8px 0 10px; padding: 3px 12px; border-left: 2px solid var(--gold);
+  color: var(--muted); }
+.said hr { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
+.said a.mdlink { color: var(--blue); text-decoration: none; border-bottom: 1px solid transparent;
+  transition: border-color 120ms var(--ease); word-break: break-all; }
+.said a.mdlink:hover { border-bottom-color: var(--blue); }
+.said s { color: var(--muted); }
+.said table { border-collapse: collapse; margin: 8px 0 12px; font-size: 12.5px;
+  display: block; max-width: 100%; overflow-x: auto; }
+.said th, .said td { border: 1px solid var(--line); padding: 4px 10px; text-align: left; }
+.said th { font-family: var(--mono); font-size: 10.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); background: var(--panel); }
+.said pre { position: relative; }
+.said pre[data-lang]::before { content: attr(data-lang); position: absolute; top: 5px; right: 11px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em; color: rgba(233,226,207,.45); }
 .msg .body code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; }
 .msg .body pre { background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: 12.5px;
   padding: 11px 13px; border-radius: 10px; overflow-x: auto; box-shadow: var(--z1); }
@@ -197,11 +224,33 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
 .colophon { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 6px;
   border-top: 1px solid var(--line); font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 
-/* Thinking indicator */
+/* Thinking indicator: one of the eight tournament directions, animated by its
+   own principle. Identity stays the hex cube; these are cognition states. */
 .thinking { display: inline-flex; align-items: center; gap: 8px; color: var(--muted);
   font-family: var(--mono); font-size: 12px; }
 .thinking .tdot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold-soft);
   animation: pulse 1.1s ease-in-out infinite; }
+.thinking .tg { width: 18px; height: 18px; flex: 0 0 auto; overflow: visible; }
+.tg .a, .tg .o { transform-box: view-box; transform-origin: 12px 12px; }
+.tg-meridian .a { animation: tgSpin 2.2s linear infinite; }
+.tg-iris .a { animation: tgIris 1.8s cubic-bezier(.37,0,.32,1) infinite; }
+.tg-coalesce .a { animation: tgConverge 1.9s cubic-bezier(.37,0,.32,1) infinite; }
+.tg-convergent .a { animation: tgConverge 1.6s ease-in-out infinite; }
+.tg-hexbloom .a { animation: tgBreathe 2.1s ease-in-out infinite; }
+.tg-mycelial line { stroke-dasharray: 2.6 2.6; animation: tgFlow 1.5s linear infinite; }
+.tg-meshwork .a { animation: tgSpin 3.2s linear infinite; }
+.tg-meshwork .o { animation: tgSpinR 3.2s linear infinite; }
+.tg-facet polygon { animation: tgFade 1.8s ease-in-out infinite; }
+.tg-facet polygon:nth-of-type(2), .tg-facet polygon:nth-of-type(5) { animation-delay: .3s; }
+.tg-facet polygon:nth-of-type(3), .tg-facet polygon:nth-of-type(6) { animation-delay: .6s; }
+@keyframes tgSpin { to { transform: rotate(360deg); } }
+@keyframes tgSpinR { to { transform: rotate(-360deg); } }
+@keyframes tgIris { 0%, 100% { transform: scale(.68); } 50% { transform: scale(1.12); } }
+@keyframes tgConverge { 0%, 100% { transform: scale(1); } 50% { transform: scale(.74); } }
+@keyframes tgBreathe { 0%, 100% { transform: scale(.88); } 50% { transform: scale(1.06); } }
+@keyframes tgFlow { to { stroke-dashoffset: -10.4; } }
+@keyframes tgFade { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tg, .tg * { animation: none !important; } }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .msg { animation: rise 180ms var(--ease); }

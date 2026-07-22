@@ -1,0 +1,87 @@
+<!doctype html><meta charset="utf-8"><title>crowe_house_thinking_mark_final</title><style>:root{--text-primary:#1a1714;--text-secondary:#6b6457;--text-muted:#8a8274;--surface-0:#f7f3ea;--surface-1:#fbf8f1;--surface-2:#fffdf7;--border:rgba(26,23,20,.14);--border-strong:rgba(26,23,20,.25);--radius:8px;--font-sans:Inter,system-ui,sans-serif;--font-mono:ui-monospace,Menlo,monospace}body{background:var(--surface-0);margin:24px;font-family:var(--font-sans)}</style>
+<h2 class="sr-only">The recommended Crowe Logic thinking mark: signature blue and gold, with the blue arms flaring an electric luminance jump only at the bloom peak, shown calm on the cream surface and brighter on the dark surface.</h2>
+<style>
+.rig{display:flex;flex-direction:column;gap:14px;padding:8px 0}
+.stages{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.stage{border-radius:14px;display:flex;align-items:center;justify-content:center;padding:22px;min-height:196px;position:relative}
+.stage.cream{background:#f5f1e8;border:1px solid rgba(31,29,24,.12);--blue:#0054b2;--blueHot:#2f7fd6;--gold:#b7791f;--goldHot:#c9a227;--ring:#b7791f}
+.stage.dark{background:#14120e;border:1px solid rgba(233,226,207,.14);--blue:#0d5bc0;--blueHot:#4d9fe8;--gold:#c9a227;--goldHot:#e0c15a;--ring:#d4af37}
+.mark{width:132px;height:132px;overflow:visible}
+.rotor{transform-box:view-box;transform-origin:60px 60px}
+.breath{transform-box:view-box;transform-origin:60px 60px}
+.arm{transform-box:view-box;transform-origin:60px 60px}
+.ping{transform-box:view-box;transform-origin:60px 60px;opacity:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes bIdle{0%,100%{transform:scale(.965)}50%{transform:scale(1.02)}}
+@keyframes bReason{0%{transform:scale(.46)}42%{transform:scale(1.09)}66%{transform:scale(.82)}100%{transform:scale(.46)}}
+@keyframes goldRecede{0%{opacity:.9}42%{opacity:.08}70%{opacity:.5}100%{opacity:.9}}
+@keyframes armWob{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.16)}}
+@keyframes blueHeat{0%{stroke:var(--blue)}42%{stroke:var(--blueHot)}100%{stroke:var(--blue)}}
+@keyframes coreHeat{0%{fill:var(--blue)}42%{fill:var(--blueHot)}100%{fill:var(--blue)}}
+@keyframes toolPing{0%{transform:scale(.42);opacity:.92}100%{transform:scale(2.5);opacity:0}}
+@keyframes corePop{0%,100%{transform:scale(1)}40%{transform:scale(1.55)}}
+.stage[data-state=idle] .rotor{animation:spin 46s linear infinite}
+.stage[data-state=idle] .breath{animation:bIdle 5s ease-in-out infinite}
+.stage[data-state=idle] .gold-arm{opacity:.88}
+.stage[data-state=reasoning] .rotor{animation:spin 7.5s linear infinite}
+.stage[data-state=reasoning] .breath{animation:bReason 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage[data-state=reasoning] .gold-arm{animation:goldRecede 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage[data-state=reasoning] .blue-arm{animation:armWob 1.75s ease-in-out infinite,blueHeat 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage[data-state=reasoning] .heart{animation:coreHeat 1.75s cubic-bezier(.37,0,.32,1) infinite}
+.stage.ping .ping{animation:toolPing .78s cubic-bezier(.16,1,.3,1)}
+.stage.ping .core{animation:corePop .52s cubic-bezier(.16,1,.3,1)}
+.cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;font-family:var(--font-mono);font-size:11px;color:#6b6457}
+.dark .cap{color:#8f897a}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.controls .sp{flex:1}
+.note{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)}
+@media(prefers-reduced-motion:reduce){.rotor,.breath,.arm,.blue-arm,.gold-arm,.heart{animation:none!important}.gold-arm{opacity:.55}}
+</style>
+<div class="rig">
+  <div class="stages">
+    <div class="stage cream" data-state="reasoning" id="c"><div class="cap">on paper · gentle flare</div></div>
+    <div class="stage dark" data-state="reasoning" id="d"><div class="cap" style="color:#8f897a">on the machine · full ignite</div></div>
+  </div>
+  <div class="controls">
+    <button onclick="S('idle')">Idle</button>
+    <button onclick="S('reasoning')">Reasoning</button>
+    <button onclick="tool()">Tool call</button>
+    <button onclick="demo()">Run a turn</button>
+    <span class="sp"></span>
+    <span class="note">signature palette · electric flare reserved for the bloom</span>
+  </div>
+</div>
+<script>
+(function(){
+function arm(angle,r0,r1,w,which){
+  var a=(angle-90)*Math.PI/180;
+  var x1=(60+Math.cos(a)*r0).toFixed(2),y1=(60+Math.sin(a)*r0).toFixed(2);
+  var x2=(60+Math.cos(a)*r1).toFixed(2),y2=(60+Math.sin(a)*r1).toFixed(2);
+  var col=which==="blue"?"var(--blue)":"var(--gold)";
+  var cls=which==="blue"?"arm blue-arm":"arm gold-arm";
+  return '<line class="'+cls+'" x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+col+'" stroke-width="'+w+'" stroke-linecap="round" style="animation-delay:'+(angle/360*-1.75).toFixed(2)+'s"/>';
+}
+function build(){
+  var bA="",gA="",hex=[],ring=[],i,a;
+  for(i=0;i<6;i++) bA+=arm(i*60,14,42,6,"blue");
+  for(i=0;i<6;i++) gA+=arm(30+i*60,12,29,4.5,"gold");
+  for(i=0;i<6;i++){a=(i*60-90)*Math.PI/180;hex.push((60+Math.cos(a)*13).toFixed(1)+","+(60+Math.sin(a)*13).toFixed(1));}
+  for(i=0;i<6;i++){a=(i*60-90)*Math.PI/180;ring.push((60+Math.cos(a)*46).toFixed(1)+","+(60+Math.sin(a)*46).toFixed(1));}
+  return '<svg class="mark" viewBox="0 0 120 120" aria-label="Crowe Logic thinking mark">'
+    +'<polygon class="ping" points="'+ring.join(" ")+'" fill="none" stroke="var(--ring)" stroke-width="2"/>'
+    +'<g class="rotor"><g class="breath">'+gA+bA
+    +'<g class="core"><polygon class="heart" points="'+hex.join(" ")+'" fill="var(--blue)"/>'
+    +'<polygon points="'+hex.join(" ")+'" fill="none" stroke="var(--goldHot)" stroke-width="1.5"/>'
+    +'<circle cx="60" cy="60" r="4.2" fill="var(--gold)"/></g>'
+    +'</g></g></svg>';
+}
+var stages=[document.getElementById("c"),document.getElementById("d")];
+stages.forEach(function(s){s.insertAdjacentHTML("afterbegin",build());});
+window.S=function(st){stages.forEach(function(s){s.dataset.state=st;});};
+window.tool=function(){stages.forEach(function(s){s.classList.remove("ping");void s.offsetWidth;s.classList.add("ping");});};
+var T=[];
+window.demo=function(){T.forEach(clearTimeout);T=[];S("reasoning");
+  [[1000,tool],[1900,function(){S("reasoning");}],[2800,tool],[3700,function(){S("reasoning");}],[4500,tool],[5400,function(){S("idle");}]].forEach(function(p){T.push(setTimeout(p[1],p[0]));});};
+setTimeout(demo,600);
+})();
+</script>
