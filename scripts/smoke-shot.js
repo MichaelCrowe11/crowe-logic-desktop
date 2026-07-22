@@ -32,6 +32,25 @@ app.whenReady().then(async () => {
   await js(`document.body.classList.add("dark"); setSpace("projects")`); await sleep(900); await shoot(win, "7-projects-home-dark");
   await js(`setSpace("chat"); document.body.classList.remove("dark"); localStorage.setItem("crowe-space","chat")`);
   await sleep(300);
+
+  // Resize regression: shrinking the window must shrink the terminal so #shell
+  // never overflows the viewport (grid items need min-width:0 for this).
+  const measure = () => js(`(() => { const s = document.getElementById("shell");
+    return { scroll: s.scrollWidth, client: s.clientWidth, cols: typeof term !== "undefined" && term ? term.cols : null }; })()`);
+  const wide = await measure();
+  win.setContentSize(900, 840);
+  await sleep(600);
+  const chat900 = await measure();
+  await shoot(win, "8-chat-900");
+  await js(`setSpace("projects")`); await sleep(400);
+  await js(`document.querySelector('[data-lane="deepwork"]').click()`); await sleep(600);
+  const deep900 = await measure();
+  await shoot(win, "9-deepwork-900");
+  await js(`setSpace("chat"); localStorage.setItem("crowe-space","chat")`);
+  console.log("resize:", JSON.stringify({ wide, chat900, deep900 }));
+  const fits = (m) => m && m.scroll === m.client;
+  const shrank = wide && chat900 && wide.cols && chat900.cols && chat900.cols < wide.cols;
+  if (!fits(chat900) || !fits(deep900) || !shrank) { console.error("SMOKE-FAIL: shell overflows or term did not shrink after resize"); app.exit(1); return; }
   console.log("SMOKE-DONE");
   app.exit(0);
 });

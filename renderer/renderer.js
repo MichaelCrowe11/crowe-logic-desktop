@@ -191,7 +191,7 @@ async function initTerm() {
   window.crowe.pty.onData((d) => term.write(d));
   term.onData((d) => window.crowe.pty.input(d));
 }
-window.addEventListener("resize", () => { if (document.querySelector("#pane-term.active")) fitTerm(); });
+window.addEventListener("resize", () => { clampSplit(); if (document.querySelector("#pane-term.active")) fitTerm(); });
 
 // ── Browser ──
 const wv = $("wv"), urlIn = $("url-in");
@@ -255,11 +255,20 @@ $("cfg-save").addEventListener("click", async () => {
 
 // ── Resizable split ──
 const divider = $("divider"), workbench = $("workbench");
+// A drag clamps --split against the workbench width at drag time; shrinking the
+// window (or entering a narrower space) can strand it wider than that, so re-clamp.
+// The 360 margin keeps the workspace wide enough for the tabs row (~341px min).
+function clampSplit() {
+  const cur = parseFloat(workbench.style.getPropertyValue("--split"));
+  if (!cur) return;
+  const w = workbench.getBoundingClientRect().width;
+  if (w && cur > w - 360) workbench.style.setProperty("--split", Math.max(300, w - 360) + "px");
+}
 divider.addEventListener("mousedown", (e) => {
   e.preventDefault(); divider.classList.add("dragging");
   const move = (ev) => {
     const rect = workbench.getBoundingClientRect();
-    const px = Math.min(Math.max(ev.clientX - rect.left, 300), rect.width - 320);
+    const px = Math.min(Math.max(ev.clientX - rect.left, 300), rect.width - 360);
     workbench.style.setProperty("--split", px + "px");
   };
   const up = () => { divider.classList.remove("dragging"); fitTerm();
@@ -424,7 +433,7 @@ function setSpace(name) {
     else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
   } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
   else if (name === "cultivation") SURFACES.cultivation.classList.remove("hidden");
-  if (showWb) setTimeout(fitTerm, 30);
+  if (showWb) setTimeout(() => { clampSplit(); fitTerm(); }, 30);
   try { localStorage.setItem("crowe-space", name); } catch {}
 }
 document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
