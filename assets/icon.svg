@@ -1,4 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#182338"/><stop offset="0.55" stop-color="#101828"/><stop offset="1" stop-color="#0a0e18"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgba(255,255,255,0.14)"/><stop offset="0.2" stop-color="rgba(255,255,255,0.03)"/><stop offset="1" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="102" y="102" width="820" height="820" rx="184" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <g transform="translate(215 209) scale(5.05)">
   <polygon points="62.39,7.07 60.00,5.69 12.96,32.84 27.36,41.16 60.00,22.31 62.39,23.69" fill="#3766C0"/>
   <polygon points="12.96,32.84 12.96,87.16 27.36,78.84 27.36,41.16" fill="#2E5AAD"/>
   <polygon points="12.96,87.16 60.00,114.31 95.85,93.61 95.85,76.99 60.00,97.69 27.36,78.84" fill="#274C97"/>
@@ -10,4 +21,5 @@
   <polygon points="51.14,78.52 51.14,50.22 67.82,40.58 67.82,45.92 55.76,52.89 55.76,75.85" fill="#A96F08"/>
   <polygon points="67.02,24.73 106.46,38.07 67.02,51.41" fill="#EFA71B"/>
   <polygon points="67.02,51.41 106.46,38.07 107.27,40.48 67.83,53.82" fill="#A96F08"/>
+</g>
 </svg>

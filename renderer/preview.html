@@ -1,0 +1,266 @@
+<!doctype html>
+<!-- Design preview: a copy of index.html with preview-shim.js loaded before
+     renderer.js so the UI runs in a plain browser (python3 -m http.server in
+     renderer/). Regenerate from index.html after shell changes. Excluded from
+     the packaged build via package.json build.files. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Crowe Logic</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css?v=1784710274" />
+</head>
+<body>
+  <header id="bar">
+    <span id="mark" role="img" aria-label="Crowe Logic"></span>
+    <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
+    <span class="tagline">Operator</span>
+    <div id="spaces" class="seg spaces" title="Spaces: where you are working">
+      <button class="seg-btn active" data-space="chat">Chat</button>
+      <button class="seg-btn" data-space="projects">Projects</button>
+      <button class="seg-btn" data-space="studio">Studio</button>
+      <button class="seg-btn" data-space="cultivation">Cultivation</button>
+    </div>
+    <span class="ws-sep" aria-hidden="true"></span>
+    <span id="ws-path" class="ws-path" title="Workspace folder"></span>
+    <div class="spacer"></div>
+    <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
+      <button class="seg-btn" data-tier="plan">Plan</button>
+      <button class="seg-btn" data-tier="readonly">Read</button>
+      <button class="seg-btn" data-tier="edit">Edit</button>
+      <button class="seg-btn" data-tier="execute">Execute</button>
+    </div>
+    <span id="mcp-badge" class="badge alt hidden"></span>
+    <span id="model-badge" class="badge">CroweLM</span>
+    <button id="signin" class="ghost">Sign in with Crowe ID</button>
+    <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID. Click to sign out."></span>
+    <button id="theme-btn" class="ghost" title="Toggle dark mode">Dark</button>
+    <button id="settings-btn" class="ghost">Settings</button>
+  </header>
+
+  <div id="shell">
+    <nav id="rail">
+      <button class="rail-btn" id="rail-new" title="New chat">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="rail-btn" id="rail-sessions" title="Sessions">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      </button>
+      <div class="rail-sep"></div>
+      <button class="rail-btn active" data-pane="term" title="Terminal">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="browser" title="Browser">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="files" title="Files">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
+      </button>
+      <button class="rail-btn" data-pane="git" title="Version control">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="9" r="2"/><path d="M7 9v6M17 11c0 3.2-3.5 3-6 3"/></svg>
+      </button>
+      <div class="spacer"></div>
+      <button class="rail-btn" id="rail-palette" title="Command palette (Cmd+K)">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
+      </button>
+      <button class="rail-btn" id="rail-settings" title="Settings">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M17.5 6.5l-2 2M8.5 15.5l-2 2"/></svg>
+      </button>
+    </nav>
+
+    <aside id="sessions-drawer" class="drawer hidden">
+      <div class="drawer-head"><span>Sessions</span><button id="sess-new" class="ghost sm">New</button></div>
+      <div id="sess-list" class="sess-list"></div>
+    </aside>
+
+    <nav id="space-nav" class="space-nav hidden">
+      <span class="sn-group">Operate</span>
+      <button class="sn-item active" data-lane="home">Home</button>
+      <button class="sn-item" data-lane="sessions">Sessions</button>
+      <span class="sn-group">Work</span>
+      <button class="sn-item" data-lane="deepwork">Deep work</button>
+      <span class="sn-group">Models</span>
+      <button class="sn-item" data-lane="training">Training</button>
+      <button class="sn-item" data-lane="evals">Evals</button>
+      <button class="sn-item" data-lane="deployments">Deployments</button>
+      <span class="sn-group">Data</span>
+      <button class="sn-item" data-lane="storage">Storage</button>
+    </nav>
+
+    <section id="surface-home" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Projects</h1><p class="sh-sub">Coding, development, and research — run by the operator.</p></header>
+        <form id="home-composer" class="surface-composer" autocomplete="off">
+          <input id="home-input" type="text" placeholder="Start a task — it opens in Chat, routed to the right expert..." spellcheck="false" />
+          <button type="submit" class="primary sm">Send</button>
+        </form>
+        <div class="cards">
+          <div class="card"><div class="card-h">Recent sessions</div><div id="home-sessions" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Routing · CroweLM</div><div id="home-routing" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Gateway</div><div id="home-gateway" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Models</div><div id="home-models" class="card-b"></div></div>
+        </div>
+        <div class="surface-status">
+          <span id="ss-gw"><span class="ss-dot"></span>gateway</span>
+          <span id="ss-cat"></span>
+          <span class="spacer"></span>
+          <span id="ss-tier"></span>
+          <span id="ss-ver"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="surface-lane" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1 id="lane-title"></h1><p id="lane-sub" class="sh-sub"></p></header>
+        <div id="lane-body"></div>
+      </div>
+    </section>
+
+    <section id="surface-studio" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Crowe Logic Studio</h1><p class="sh-sub">The creative house — film, music, and the studio itself, under one roof.</p></header>
+        <div class="cards">
+          <div class="card lane-card">
+            <div class="card-h">Film · Parallel Synth</div>
+            <p>Terminal timeline editor for film, audio, and generated media. Arrangement lanes, session grid, command palette.</p>
+            <button id="studio-film" class="ghost sm">Copy psynth · open Terminal</button>
+          </div>
+          <div class="card lane-card">
+            <div class="card-h">Music · Talon</div>
+            <p>Crowe Talon composes and produces through the gateway. Describe the piece; the operator carries it.</p>
+            <button id="studio-music" class="ghost sm">Compose with Talon</button>
+          </div>
+          <div class="card lane-card">
+            <div class="card-h">Crowe Studio</div>
+            <p>Design and brand production. The desktop bridge is on the roadmap.</p>
+            <span class="pending">wire pending · 0.7.x</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="surface-cultivation" class="surface hidden">
+      <div class="surface-inner">
+        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Questions here route to crowelm-grower, the mycology expert.</p></header>
+        <div class="chips surface-chips">
+          <button class="chip cult-chip">Plan an oyster substrate recipe for a 10-bag run, with sterilization steps</button>
+          <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
+          <button class="chip cult-chip">Set fruiting conditions for lion's mane in a Martha tent this week</button>
+        </div>
+        <div class="cards" style="margin-top: 18px;">
+          <div class="card lane-card">
+            <div class="card-h">Crowe Sense telemetry</div>
+            <p>Live grow-room sensors and farmlog outcomes, on this surface.</p>
+            <span class="pending">wire pending · 0.8</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <main id="workbench">
+      <section id="agent">
+        <div id="transcript">
+          <div class="welcome">
+            <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
+            <h1>Crowe Logic</h1>
+            <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
+            <div class="chips">
+              <button class="chip">List the files here and summarize the project</button>
+              <button class="chip">Run the test suite and report failures</button>
+              <button class="chip">Show me the git changes and stage the ones that look right</button>
+            </div>
+          </div>
+        </div>
+        <form id="composer" autocomplete="off">
+          <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
+          <button id="send" type="submit">Send</button>
+          <button id="stop" type="button" class="hidden">Stop</button>
+        </form>
+        <div id="hud">
+          <span id="hud-model">CroweLM</span>
+          <span class="hud-sep"></span>
+          <span id="hud-status">idle</span>
+          <span class="spacer"></span>
+          <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
+          <span id="hud-tps"></span>
+          <span id="hud-cost" title="estimated cost this session">$0.0000</span>
+        </div>
+      </section>
+
+      <div id="divider"></div>
+
+      <section id="workspace">
+        <div class="tabs">
+          <button class="tab active" data-pane="term">Terminal</button>
+          <button class="tab" data-pane="browser">Browser</button>
+          <button class="tab" data-pane="files">Files</button>
+          <button class="tab" data-pane="git">Git</button>
+          <div class="spacer"></div>
+          <span id="cwd" class="cwd"></span>
+        </div>
+
+        <div class="pane active" id="pane-term"><div id="term"></div></div>
+
+        <div class="pane" id="pane-browser">
+          <div class="urlbar">
+            <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
+            <button id="url-go" class="ghost">Go</button>
+          </div>
+          <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
+        </div>
+
+        <div class="pane" id="pane-files">
+          <div id="files-tree"></div>
+          <pre id="files-view"></pre>
+        </div>
+
+        <div class="pane" id="pane-git">
+          <div class="git-head">
+            <span class="git-branch-wrap">on <span id="git-branch">-</span></span>
+            <div class="spacer"></div>
+            <button id="git-refresh" class="ghost sm">Refresh</button>
+          </div>
+          <div class="git-body">
+            <div id="git-files" class="git-files"></div>
+            <pre id="git-diff" class="git-diff"></pre>
+          </div>
+          <div class="git-commit">
+            <input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" />
+            <button id="git-commit-btn" class="primary sm">Commit</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="settings" class="modal hidden">
+    <div class="modal-card">
+      <h2>Settings</h2>
+      <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
+      <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
+      <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
+      <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
+      <label>MCP servers (JSON: {"name":{"command":"...","args":[...]}})
+        <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
+      </label>
+      <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
+      <p id="cfg-status" class="hint"></p>
+    </div>
+  </div>
+
+  <div id="palette" class="modal hidden">
+    <div class="palette-card">
+      <input id="pal-input" type="text" placeholder="Type a command..." spellcheck="false" />
+      <div id="pal-list" class="pal-list"></div>
+    </div>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="preview-shim.js?v=1784710274"></script>
+  <script src="mark-geometry.js?v=1784710274"></script>
+  <script src="mark.js?v=1784710274"></script>
+  <script src="renderer.js?v=1784710274"></script>
+</body>
+</html>

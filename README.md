@@ -43,9 +43,26 @@ npm run build:linux   # AppImage + deb
 - `main.js` — window + the gateway bridge. Holds the token; POSTs to
   `{baseUrl}/api/gateway/chat`, forwarding `tools` and returning `tool_calls`.
 - `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig}` (contextIsolation on, nodeIntegration off).
-- `renderer/` — the Crowe editorial UI (cream/ink/gold, Fraunces/Inter), chat
-  loop, tool-call cards, settings.
-- `assets/` — Crowe Logic avatar + mark + app icon.
+- `renderer/` — the Crowe editorial UI (cream/ink/gold, self-hosted
+  Fraunces/Inter/JetBrains Mono), chat loop, tool-call cards, settings.
+- `assets/` — brand assets, all derived from one source of truth.
+
+## Brand assets (one source of truth)
+
+The mark is the corporate double-C hex cube (blue hexagonal C + gold inner C
+firing an arrow out the upper-right edge), generated as exact vector geometry:
+
+```bash
+node scripts/gen-mark.js    # mark.svg, mark-simple.svg, mark-tray.svg, icon.svg,
+                            # renderer/mark-geometry.js (living mark polygons)
+scripts/gen-icons.sh        # icon.icns / icon.ico / icon.png / avatar.png /
+                            # mark.png / tray.png (needs rsvg-convert + magick)
+```
+
+Tune proportions in `scripts/gen-mark.js` and rerun; the in-app living mark
+(`renderer/mark.js`) animates the same geometry (idle breath, reasoning drive,
+tool-call ring). After changing `mark.png`, re-upload `/brand/mark.png` in the
+releases Worker R2 bucket so the download page matches.
 
 ## Native tool calling
 
