@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld("crowe", {
     resize: (size) => ipcRenderer.send("crowe:pty:resize", size),
     onData: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
   },
-  fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p) },
+  fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p), walk: () => ipcRenderer.invoke("crowe:fs:walk") },
   // Version control (git, run in the workspace).
   git: {
     status: () => ipcRenderer.invoke("crowe:git:status"),
@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld("crowe", {
     log: () => ipcRenderer.invoke("crowe:git:log"),
     branches: () => ipcRenderer.invoke("crowe:git:branches"),
     checkout: (branch) => ipcRenderer.invoke("crowe:git:checkout", { branch }),
+    pull: () => ipcRenderer.invoke("crowe:git:pull"),
+    push: () => ipcRenderer.invoke("crowe:git:push"),
   },
   // Conversation history (persisted on disk in the main process).
   sessions: {

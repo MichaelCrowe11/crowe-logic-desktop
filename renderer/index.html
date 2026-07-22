@@ -173,15 +173,6 @@
           <button id="send" type="submit">Send</button>
           <button id="stop" type="button" class="hidden">Stop</button>
         </form>
-        <div id="hud">
-          <span id="hud-model">CroweLM</span>
-          <span class="hud-sep"></span>
-          <span id="hud-status">idle</span>
-          <span class="spacer"></span>
-          <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
-          <span id="hud-tps"></span>
-          <span id="hud-cost" title="estimated cost this session">$0.0000</span>
-        </div>
       </section>
 
       <div id="divider"></div>
@@ -192,6 +183,7 @@
           <button class="tab" data-pane="browser">Browser</button>
           <button class="tab" data-pane="files">Files</button>
           <button class="tab" data-pane="git">Git</button>
+          <button class="tab" data-pane="output">Output</button>
           <div class="spacer"></div>
           <span id="cwd" class="cwd"></span>
         </div>
@@ -211,10 +203,14 @@
           <pre id="files-view"></pre>
         </div>
 
+        <div class="pane" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
+
         <div class="pane" id="pane-git">
           <div class="git-head">
             <span class="git-branch-wrap">on <span id="git-branch">-</span></span>
             <div class="spacer"></div>
+            <button id="git-pull" class="ghost sm" title="git pull --ff-only">Pull</button>
+            <button id="git-push" class="ghost sm" title="git push">Push</button>
             <button id="git-refresh" class="ghost sm">Refresh</button>
           </div>
           <div class="git-body">
@@ -228,6 +224,30 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="term-drawer" class="hidden" aria-label="Terminal drawer">
+    <div id="td-grip" title="Drag to resize · Ctrl+` to toggle"></div>
+  </div>
+
+  <div id="hud">
+    <span id="hud-model">CroweLM</span>
+    <span class="hud-sep"></span>
+    <span id="hud-status">idle</span>
+    <span class="hud-sep"></span>
+    <button id="hud-branch" class="hud-btn" title="Git branch · click for version control"></button>
+    <span id="hud-plug" title="Enabled plugins"></span>
+    <span class="spacer"></span>
+    <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
+    <span id="hud-tps"></span>
+    <span id="hud-cost" title="estimated cost this session">$0.0000</span>
+  </div>
+
+  <div id="qopen" class="modal hidden">
+    <div class="palette-card">
+      <input id="qo-input" type="text" placeholder="Jump to a file... (Enter opens · Cmd+Enter adds to chat)" spellcheck="false" />
+      <div id="qo-list" class="pal-list"></div>
+    </div>
   </div>
 
   <div id="settings" class="modal hidden">

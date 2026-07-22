@@ -435,6 +435,24 @@ ipcMain.handle("crowe:fs:list", (_e, dir) => {
   } catch (e) { return { cwd: target, entries: [], error: String(e) }; }
 });
 ipcMain.handle("crowe:fs:read", (_e, p) => { try { return { content: fs.readFileSync(resolvePath(p), "utf8").slice(0, 200000) }; } catch (e) { return { error: String(e) }; } });
+// Bounded recursive listing for quick open (Cmd+P). Relative paths, files only.
+const WALK_SKIP = new Set(["node_modules", ".git", "dist", "build", "out", ".next", "__pycache__", ".venv", "venv", "target", ".cache"]);
+ipcMain.handle("crowe:fs:walk", () => {
+  const root = CWD, out = [], MAX = 2500;
+  const rec = (dir, rel, depth) => {
+    if (out.length >= MAX || depth > 6) return;
+    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      if (out.length >= MAX) return;
+      if (d.name.startsWith(".") || WALK_SKIP.has(d.name) || d.name.endsWith(".app")) continue;
+      const r = rel ? rel + "/" + d.name : d.name;
+      if (d.isDirectory()) rec(path.join(dir, d.name), r, depth + 1);
+      else if (d.isFile()) out.push(r);
+    }
+  };
+  rec(root, "", 0);
+  return { root, files: out, truncated: out.length >= MAX };
+});
 
 // ─── Git (version control) ───────────────────────────────────────────────────
 function gitRun(argStr) {
@@ -443,7 +461,7 @@ function gitRun(argStr) {
       (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
   });
 }
-function gitWritesBlocked() { return (loadConfig().autonomy || "edit") === "readonly"; }
+function gitWritesBlocked() { const t = loadConfig().autonomy || "edit"; return t === "readonly" || t === "plan"; }
 function shq(p) { return "'" + String(p == null ? "" : p).replace(/'/g, "'\\''") + "'"; }
 ipcMain.handle("crowe:git:status", async () => {
   const probe = await gitRun("rev-parse --is-inside-work-tree");
@@ -478,6 +496,8 @@ ipcMain.handle("crowe:git:branches", async () => {
   return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
 });
 ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`checkout ${shq(branch)}`); });
+ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("pull --ff-only"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("push"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {

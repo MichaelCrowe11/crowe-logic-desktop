@@ -333,9 +333,30 @@ body.dark #signin:hover { color: #16130e; }
 #userbadge:hover { border-color: var(--gold); color: var(--gold-deep); }
 body.dark #userbadge:hover { color: var(--gold); }
 
-/* ── Glass-box HUD (live cost + progress) ── */
+/* ── Glass-box HUD → app-wide status bar (live cost + progress + repo) ── */
 #hud { display: flex; align-items: center; gap: 10px; padding: 5px 14px; border-top: 1px solid var(--line);
-  background: var(--panel); font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  background: var(--panel); font-family: var(--mono); font-size: 11px; color: var(--muted);
+  flex: 0 0 auto; box-shadow: inset 0 1px 0 var(--hair-top); }
+.hud-btn { background: transparent; border: none; padding: 0; font-family: var(--mono); font-size: 11px;
+  color: var(--muted); cursor: pointer; }
+.hud-btn:hover { color: var(--gold-deep); }
+body.dark .hud-btn:hover { color: var(--gold); }
+#hud-plug { color: var(--gold-deep); }
+body.dark #hud-plug { color: var(--gold); }
+
+/* ── Terminal drawer (Ctrl+`) ── */
+#term-drawer { flex: 0 0 auto; height: 240px; display: flex; flex-direction: column;
+  background: var(--term-bg); border-top: 1px solid var(--line-strong); padding: 0 4px 4px 8px; }
+#term-drawer.hidden { display: none; }
+#term-drawer > #term { flex: 1; min-height: 0; }
+#td-grip { flex: 0 0 6px; cursor: row-resize; margin: 0 -4px 2px -8px;
+  border-top: 2px solid transparent; transition: border-color 120ms var(--ease); }
+#td-grip:hover { border-top-color: var(--gold-soft); }
+
+/* ── Output pane (agent event stream) ── */
+#pane-output { background: var(--term-bg); }
+#output-log { flex: 1; margin: 0; overflow: auto; padding: 10px 12px; font-family: var(--mono);
+  font-size: 11.5px; line-height: 1.6; color: var(--term-fg); white-space: pre-wrap; word-break: break-word; }
 #hud .spacer { flex: 1; }
 #hud .hud-sep { width: 1px; height: 12px; background: var(--line); }
 #hud-model { color: var(--gold-deep); }
@@ -476,8 +497,10 @@ button.ghost.sm { padding: 3px 10px; font-size: 11.5px; }
   background: rgba(255, 253, 247, 0.86); -webkit-backdrop-filter: blur(18px) saturate(1.15); backdrop-filter: blur(18px) saturate(1.15);
   border: 1px solid var(--line-strong); box-shadow: var(--z3); }
 body.dark .palette-card { background: rgba(29, 26, 21, 0.78); }
-#pal-input { width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink);
+#pal-input, #qo-input { width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink);
   font-family: var(--body); font-size: 15px; padding: 14px 16px; outline: none; }
+#qo-input { font-family: var(--mono); font-size: 13.5px; }
+#qo-list .pal-row { font-family: var(--mono); font-size: 12.5px; }
 .pal-list { max-height: 300px; overflow-y: auto; padding: 6px; }
 .pal-row { padding: 9px 12px; border-radius: 9px; font-size: 13.5px; cursor: pointer; color: var(--ink); }
 .pal-row:hover, .pal-row.sel { background: rgba(184,137,58,.12); }

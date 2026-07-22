@@ -114,6 +114,28 @@
       "chips": []
     },
     {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Repos, pull requests, issues, and checks. Remote-mutating tools require Execute autonomy.",
+      "category": "projects",
+      "spaces": ["projects", "chat"],
+      "official": true,
+      "available": true,
+      "mcp": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {} },
+      "envPrompts": [{ "key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub personal access token (repo scope)" }],
+      "tools": [
+        { "match": "search_*", "tier": "readonly" },
+        { "match": "get_*", "tier": "readonly" },
+        { "match": "list_*", "tier": "readonly" },
+        { "match": "create_issue", "tier": "edit" },
+        { "match": "update_issue", "tier": "edit" },
+        { "match": "add_issue_comment", "tier": "edit" },
+        { "match": "*", "tier": "execute" }
+      ],
+      "glyph": "meshwork",
+      "chips": ["List my open pull requests and summarize the review state"]
+    },
+    {
       "id": "crowe-cli",
       "name": "Crowe CLI",
       "description": "The Crowe agent CLI as a tool server: python execution, file ops, and web search.",

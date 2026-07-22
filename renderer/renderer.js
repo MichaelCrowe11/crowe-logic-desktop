@@ -318,7 +318,7 @@ document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () 
 function showPane(name) {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x.dataset.pane === name));
   document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + name));
-  if (name === "term") setTimeout(fitTerm, 30);
+  if (name === "term") { if (typeof toggleTermDrawer === "function" && drawerOpen()) toggleTermDrawer(false); setTimeout(fitTerm, 30); }
 }
 
 // ── Terminal (xterm + PTY) ──
@@ -339,7 +339,7 @@ window.addEventListener("resize", () => {
   cancelAnimationFrame(resizeFitFrame);
   resizeFitFrame = requestAnimationFrame(() => {
     clampWorkbenchSplit();
-    if (document.querySelector("#pane-term.active")) fitTerm();
+    if (document.querySelector("#pane-term.active") || drawerOpen()) fitTerm();
   });
 });
 
@@ -506,6 +506,18 @@ function rebuildTranscript() {
 
 // ── Git / version control pane ──
 $("git-refresh").addEventListener("click", loadGit);
+$("git-pull").addEventListener("click", async () => {
+  const r = await window.crowe.git.pull();
+  if (!r || r.error || r.ok === false) { $("git-branch").textContent = (r && r.error) || "pull failed"; appendOutput("git pull failed: " + ((r && (r.out || r.error)) || "").slice(0, 400)); }
+  else { $("git-branch").textContent = "pulled"; loadGit(); }
+  statusTick();
+});
+$("git-push").addEventListener("click", async () => {
+  const r = await window.crowe.git.push();
+  if (!r || r.error || r.ok === false) { $("git-branch").textContent = (r && r.error) || "push failed"; appendOutput("git push failed: " + ((r && (r.out || r.error)) || "").slice(0, 400)); }
+  else { $("git-branch").textContent = "pushed"; setTimeout(loadGit, 600); }
+  statusTick();
+});
 $("git-commit-btn").addEventListener("click", doCommit);
 $("git-msg").addEventListener("keydown", (e) => { if (e.key === "Enter") doCommit(); });
 async function loadGit() {
@@ -751,6 +763,124 @@ async function renderPlugins() {
   }
 }
 
+// ── Workbench ergonomics: terminal drawer, quick open, output, status bar ──
+// The drawer re-parents the single xterm (#term) to a full-width bottom panel,
+// VS Code style; the workspace Terminal tab reclaims it when selected.
+const termDrawer = $("term-drawer");
+function drawerOpen() { return !termDrawer.classList.contains("hidden"); }
+function toggleTermDrawer(force) {
+  const show = force !== undefined ? force : !drawerOpen();
+  if (show === drawerOpen()) return;
+  const termEl = $("term");
+  const hadFocus = termEl.contains(document.activeElement);
+  if (show) {
+    termDrawer.appendChild(termEl); termDrawer.classList.remove("hidden");
+    // The emptied Terminal tab must not sit as an active black void.
+    if ($("pane-term").classList.contains("active")) switchPane("output");
+  } else { $("pane-term").appendChild(termEl); termDrawer.classList.add("hidden"); }
+  if (term && (show || hadFocus)) term.focus();
+  setTimeout(fitTerm, 40);
+}
+if ($("td-grip")) $("td-grip").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  const move = (ev) => {
+    const h = Math.min(Math.max(window.innerHeight - ev.clientY - 26, 120), window.innerHeight * 0.6);
+    termDrawer.style.height = h + "px"; fitTerm();
+  };
+  const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); fitTerm(); };
+  window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey && e.key === "`") || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j")) {
+    e.preventDefault(); toggleTermDrawer();
+  }
+});
+
+// Output pane: the full agent event stream, always recording.
+const OUTPUT_MAX = 500;
+function appendOutput(line) {
+  const log = $("output-log"); if (!log) return;
+  const ts = new Date().toLocaleTimeString([], { hour12: false });
+  log.textContent += `[${ts}] ${line}\n`;
+  const lines = log.textContent.split("\n");
+  if (lines.length > OUTPUT_MAX) log.textContent = lines.slice(lines.length - OUTPUT_MAX).join("\n");
+  log.scrollTop = log.scrollHeight;
+}
+window.crowe.agent.onEvent((ev) => {
+  if (ev.type === "assistant_delta") return; // too chatty for a log
+  const brief = ev.type === "tool_call" ? `${ev.name} ${JSON.stringify(ev.args || {}).slice(0, 120)}`
+    : ev.type === "tool_result" ? `${ev.name || "tool"} → ${String(ev.result || "").slice(0, 120).replace(/\n/g, " ")}`
+    : ev.type === "route" ? `→ ${ev.expert} · ${ev.model}`
+    : ev.type === "telemetry" ? `${ev.promptTokens || 0}/${ev.completionTokens || 0} tok`
+    : ev.type === "assistant" ? String(ev.text || "").slice(0, 120).replace(/\n/g, " ")
+    : ev.type;
+  appendOutput(`${ev.type}: ${brief}`);
+});
+
+// Quick open (Cmd+P): fuzzy file jump over the workspace.
+const qopen = $("qopen"), qoInput = $("qo-input"), qoList = $("qo-list");
+let qoFiles = [], qoAt = 0, qoRoot = null;
+function fuzzy(q, s) {
+  q = q.toLowerCase(); s = s.toLowerCase();
+  let qi = 0, score = 0, last = -2;
+  for (let i = 0; i < s.length && qi < q.length; i++) {
+    if (s[i] === q[qi]) { score += (i === last + 1 ? 3 : 1) + (s[i - 1] === "/" ? 4 : 0); last = i; qi++; }
+  }
+  return qi === q.length ? score - s.length * 0.01 : -1;
+}
+async function openQuickOpen() {
+  const cwd = (await window.crowe.getConfig()).cwd;
+  if (Date.now() - qoAt > 30000 || qoRoot !== cwd) {
+    const w = await window.crowe.fs.walk();
+    qoFiles = w.files || []; qoRoot = w.root || cwd; qoAt = Date.now();
+  }
+  qopen.classList.remove("hidden"); qoInput.value = ""; renderQuickOpen(""); qoInput.focus();
+}
+function closeQuickOpen() { qopen.classList.add("hidden"); }
+function renderQuickOpen(q) {
+  const ranked = q
+    ? qoFiles.map((f) => [fuzzy(q, f), f]).filter((x) => x[0] >= 0).sort((a, b) => b[0] - a[0]).slice(0, 40).map((x) => x[1])
+    : qoFiles.slice(0, 40);
+  qoList.innerHTML = "";
+  ranked.forEach((f, i) => {
+    const d = document.createElement("div"); d.className = "pal-row" + (i === 0 ? " sel" : ""); d.textContent = f;
+    d.addEventListener("click", () => quickOpenFile(f, false));
+    qoList.appendChild(d);
+  });
+}
+async function quickOpenFile(f, toChat) {
+  closeQuickOpen();
+  if (toChat) { setSpace("chat"); input.value = (input.value ? input.value + " " : "") + f; input.focus(); return; }
+  setSpace("chat"); switchPane("files");
+  const r = await window.crowe.fs.read(f);
+  $("files-view").textContent = r.error ? r.error : r.content;
+}
+qoInput.addEventListener("input", () => renderQuickOpen(qoInput.value));
+qoInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeQuickOpen();
+  else if (e.key === "Enter") { const first = qoList.querySelector(".pal-row.sel") || qoList.querySelector(".pal-row"); if (first) quickOpenFile(first.textContent, e.metaKey || e.ctrlKey); }
+});
+qopen.addEventListener("click", (e) => { if (e.target === qopen) closeQuickOpen(); });
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); openQuickOpen(); }
+});
+
+// Status bar: branch + dirty count + plugin count, refreshed lazily.
+async function statusTick() {
+  try {
+    const s = await window.crowe.git.status();
+    const b = $("hud-branch");
+    if (s.repo) { b.textContent = `⎇ ${s.branch}${s.files.length ? " · " + s.files.length : ""}`; b.classList.remove("hidden"); }
+    else { b.textContent = ""; b.classList.add("hidden"); }
+  } catch { /* keep last */ }
+  try {
+    const on = (await window.crowe.plugins.list()).filter((p) => p.connected).length;
+    $("hud-plug").textContent = on ? `⬡ ${on}` : "";
+  } catch { /* keep last */ }
+}
+if ($("hud-branch")) $("hud-branch").addEventListener("click", () => { setSpace("chat"); switchPane("git"); });
+setInterval(statusTick, 30000);
+
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
   { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
@@ -768,6 +898,11 @@ const PAL_ACTIONS = [
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
   { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
   { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
+  { label: "Toggle terminal drawer", run: () => toggleTermDrawer() },
+  { label: "Quick open file", run: openQuickOpen },
+  { label: "Output (agent events)", run: () => { setSpace("chat"); switchPane("output"); } },
+  { label: "Git: pull", run: async () => { const r = await window.crowe.git.pull(); appendOutput("git pull: " + ((r && (r.out || r.error)) || "").slice(0, 200)); loadGit(); statusTick(); } },
+  { label: "Git: push", run: async () => { const r = await window.crowe.git.push(); appendOutput("git push: " + ((r && (r.out || r.error)) || "").slice(0, 200)); statusTick(); } },
   { label: "Plugins", run: () => $("settings-btn").click() },
   { label: "Settings", run: () => $("settings-btn").click() },
 ];
@@ -845,5 +980,6 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
   try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
+  statusTick();
   await initTerm();
 })();
