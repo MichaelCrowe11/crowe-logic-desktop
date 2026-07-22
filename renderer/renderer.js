@@ -214,7 +214,17 @@ async function loadTree(dir) {
 }
 
 // ── Status (cwd + MCP) ──
-function setCwd(c) { if (c) $("cwd").textContent = c; }
+function abbrevPath(p) {
+  if (!p) return "";
+  let s = String(p).replace(/\/+$/, "");
+  const home = "/Users/"; // abbreviate the home prefix to ~ when present
+  const m = s.match(/^\/Users\/[^/]+(\/.*)?$/);
+  if (m) s = "~" + (m[1] || "");
+  const parts = s.split("/").filter(Boolean);
+  if (parts.length > 3) s = (s[0] === "~" ? "~/…/" : "…/") + parts.slice(-2).join("/");
+  return s;
+}
+function setCwd(c) { if (c) { $("cwd").textContent = c; const w = $("ws-path"); if (w) { w.textContent = abbrevPath(c); w.title = c; } } }
 async function refreshStatus() {
   const c = await window.crowe.getConfig();
   setCwd(c.cwd);
