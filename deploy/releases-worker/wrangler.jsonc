@@ -6,5 +6,8 @@
   "r2_buckets": [
     { "binding": "RELEASES", "bucket_name": "crowe-releases" }
   ],
+  "routes": [
+    { "pattern": "releases.crowelogic.com", "custom_domain": true }
+  ],
   "observability": { "enabled": true }
 }
