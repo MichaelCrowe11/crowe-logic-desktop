@@ -237,7 +237,9 @@
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
       <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
-      <label>MCP servers (JSON: {"name":{"command":"...","args":[...]}})
+      <label>Official plugins</label>
+      <div id="cfg-plugins" class="plugs"></div>
+      <label>MCP servers — advanced (JSON: {"name":{"command":"...","args":[...]}})
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>

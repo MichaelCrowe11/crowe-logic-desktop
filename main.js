@@ -188,7 +188,13 @@ function mcpConnect(name, spec) {
       }
     });
     proc.on("error", () => resolve({ error: "spawn failed" }));
-    proc.on("exit", () => { delete MCP[name]; });
+    proc.on("exit", (code) => {
+      // Identity check: a late exit from a superseded process must not
+      // deregister a freshly reconnected server under the same name.
+      if (MCP[name] === srv) { delete MCP[name]; PLUGIN_MANAGED.delete(name); }
+      for (const p of srv.pending.values()) p.rej(new Error(`server exited (code ${code})`));
+      srv.pending.clear();
+    });
     (async () => {
       try {
         await srv.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "crowe-logic", version: app.getVersion() } });
@@ -200,16 +206,104 @@ function mcpConnect(name, spec) {
         }));
         MCP[name] = srv;
         resolve({ ok: true, tools: srv.tools.length });
-      } catch (e) { resolve({ error: String(e) }); }
+      } catch (e) { try { proc.kill(); } catch {} resolve({ error: String(e) }); }
     })();
   });
 }
 async function mcpConnectAll() {
   const { mcpServers } = loadConfig();
   for (const [name, spec] of Object.entries(mcpServers || {})) {
+    // Official plugin ids are reserved: a hand-configured server may not claim
+    // one, so Disable can only ever kill a plugin-spawned process.
+    if (PLUGIN_IDS.has(name)) continue;
     if (spec && spec.command) await mcpConnect(name, spec);
   }
 }
+// ─── Official plugins (Phase 1: bundled manifest over the MCP client) ────────
+// A plugin IS a manifest entry + an MCP server + declared tiers. Enable is one
+// click, disable is one click, and a dead server never breaks the app.
+// TRUST BOUNDARY: p.mcp.command/args are spawned verbatim. The ONLY acceptable
+// manifest source is the bundled plugins.builtin.json, which shares the app's
+// code-signature/asar integrity domain. Any non-bundled source (gateway,
+// userData, download) MUST be signature- or pinned-hash-verified before
+// parsing — a hostile mcp field is arbitrary code execution.
+const BUILTIN_PLUGINS = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, "plugins.builtin.json"), "utf8")).plugins || []; }
+  catch { return []; }
+})();
+const PLUGIN_IDS = new Set(BUILTIN_PLUGINS.map((p) => p.id));
+const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager
+const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
+const PLUGIN_CONNECTING = new Set();
+function pluginState() { return loadConfig().plugins || {}; }
+function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
+function pluginList() {
+  const st = pluginState();
+  return BUILTIN_PLUGINS.map((p) => {
+    const connected = PLUGIN_MANAGED.has(p.id) && Boolean(MCP[p.id]);
+    return {
+      id: p.id, name: p.name, description: p.description, category: p.category,
+      spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
+      glyph: p.glyph || "", chips: p.chips || [],
+      enabled: Boolean(st[p.id] && st[p.id].enabled),
+      connected,
+      toolCount: connected ? MCP[p.id].tools.length : 0,
+    };
+  });
+}
+async function pluginConnect(p, env) {
+  if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
+  const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
+  const r = await mcpConnect(p.id, {
+    command: expandHome(p.mcp.command),
+    args: (p.mcp.args || []).map(expandHome),
+    env: { ...(p.mcp.env || {}), ...(env || {}) },
+  });
+  if (PLUGIN_GEN[p.id] !== gen) {
+    // Disabled (or superseded) while connecting: tear down our registration.
+    const srv = MCP[p.id];
+    if (srv) { try { srv.proc.kill(); } catch {} delete MCP[p.id]; }
+    return { error: "plugin was disabled during connect" };
+  }
+  if (r && r.ok) PLUGIN_MANAGED.add(p.id);
+  return r;
+}
+async function pluginsConnectAll() {
+  const st = pluginState();
+  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled) await pluginConnect(p, s.env); }
+}
+ipcMain.handle("crowe:plugins:list", () => pluginList());
+ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
+  const p = BUILTIN_PLUGINS.find((x) => x.id === id);
+  if (!p) return { error: "unknown plugin" };
+  if (p.available === false) return { error: "server pending — this plugin is not released yet" };
+  if (PLUGIN_MANAGED.has(id) && MCP[id]) return { ok: true, tools: MCP[id].tools.length };
+  if (PLUGIN_CONNECTING.has(id)) return { error: "already connecting" };
+  PLUGIN_CONNECTING.add(id);
+  try {
+    const r = await pluginConnect(p, env);
+    if (r && r.error) return { error: `could not start: ${String(r.error).slice(0, 160)}` };
+    try {
+      saveConfig({ plugins: { ...pluginState(), [id]: { enabled: true, env: env || {} } } });
+    } catch (e) {
+      const srv = MCP[id];
+      if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+      PLUGIN_MANAGED.delete(id);
+      return { error: `could not save config: ${String(e).slice(0, 160)}` };
+    }
+    return { ok: true, tools: r.tools || 0 };
+  } finally { PLUGIN_CONNECTING.delete(id); }
+});
+ipcMain.handle("crowe:plugins:disable", (_e, { id }) => {
+  PLUGIN_GEN[id] = (PLUGIN_GEN[id] || 0) + 1; // void any in-flight connect
+  PLUGIN_MANAGED.delete(id);
+  const srv = MCP[id];
+  if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+  try { saveConfig({ plugins: { ...pluginState(), [id]: { enabled: false } } }); }
+  catch (e) { return { error: `could not save config: ${String(e).slice(0, 160)}` }; }
+  return { ok: true };
+});
+
 async function mcpCall(fullName, args) {
   const [, server, ...rest] = fullName.split("__");
   const tool = rest.join("__");
@@ -297,6 +391,9 @@ const harnessCtx = {
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
   getCatalog: () => catalogCache.models,
+  // Only plugin-managed servers are tier-gated; hand-configured MCP servers
+  // keep their historic ungated behavior even if named like a manifest id.
+  getPlugins: () => BUILTIN_PLUGINS.filter((p) => PLUGIN_MANAGED.has(p.id)),
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 let agentRun = { aborted: false, controller: null };
@@ -494,6 +591,7 @@ app.whenReady().then(async () => {
   createTray();
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
+  pluginsConnectAll();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.

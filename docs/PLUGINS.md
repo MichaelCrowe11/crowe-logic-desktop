@@ -1,6 +1,6 @@
 # Official plugins — Crowe Logic desktop
 
-Status: proposal (2026-07-22). Companion to HARNESS-ARCHITECTURE.md.
+Status: Phase 1 shipped in 0.8.0 (2026-07-22); Phase 2 (gateway registry) next. Companion to HARNESS-ARCHITECTURE.md.
 
 ## The insight
 

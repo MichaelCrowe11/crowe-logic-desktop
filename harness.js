@@ -202,9 +202,33 @@ function toolListDir(ctx, args) {
   return lines.join("\n") || "(empty directory)";
 }
 
+// Official plugins declare per-tool tiers in their manifest. A plugin can add
+// capability, never widen autonomy: its tools pass the same gate as built-ins.
+// Unmanaged (hand-configured) MCP servers keep their historic behavior.
+const TIER_RANK = { plan: 0, readonly: 0, edit: 1, execute: 2 };
+function pluginToolTier(ctx, fullName) {
+  if (!ctx.getPlugins) return null;
+  const [, id, ...rest] = String(fullName).split("__");
+  const tool = rest.join("__");
+  const p = (ctx.getPlugins() || []).find((x) => x && x.id === id);
+  if (!p || !Array.isArray(p.tools)) return null;
+  for (const r of p.tools) {
+    const rx = new RegExp("^" + String(r.match || "*").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+    if (rx.test(tool)) return r.tier || "edit";
+  }
+  return "edit";
+}
 async function execTool(ctx, name, args) {
   try {
-    if (name && name.startsWith("mcp__")) return await ctx.mcpCall(name, args);
+    if (name && name.startsWith("mcp__")) {
+      const need = pluginToolTier(ctx, name);
+      if (need) {
+        const tier = ctx.loadConfig().autonomy || "execute";
+        if ((TIER_RANK[need] ?? 1) > (TIER_RANK[tier] ?? 2))
+          return `blocked: this plugin tool requires "${need}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
+      }
+      return await ctx.mcpCall(name, args);
+    }
     const tier = ctx.loadConfig().autonomy || "execute";
     if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
       return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";

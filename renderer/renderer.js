@@ -148,7 +148,10 @@ function toolGlyph(name) {
   if (name === "run_shell") return ["meshwork", "executing"];
   if (name === "write_file" || name === "edit_file") return ["facet", "editing"];
   if (name === "open_url") return ["iris", "browsing"];
-  if (name && name.startsWith("mcp__")) return ["hexbloom", "calling " + name.split("__")[1]];
+  if (name && name.startsWith("mcp__")) {
+    const id = name.split("__")[1];
+    return [pluginGlyphs[id] || "hexbloom", "calling " + id];
+  }
   return ["mycelial", "retrieving"];
 }
 // One indicator per message body; it moves to the bottom and morphs per stage.
@@ -388,6 +391,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-base").value = c.baseUrl; $("cfg-cwd").value = c.cwd || ""; $("cfg-token").value = "";
   $("cfg-auto").checked = Boolean(c.autoApprove);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
+  renderPlugins();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));
@@ -695,6 +699,58 @@ $("studio-music").addEventListener("click", () => {
 });
 document.querySelectorAll(".cult-chip").forEach((c) => c.addEventListener("click", () => { setSpace("chat"); send(c.textContent); }));
 
+// ── Official plugins (Settings picker; manifest lives in main) ──
+let pluginGlyphs = {};
+async function loadPluginGlyphs() {
+  try { for (const p of await window.crowe.plugins.list()) if (p.glyph) pluginGlyphs[p.id] = p.glyph; } catch {}
+}
+async function renderPlugins() {
+  const box = $("cfg-plugins"); if (!box) return;
+  const list = await window.crowe.plugins.list();
+  box.innerHTML = "";
+  for (const p of list) {
+    const row = document.createElement("div"); row.className = "plug-row";
+    const status = !p.available ? '<em class="plug-tag">server pending</em>'
+      : p.connected ? `<em class="plug-tag on">on · ${p.toolCount} tools</em>`
+      : p.enabled ? '<em class="plug-tag warn">enabled · not connected</em>' : "";
+    row.innerHTML = `<div class="plug-main"><div class="plug-name">${esc(p.name)} ${status}</div>
+      <div class="plug-desc">${esc(p.description)}</div></div>`;
+    const act = document.createElement("button");
+    act.type = "button"; act.className = "ghost sm";
+    act.textContent = p.enabled ? "Disable" : "Enable";
+    if (!p.available && !p.enabled) act.disabled = true;
+    const collectEnv = (envDiv) => {
+      const vals = {};
+      if (envDiv) envDiv.querySelectorAll("input").forEach((i) => { if (i.value.trim()) vals[i.dataset.key] = i.value.trim(); });
+      return vals;
+    };
+    const doEnable = async (vals) => {
+      const r = await window.crowe.plugins.enable(p.id, vals);
+      if (r && r.error) { $("cfg-status").textContent = r.error; return; }
+      $("cfg-status").textContent = `${p.name} connected.`;
+      renderPlugins(); refreshStatus();
+    };
+    act.addEventListener("click", async () => {
+      if (p.enabled) { await window.crowe.plugins.disable(p.id); $("cfg-status").textContent = ""; renderPlugins(); refreshStatus(); return; }
+      const existing = row.querySelector(".plug-env");
+      if (existing) { doEnable(collectEnv(existing)); return; } // Enable == Connect once inputs are shown
+      if ((p.envPrompts || []).length) {
+        // Keys are entered by the user, stored in the plugin's config section,
+        // and passed to the server as env — never rendered back.
+        const env = document.createElement("div"); env.className = "plug-env";
+        env.innerHTML = p.envPrompts.map((e) => `<input type="password" data-key="${esc(e.key)}" placeholder="${esc(e.label)}" spellcheck="false">`).join("");
+        const go = document.createElement("button"); go.type = "button"; go.className = "primary sm"; go.textContent = "Connect";
+        go.addEventListener("click", () => doEnable(collectEnv(env)));
+        env.appendChild(go); row.appendChild(env);
+        return;
+      }
+      doEnable({});
+    });
+    row.appendChild(act);
+    box.appendChild(row);
+  }
+}
+
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
   { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
@@ -712,6 +768,7 @@ const PAL_ACTIONS = [
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
   { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
   { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
+  { label: "Plugins", run: () => $("settings-btn").click() },
   { label: "Settings", run: () => $("settings-btn").click() },
 ];
 async function selAutonomy(t) { await window.crowe.setConfig({ autonomy: t }); setAutonomyBadge(t); }
@@ -784,7 +841,7 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
   $("model-badge").textContent = "CroweLM";
   if (window.CroweMark) { CroweMark.mount($("mark"), { state: "rest" }); mountWelcomeMark(); }
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
-  const c = await refreshStatus(); loadTree();
+  const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
   try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
