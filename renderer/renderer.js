@@ -763,6 +763,28 @@ async function renderPlugins() {
   }
 }
 
+// ── Auto-update banner (consent-first: never downloads without a click) ──
+const updBanner = $("update-banner"), ubText = $("ub-text"), ubAction = $("ub-action");
+function renderUpdate(s) {
+  if (!s || s.status === "idle" || s.status === "current" || s.status === "dev") { updBanner.classList.add("hidden"); return; }
+  updBanner.classList.remove("hidden");
+  if (s.status === "available") { ubText.textContent = `Update ${s.version} is available.`; ubAction.textContent = "Download"; ubAction.disabled = false; }
+  else if (s.status === "downloading") { ubText.textContent = `Downloading update… ${s.percent || 0}%`; ubAction.textContent = "Downloading"; ubAction.disabled = true; }
+  else if (s.status === "ready") { ubText.textContent = `Update ${s.version} is ready.`; ubAction.textContent = "Restart to update"; ubAction.disabled = false; }
+  else if (s.status === "error") { ubText.textContent = `Update check failed.`; ubAction.textContent = "Retry"; ubAction.disabled = false; }
+}
+ubAction.addEventListener("click", async () => {
+  const t = ubAction.textContent;
+  if (t === "Download") await window.crowe.update.download();
+  else if (t === "Restart to update") await window.crowe.update.install();
+  else if (t === "Retry") await window.crowe.update.check();
+});
+$("ub-dismiss").addEventListener("click", () => updBanner.classList.add("hidden"));
+if (window.crowe.update) {
+  window.crowe.update.onChange(renderUpdate);
+  window.crowe.update.state().then(renderUpdate);
+}
+
 // ── Workbench ergonomics: terminal drawer, quick open, output, status bar ──
 // The drawer re-parents the single xterm (#term) to a full-width bottom panel,
 // VS Code style; the workspace Terminal tab reclaims it when selected.
@@ -903,6 +925,7 @@ const PAL_ACTIONS = [
   { label: "Output (agent events)", run: () => { setSpace("chat"); switchPane("output"); } },
   { label: "Git: pull", run: async () => { const r = await window.crowe.git.pull(); appendOutput("git pull: " + ((r && (r.out || r.error)) || "").slice(0, 200)); loadGit(); statusTick(); } },
   { label: "Git: push", run: async () => { const r = await window.crowe.git.push(); appendOutput("git push: " + ((r && (r.out || r.error)) || "").slice(0, 200)); statusTick(); } },
+  { label: "Check for updates", run: async () => { const s = await window.crowe.update.check(); if (s && (s.status === "current" || s.status === "dev")) appendOutput("update: " + (s.status === "dev" ? "dev build — updates only in packaged app" : "you're on the latest version")); } },
   { label: "Plugins", run: () => $("settings-btn").click() },
   { label: "Settings", run: () => $("settings-btn").click() },
 ];

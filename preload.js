@@ -50,6 +50,14 @@ contextBridge.exposeInMainWorld("crowe", {
   onMenuAction: (cb) => { const h = (_e, a) => cb(a); ipcRenderer.on("crowe:menu", h); return () => ipcRenderer.removeListener("crowe:menu", h); },
   // Model catalog (cached in main; drives the router and the Home surface).
   catalog: { get: () => ipcRenderer.invoke("crowe:catalog:get") },
+  // Auto-update (packaged builds only; downloads are user-consented).
+  update: {
+    check: () => ipcRenderer.invoke("crowe:update:check"),
+    download: () => ipcRenderer.invoke("crowe:update:download"),
+    install: () => ipcRenderer.invoke("crowe:update:install"),
+    state: () => ipcRenderer.invoke("crowe:update:state"),
+    onChange: (cb) => { const h = (_e, s) => cb(s); ipcRenderer.on("crowe:update", h); return () => ipcRenderer.removeListener("crowe:update", h); },
+  },
   // Official plugins (bundled manifest, Phase 1).
   plugins: {
     list: () => ipcRenderer.invoke("crowe:plugins:list"),
