@@ -313,23 +313,38 @@ function compactMessages(msgs) {
 // the turn (intent + file types + tier + cost ceiling) and dispatch to a specific
 // Azure / Cloudflare deployment, FALLBACK-FIRST so routing can never regress the
 // loop. See docs/HARNESS-ARCHITECTURE.md.
-// Curated to deployments verified tool-capable on the gateway (2026-07). The
-// rest of the catalog (FW-GLM-5, Llama-3-3-70B, gpt-5.4, DeepSeek) is not live
-// for tool calling yet, so v1 routes only among known-good experts and always
-// carries a fallback to the default model.
-const EXPERTS = [
-  { expert: "grower", model: "crowelm-grower",
-    match: /\b(cultivat\w*|mycolog\w*|substrate|myceli\w*|grow(?:er|ing)?|inocula\w*|fruit(?:ing)?|spawn|agar|petri|contaminat\w*|harvest|strain|mushroom|coloniz\w*|sterili[sz]\w*)\b/i },
-  { expert: "deep", model: "Kimi-K2.5",
-    match: /\b(architect\w*|refactor\w*|redesign|prove|reason through|algorithm\w*|optimi[sz]\w*|trade-?off|concurren\w*|race condition|root cause)\b/i },
+// Intent -> role is classified here; role -> model is resolved DYNAMICALLY from
+// the gateway catalog (featured, available, tool-capable entries carrying a
+// `role`), so new deployments light up with no desktop release. Until the
+// catalog carries role tags, a thin static bridge keeps the known specialists;
+// if neither resolves, the default model handles it. Fallback-first end to end.
+const ROLE_MATCH = [
+  { role: "cultivation", match: /\b(cultivat\w*|mycolog\w*|substrate|myceli\w*|grow(?:er|ing)?|inocula\w*|fruit(?:ing)?|spawn|agar|petri|contaminat\w*|harvest|strain|mushroom|coloniz\w*|sterili[sz]\w*)\b/i },
+  { role: "coding", match: /\b(refactor\w*|implement|debug\w*|stack ?trace|compile|pytest|unit test|API endpoint|migration|typescript|rust|golang)\b/i },
+  { role: "reasoning", match: /\b(architect\w*|redesign|prove|reason through|algorithm\w*|optimi[sz]\w*|trade-?off|concurren\w*|race condition|root cause|complexity)\b/i },
+  { role: "long-context", match: /\b(summari[sz]e (?:this|the (?:whole|entire))|entire (?:repo|codebase|document|file)|long document|across all files)\b/i },
 ];
+// Bridge: kept only until the catalog carries role tags; drop once dynamic.
+const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower", reasoning: "Kimi-K2.5" };
+function classifyRole(text) {
+  for (const r of ROLE_MATCH) if (r.match.test(text)) return r.role;
+  return "default";
+}
+function catalogModelForRole(catalog, role) {
+  if (!Array.isArray(catalog)) return null;
+  const m = catalog.find((x) => x && x.featured && x.available !== false && x.gateway_tool_calling !== false && x.role === role);
+  return m ? m.model : null;
+}
 function routeTurn(ctx, messages) {
   const cfg = ctx.loadConfig();
   const dflt = cfg.model || "crowelm";
   const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
-  const text = String((last && last.content) || "");
-  for (const e of EXPERTS) if (e.match.test(text)) return { expert: e.expert, model: e.model, reason: `matched ${e.expert}`, fallback: dflt };
-  return { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
+  const role = classifyRole(String((last && last.content) || ""));
+  if (role === "default") return { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
+  const dynamic = catalogModelForRole(ctx.getCatalog ? ctx.getCatalog() : [], role);
+  const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
+  const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
+  return { expert: role, model, reason: `${role} · ${src}`, fallback: dflt };
 }
 
 // ─── Agent loop (block: route -> retrieve/reason/synthesize) ──────────────────
@@ -411,4 +426,4 @@ async function runAgent(ctx, messages, deps) {
   return { text: assistantText, capped };
 }
 
-module.exports = { runAgent, routeTurn, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS, TIER_LINES };
+module.exports = { runAgent, routeTurn, classifyRole, catalogModelForRole, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS, TIER_LINES };

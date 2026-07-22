@@ -258,6 +258,21 @@ async function proposeEdit(filePath, newContent) {
 const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
 
 // ─── Agentic loop (delegates to harness.js) ──────────────────────────────────
+// ─── Model catalog (public endpoint; drives dynamic routing) ─────────────────
+// Cached so the router reads it per-turn without a network hop. Refreshed on
+// startup, after sign-in, and on a timer. If it can't be fetched the router
+// falls back to the default model, so a missing catalog never breaks a turn.
+let catalogCache = { models: [], at: 0 };
+async function fetchCatalog() {
+  try {
+    const base = loadConfig().baseUrl.replace(/\/$/, "");
+    const resp = await fetch(`${base}/api/gateway/catalog`, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data && Array.isArray(data.models)) catalogCache = { models: data.models, at: Date.now() };
+  } catch { /* keep last good; the router degrades to the default model */ }
+}
+
 const harnessCtx = {
   getCwd: () => CWD,
   setCwd: (p) => { CWD = p; },
@@ -266,6 +281,7 @@ const harnessCtx = {
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  getCatalog: () => catalogCache.models,
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 let agentRun = { aborted: false, controller: null };
@@ -462,6 +478,7 @@ app.whenReady().then(async () => {
   createTray();
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
+  fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });
