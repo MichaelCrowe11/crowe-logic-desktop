@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld("crowe", {
   onBrowserNavigate: (cb) => { const h = (_e, url) => cb(url); ipcRenderer.on("crowe:browser:navigate", h); return () => ipcRenderer.removeListener("crowe:browser:navigate", h); },
   // Native menu / tray / global-shortcut actions: new-chat, palette, focus-composer, toggle-theme, pane:term|browser|files.
   onMenuAction: (cb) => { const h = (_e, a) => cb(a); ipcRenderer.on("crowe:menu", h); return () => ipcRenderer.removeListener("crowe:menu", h); },
+  // Model catalog (cached in main; drives the router and the Home surface).
+  catalog: { get: () => ipcRenderer.invoke("crowe:catalog:get") },
   getConfig: () => ipcRenderer.invoke("crowe:get-config"),
   setConfig: (patch) => ipcRenderer.invoke("crowe:set-config", patch),
 });

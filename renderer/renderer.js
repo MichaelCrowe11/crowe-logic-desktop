@@ -166,7 +166,7 @@ $("stop").addEventListener("click", () => window.crowe.agent.stop());
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input.value); } });
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
-function bindChips() { document.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
+function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
 
@@ -185,7 +185,7 @@ async function initTerm() {
   term = new Terminal({ fontFamily: "JetBrains Mono, ui-monospace, Menlo, monospace", fontSize: 12.5, cursorBlink: true,
     theme: { background: "#17150f", foreground: "#e9e2cf", cursor: "#c9a227", selectionBackground: "#3a352a" } });
   fit = new FitAddon.FitAddon(); term.loadAddon(fit);
-  term.open($("term")); fit.fit();
+  term.open($("term")); try { fit.fit(); } catch { /* hidden at init (non-chat space); refit on show */ }
   const r = await window.crowe.pty.start({ cols: term.cols, rows: term.rows });
   if (!r || r.ok === false) { term.write("\r\n  PTY unavailable in this build.\r\n"); return; }
   window.crowe.pty.onData((d) => term.write(d));
@@ -397,14 +397,151 @@ document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListene
   await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
 }));
 
+// ── Spaces: Chat · Projects · Studio · Cultivation ──
+// One operator thread underneath; a space is how much surface you see. Chat is
+// today's workbench. Projects adds the grouped nav + Home control surface.
+// Studio and Cultivation are launch surfaces that funnel into the same thread.
+const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), studio: $("surface-studio"), cultivation: $("surface-cultivation") };
+let projLane = "home";
+const LANES = {
+  sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
+  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending — lands with the crowe-nimbus training API." },
+  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending — /api/gateway/evals is on the nimbus roadmap." },
+  deployments: { title: "Deployments", sub: "Every model the gateway serves, with its routing flags." },
+  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
+};
+function setSpace(name) {
+  document.body.dataset.space = name;
+  document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.space === name));
+  const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
+  workbench.classList.toggle("hidden", !showWb);
+  $("rail").classList.toggle("hidden", name !== "chat");
+  if (name !== "chat") drawer.classList.add("hidden");
+  $("space-nav").classList.toggle("hidden", name !== "projects");
+  Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
+  if (name === "projects" && !showWb) {
+    if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
+    else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
+  } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
+  else if (name === "cultivation") SURFACES.cultivation.classList.remove("hidden");
+  if (showWb) setTimeout(fitTerm, 30);
+  try { localStorage.setItem("crowe-space", name); } catch {}
+}
+document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
+document.querySelectorAll("#space-nav .sn-item").forEach((b) => b.addEventListener("click", () => {
+  projLane = b.dataset.lane;
+  document.querySelectorAll("#space-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
+  setSpace("projects");
+}));
+
+function ago(ts) {
+  if (!ts) return "never";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 2) return "just now";
+  if (m < 90) return m + "m ago";
+  const h = Math.round(m / 60);
+  return h < 36 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+async function refreshHome() {
+  const [cat, sess, cfg] = await Promise.all([window.crowe.catalog.get(), window.crowe.sessions.list(), window.crowe.getConfig()]);
+  const hs = $("home-sessions"); hs.innerHTML = "";
+  if (!sess.length) hs.innerHTML = '<div class="card-empty">No sessions yet. Start one above.</div>';
+  for (const s of sess.slice(0, 4)) {
+    const row = document.createElement("button"); row.type = "button"; row.className = "krow";
+    row.innerHTML = `<span class="k">${esc(s.title || "Untitled")}</span><span class="v dim">${esc(ago(s.updatedAt))}</span>`;
+    row.addEventListener("click", async () => { await loadSession(s.id); setSpace("chat"); });
+    hs.appendChild(row);
+  }
+  const hr = $("home-routing"); hr.innerHTML = "";
+  for (const [role, r] of Object.entries(cat.resolved || {}))
+    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(role)}</span><span class="v">${esc(r.model)}<em class="src">${esc(r.source)}</em></span></div>`);
+  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}<em class="src">operator</em></span></div>`);
+  let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
+  $("home-gateway").innerHTML = `
+    <div class="kv"><span class="k">endpoint</span><span class="v">${esc(host)}</span></div>
+    <div class="kv"><span class="k">signed in</span><span class="v">${authed ? "yes" : "no"}</span></div>
+    <div class="kv"><span class="k">catalog</span><span class="v">${cat.models.length ? esc(ago(cat.at)) : "unreachable"}</span></div>`;
+  const featured = cat.models.filter((m) => m && m.featured).length;
+  const roled = cat.models.filter((m) => m && m.role).length;
+  $("home-models").innerHTML = `
+    <div class="kv"><span class="k">in catalog</span><span class="v">${cat.models.length}</span></div>
+    <div class="kv"><span class="k">featured</span><span class="v">${featured || "none yet"}</span></div>
+    <div class="kv"><span class="k">role-tagged</span><span class="v">${roled || "none yet"}</span></div>
+    <div class="kv"><span class="k">health</span><span class="v dim">endpoint pending</span></div>`;
+  $("ss-gw").classList.toggle("ok", cat.models.length > 0);
+  $("ss-cat").textContent = cat.models.length ? `catalog · ${cat.models.length} models` : "catalog · unreachable";
+  $("ss-tier").textContent = "tier · " + (document.body.dataset.tier || "edit");
+  $("ss-ver").textContent = cfg.version ? "v" + cfg.version : "";
+}
+let laneGen = 0; // stale async renders must not write into a newer lane
+async function renderLane(lane) {
+  const gen = ++laneGen;
+  const info = LANES[lane] || { title: lane, sub: "" };
+  $("lane-title").textContent = info.title; $("lane-sub").textContent = info.sub;
+  const body = $("lane-body"); body.innerHTML = "";
+  if (lane === "sessions") {
+    const list = await window.crowe.sessions.list();
+    if (gen !== laneGen) return;
+    if (!list.length) { body.innerHTML = '<div class="card-empty">No saved sessions yet.</div>'; return; }
+    for (const s of list) {
+      const row = document.createElement("div"); row.className = "sess-row lane-sess" + (s.current ? " current" : "");
+      const when = new Date(s.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(s.title || "Untitled")}</div><div class="sess-when">${esc(when)}</div></div><button class="sess-del" title="Delete">Delete</button>`;
+      row.addEventListener("click", async (e) => { if (e.target.closest(".sess-del")) return; await loadSession(s.id); setSpace("chat"); });
+      row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation(); await window.crowe.sessions.delete(s.id); if (projLane === "sessions") renderLane("sessions"); });
+      body.appendChild(row);
+    }
+  } else if (lane === "deployments") {
+    const cat = await window.crowe.catalog.get();
+    if (gen !== laneGen) return;
+    if (!cat.models.length) { body.innerHTML = '<div class="card-empty">Catalog unreachable. Check the gateway URL in Settings.</div>'; return; }
+    for (const m of cat.models) {
+      if (!m) continue;
+      const flags = [m.featured ? "featured" : "", m.role || "", m.available === false ? "offline" : "", m.gateway_tool_calling === false ? "no-tools" : ""].filter(Boolean);
+      body.insertAdjacentHTML("beforeend", `<div class="mrow"><span class="m-id">${esc(m.model || m.id || "?")}</span><span class="m-name">${esc(m.display || m.display_name || "")}</span><span class="m-flags">${flags.map((f) => `<em>${esc(f)}</em>`).join("")}</span></div>`);
+    }
+  } else {
+    body.innerHTML = `<span class="pending">${esc(info.pending || "wire pending")}</span>`;
+  }
+}
+$("home-composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("home-input").value.trim(); if (!t) return;
+  setSpace("chat");
+  // Seed the chat composer first: send() clears it only after its running/auth
+  // guards pass, so an early return leaves the draft visible instead of lost.
+  input.value = t;
+  send(t);
+  $("home-input").value = "";
+});
+$("studio-film").addEventListener("click", (e) => {
+  // Never inject keystrokes into the live PTY — a foregrounded vim/REPL would
+  // receive them as commands. Copy instead; the user pastes at their prompt.
+  const btn = e.currentTarget;
+  navigator.clipboard.writeText("psynth").catch(() => {});
+  btn.textContent = "Copied — paste at the prompt";
+  setTimeout(() => { btn.textContent = "Copy psynth · open Terminal"; }, 2400);
+  setSpace("chat"); switchPane("term");
+});
+$("studio-music").addEventListener("click", () => {
+  setSpace("chat");
+  input.value = "Compose with Talon: ";
+  input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+});
+document.querySelectorAll(".cult-chip").forEach((c) => c.addEventListener("click", () => { setSpace("chat"); send(c.textContent); }));
+
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
-  { label: "New chat", run: newChat },
-  { label: "Sessions", run: () => $("rail-sessions").click() },
-  { label: "Terminal", run: () => switchPane("term") },
-  { label: "Browser", run: () => switchPane("browser") },
-  { label: "Files", run: () => switchPane("files") },
-  { label: "Version control (git)", run: () => switchPane("git") },
+  { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
+  { label: "Space: Chat", run: () => setSpace("chat") },
+  { label: "Space: Projects", run: () => setSpace("projects") },
+  { label: "Space: Studio", run: () => setSpace("studio") },
+  { label: "Space: Cultivation", run: () => setSpace("cultivation") },
+  { label: "Sessions", run: () => { setSpace("chat"); $("rail-sessions").click(); } },
+  { label: "Terminal", run: () => { setSpace("chat"); switchPane("term"); } },
+  { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
+  { label: "Files", run: () => { setSpace("chat"); switchPane("files"); } },
+  { label: "Version control (git)", run: () => { setSpace("chat"); switchPane("git"); } },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
   { label: "Autonomy: Plan", run: () => selAutonomy("plan") },
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
@@ -436,11 +573,11 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 
 // ── Menu / tray / global-summon bus (previously fired into the void) ──
 window.crowe.onMenuAction((a) => {
-  if (a === "new-chat") newChat();
-  else if (a === "focus-composer") input.focus();
+  if (a === "new-chat") { setSpace("chat"); newChat(); }
+  else if (a === "focus-composer") { setSpace("chat"); input.focus(); }
   else if (a === "palette") openPalette();
   else if (a === "toggle-theme") applyTheme(!document.body.classList.contains("dark"));
-  else if (a && a.startsWith("pane:")) switchPane(a.slice(5));
+  else if (a && a.startsWith("pane:")) { setSpace("chat"); switchPane(a.slice(5)); }
   else if (a && a.startsWith("autonomy:")) setAutonomyBadge(a.slice(9));
 });
 
@@ -485,5 +622,6 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
+  try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
   await initTerm();
 })();

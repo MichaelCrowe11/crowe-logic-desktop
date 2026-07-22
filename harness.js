@@ -426,4 +426,4 @@ async function runAgent(ctx, messages, deps) {
   return { text: assistantText, capped };
 }
 
-module.exports = { runAgent, routeTurn, classifyRole, catalogModelForRole, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS, TIER_LINES };
+module.exports = { runAgent, routeTurn, classifyRole, catalogModelForRole, BRIDGE_ROLE_MODEL, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS, TIER_LINES };

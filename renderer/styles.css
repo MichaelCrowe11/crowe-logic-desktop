@@ -413,6 +413,85 @@ body.dark .palette-card { background: rgba(29, 26, 21, 0.78); }
 .pal-row { padding: 9px 12px; border-radius: 9px; font-size: 13.5px; cursor: pointer; color: var(--ink); }
 .pal-row:hover, .pal-row.sel { background: rgba(184,137,58,.12); }
 
+/* ── Spaces: Chat · Projects · Studio · Cultivation ── */
+.spaces { margin-left: 10px; }
+.spaces .seg-btn { padding: 4px 14px; }
+#spaces .seg-btn.active { color: var(--gold-deep); }
+body.dark #spaces .seg-btn.active { color: var(--gold); }
+/* The bar must never silently clip the space/autonomy pills (.seg has
+   overflow:hidden, which zeroes flex min-size): pin them, shed the
+   decorative items early, and wrap as the last resort. */
+#bar { flex-wrap: wrap; row-gap: 4px; }
+#bar .seg { flex-shrink: 0; }
+#userbadge { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1460px) { .ws-sep, .ws-path { display: none; } }
+@media (max-width: 1250px) { .tagline { display: none; } }
+
+.space-nav { flex: 0 0 188px; display: flex; flex-direction: column; gap: 1px; padding: 12px 10px;
+  background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+.sn-group { font-family: var(--mono); font-size: 10.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted); padding: 10px 9px 4px; }
+.sn-group:first-child { padding-top: 2px; }
+.sn-item { text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px;
+  padding: 6px 9px; font-family: var(--body); font-size: 13px; color: var(--ink); cursor: pointer;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease), color 120ms var(--ease); }
+.sn-item:hover { background: var(--cream); border-color: var(--line); }
+.sn-item.active { background: var(--raised); border-color: var(--line); color: var(--gold-deep);
+  font-weight: 600; box-shadow: var(--z2); }
+body.dark .sn-item.active { color: var(--gold); }
+/* At the 900px min window the deepwork lane (nav + workbench grid minimums)
+   needs 912px; narrow the nav so nothing clips off-screen. */
+@media (max-width: 930px) { .space-nav { flex-basis: 170px; } }
+
+/* ── Surfaces (Home, lanes, Studio, Cultivation) ── */
+.surface { flex: 1; min-width: 0; overflow-y: auto; background: var(--cream); }
+.surface-inner { max-width: 880px; margin: 0 auto; padding: 34px 32px 26px; }
+.sh h1 { font-family: var(--display); font-weight: 560; font-size: 27px; letter-spacing: .2px; margin: 0 0 5px; }
+.sh-sub { color: var(--muted); font-size: 13.5px; margin: 0 0 20px; }
+.surface-composer { display: flex; gap: 8px; margin: 0 0 20px; }
+.surface-composer input { flex: 1; font-family: var(--body); font-size: 14px; color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 10px 13px;
+  box-shadow: var(--z1); transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
+.surface-composer input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(184,137,58,.15), var(--z1); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: var(--z2); min-width: 0; }
+.card-h { font-family: var(--mono); font-size: 10.5px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted); margin-bottom: 10px; }
+.card-b { display: flex; flex-direction: column; gap: 1px; }
+.card-empty { color: var(--muted); font-size: 12.5px; padding: 4px 0; }
+.kv { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 3px 0; }
+.kv .k { color: var(--muted); }
+.kv .v { font-family: var(--mono); font-size: 12px; color: var(--ink); text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv .v .src { font-style: normal; color: var(--muted); font-size: 10px; margin-left: 6px;
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; }
+.kv .v.dim, .krow .v.dim { color: var(--muted); }
+.krow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px 7px; margin: 0 -7px;
+  font-size: 12.5px; cursor: pointer; text-align: left; color: var(--ink); font-family: var(--body); }
+.krow:hover { background: var(--cream); border-color: var(--line); }
+.krow .k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.krow .v { font-family: var(--mono); font-size: 11px; flex: 0 0 auto; }
+.lane-card p { font-size: 13px; color: var(--muted); line-height: 1.55; margin: 0 0 12px; }
+.pending { display: inline-block; font-family: var(--mono); font-size: 11px; color: var(--muted);
+  border: 1px dashed var(--line-strong); border-radius: 8px; padding: 5px 10px; }
+.surface-chips .chip { max-width: 560px; }
+.lane-sess { background: var(--panel); border-color: var(--line); box-shadow: var(--z1); margin-bottom: 6px; }
+.mrow { display: flex; align-items: baseline; gap: 12px; font-family: var(--mono); font-size: 12px;
+  padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.mrow .m-id { color: var(--gold-deep); flex: 0 0 auto; }
+body.dark .mrow .m-id { color: var(--gold); }
+.mrow .m-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mrow .m-flags { margin-left: auto; display: flex; gap: 5px; }
+.mrow .m-flags em { font-style: normal; font-size: 10px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.surface-status { display: flex; align-items: center; gap: 16px; margin-top: 24px; padding-top: 10px;
+  border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.surface-status .spacer { flex: 1; }
+.ss-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+#ss-gw.ok .ss-dot { background: var(--ok); }
+
 /* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

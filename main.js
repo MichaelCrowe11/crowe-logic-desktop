@@ -127,7 +127,7 @@ function signIn() {
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
 }
-ipcMain.handle("crowe:auth:login", () => signIn());
+ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(AUTH_JSON); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:auth:status", async () => {
   let u = currentUser();
@@ -263,6 +263,21 @@ const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
 // startup, after sign-in, and on a timer. If it can't be fetched the router
 // falls back to the default model, so a missing catalog never breaks a turn.
 let catalogCache = { models: [], at: 0 };
+// Roles the router understands; the Home surface shows how each resolves today.
+const ROUTED_ROLES = ["cultivation", "coding", "reasoning", "long-context"];
+function resolveRoles() {
+  const dflt = loadConfig().model || "crowelm";
+  const out = {};
+  for (const role of ROUTED_ROLES) {
+    const dynamic = harness.catalogModelForRole(catalogCache.models, role);
+    const bridge = harness.BRIDGE_ROLE_MODEL[role];
+    out[role] = dynamic ? { model: dynamic, source: "catalog" }
+      : bridge ? { model: bridge, source: "bridge" }
+      : { model: dflt, source: "default" };
+  }
+  return out;
+}
+ipcMain.handle("crowe:catalog:get", () => ({ models: catalogCache.models, at: catalogCache.at, resolved: resolveRoles(), defaultModel: loadConfig().model || "crowelm" }));
 async function fetchCatalog() {
   try {
     const base = loadConfig().baseUrl.replace(/\/$/, "");
@@ -371,7 +386,8 @@ ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBl
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
-    mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
+    mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
+    version: require("./package.json").version };
 });
 ipcMain.handle("crowe:set-config", async (_e, patch) => {
   const c = saveConfig(patch || {});
