@@ -161,6 +161,12 @@ body.dark[data-tier="execute"] { --tier: #d98a4a; }
 
 .toolcard { border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; background: var(--panel);
   box-shadow: var(--z1); animation: rise 180ms var(--ease); position: relative; }
+.routecard { position: relative; display: flex; align-items: center; gap: 7px; margin: 2px 0 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.routecard .rc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tier); flex: 0 0 auto; }
+.msg.assistant .routecard::before { content: ""; position: absolute; left: -23.5px; top: 4px; width: 7px; height: 7px;
+  border-radius: 50%; box-sizing: border-box; background: var(--cream); border: 2px solid var(--tier); }
+.routecard .rc-label { color: var(--muted); }
 .msg.assistant .toolcard::before, .msg.assistant .editcard::before { content: ""; position: absolute;
   left: -23.5px; top: 11px; width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box;
   background: var(--cream); border: 2px solid var(--tier); }

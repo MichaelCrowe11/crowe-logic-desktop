@@ -313,9 +313,23 @@ function compactMessages(msgs) {
 // the turn (intent + file types + tier + cost ceiling) and dispatch to a specific
 // Azure / Cloudflare deployment, FALLBACK-FIRST so routing can never regress the
 // loop. See docs/HARNESS-ARCHITECTURE.md.
-function routeTurn(ctx, _messages) {
+// Curated to deployments verified tool-capable on the gateway (2026-07). The
+// rest of the catalog (FW-GLM-5, Llama-3-3-70B, gpt-5.4, DeepSeek) is not live
+// for tool calling yet, so v1 routes only among known-good experts and always
+// carries a fallback to the default model.
+const EXPERTS = [
+  { expert: "grower", model: "crowelm-grower",
+    match: /\b(cultivat\w*|mycolog\w*|substrate|myceli\w*|grow(?:er|ing)?|inocula\w*|fruit(?:ing)?|spawn|agar|petri|contaminat\w*|harvest|strain|mushroom|coloniz\w*|sterili[sz]\w*)\b/i },
+  { expert: "deep", model: "Kimi-K2.5",
+    match: /\b(architect\w*|refactor\w*|redesign|prove|reason through|algorithm\w*|optimi[sz]\w*|trade-?off|concurren\w*|race condition|root cause)\b/i },
+];
+function routeTurn(ctx, messages) {
   const cfg = ctx.loadConfig();
-  return { expert: "operator", model: cfg.model || "crowelm", reason: "default expert (router not yet enabled)" };
+  const dflt = cfg.model || "crowelm";
+  const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
+  const text = String((last && last.content) || "");
+  for (const e of EXPERTS) if (e.match.test(text)) return { expert: e.expert, model: e.model, reason: `matched ${e.expert}`, fallback: dflt };
+  return { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
 }
 
 // ─── Agent loop (block: route -> retrieve/reason/synthesize) ──────────────────
@@ -328,8 +342,10 @@ async function runAgent(ctx, messages, deps) {
   let assistantText = "";
   let totIn = 0, totOut = 0, totMs = 0, capped = false;
 
-  // ── ROUTE ── pick the expert for this block (stub: default; event only).
+  // ── ROUTE ── pick the expert deployment for this block, fallback-first.
   const route = routeTurn(ctx, messages);
+  let activeModel = route.model;
+  let fellBack = false;
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
 
   // ── RETRIEVE / REASON / SYNTHESIZE ── the tool loop attends the workspace,
@@ -339,9 +355,18 @@ async function runAgent(ctx, messages, deps) {
     const controller = new AbortController();
     deps.setController(controller);
     msgs = compactMessages(msgs);
-    const r = await deps.gatewayChat(msgs, allTools(ctx), controller.signal);
+    const r = await deps.gatewayChat(msgs, allTools(ctx), controller.signal, activeModel);
     if (r && r.aborted) { deps.send({ type: "stopped" }); break; }
-    if (r.error) { deps.send({ type: "error", text: r.error }); return { text: assistantText, error: r.error }; }
+    if (r.error) {
+      // Fallback-first: a routed expert that errors must never sink the turn.
+      // Drop to the default model once and retry this same round.
+      if (!fellBack && activeModel !== route.fallback) {
+        fellBack = true; activeModel = route.fallback;
+        deps.send({ type: "route", expert: "operator", model: activeModel, reason: `${route.model} unavailable, using ${activeModel}` });
+        round -= 1; continue;
+      }
+      deps.send({ type: "error", text: r.error }); return { text: assistantText, error: r.error };
+    }
     const u = r.usage || {}, pin = u.prompt_tokens || 0, pout = u.completion_tokens || 0;
     totIn += pin; totOut += pout; totMs += r.elapsedMs || 0;
     deps.send({ type: "telemetry", promptTokens: totIn, completionTokens: totOut, elapsedMs: totMs,
@@ -373,7 +398,7 @@ async function runAgent(ctx, messages, deps) {
     msgs.push({ role: "user", content: "You have reached the tool-call limit for this turn. Give your final answer now from what you have gathered. Do not request more tools." });
     const controller = new AbortController();
     deps.setController(controller);
-    const r = await deps.gatewayChat(compactMessages(msgs), [], controller.signal);
+    const r = await deps.gatewayChat(compactMessages(msgs), [], controller.signal, route.fallback);
     if (r && !r.error && !r.aborted && r.content) {
       assistantText += (assistantText ? "\n\n" : "") + r.content;
       deps.send({ type: "assistant", text: r.content });

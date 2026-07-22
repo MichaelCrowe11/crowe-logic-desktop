@@ -122,6 +122,12 @@ function setRunning(on) {
   $("hud-status").textContent = on ? "running" : "idle";
 }
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
+function addRouteNode(body, ev) {
+  const label = ev.expert && ev.expert !== "operator" ? `${ev.expert} · ${ev.model}` : (ev.model || "operator");
+  const el = document.createElement("div"); el.className = "routecard";
+  el.innerHTML = `<span class="rc-dot"></span><span class="rc-label">routed to ${esc(label)}</span>`;
+  body.appendChild(el); transcript.scrollTop = transcript.scrollHeight;
+}
 async function send(text) {
   if (!text.trim() || running) return;
   if (!authed) { showSignInPrompt(); return; }
@@ -144,10 +150,11 @@ async function send(text) {
       fillToolResult(ev);
     }
     else if (ev.type === "edit_proposal") addEditProposal(body, ev);
+    else if (ev.type === "route") { addRouteNode(body, ev); if (ev.model) $("hud-model").textContent = ev.model; }
     else if (ev.type === "stopped") { const t = body.querySelector(".thinking"); if (t) t.remove(); addStopped(body); }
     else if (ev.type === "error") addError(body, ev.text);
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   const t = body.querySelector(".thinking"); if (t) t.remove();
   const said = body.querySelector("p.said"); if (said) said.classList.remove("streaming");
   if (runText) messages.push({ role: "assistant", content: runText });

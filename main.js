@@ -138,22 +138,23 @@ ipcMain.handle("crowe:auth:status", async () => {
   }
   return { user: u };
 });
-async function gatewayChat(messages, tools, _retried, signal) {
+async function gatewayChat(messages, tools, _retried, signal, model) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
+  const useModel = model || cfg.model;
   const t0 = Date.now();
   try {
     const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify({ model: cfg.model, messages, tools: tools || undefined }),
+      body: JSON.stringify({ model: useModel, messages, tools: tools || undefined }),
       signal,
     });
-    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal); }
+    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal, model); }
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
-    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || cfg.model,
+    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel,
              usage: data.usage || {}, elapsedMs: Date.now() - t0 };
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
@@ -272,7 +273,7 @@ ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentR
 ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
   agentRun = { aborted: false, controller: null };
   const result = await harness.runAgent(harnessCtx, messages.slice(), {
-    gatewayChat: (msgs, tools, signal) => gatewayChat(msgs, tools, false, signal),
+    gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
     send: (ev) => evt.sender.send("crowe:agent:event", ev),
     isAborted: () => agentRun.aborted,
     setController: (c) => { agentRun.controller = c; },
