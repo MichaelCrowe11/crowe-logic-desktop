@@ -206,6 +206,8 @@ async function execTool(ctx, name, args) {
   try {
     if (name && name.startsWith("mcp__")) return await ctx.mcpCall(name, args);
     const tier = ctx.loadConfig().autonomy || "execute";
+    if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
+      return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";
     if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
     if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
@@ -252,6 +254,7 @@ function workspaceNotes(cwd) {
   return null;
 }
 const TIER_LINES = {
+  plan: "PLAN: read-only exploration. Inspect freely (read_file, search, list_dir, open_url) but change nothing. Investigate the task, then finish by writing a short numbered plan of the changes you would make, and ask the user to approve by switching to Edit or Execute. Do not call run_shell, write_file, or edit_file.",
   readonly: "READ-ONLY: you may inspect (read_file, search, list_dir, open_url) but shell and all writes are blocked. Say what tier a blocked action needs instead of retrying it.",
   edit: "EDIT: you may inspect and change files (edit_file/write_file, each reviewed by the user before applying). Shell is blocked; suggest commands for the user instead of retrying run_shell.",
   execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive.",
@@ -304,13 +307,33 @@ function compactMessages(msgs) {
   return msgs;
 }
 
-// ─── Agent loop ──────────────────────────────────────────────────────────────
+// ─── Route (mixture-of-experts, stub) ────────────────────────────────────────
+// The router picks which expert deployment handles this turn. v1 returns a
+// single default expert so the loop is byte-for-byte unchanged; H2 will classify
+// the turn (intent + file types + tier + cost ceiling) and dispatch to a specific
+// Azure / Cloudflare deployment, FALLBACK-FIRST so routing can never regress the
+// loop. See docs/HARNESS-ARCHITECTURE.md.
+function routeTurn(ctx, _messages) {
+  const cfg = ctx.loadConfig();
+  return { expert: "operator", model: cfg.model || "crowelm", reason: "default expert (router not yet enabled)" };
+}
+
+// ─── Agent loop (block: route -> retrieve/reason/synthesize) ──────────────────
+// Each turn is a block. route() selects the expert; the tool loop below is the
+// retrieve/reason/synthesize body; the operator thread is the residual backbone.
 // deps = { gatewayChat(msgs, tools, signal), send(ev), isAborted(), setController(c) }
 async function runAgent(ctx, messages, deps) {
   const sys = await buildSystemPrompt(ctx);
   let msgs = [{ role: "system", content: sys }, ...messages];
   let assistantText = "";
   let totIn = 0, totOut = 0, totMs = 0, capped = false;
+
+  // ── ROUTE ── pick the expert for this block (stub: default; event only).
+  const route = routeTurn(ctx, messages);
+  deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
+
+  // ── RETRIEVE / REASON / SYNTHESIZE ── the tool loop attends the workspace,
+  // reasons, and emits reviewed steps; every round appends to the thread.
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (deps.isAborted()) { deps.send({ type: "stopped" }); break; }
     const controller = new AbortController();
@@ -363,4 +386,4 @@ async function runAgent(ctx, messages, deps) {
   return { text: assistantText, capped };
 }
 
-module.exports = { runAgent, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS };
+module.exports = { runAgent, routeTurn, allTools, execTool, buildSystemPrompt, compactMessages, BUILTIN_TOOLS, isSecretPath, MAX_ROUNDS, TIER_LINES };

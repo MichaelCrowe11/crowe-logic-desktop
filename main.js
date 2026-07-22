@@ -45,7 +45,7 @@ let mainWindow = null;
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#f5f1e8", title: "Crowe Logic",
+    backgroundColor: "#f7f3ea", title: "Crowe Logic",
     icon: path.join(__dirname, "assets", "icon.icns"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -97,7 +97,7 @@ function signIn() {
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const code = u.searchParams.get("code"), st = u.searchParams.get("state");
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f5f1e8;color:#1f1d18;text-align:center;padding-top:14vh"><h2 style="color:#b7791f;font-family:Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f7f3ea;color:#1a1714;text-align:center;padding-top:14vh"><h2 style="color:#96702c;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
       try { server.close(); } catch {}
       if (!code || st !== state) return finish({ error: "sign-in was cancelled" });
       try {
@@ -439,6 +439,7 @@ function buildMenu() {
       crowe("Files", "pane:files", "CmdOrCtrl+3"),
       { type: "separator" },
       { label: "Autonomy", submenu: [
+        { label: "Plan (explore read-only, then propose a plan)", type: "radio", checked: tier === "plan", click: () => setAutonomy("plan") },
         { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
         { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },
         { label: "Execute (shell + writes)", type: "radio", checked: tier === "execute", click: () => setAutonomy("execute") },

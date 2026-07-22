@@ -364,6 +364,7 @@ async function doCommit() {
 
 // ── Autonomy pill ──
 const TIER_HINT = {
+  plan: "Describe a task. It explores read-only, then writes a plan to approve.",
   readonly: "Ask anything. Read-only: it can look, not touch.",
   edit: "Ask anything. It can edit files, with your review.",
   execute: "Ask anything. It can run commands and edit files.",
@@ -388,6 +389,7 @@ const PAL_ACTIONS = [
   { label: "Files", run: () => switchPane("files") },
   { label: "Version control (git)", run: () => switchPane("git") },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
+  { label: "Autonomy: Plan", run: () => selAutonomy("plan") },
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
   { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
   { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
