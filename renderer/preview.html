@@ -1,10 +1,14 @@
 <!doctype html>
+<!-- Design preview: a copy of index.html with preview-shim.js loaded before
+     renderer.js so the UI runs in a plain browser (python3 -m http.server in
+     renderer/). Regenerate from index.html after shell changes. Excluded from
+     the packaged build via package.json build.files. -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=1784710274" />
 </head>
 <body>
   <header id="bar">
@@ -33,12 +37,6 @@
     <button id="theme-btn" class="ghost" title="Toggle dark mode">Dark</button>
     <button id="settings-btn" class="ghost">Settings</button>
   </header>
-
-  <div id="update-banner" class="hidden">
-    <span id="ub-text"></span>
-    <button id="ub-action" class="primary sm"></button>
-    <button id="ub-dismiss" class="ghost sm">Later</button>
-  </div>
 
   <div id="shell">
     <nav id="rail">
@@ -162,9 +160,6 @@
 
     <main id="workbench">
       <section id="agent">
-        <div class="conversation-toolbar">
-          <button id="copy-conversation" type="button" class="ghost sm" title="Copy the complete conversation as Markdown">Copy conversation</button>
-        </div>
         <div id="transcript">
           <div class="welcome">
             <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
@@ -179,70 +174,64 @@
         </div>
         <form id="composer" autocomplete="off">
           <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
-          <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone">Mic</button>
-          <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud">Speak</button>
           <button id="send" type="submit">Send</button>
           <button id="stop" type="button" class="hidden">Stop</button>
         </form>
+        <div id="hud">
+          <span id="hud-model">CroweLM</span>
+          <span class="hud-sep"></span>
+          <span id="hud-status">idle</span>
+          <span class="spacer"></span>
+          <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
+          <span id="hud-tps"></span>
+          <span id="hud-cost" title="estimated cost this session">$0.0000</span>
+        </div>
       </section>
 
       <div id="divider"></div>
 
       <section id="workspace">
-        <div class="workspace-toolbar">
-          <button id="panel-add-term" class="ghost sm" title="New terminal panel">+ Terminal</button>
-          <button id="panel-add-browser" class="ghost sm" title="New browser panel">+ Browser</button>
-          <button id="panel-add-operator" class="ghost sm" title="Operator control panel">Operator</button>
-          <button id="panel-add-workflow" class="ghost sm" title="Build and run multi-agent workflows">Workflows</button>
-          <button id="panel-add-agents" class="ghost sm" title="Launch licensed Crowe Agents">Agent Fleet</button>
-          <button id="panel-add-workbench" class="ghost sm" title="Compose, compare, and save agent runs">Workbench</button>
-          <select id="panel-layout" class="panel-layout" title="Panel layout"><option value="columns">Columns</option><option value="rows">Rows</option><option value="grid">Grid</option><option value="stack">Stack</option></select>
-          <button id="layout-save" class="ghost sm" title="Save the current workspace layout">Save layout</button>
-          <select id="layout-saved" class="panel-layout" title="Saved layouts"><option value="">Saved layouts</option></select>
-          <button id="layout-reset" class="ghost sm" title="Reset and recover workspace panels">Reset</button>
-          <button class="legacy-pane ghost sm" data-pane="files">Files</button>
-          <button class="legacy-pane ghost sm" data-pane="git">Git</button>
-          <button class="legacy-pane ghost sm" data-pane="output">Output</button>
-          <div class="spacer"></div><span id="cwd" class="cwd"></span>
+        <div class="tabs">
+          <button class="tab active" data-pane="term">Terminal</button>
+          <button class="tab" data-pane="browser">Browser</button>
+          <button class="tab" data-pane="files">Files</button>
+          <button class="tab" data-pane="git">Git</button>
+          <div class="spacer"></div>
+          <span id="cwd" class="cwd"></span>
         </div>
-        <div id="panel-deck" class="panel-deck columns"></div>
 
-        <div class="pane legacy-pane-view" id="pane-files">
-          <div id="files-tree"></div><pre id="files-view"></pre>
+        <div class="pane active" id="pane-term"><div id="term"></div></div>
+
+        <div class="pane" id="pane-browser">
+          <div class="urlbar">
+            <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
+            <button id="url-go" class="ghost">Go</button>
+          </div>
+          <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
         </div>
-        <div class="pane legacy-pane-view" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
-        <div class="pane legacy-pane-view" id="pane-git">
-          <div class="git-head"><span class="git-branch-wrap">on <span id="git-branch">-</span></span><div class="spacer"></div><button id="git-pull" class="ghost sm">Pull</button><button id="git-push" class="ghost sm">Push</button><button id="git-refresh" class="ghost sm">Refresh</button></div>
-          <div class="git-body"><div id="git-files" class="git-files"></div><pre id="git-diff" class="git-diff"></pre></div>
-          <div class="git-commit"><input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" /><button id="git-commit-btn" class="primary sm">Commit</button></div>
+
+        <div class="pane" id="pane-files">
+          <div id="files-tree"></div>
+          <pre id="files-view"></pre>
+        </div>
+
+        <div class="pane" id="pane-git">
+          <div class="git-head">
+            <span class="git-branch-wrap">on <span id="git-branch">-</span></span>
+            <div class="spacer"></div>
+            <button id="git-refresh" class="ghost sm">Refresh</button>
+          </div>
+          <div class="git-body">
+            <div id="git-files" class="git-files"></div>
+            <pre id="git-diff" class="git-diff"></pre>
+          </div>
+          <div class="git-commit">
+            <input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" />
+            <button id="git-commit-btn" class="primary sm">Commit</button>
+          </div>
         </div>
       </section>
     </main>
-  </div>
-
-
-  <div id="glass-controls"><button id="glass-arrange" type="button" class="ghost sm" title="Arrange every agent into the visible workspace">Orbit agents</button><button id="glass-minimize-all" type="button" class="ghost sm" title="Minimize all floating agents">Minimize agents</button><button id="glass-restore-all" type="button" class="ghost sm" title="Restore and arrange all floating agents">Restore agents</button></div>
-  <button id="glass-launcher" type="button" title="Open a floating Crowe Logic agent" aria-label="Open Crowe Logic agent"><img src="../assets/mark-simple.svg" alt=""></button>
-  <div id="glass-layer" aria-live="polite"></div>
-
-  <div id="hud">
-    <span id="hud-model">CroweLM</span>
-    <span class="hud-sep"></span>
-    <span id="hud-status">idle</span>
-    <span class="hud-sep"></span>
-    <button id="hud-branch" class="hud-btn" title="Git branch · click for version control"></button>
-    <span id="hud-plug" title="Enabled plugins"></span>
-    <span class="spacer"></span>
-    <span id="hud-tok" title="tokens in / out">0 / 0 tok</span>
-    <span id="hud-tps"></span>
-    <span id="hud-cost" title="estimated cost this session">$0.0000</span>
-  </div>
-
-  <div id="qopen" class="modal hidden">
-    <div class="palette-card">
-      <input id="qo-input" type="text" placeholder="Jump to a file... (Enter opens · Cmd+Enter adds to chat)" spellcheck="false" />
-      <div id="qo-list" class="pal-list"></div>
-    </div>
   </div>
 
   <div id="settings" class="modal hidden">
@@ -251,11 +240,8 @@
       <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
-      <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
       <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
-      <label>Official plugins</label>
-      <div id="cfg-plugins" class="plugs"></div>
-      <label>MCP servers — advanced (JSON: {"name":{"command":"...","args":[...]}})
+      <label>MCP servers (JSON: {"name":{"command":"...","args":[...]}})
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
@@ -272,8 +258,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="mark-geometry.js"></script>
-  <script src="mark.js"></script>
-  <script src="renderer.js"></script>
+  <script src="preview-shim.js?v=1784710274"></script>
+  <script src="mark-geometry.js?v=1784710274"></script>
+  <script src="mark.js?v=1784710274"></script>
+  <script src="renderer.js?v=1784710274"></script>
 </body>
 </html>

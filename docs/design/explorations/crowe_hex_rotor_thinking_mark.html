@@ -1,0 +1,87 @@
+<!doctype html><meta charset="utf-8"><title>crowe_hex_rotor_thinking_mark</title><style>:root{--text-primary:#1a1714;--text-secondary:#6b6457;--text-muted:#8a8274;--surface-0:#f7f3ea;--surface-1:#fbf8f1;--surface-2:#fffdf7;--border:rgba(26,23,20,.14);--border-strong:rgba(26,23,20,.25);--radius:8px;--font-sans:Inter,system-ui,sans-serif;--font-mono:ui-monospace,Menlo,monospace}body{background:var(--surface-0);margin:24px;font-family:var(--font-sans)}</style>
+<h2 class="sr-only">A Crowe Logic hexagonal rotor mark that idles calm, spins and pulses while reasoning, and ticks a ring pulse on each tool call, shown on light and dark surfaces.</h2>
+<style>
+.rig{display:flex;flex-direction:column;gap:16px;padding:8px 0}
+.stages{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.stage{border-radius:14px;display:flex;align-items:center;justify-content:center;padding:26px;position:relative;min-height:180px}
+.stage.cream{background:#f5f1e8;border:1px solid rgba(31,29,24,.12)}
+.stage.dark{background:#14120e;border:1px solid rgba(233,226,207,.14)}
+.mark{width:120px;height:120px}
+.rotor{transform-box:view-box;transform-origin:60px 60px}
+.spokes{transform-box:view-box;transform-origin:60px 60px}
+.ping{transform-box:view-box;transform-origin:60px 60px;opacity:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes breatheSlow{0%,100%{transform:scale(.94)}50%{transform:scale(1.01)}}
+@keyframes breathe{0%,100%{transform:scale(.58)}50%{transform:scale(1.06)}}
+@keyframes toolping{0%{transform:scale(.42);opacity:.85}100%{transform:scale(1.6);opacity:0}}
+.stage[data-state=idle] .rotor{animation:spin 17s linear infinite}
+.stage[data-state=idle] .spokes{animation:breatheSlow 5s ease-in-out infinite}
+.stage[data-state=reasoning] .rotor{animation:spin 3s linear infinite}
+.stage[data-state=reasoning] .spokes{animation:breathe 1.15s ease-in-out infinite}
+.stage.ping .ping{animation:toolping .7s cubic-bezier(.16,1,.3,1)}
+.lbl{position:absolute;bottom:10px;left:0;right:0;text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.controls .sp{flex:1}
+.status{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)}
+@media(prefers-reduced-motion:reduce){.rotor,.spokes{animation:none!important}}
+</style>
+<div class="rig">
+  <div class="stages">
+    <div class="stage cream" data-state="idle" id="s-cream">
+      <div class="lbl">on paper</div>
+    </div>
+    <div class="stage dark" data-state="idle" id="s-dark">
+      <div class="lbl" style="color:#8f897a">on the machine</div>
+    </div>
+  </div>
+  <div class="controls">
+    <button onclick="setState('idle')">Idle</button>
+    <button onclick="setState('reasoning')">Reasoning</button>
+    <button onclick="toolTick()">Tool call</button>
+    <button onclick="demo()">Run a turn</button>
+    <span class="sp"></span>
+    <span class="status" id="status">state: idle</span>
+  </div>
+</div>
+<script>
+function markSVG(){
+  const NS="http://www.w3.org/2000/svg";
+  const blue="#0054b2", blue2="#2f7fd6", gold="#c9a227", gold2="#e0c15a";
+  function spoke(angle,r0,r1,w,color){
+    const a=(angle-90)*Math.PI/180;
+    const x1=60+Math.cos(a)*r0, y1=60+Math.sin(a)*r0;
+    const x2=60+Math.cos(a)*r1, y2=60+Math.sin(a)*r1;
+    return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="${color}" stroke-width="${w}" stroke-linecap="round"/>`;
+  }
+  let longS="",shortS="";
+  for(let i=0;i<6;i++){ longS+=spoke(i*60,15,41,6,blue); }
+  for(let i=0;i<6;i++){ shortS+=spoke(30+i*60,13,30,4.5,gold); }
+  const hexPts=[];
+  for(let i=0;i<6;i++){ const a=(i*60-90)*Math.PI/180; hexPts.push((60+Math.cos(a)*13).toFixed(2)+","+(60+Math.sin(a)*13).toFixed(2)); }
+  const pingPts=[];
+  for(let i=0;i<6;i++){ const a=(i*60-90)*Math.PI/180; pingPts.push((60+Math.cos(a)*44).toFixed(2)+","+(60+Math.sin(a)*44).toFixed(2)); }
+  return `<svg class="mark" viewBox="0 0 120 120" role="img" aria-label="Crowe Logic thinking mark">
+    <polygon class="ping" points="${pingPts.join(' ')}" fill="none" stroke="${gold}" stroke-width="2"/>
+    <g class="rotor">
+      <g class="spokes">${longS}${shortS}</g>
+      <polygon points="${hexPts.join(' ')}" fill="${blue}"/>
+      <polygon points="${hexPts.join(' ')}" fill="none" stroke="${gold2}" stroke-width="1.4"/>
+      <circle cx="60" cy="60" r="4.4" fill="${gold}"/>
+    </g>
+  </svg>`;
+}
+const cream=document.getElementById("s-cream"), dark=document.getElementById("s-dark");
+cream.insertAdjacentHTML("afterbegin",markSVG());
+dark.insertAdjacentHTML("afterbegin",markSVG());
+const stages=[cream,dark];
+function setState(s){ stages.forEach(st=>st.dataset.state=s); document.getElementById("status").textContent="state: "+s; }
+function toolTick(){ stages.forEach(st=>{ st.classList.remove("ping"); void st.offsetWidth; st.classList.add("ping"); }); const s=document.getElementById("status"); s.textContent="state: tool call"; }
+let demoTimers=[];
+function demo(){
+  demoTimers.forEach(clearTimeout); demoTimers=[];
+  setState("reasoning");
+  const seq=[[900,"tool"],[1500,"reasoning"],[2300,"tool"],[3000,"reasoning"],[3700,"tool"],[4600,"idle"]];
+  seq.forEach(([t,a])=>demoTimers.push(setTimeout(()=>{ if(a==="tool"){toolTick();setState("reasoning");} else setState(a); },t)));
+}
+setTimeout(demo,600);
+</script>

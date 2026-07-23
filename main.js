@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -13,6 +13,11 @@ const { spawn, exec } = require("child_process");
 let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
 
+// Auto-update (electron-updater over the generic R2 channel). Only in packaged
+// builds; downloads are user-consented, never silent. See setupAutoUpdate().
+let autoUpdater = null;
+try { ({ autoUpdater } = require("electron-updater")); } catch { autoUpdater = null; }
+
 const DEFAULTS = {
   baseUrl: "https://api.crowelogic.com",
   model: "crowelm",
@@ -21,7 +26,52 @@ const DEFAULTS = {
   autoApprove: false,     // when true, file edits apply without review
   autonomy: "edit",       // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all). Safe default: edit.
   mcpServers: {},         // { name: { command, args, env } }
+  telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
+  onboarded: false,       // set true after the first-run card has been shown
+  licenseWorkspaceId: "", // selected Crowe Agents customer workspace
 };
+
+// ─── Crash reporting + minimal telemetry ─────────────────────────────────────
+// Local crash dumps always write to userData/crashes so the user can inspect
+// them. Network submission is opt-out via Settings (config.telemetry); when off,
+// nothing leaves the machine. The report line carries no message content,
+// paths, or tokens - only app/platform metadata.
+function telemetryExtra() {
+  return {
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    channel: app.isPackaged ? "release" : "dev",
+    model: (loadConfig().model || "crowelm"),
+  };
+}
+function initCrashReporting() {
+  const dumps = path.join(app.getPath("userData"), "crashes");
+  try { app.setPath("crashDumps", dumps); } catch {}
+  const enabled = Boolean(loadConfig().telemetry);
+  try {
+    crashReporter.start({
+      productName: "Crowe Logic",
+      companyName: "Crowe Logic, Inc.",
+      submitURL: enabled ? `${(loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "")}/api/telemetry/crash` : "",
+      uploadToServer: enabled,
+      ignoreSystemCrashHandler: false,
+      extra: telemetryExtra(),
+    });
+  } catch { /* crash reporting must never block startup */ }
+}
+function postTelemetry(event, props) {
+  if (!loadConfig().telemetry) return;
+  try {
+    const base = (loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "");
+    fetch(`${base}/api/telemetry/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, props: props || {}, ...telemetryExtra(), at: Date.now() }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  } catch { /* best effort */ }
+}
 
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
 function loadConfig() {
@@ -39,6 +89,67 @@ function saveConfig(patch) {
   return merged;
 }
 
+const KEY_PROVIDERS = {
+  openai: { label: "OpenAI", url: "https://api.openai.com/v1/models", header: "Bearer" },
+  anthropic: { label: "Anthropic", url: "https://api.anthropic.com/v1/models", header: "x-api-key" },
+  openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1/models", header: "Bearer" },
+  groq: { label: "Groq", url: "https://api.groq.com/openai/v1/models", header: "Bearer" },
+};
+function keyStorePath() { return path.join(app.getPath("userData"), "credentials.bin"); }
+function readKeyStore() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return {};
+    return JSON.parse(safeStorage.decryptString(fs.readFileSync(keyStorePath())));
+  } catch { return {}; }
+}
+function writeKeyStore(store) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Native credential encryption is unavailable");
+  fs.writeFileSync(keyStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
+}
+function keyStatus() {
+  const store = readKeyStore();
+  return Object.entries(KEY_PROVIDERS).map(([id, spec]) => {
+    const entry = store[id] || {};
+    return { id, label: spec.label, configured: Boolean(entry.value), updatedAt: entry.updatedAt || 0, testedAt: entry.testedAt || 0, healthy: entry.healthy === true };
+  });
+}
+ipcMain.handle("crowe:keys:list", () => ({ encrypted: safeStorage.isEncryptionAvailable(), providers: keyStatus() }));
+ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
+  if (!KEY_PROVIDERS[provider] || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
+  const store = readKeyStore(); store[provider] = { value: key.trim(), updatedAt: Date.now() }; writeKeyStore(store);
+  return { ok: true, providers: keyStatus() };
+});
+ipcMain.handle("crowe:keys:remove", (_e, { provider }) => {
+  const store = readKeyStore(); delete store[provider]; writeKeyStore(store); return { ok: true, providers: keyStatus() };
+});
+ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
+  const spec = KEY_PROVIDERS[provider], secret = readKeyStore()[provider]?.value;
+  if (!spec || !secret) return { ok: false, error: "No key configured" };
+  const headers = spec.header === "Bearer" ? { Authorization: `Bearer ${secret}` } : { "x-api-key": secret, "anthropic-version": "2023-06-01" };
+  try {
+    const r = await fetch(spec.url, { headers, signal: AbortSignal.timeout(10000) });
+    const store = readKeyStore();
+    if (store[provider]) { store[provider].testedAt = Date.now(); store[provider].healthy = r.ok; writeKeyStore(store); }
+    return { ok: r.ok, status: r.status, error: r.ok ? "" : "Provider rejected the credential", providers: keyStatus() };
+  } catch {
+    const store = readKeyStore();
+    if (store[provider]) { store[provider].testedAt = Date.now(); store[provider].healthy = false; writeKeyStore(store); }
+    return { ok: false, error: "Provider could not be reached", providers: keyStatus() };
+  }
+});
+ipcMain.handle("crowe:files:pick", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openFile", "multiSelections"], title: "Attach context files" });
+  if (result.canceled) return [];
+  return result.filePaths.map((filePath) => {
+    try { const stat = fs.statSync(filePath); return { path: filePath, name: path.basename(filePath), size: stat.size }; }
+    catch { return null; }
+  }).filter(Boolean);
+});
+ipcMain.handle("crowe:files:read-context", (_e, filePaths) => (Array.isArray(filePaths) ? filePaths : []).slice(0, 12).map((filePath) => {
+  try { return { path: filePath, content: fs.readFileSync(filePath, "utf8").slice(0, 100000) }; }
+  catch { return { path: filePath, error: "File could not be read as text" }; }
+}));
+
 let CWD = loadConfig().cwd || os.homedir();
 let mainWindow = null;
 
@@ -50,9 +161,20 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
+      sandbox: true,
     },
   });
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const url = details?.requestingUrl || wc.getURL();
+    const trusted = url.startsWith("file://") || url.startsWith("https://croweagents.com") || url.startsWith("https://crowelogic.com");
+    callback(trusted && ["media", "microphone", "notifications", "clipboard-sanitized-write"].includes(permission));
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => { if (!url.startsWith("file://")) { event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); } });
 }
 
 // ─── Crowe ID auth (OAuth2 Authorization Code + PKCE, loopback redirect) ──────
@@ -138,6 +260,54 @@ ipcMain.handle("crowe:auth:status", async () => {
   }
   return { user: u };
 });
+async function licensedFetch(route, method = "GET") {
+  let token = loadConfig().token;
+  if (!token) return { status: 401, data: null };
+  const request = () => fetch(`${loadConfig().baseUrl.replace(/\/$/, "")}${route}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+  let response = await request();
+  if (response.status === 401) { token = await refreshToken(); if (token) response = await request(); }
+  const text = await response.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { status: response.status, data };
+}
+async function licenseStatus() {
+  if (!currentUser()) return { authenticated: false, workspaces: [], selectedWorkspaceId: "" };
+  try {
+    const result = await licensedFetch("/api/workspaces");
+    if (result.status >= 400 || !Array.isArray(result.data)) return { authenticated: true, workspaces: [], selectedWorkspaceId: "", error: `License service returned HTTP ${result.status}` };
+    const workspaces = await Promise.all(result.data.map(async (workspace) => {
+      const [entitlement, usage] = await Promise.all([
+        licensedFetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/entitlements/agents`),
+        licensedFetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/usage`),
+      ]);
+      return { ...workspace, agents: entitlement.status < 400 ? entitlement.data : { allowed: false }, usage: usage.status < 400 ? usage.data : null };
+    }));
+    const configured = loadConfig().licenseWorkspaceId;
+    const selectedWorkspaceId = workspaces.some((workspace) => workspace.id === configured) ? configured : (workspaces[0]?.id || "");
+    return { authenticated: true, workspaces, selectedWorkspaceId };
+  } catch { return { authenticated: true, workspaces: [], selectedWorkspaceId: "", error: "License service could not be reached" }; }
+}
+ipcMain.handle("crowe:license:status", licenseStatus);
+ipcMain.handle("crowe:license:select", (_event, { workspaceId } = {}) => {
+  if (typeof workspaceId !== "string" || workspaceId.length > 200) return { error: "Invalid workspace" };
+  saveConfig({ licenseWorkspaceId: workspaceId });
+  return { ok: true, selectedWorkspaceId: workspaceId };
+});
+ipcMain.handle("crowe:license:billing", async () => {
+  try {
+    const result = await licensedFetch("/api/billing/portal/self", "POST");
+    if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
+    const portal = new URL(result.data.url);
+    if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
+    await shell.openExternal(portal.toString()); return { ok: true };
+  } catch { return { error: "Billing portal could not be reached" }; }
+});
+async function requireAgentEntitlement(workspaceId) {
+  const status = await licenseStatus();
+  const id = workspaceId || status.selectedWorkspaceId;
+  const workspace = status.workspaces.find((item) => item.id === id);
+  return workspace?.agents?.allowed ? { ok: true, workspace } : { ok: false, error: status.authenticated ? "An active Crowe Agents entitlement is required" : "Sign in with Crowe ID to use licensed agents" };
+}
 async function gatewayChat(messages, tools, _retried, signal, model) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
@@ -188,7 +358,13 @@ function mcpConnect(name, spec) {
       }
     });
     proc.on("error", () => resolve({ error: "spawn failed" }));
-    proc.on("exit", () => { delete MCP[name]; });
+    proc.on("exit", (code) => {
+      // Identity check: a late exit from a superseded process must not
+      // deregister a freshly reconnected server under the same name.
+      if (MCP[name] === srv) { delete MCP[name]; PLUGIN_MANAGED.delete(name); }
+      for (const p of srv.pending.values()) p.rej(new Error(`server exited (code ${code})`));
+      srv.pending.clear();
+    });
     (async () => {
       try {
         await srv.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "crowe-logic", version: app.getVersion() } });
@@ -200,16 +376,104 @@ function mcpConnect(name, spec) {
         }));
         MCP[name] = srv;
         resolve({ ok: true, tools: srv.tools.length });
-      } catch (e) { resolve({ error: String(e) }); }
+      } catch (e) { try { proc.kill(); } catch {} resolve({ error: String(e) }); }
     })();
   });
 }
 async function mcpConnectAll() {
   const { mcpServers } = loadConfig();
   for (const [name, spec] of Object.entries(mcpServers || {})) {
+    // Official plugin ids are reserved: a hand-configured server may not claim
+    // one, so Disable can only ever kill a plugin-spawned process.
+    if (PLUGIN_IDS.has(name)) continue;
     if (spec && spec.command) await mcpConnect(name, spec);
   }
 }
+// ─── Official plugins (Phase 1: bundled manifest over the MCP client) ────────
+// A plugin IS a manifest entry + an MCP server + declared tiers. Enable is one
+// click, disable is one click, and a dead server never breaks the app.
+// TRUST BOUNDARY: p.mcp.command/args are spawned verbatim. The ONLY acceptable
+// manifest source is the bundled plugins.builtin.json, which shares the app's
+// code-signature/asar integrity domain. Any non-bundled source (gateway,
+// userData, download) MUST be signature- or pinned-hash-verified before
+// parsing — a hostile mcp field is arbitrary code execution.
+const BUILTIN_PLUGINS = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, "plugins.builtin.json"), "utf8")).plugins || []; }
+  catch { return []; }
+})();
+const PLUGIN_IDS = new Set(BUILTIN_PLUGINS.map((p) => p.id));
+const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager
+const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
+const PLUGIN_CONNECTING = new Set();
+function pluginState() { return loadConfig().plugins || {}; }
+function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
+function pluginList() {
+  const st = pluginState();
+  return BUILTIN_PLUGINS.map((p) => {
+    const connected = PLUGIN_MANAGED.has(p.id) && Boolean(MCP[p.id]);
+    return {
+      id: p.id, name: p.name, description: p.description, category: p.category,
+      spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
+      glyph: p.glyph || "", chips: p.chips || [],
+      enabled: Boolean(st[p.id] && st[p.id].enabled),
+      connected,
+      toolCount: connected ? MCP[p.id].tools.length : 0,
+    };
+  });
+}
+async function pluginConnect(p, env) {
+  if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
+  const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
+  const r = await mcpConnect(p.id, {
+    command: expandHome(p.mcp.command),
+    args: (p.mcp.args || []).map(expandHome),
+    env: { ...(p.mcp.env || {}), ...(env || {}) },
+  });
+  if (PLUGIN_GEN[p.id] !== gen) {
+    // Disabled (or superseded) while connecting: tear down our registration.
+    const srv = MCP[p.id];
+    if (srv) { try { srv.proc.kill(); } catch {} delete MCP[p.id]; }
+    return { error: "plugin was disabled during connect" };
+  }
+  if (r && r.ok) PLUGIN_MANAGED.add(p.id);
+  return r;
+}
+async function pluginsConnectAll() {
+  const st = pluginState();
+  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled) await pluginConnect(p, s.env); }
+}
+ipcMain.handle("crowe:plugins:list", () => pluginList());
+ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
+  const p = BUILTIN_PLUGINS.find((x) => x.id === id);
+  if (!p) return { error: "unknown plugin" };
+  if (p.available === false) return { error: "server pending — this plugin is not released yet" };
+  if (PLUGIN_MANAGED.has(id) && MCP[id]) return { ok: true, tools: MCP[id].tools.length };
+  if (PLUGIN_CONNECTING.has(id)) return { error: "already connecting" };
+  PLUGIN_CONNECTING.add(id);
+  try {
+    const r = await pluginConnect(p, env);
+    if (r && r.error) return { error: `could not start: ${String(r.error).slice(0, 160)}` };
+    try {
+      saveConfig({ plugins: { ...pluginState(), [id]: { enabled: true, env: env || {} } } });
+    } catch (e) {
+      const srv = MCP[id];
+      if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+      PLUGIN_MANAGED.delete(id);
+      return { error: `could not save config: ${String(e).slice(0, 160)}` };
+    }
+    return { ok: true, tools: r.tools || 0 };
+  } finally { PLUGIN_CONNECTING.delete(id); }
+});
+ipcMain.handle("crowe:plugins:disable", (_e, { id }) => {
+  PLUGIN_GEN[id] = (PLUGIN_GEN[id] || 0) + 1; // void any in-flight connect
+  PLUGIN_MANAGED.delete(id);
+  const srv = MCP[id];
+  if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+  try { saveConfig({ plugins: { ...pluginState(), [id]: { enabled: false } } }); }
+  catch (e) { return { error: `could not save config: ${String(e).slice(0, 160)}` }; }
+  return { ok: true };
+});
+
 async function mcpCall(fullName, args) {
   const [, server, ...rest] = fullName.split("__");
   const tool = rest.join("__");
@@ -297,36 +561,75 @@ const harnessCtx = {
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
   getCatalog: () => catalogCache.models,
+  // Only plugin-managed servers are tier-gated; hand-configured MCP servers
+  // keep their historic ungated behavior even if named like a manifest id.
+  getPlugins: () => BUILTIN_PLUGINS.filter((p) => PLUGIN_MANAGED.has(p.id)),
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
-let agentRun = { aborted: false, controller: null };
-ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentRun.controller && agentRun.controller.abort(); } catch {} return { ok: true }; });
-ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
-  agentRun = { aborted: false, controller: null };
-  const result = await harness.runAgent(harnessCtx, messages.slice(), {
-    gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
-    send: (ev) => evt.sender.send("crowe:agent:event", ev),
-    isAborted: () => agentRun.aborted,
-    setController: (c) => { agentRun.controller = c; },
-  });
-  // Persist the turn to the current session.
-  try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
-  return { done: true };
+const agentRuns = new Map();
+ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
+  const run = agentRuns.get(id);
+  if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
+  return { ok: true };
+});
+ipcMain.handle("crowe:agent:stop-all", () => {
+  for (const run of agentRuns.values()) {
+    run.aborted = true;
+    try { if (run.controller) run.controller.abort(); } catch {}
+  }
+  return { ok: true, stopped: agentRuns.size };
+});
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "" }) => {
+  if (licensed) {
+    const entitlement = await requireAgentEntitlement(workspaceId);
+    if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
+  }
+  const run = { aborted: false, controller: null };
+  agentRuns.set(id, run);
+  postTelemetry("agent_turn", { turns: messages.length, agentId: id });
+  try {
+    const result = await harness.runAgent(harnessCtx, messages.slice(), {
+      gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
+      send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
+      isAborted: () => run.aborted,
+      setController: (c) => { run.controller = c; },
+    });
+    if (id === "main") {
+      try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
+    }
+    return { done: true, text: result.text || "" };
+  } finally {
+    agentRuns.delete(id);
+  }
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
-let ptyProc = null;
-ipcMain.handle("crowe:pty:start", (evt, { cols, rows } = {}) => {
+const ptyProcs = new Map();
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable" };
-  if (ptyProc) return { ok: true };
-  ptyProc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
-  ptyProc.onData((d) => { try { evt.sender.send("crowe:pty:data", d); } catch {} });
-  ptyProc.onExit(() => { ptyProc = null; });
+  if (ptyProcs.has(id)) return { ok: true, id };
+  const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
+  ptyProcs.set(id, proc);
+  proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
+  proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
+  return { ok: true, id };
+});
+ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { const proc = ptyProcs.get(id); if (proc) proc.write(data || ""); });
+ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { const proc = ptyProcs.get(id); if (proc) { try { proc.resize(cols, rows); } catch {} } });
+ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { const proc = ptyProcs.get(id); if (proc) { try { proc.kill(); } catch {} ptyProcs.delete(id); } return { ok: true }; });
+ipcMain.handle("crowe:operator:status", () => ({
+  app: "running", agents: agentRuns.size,
+  agentIds: [...agentRuns.keys()], terminals: ptyProcs.size, terminalIds: [...ptyProcs.keys()],
+  mcpServers: Object.keys(MCP).length,
+  mcpTools: Object.values(MCP).reduce((n, server) => n + server.tools.length, 0),
+  cwd: CWD, autonomy: loadConfig().autonomy || "edit", version: app.getVersion(), uptime: Math.round(process.uptime()),
+}));
+ipcMain.handle("crowe:operator:stop-all", () => {
+  for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
+  for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   return { ok: true };
 });
-ipcMain.on("crowe:pty:input", (_e, d) => { if (ptyProc) ptyProc.write(d); });
-ipcMain.on("crowe:pty:resize", (_e, { cols, rows }) => { if (ptyProc) { try { ptyProc.resize(cols, rows); } catch {} } });
 
 // ─── Filesystem ──────────────────────────────────────────────────────────────
 ipcMain.handle("crowe:fs:list", (_e, dir) => {
@@ -338,6 +641,24 @@ ipcMain.handle("crowe:fs:list", (_e, dir) => {
   } catch (e) { return { cwd: target, entries: [], error: String(e) }; }
 });
 ipcMain.handle("crowe:fs:read", (_e, p) => { try { return { content: fs.readFileSync(resolvePath(p), "utf8").slice(0, 200000) }; } catch (e) { return { error: String(e) }; } });
+// Bounded recursive listing for quick open (Cmd+P). Relative paths, files only.
+const WALK_SKIP = new Set(["node_modules", ".git", "dist", "build", "out", ".next", "__pycache__", ".venv", "venv", "target", ".cache"]);
+ipcMain.handle("crowe:fs:walk", () => {
+  const root = CWD, out = [], MAX = 2500;
+  const rec = (dir, rel, depth) => {
+    if (out.length >= MAX || depth > 6) return;
+    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of entries) {
+      if (out.length >= MAX) return;
+      if (d.name.startsWith(".") || WALK_SKIP.has(d.name) || d.name.endsWith(".app")) continue;
+      const r = rel ? rel + "/" + d.name : d.name;
+      if (d.isDirectory()) rec(path.join(dir, d.name), r, depth + 1);
+      else if (d.isFile()) out.push(r);
+    }
+  };
+  rec(root, "", 0);
+  return { root, files: out, truncated: out.length >= MAX };
+});
 
 // ─── Git (version control) ───────────────────────────────────────────────────
 function gitRun(argStr) {
@@ -346,7 +667,7 @@ function gitRun(argStr) {
       (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
   });
 }
-function gitWritesBlocked() { return (loadConfig().autonomy || "edit") === "readonly"; }
+function gitWritesBlocked() { const t = loadConfig().autonomy || "edit"; return t === "readonly" || t === "plan"; }
 function shq(p) { return "'" + String(p == null ? "" : p).replace(/'/g, "'\\''") + "'"; }
 ipcMain.handle("crowe:git:status", async () => {
   const probe = await gitRun("rev-parse --is-inside-work-tree");
@@ -381,11 +702,14 @@ ipcMain.handle("crowe:git:branches", async () => {
   return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
 });
 ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`checkout ${shq(branch)}`); });
+ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("pull --ff-only"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("push"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
@@ -488,13 +812,51 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// ─── Auto-update ─────────────────────────────────────────────────────────────
+// Manual-consent flow: check on launch + on demand, tell the renderer when an
+// update is available, download only when the user asks, install on quit.
+let updateState = { status: "idle", version: "", notes: "" };
+let updateUserInitiated = false; // errors only surface for checks the user asked for
+function relayUpdate() { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:update", updateState); }
+function setupAutoUpdate() {
+  if (!autoUpdater || !app.isPackaged) return;   // dev/unsigned runs never self-update
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("update-available", (info) => { updateState = { status: "available", version: info.version, notes: String(info.releaseNotes || "").slice(0, 500) }; relayUpdate(); });
+  autoUpdater.on("update-not-available", () => { updateState = { status: "current", version: app.getVersion(), notes: "" }; relayUpdate(); });
+  autoUpdater.on("download-progress", (p) => { updateState = { ...updateState, status: "downloading", percent: Math.round(p.percent) }; relayUpdate(); });
+  autoUpdater.on("update-downloaded", (info) => { updateState = { status: "ready", version: info.version, notes: updateState.notes }; relayUpdate(); });
+  autoUpdater.on("error", (e) => {
+    // A silent launch check that 404s (unseeded channel) or fails offline must
+    // not raise a red-herring banner on every start. Only surface user-asked errors.
+    if (!updateUserInitiated) return;
+    updateState = { status: "error", message: String(e).slice(0, 200) }; relayUpdate();
+  });
+  setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 4000);
+}
+ipcMain.handle("crowe:update:check", async () => { if (!autoUpdater || !app.isPackaged) return { status: "dev" }; updateUserInitiated = true; try { await autoUpdater.checkForUpdates(); } catch (e) { return { status: "error", message: String(e).slice(0, 200) }; } return updateState; });
+ipcMain.handle("crowe:update:download", async () => { if (!autoUpdater) return { error: "unavailable" }; try { await autoUpdater.downloadUpdate(); } catch (e) { return { error: String(e).slice(0, 200) }; } return { ok: true }; });
+ipcMain.handle("crowe:update:install", () => { if (autoUpdater) autoUpdater.quitAndInstall(); return { ok: true }; });
+ipcMain.handle("crowe:update:state", () => updateState);
+
 app.whenReady().then(async () => {
+  initCrashReporting();
   createWindow();
   buildMenu();
   createTray();
+  setupAutoUpdate();
+  postTelemetry("app_launch", { firstRun: !loadConfig().onboarded });
+  process.on("uncaughtException", (e) => { postTelemetry("main_exception", { error: String(e && e.message || e).slice(0, 200) }); });
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
+  pluginsConnectAll();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
+  // Keep the Crowe ID session fresh while the app runs: refresh proactively
+  // before expiry so a long-lived window never silently loses the harness.
+  setInterval(() => {
+    const u = currentUser();
+    if (u && u.exp && u.exp * 1000 < Date.now() + 5 * 60 * 1000) refreshToken();
+  }, 4 * 60 * 1000);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });

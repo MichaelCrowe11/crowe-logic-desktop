@@ -27,79 +27,80 @@ app.whenReady().then(async () => {
     await new Promise((res) => (win.webContents.isLoading() ? win.webContents.once("did-finish-load", res) : res()));
     await sleep(1800); // fonts, mark, auth/status, catalog
     const js = (code) => win.webContents.executeJavaScript(code);
-    const metrics = () => js(`(() => {
-      const shell = document.getElementById("shell");
-      const wb = document.getElementById("workbench");
-      const shellRight = shell.getBoundingClientRect().right;
-      return {
-        shellClientWidth: shell.clientWidth,
-        shellScrollWidth: shell.scrollWidth,
-        workbenchWidth: wb.getBoundingClientRect().width,
-        agentWidth: document.getElementById("agent").getBoundingClientRect().width,
-        workspaceWidth: document.getElementById("workspace").getBoundingClientRect().width,
-        split: wb.style.getPropertyValue("--split"),
-        cols: term ? term.cols : 0,
-        overflowers: [...shell.querySelectorAll("*")]
-          .filter((el) => el.getBoundingClientRect().right > shellRight + 0.5)
-          .slice(0, 8)
-          .map((el) => ({ id: el.id, cls: el.className, right: el.getBoundingClientRect().right })),
-      };
-    })()`);
-    const resize = async (width) => { win.setContentSize(width, 840); await sleep(350); };
-    const assertContained = (label, value) => assert(
-      value.shellScrollWidth === value.shellClientWidth,
-      `${label}: #shell overflowed (${value.shellScrollWidth} > ${value.shellClientWidth})`,
-    );
-
-    // Chat: start at 1280 with the fluid split, then verify FitAddon reduces
-    // terminal columns when the content width shrinks to the 900px minimum.
-    await js(`setSpace("chat"); document.getElementById("workbench").style.removeProperty("--split"); fitTerm()`);
+    const metrics = () => js(`(() => ({
+      panels: document.querySelectorAll(".workspace-panel").length,
+      terminals: document.querySelectorAll(".terminal-host").length,
+      browsers: document.querySelectorAll(".browser-host webview").length,
+      operators: document.querySelectorAll(".operator-grid").length,
+      workflows: document.querySelectorAll(".workflow-surface").length,
+      agentFleets: document.querySelectorAll(".agent-fleet").length,
+      workbenches: document.querySelectorAll(".agent-workbench").length,
+      browserControls: [".back",".forward",".reload",".hist",".bookmark",".bookmarks",".browser-url"].every((s) => document.querySelector(s)),
+      terminalControls: [".term-restart",".term-clear",".term-copy",".term-export"].every((s) => document.querySelector(s)),
+      operatorControls: [".refresh",".stop-agent",".stop-voice",".emergency"].every((s) => document.querySelector(s)),
+      persisted: Boolean(localStorage.getItem("crowe-workspace-panels")),
+      layout: document.getElementById("panel-deck").className,
+      voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
+      conversationCopy: Boolean(document.getElementById("copy-conversation")),
+      glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
+      workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save",".awb-attach",".awb-cancel",".awb-workflow",".awb-history",".awb-meter"].every((s) => document.querySelector(s)),
+      licensingControls: [".fleet-workspace",".fleet-refresh",".fleet-billing",".fleet-license .badge"].every((s) => document.querySelector(s)),
+      licensingSettled: document.querySelector(".fleet-license .badge")?.textContent !== "Checking",
+      glassAgents: document.querySelectorAll(".glass-agent").length,
+      glassArrange: Boolean(document.getElementById("glass-arrange")),
+      glassVisible: [...document.querySelectorAll(".glass-agent")].every((el) => { const r=el.getBoundingClientRect(); return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }),
+      glassCompact: [...document.querySelectorAll(".glass-agent")].every((el) => el.offsetWidth<=330 && el.offsetHeight<=360),
+      shellOverflow: document.getElementById("shell").scrollWidth > document.getElementById("shell").clientWidth,
+    }))()`);
+    await js(`localStorage.removeItem("crowe-workspace-panels"); [...panels].forEach((p) => closePanel(p.id)); setSpace("chat")`);
+    await sleep(300);
+    await js(`addPanel("terminal"); addPanel("terminal"); addPanel("browser", {url:"https://example.com"}); addPanel("operator"); addPanel("workflow"); addPanel("agents"); addPanel("workbench")`);
+    await sleep(1500);
+    const modular = await metrics();
+    assert(modular.panels >= 4, `expected at least 4 panels, got ${modular.panels}`);
+    assert(modular.terminals >= 2, `expected multiple terminals, got ${modular.terminals}`);
+    assert(modular.browsers >= 1, "browser panel missing");
+    assert(modular.operators >= 1, "operator panel missing");
+    assert(modular.workflows >= 1, "workflow panel missing");
+    assert(modular.agentFleets >= 1, "agent fleet panel missing");
+    assert(modular.licensingControls && modular.licensingSettled, "customer licensing controls did not initialize");
+    assert(modular.workbenches >= 1 && modular.workbenchControls, "agent workbench or its controls missing");
+    assert(await js(`document.querySelectorAll(".wf-template").length >= 2 && document.querySelectorAll(".fleet-card").length >= 4`), "workflow templates or licensed agent cards missing");
+    assert(modular.browserControls, "browser navigation, history, or bookmark controls missing");
+    assert(modular.terminalControls, "terminal management controls missing");
+    assert(modular.operatorControls, "operator management controls missing");
+    await js(`{const p=panels.find((x)=>x.type==="browser");p.bookmarks=["https://example.com"];savePanelState();document.querySelector(".bookmarks").click()}`);
+    assert(await js(`document.querySelectorAll(".browser-history .history-row").length >= 1`), "browser bookmark list missing");
+    assert(modular.persisted, "panel state was not persisted");
+    assert(modular.voiceButtons, "voice controls missing");
+    assert(modular.conversationCopy, "conversation copy control missing");
+    assert(modular.glassLauncher, "branded floating Crowe Logic launcher missing");
+    await js(`document.getElementById("settings-btn").click()`); await sleep(200);
+    assert(await js(`document.querySelectorAll(".key-provider").length >= 4 && document.getElementById("key-vault-state").textContent.length > 0 && [...document.querySelectorAll(".key-provider input")].every(x=>x.type==="password" && x.autocomplete==="new-password")`), "secure key manager missing or exposes unsafe inputs");
+    await js(`document.getElementById("cfg-cancel").click()`);
+    await js(`mountGlassAgent({title:"Research"}); mountGlassAgent({title:"Builder"}); mountGlassAgent({title:"Analyst"}); arrangeGlassAgents()`);
+    await sleep(250);
+    const glass = await metrics();
+    assert(glass.glassAgents >= 3, "parallel floating agents missing");
+    assert(glass.glassArrange, "agent orbit control missing");
+    assert(glass.glassVisible, "agent panel escaped the visible workspace");
+    assert(glass.glassCompact, "agent panels did not autoscale compactly");
+    assert(await js(`document.querySelectorAll(".glass-agent .glass-composer").length >= 3`), "floating agent composers missing");
+    await shoot(win, "floating-parallel-agents");
+    await js(`addUser("Copy test"); messages.push({role:"user",content:"Copy test"}); const b=addAssistant(); renderText(b,"Portable answer"); attachCopyButton(b.closest(".msg"),"Portable answer"); messages.push({role:"assistant",content:"Portable answer"})`);
+    const copyMetrics = await js(`(() => ({messageCopies:document.querySelectorAll(".message-copy").length, exportText:conversationMarkdown()}))()`);
+    assert(copyMetrics.messageCopies >= 2, "per-message copy controls missing");
+    assert(copyMetrics.exportText.includes("## You") && copyMetrics.exportText.includes("## Crowe Logic"), "conversation export format is incomplete");
+    assert(!modular.shellOverflow, "workspace overflowed");
+    await js(`document.getElementById("panel-layout").value="grid"; document.getElementById("panel-layout").dispatchEvent(new Event("change"))`);
     await sleep(200);
-    const chatWide = await metrics();
-    await resize(900);
-    const chatNarrow = await metrics();
-    assertContained("chat@900", chatNarrow);
-    assert(chatNarrow.cols < chatWide.cols, `chat: terminal cols did not shrink (${chatWide.cols} -> ${chatNarrow.cols})`);
-    console.log("resize: chat", chatWide.cols, "->", chatNarrow.cols, "cols");
-    await shoot(win, "resize-chat-900");
+    const grid = await metrics();
+    assert(grid.layout.includes("grid"), "grid layout did not apply");
+    console.log("modular:", JSON.stringify(grid));
+    await shoot(win, "modular-workspace");
 
-    // A split dragged at 1280 must be reclamped after shrinking, otherwise its
-    // stale pixel width alone can overflow the narrower grid.
-    await resize(1280);
-    await js(`setWorkbenchSplit(1e6); fitTerm()`);
-    await resize(900);
-    const staleSplit = await metrics();
-    console.log("stale split:", JSON.stringify(staleSplit));
-    assertContained("chat stale split@900", staleSplit);
-    assert(staleSplit.workspaceWidth >= 319, `stale split: workspace collapsed to ${staleSplit.workspaceWidth}px`);
-
-    // Projects → Deep work adds the 170px space nav. Exercise the same 1280 →
-    // 900 transition with a fluid split and require FitAddon to shrink again.
-    await resize(1280);
-    await js(`document.getElementById("workbench").style.removeProperty("--split"); document.querySelector('[data-space="projects"]').click(); document.querySelector('[data-lane="deepwork"]').click()`);
-    await sleep(350);
-    const deepWide = await metrics();
-    await resize(900);
-    const deepNarrow = await metrics();
-    assertContained("projects/deepwork@900", deepNarrow);
-    assert(deepNarrow.cols < deepWide.cols, `deep work: terminal cols did not shrink (${deepWide.cols} -> ${deepNarrow.cols})`);
-    console.log("resize: deep work", deepWide.cols, "->", deepNarrow.cols, "cols");
-    await shoot(win, "resize-projects-deepwork-900");
-
-    // Divider extremes retain the intended 300px agent and 320px workspace
-    // floors at the app's minimum width, including the 5px divider track.
-    await js(`setWorkbenchSplit(-1e6); fitTerm()`); await sleep(100);
-    const splitLeft = await metrics();
-    assertContained("divider left clamp", splitLeft);
-    assert(splitLeft.agentWidth >= 299, `divider left: agent width ${splitLeft.agentWidth}px`);
-    await js(`setWorkbenchSplit(1e6); fitTerm()`); await sleep(100);
-    const splitRight = await metrics();
-    assertContained("divider right clamp", splitRight);
-    assert(splitRight.workspaceWidth >= 319, `divider right: workspace width ${splitRight.workspaceWidth}px`);
-    console.log("divider:", splitLeft.agentWidth, "px agent /", splitRight.workspaceWidth, "px workspace");
-
-    await resize(1280);
-    await js(`document.getElementById("workbench").style.removeProperty("--split"); setSpace("chat"); fitTerm()`);
+    win.setContentSize(1280, 840);
+    await js(`setSpace("chat"); fitTerminals()`);
     await sleep(250);
     await shoot(win, "1-chat-light");
     await js(`setSpace("projects")`); await sleep(900); await shoot(win, "2-projects-home");
