@@ -43,7 +43,7 @@ app.whenReady().then(async () => {
       voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
       glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
-      workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save"].every((s) => document.querySelector(s)),
+      workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save",".awb-attach",".awb-cancel",".awb-workflow",".awb-history",".awb-meter"].every((s) => document.querySelector(s)),
       glassAgents: document.querySelectorAll(".glass-agent").length,
       glassArrange: Boolean(document.getElementById("glass-arrange")),
       glassVisible: [...document.querySelectorAll(".glass-agent")].every((el) => { const r=el.getBoundingClientRect(); return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }),
@@ -73,7 +73,7 @@ app.whenReady().then(async () => {
     assert(modular.conversationCopy, "conversation copy control missing");
     assert(modular.glassLauncher, "branded floating Crowe Logic launcher missing");
     await js(`document.getElementById("settings-btn").click()`); await sleep(200);
-    assert(await js(`document.querySelectorAll(".key-provider").length >= 4 && document.getElementById("key-vault-state").textContent.length > 0`), "secure key manager missing");
+    assert(await js(`document.querySelectorAll(".key-provider").length >= 4 && document.getElementById("key-vault-state").textContent.length > 0 && [...document.querySelectorAll(".key-provider input")].every(x=>x.type==="password" && x.autocomplete==="new-password")`), "secure key manager missing or exposes unsafe inputs");
     await js(`document.getElementById("cfg-cancel").click()`);
     await js(`mountGlassAgent({title:"Research"}); mountGlassAgent({title:"Builder"}); mountGlassAgent({title:"Analyst"}); arrangeGlassAgents()`);
     await sleep(250);

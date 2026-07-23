@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -107,7 +107,10 @@ function writeKeyStore(store) {
 }
 function keyStatus() {
   const store = readKeyStore();
-  return Object.entries(KEY_PROVIDERS).map(([id, spec]) => ({ id, label: spec.label, configured: Boolean(store[id]), updatedAt: store[id]?.updatedAt || 0 }));
+  return Object.entries(KEY_PROVIDERS).map(([id, spec]) => {
+    const entry = store[id] || {};
+    return { id, label: spec.label, configured: Boolean(entry.value), updatedAt: entry.updatedAt || 0, testedAt: entry.testedAt || 0, healthy: entry.healthy === true };
+  });
 }
 ipcMain.handle("crowe:keys:list", () => ({ encrypted: safeStorage.isEncryptionAvailable(), providers: keyStatus() }));
 ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
@@ -122,9 +125,29 @@ ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
   const spec = KEY_PROVIDERS[provider], secret = readKeyStore()[provider]?.value;
   if (!spec || !secret) return { ok: false, error: "No key configured" };
   const headers = spec.header === "Bearer" ? { Authorization: `Bearer ${secret}` } : { "x-api-key": secret, "anthropic-version": "2023-06-01" };
-  try { const r = await fetch(spec.url, { headers, signal: AbortSignal.timeout(10000) }); return { ok: r.ok, status: r.status, error: r.ok ? "" : "Provider rejected the credential" }; }
-  catch { return { ok: false, error: "Provider could not be reached" }; }
+  try {
+    const r = await fetch(spec.url, { headers, signal: AbortSignal.timeout(10000) });
+    const store = readKeyStore();
+    if (store[provider]) { store[provider].testedAt = Date.now(); store[provider].healthy = r.ok; writeKeyStore(store); }
+    return { ok: r.ok, status: r.status, error: r.ok ? "" : "Provider rejected the credential", providers: keyStatus() };
+  } catch {
+    const store = readKeyStore();
+    if (store[provider]) { store[provider].testedAt = Date.now(); store[provider].healthy = false; writeKeyStore(store); }
+    return { ok: false, error: "Provider could not be reached", providers: keyStatus() };
+  }
 });
+ipcMain.handle("crowe:files:pick", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openFile", "multiSelections"], title: "Attach context files" });
+  if (result.canceled) return [];
+  return result.filePaths.map((filePath) => {
+    try { const stat = fs.statSync(filePath); return { path: filePath, name: path.basename(filePath), size: stat.size }; }
+    catch { return null; }
+  }).filter(Boolean);
+});
+ipcMain.handle("crowe:files:read-context", (_e, filePaths) => (Array.isArray(filePaths) ? filePaths : []).slice(0, 12).map((filePath) => {
+  try { return { path: filePath, content: fs.readFileSync(filePath, "utf8").slice(0, 100000) }; }
+  catch { return { path: filePath, error: "File could not be read as text" }; }
+}));
 
 let CWD = loadConfig().cwd || os.homedir();
 let mainWindow = null;
@@ -137,6 +160,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
+      sandbox: true,
     },
   });
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
@@ -144,9 +168,12 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
     return { action: "deny" };
   });
-  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(["media", "microphone", "notifications", "clipboard-sanitized-write"].includes(permission));
+  mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const url = details?.requestingUrl || wc.getURL();
+    const trusted = url.startsWith("file://") || url.startsWith("https://croweagents.com") || url.startsWith("https://crowelogic.com");
+    callback(trusted && ["media", "microphone", "notifications", "clipboard-sanitized-write"].includes(permission));
   });
+  mainWindow.webContents.on("will-navigate", (event, url) => { if (!url.startsWith("file://")) { event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); } });
 }
 
 // ─── Crowe ID auth (OAuth2 Authorization Code + PKCE, loopback redirect) ──────

@@ -26,7 +26,13 @@ contextBridge.exposeInMainWorld("crowe", {
     close: (id) => ipcRenderer.invoke("crowe:pty:close", { id }),
     onData: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
   },
-  fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p), walk: () => ipcRenderer.invoke("crowe:fs:walk") },
+  fs: {
+    list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir),
+    read: (p) => ipcRenderer.invoke("crowe:fs:read", p),
+    walk: () => ipcRenderer.invoke("crowe:fs:walk"),
+    pick: () => ipcRenderer.invoke("crowe:files:pick"),
+    readContext: (paths) => ipcRenderer.invoke("crowe:files:read-context", paths),
+  },
   // Version control (git, run in the workspace).
   git: {
     status: () => ipcRenderer.invoke("crowe:git:status"),
