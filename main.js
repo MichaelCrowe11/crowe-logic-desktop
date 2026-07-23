@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -87,6 +87,44 @@ function saveConfig(patch) {
   fs.writeFileSync(configPath(), JSON.stringify(merged, null, 2), { mode: 0o600 });
   return merged;
 }
+
+const KEY_PROVIDERS = {
+  openai: { label: "OpenAI", url: "https://api.openai.com/v1/models", header: "Bearer" },
+  anthropic: { label: "Anthropic", url: "https://api.anthropic.com/v1/models", header: "x-api-key" },
+  openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1/models", header: "Bearer" },
+  groq: { label: "Groq", url: "https://api.groq.com/openai/v1/models", header: "Bearer" },
+};
+function keyStorePath() { return path.join(app.getPath("userData"), "credentials.bin"); }
+function readKeyStore() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return {};
+    return JSON.parse(safeStorage.decryptString(fs.readFileSync(keyStorePath())));
+  } catch { return {}; }
+}
+function writeKeyStore(store) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Native credential encryption is unavailable");
+  fs.writeFileSync(keyStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
+}
+function keyStatus() {
+  const store = readKeyStore();
+  return Object.entries(KEY_PROVIDERS).map(([id, spec]) => ({ id, label: spec.label, configured: Boolean(store[id]), updatedAt: store[id]?.updatedAt || 0 }));
+}
+ipcMain.handle("crowe:keys:list", () => ({ encrypted: safeStorage.isEncryptionAvailable(), providers: keyStatus() }));
+ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
+  if (!KEY_PROVIDERS[provider] || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
+  const store = readKeyStore(); store[provider] = { value: key.trim(), updatedAt: Date.now() }; writeKeyStore(store);
+  return { ok: true, providers: keyStatus() };
+});
+ipcMain.handle("crowe:keys:remove", (_e, { provider }) => {
+  const store = readKeyStore(); delete store[provider]; writeKeyStore(store); return { ok: true, providers: keyStatus() };
+});
+ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
+  const spec = KEY_PROVIDERS[provider], secret = readKeyStore()[provider]?.value;
+  if (!spec || !secret) return { ok: false, error: "No key configured" };
+  const headers = spec.header === "Bearer" ? { Authorization: `Bearer ${secret}` } : { "x-api-key": secret, "anthropic-version": "2023-06-01" };
+  try { const r = await fetch(spec.url, { headers, signal: AbortSignal.timeout(10000) }); return { ok: r.ok, status: r.status, error: r.ok ? "" : "Provider rejected the credential" }; }
+  catch { return { ok: false, error: "Provider could not be reached" }; }
+});
 
 let CWD = loadConfig().cwd || os.homedir();
 let mainWindow = null;

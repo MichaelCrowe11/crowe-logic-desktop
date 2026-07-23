@@ -34,6 +34,7 @@ app.whenReady().then(async () => {
       operators: document.querySelectorAll(".operator-grid").length,
       workflows: document.querySelectorAll(".workflow-surface").length,
       agentFleets: document.querySelectorAll(".agent-fleet").length,
+      workbenches: document.querySelectorAll(".agent-workbench").length,
       browserControls: [".back",".forward",".reload",".hist",".bookmark",".bookmarks",".browser-url"].every((s) => document.querySelector(s)),
       terminalControls: [".term-restart",".term-clear",".term-copy",".term-export"].every((s) => document.querySelector(s)),
       operatorControls: [".refresh",".stop-agent",".stop-voice",".emergency"].every((s) => document.querySelector(s)),
@@ -41,7 +42,8 @@ app.whenReady().then(async () => {
       layout: document.getElementById("panel-deck").className,
       voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
-      glassLauncher: Boolean(document.getElementById("glass-launcher")),
+      glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
+      workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save"].every((s) => document.querySelector(s)),
       glassAgents: document.querySelectorAll(".glass-agent").length,
       glassArrange: Boolean(document.getElementById("glass-arrange")),
       glassVisible: [...document.querySelectorAll(".glass-agent")].every((el) => { const r=el.getBoundingClientRect(); return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }),
@@ -50,7 +52,7 @@ app.whenReady().then(async () => {
     }))()`);
     await js(`localStorage.removeItem("crowe-workspace-panels"); [...panels].forEach((p) => closePanel(p.id)); setSpace("chat")`);
     await sleep(300);
-    await js(`addPanel("terminal"); addPanel("terminal"); addPanel("browser", {url:"https://example.com"}); addPanel("operator"); addPanel("workflow"); addPanel("agents")`);
+    await js(`addPanel("terminal"); addPanel("terminal"); addPanel("browser", {url:"https://example.com"}); addPanel("operator"); addPanel("workflow"); addPanel("agents"); addPanel("workbench")`);
     await sleep(1500);
     const modular = await metrics();
     assert(modular.panels >= 4, `expected at least 4 panels, got ${modular.panels}`);
@@ -59,6 +61,7 @@ app.whenReady().then(async () => {
     assert(modular.operators >= 1, "operator panel missing");
     assert(modular.workflows >= 1, "workflow panel missing");
     assert(modular.agentFleets >= 1, "agent fleet panel missing");
+    assert(modular.workbenches >= 1 && modular.workbenchControls, "agent workbench or its controls missing");
     assert(await js(`document.querySelectorAll(".wf-template").length >= 2 && document.querySelectorAll(".fleet-card").length >= 4`), "workflow templates or licensed agent cards missing");
     assert(modular.browserControls, "browser navigation, history, or bookmark controls missing");
     assert(modular.terminalControls, "terminal management controls missing");
@@ -68,7 +71,10 @@ app.whenReady().then(async () => {
     assert(modular.persisted, "panel state was not persisted");
     assert(modular.voiceButtons, "voice controls missing");
     assert(modular.conversationCopy, "conversation copy control missing");
-    assert(modular.glassLauncher, "floating Crowe Logic launcher missing");
+    assert(modular.glassLauncher, "branded floating Crowe Logic launcher missing");
+    await js(`document.getElementById("settings-btn").click()`); await sleep(200);
+    assert(await js(`document.querySelectorAll(".key-provider").length >= 4 && document.getElementById("key-vault-state").textContent.length > 0`), "secure key manager missing");
+    await js(`document.getElementById("cfg-cancel").click()`);
     await js(`mountGlassAgent({title:"Research"}); mountGlassAgent({title:"Builder"}); mountGlassAgent({title:"Analyst"}); arrangeGlassAgents()`);
     await sleep(250);
     const glass = await metrics();

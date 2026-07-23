@@ -443,13 +443,14 @@ function reorderPanel(from, to) {
 function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySelector(`[data-id="${p.id}"]`); if(el) panelDeck.appendChild(el); }); }
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet"};
+  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",workbench:"Workbench"};
   const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [] };
   panels.push(p); const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal") await mountTerminal(p, body);
   else if(type === "browser") mountBrowser(p, body);
   else if(type === "workflow") mountWorkflow(p, body);
   else if(type === "agents") mountAgentFleet(p, body);
+  else if(type === "workbench") mountWorkbench(p, body);
   else mountOperator(p, body);
   savePanelState(); return p;
 }
@@ -524,6 +525,20 @@ function mountAgentFleet(p, body) {
   body.querySelector(".fleet-site").onclick=()=>navigate("https://croweagents.com");const grid=body.querySelector(".fleet-grid");
   agents.forEach(a=>{const card=document.createElement("article");card.className="fleet-card";card.innerHTML=`<div class="fleet-avatar">${a.name.split(" ").map(x=>x[0]).join("")}</div><div class="fleet-state"><span></span>Available</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div><button class="launch primary sm">Launch agent</button><button class="workflow ghost sm">Add to workflow</button></div>`;card.querySelector(".launch").onclick=()=>{const x=mountGlassAgent({title:a.name,messages:[{role:"assistant",content:`${a.name} is ready. ${a.role}.`} ]});x.el.querySelector("textarea").value=a.prompt};card.querySelector(".workflow").onclick=()=>addPanel("workflow",{title:`${a.name} Workflow`});grid.appendChild(card)});
 }
+function workbenchPresets(){try{return JSON.parse(localStorage.getItem("crowe-workbench-presets")||"[]")}catch{return []}}
+function mountWorkbench(p, body) {
+  body.classList.add("agent-workbench");
+  body.innerHTML='<aside class="awb-sidebar"><div class="awb-brand"><img src="../assets/mark-simple.svg" alt=""><div><small>AGENT LAB</small><b>Workbench</b></div></div><button class="awb-new primary sm">New run</button><div class="awb-presets"></div></aside><main class="awb-main"><header><div><small>COMPOSE AND COMPARE</small><h2>Agent Workbench</h2></div><span class="awb-run-state">Ready</span></header><div class="awb-controls"><label>Agent<select class="awb-agent"><option>CroweLM Operator</option><option>Research Agent</option><option>Builder Agent</option><option>Operations Analyst</option></select></label><label>Mode<select class="awb-mode"><option value="single">Single run</option><option value="compare">Compare two agents</option><option value="parallel">Parallel synthesis</option></select></label><label>Context<input class="awb-context" placeholder="Workspace files, URLs, or customer context"></label></div><textarea class="awb-prompt" rows="7" placeholder="Describe the outcome, constraints, tools, and expected output..."></textarea><div class="awb-actions"><button class="awb-run primary">Run workbench</button><button class="awb-save ghost">Save preset</button><button class="awb-copy ghost">Copy outputs</button></div><section class="awb-results"><article><header><b>Primary result</b><span>Agent A</span></header><div class="awb-output">Results appear here.</div></article><article class="awb-result-b"><header><b>Comparison</b><span>Agent B</span></header><div class="awb-output">Select Compare or Parallel to run a second isolated agent.</div></article></section></main>';
+  const prompt=body.querySelector(".awb-prompt"),context=body.querySelector(".awb-context"),mode=body.querySelector(".awb-mode"),state=body.querySelector(".awb-run-state"),outputs=body.querySelectorAll(".awb-output"),second=body.querySelector(".awb-result-b");
+  const renderPresets=()=>{const list=workbenchPresets();body.querySelector(".awb-presets").innerHTML='<small>SAVED CONFIGURATIONS</small>'+list.map((x,i)=>`<button data-i="${i}"><b>${esc(x.name)}</b><span>${esc(x.mode)}</span></button>`).join("");body.querySelectorAll(".awb-presets button").forEach(b=>b.onclick=()=>{const x=list[+b.dataset.i];prompt.value=x.prompt;context.value=x.context;mode.value=x.mode;second.classList.toggle("hidden",x.mode==="single")})};
+  mode.onchange=()=>second.classList.toggle("hidden",mode.value==="single");
+  body.querySelector(".awb-new").onclick=()=>{prompt.value="";context.value="";mode.value="single";outputs.forEach((x,i)=>x.textContent=i?"Select Compare or Parallel to run a second isolated agent.":"Results appear here.");second.classList.add("hidden")};
+  body.querySelector(".awb-save").onclick=()=>{const name=prompt.value.trim().split(/\s+/).slice(0,6).join(" ")||"Untitled preset",items=workbenchPresets();items.unshift({name,prompt:prompt.value,context:context.value,mode:mode.value});localStorage.setItem("crowe-workbench-presets",JSON.stringify(items.slice(0,30)));renderPresets()};
+  body.querySelector(".awb-copy").onclick=e=>copyText([...outputs].filter(x=>!x.closest(".hidden")).map((x,i)=>`## Result ${i+1}\n\n${x.textContent}`).join("\n\n"),e.currentTarget);
+  body.querySelector(".awb-run").onclick=async()=>{const task=prompt.value.trim();if(!task)return;state.textContent="Running";const count=mode.value==="single"?1:2;second.classList.toggle("hidden",count===1);outputs.forEach((x,i)=>{if(i<count)x.textContent="Agent running..."});const jobs=Array.from({length:count},async(_,i)=>{const id=`${p.id}-run-${i}`,msgs=[{role:"user",content:(context.value.trim()?`Context: ${context.value.trim()}\n\n`:"")+task+(i===1?"\n\nProvide an independent alternative approach.":"")}];let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId===id&&(ev.type==="assistant"||ev.type==="assistant_delta"))answer+=(ev.text||"")});try{const r=await window.crowe.agent.run(msgs,id);return answer||(r&&r.text)||"Completed."}finally{off()}});const results=await Promise.all(jobs);results.forEach((x,i)=>{outputs[i].innerHTML=md(x)});state.textContent="Completed"};
+  renderPresets();mode.onchange();
+}
+
 function mountOperator(p, body) {
   body.innerHTML='<div class="operator-health"><span class="health-dot"></span><b>Operator service</b><span class="health-label">checking</span></div><div class="operator-grid"></div><div class="operator-lists"><section><b>Active agents</b><div class="agent-list">None</div></section><section><b>Active terminals</b><div class="terminal-list">None</div></section></div><div class="operator-actions"><button class="refresh primary sm">Refresh</button><button class="stop-agent ghost sm">Stop main agent</button><button class="stop-voice ghost sm">Stop voice</button><button class="emergency danger sm">Emergency stop all</button></div>';
   const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
@@ -534,7 +549,7 @@ function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)
 function showPane(name){if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit()}else{hideLegacy();const found=panels.find((p)=>p.type===name);if(!found)addPanel(name)}}
 function switchPane(name){showPane(name);setRailActive(name)}
 function navigate(u){hideLegacy();let p=[...panels].reverse().find((x)=>x.type==="browser");if(!p){addPanel("browser",{url:u});return}const el=panelDeck.querySelector(`[data-id="${p.id}"]`);const input=el?.querySelector("input.browser-url");if(input){input.value=u;el.querySelector(".go").click()}}
-$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");
+$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");
 $("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;savePanelState();setTimeout(fitTerminals,40)};
 document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(b.dataset.pane));
 window.addEventListener("resize",()=>{clampWorkbenchSplit();fitTerminals()});
@@ -581,12 +596,18 @@ async function refreshStatus() {
 
 // ── Settings ──
 const modal = $("settings");
+async function renderKeyManager(){
+  const result=await window.crowe.keys.list(),host=$("key-provider-list"),vault=$("key-vault-state");
+  vault.textContent=result.encrypted?"Native vault ready":"Vault unavailable";
+  host.innerHTML=(result.providers||[]).map(x=>`<div class="key-provider" data-provider="${x.id}"><div><b>${esc(x.label)}</b><span>${x.configured?"Configured securely":"Not configured"}</span></div><input type="password" autocomplete="off" placeholder="${x.configured?"Replace existing key":"Enter API key"}"><button class="key-save ghost sm">Save</button><button class="key-test ghost sm" ${x.configured?"":"disabled"}>Test</button><button class="key-remove ghost sm" ${x.configured?"":"disabled"}>Remove</button></div>`).join("");
+  host.querySelectorAll(".key-provider").forEach(row=>{const id=row.dataset.provider,input=row.querySelector("input");row.querySelector(".key-save").onclick=async()=>{if(!input.value.trim())return;await window.crowe.keys.set(id,input.value.trim());input.value="";renderKeyManager()};row.querySelector(".key-test").onclick=async e=>{e.currentTarget.textContent="Testing";const r=await window.crowe.keys.test(id);e.currentTarget.textContent=r.ok?"Connected":"Failed"};row.querySelector(".key-remove").onclick=async()=>{await window.crowe.keys.remove(id);renderKeyManager()}});
+}
 $("settings-btn").addEventListener("click", async () => {
   const c = await window.crowe.getConfig();
   $("cfg-base").value = c.baseUrl; $("cfg-cwd").value = c.cwd || ""; $("cfg-token").value = "";
   $("cfg-auto").checked = Boolean(c.autoApprove);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderPlugins();
+  renderPlugins(); renderKeyManager();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));

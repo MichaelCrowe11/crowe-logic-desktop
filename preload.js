@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld("crowe", {
     enable: (id, env) => ipcRenderer.invoke("crowe:plugins:enable", { id, env }),
     disable: (id) => ipcRenderer.invoke("crowe:plugins:disable", { id }),
   },
+  keys: {
+    list: () => ipcRenderer.invoke("crowe:keys:list"),
+    set: (provider, key) => ipcRenderer.invoke("crowe:keys:set", { provider, key }),
+    remove: (provider) => ipcRenderer.invoke("crowe:keys:remove", { provider }),
+    test: (provider) => ipcRenderer.invoke("crowe:keys:test", { provider }),
+  },
   operator: {
     status: () => ipcRenderer.invoke("crowe:operator:status"),
     stopAll: () => ipcRenderer.invoke("crowe:operator:stop-all"),

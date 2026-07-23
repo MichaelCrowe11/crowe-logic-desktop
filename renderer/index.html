@@ -195,6 +195,7 @@
           <button id="panel-add-operator" class="ghost sm" title="Operator control panel">Operator</button>
           <button id="panel-add-workflow" class="ghost sm" title="Build and run multi-agent workflows">Workflows</button>
           <button id="panel-add-agents" class="ghost sm" title="Launch licensed Crowe Agents">Agent Fleet</button>
+          <button id="panel-add-workbench" class="ghost sm" title="Compose, compare, and save agent runs">Workbench</button>
           <select id="panel-layout" class="panel-layout" title="Panel layout"><option value="columns">Columns</option><option value="rows">Rows</option><option value="grid">Grid</option><option value="stack">Stack</option></select>
           <button id="layout-save" class="ghost sm" title="Save the current workspace layout">Save layout</button>
           <select id="layout-saved" class="panel-layout" title="Saved layouts"><option value="">Saved layouts</option></select>
@@ -221,7 +222,7 @@
 
 
   <div id="glass-controls"><button id="glass-arrange" type="button" class="ghost sm" title="Arrange every agent into the visible workspace">Orbit agents</button><button id="glass-minimize-all" type="button" class="ghost sm" title="Minimize all floating agents">Minimize agents</button><button id="glass-restore-all" type="button" class="ghost sm" title="Restore and arrange all floating agents">Restore agents</button></div>
-  <button id="glass-launcher" type="button" title="Open a floating Crowe Logic agent">CL</button>
+  <button id="glass-launcher" type="button" title="Open a floating Crowe Logic agent" aria-label="Open Crowe Logic agent"><img src="../assets/mark-simple.svg" alt=""></button>
   <div id="glass-layer" aria-live="polite"></div>
 
   <div id="hud">
@@ -250,6 +251,7 @@
       <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
+      <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
       <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
       <label>Official plugins</label>
       <div id="cfg-plugins" class="plugs"></div>
