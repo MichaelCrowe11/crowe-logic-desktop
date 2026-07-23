@@ -4,8 +4,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("crowe", {
   // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|final|error}.
   agent: {
-    run: (messages) => ipcRenderer.invoke("crowe:agent:run", { messages }),
-    stop: () => ipcRenderer.invoke("crowe:agent:stop"),
+    run: (messages, id = "main") => ipcRenderer.invoke("crowe:agent:run", { messages, id }),
+    stop: (id = "main") => ipcRenderer.invoke("crowe:agent:stop", { id }),
+    stopAll: () => ipcRenderer.invoke("crowe:agent:stop-all"),
     onEvent: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:agent:event", h); return () => ipcRenderer.removeListener("crowe:agent:event", h); },
   },
   chat: (messages) => ipcRenderer.invoke("crowe:chat", { messages }),
@@ -20,9 +21,10 @@ contextBridge.exposeInMainWorld("crowe", {
   // Real PTY terminal.
   pty: {
     start: (size) => ipcRenderer.invoke("crowe:pty:start", size),
-    input: (d) => ipcRenderer.send("crowe:pty:input", d),
+    input: (id, data) => ipcRenderer.send("crowe:pty:input", { id, data }),
     resize: (size) => ipcRenderer.send("crowe:pty:resize", size),
-    onData: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
+    close: (id) => ipcRenderer.invoke("crowe:pty:close", { id }),
+    onData: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
   },
   fs: { list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir), read: (p) => ipcRenderer.invoke("crowe:fs:read", p), walk: () => ipcRenderer.invoke("crowe:fs:walk") },
   // Version control (git, run in the workspace).
@@ -63,6 +65,10 @@ contextBridge.exposeInMainWorld("crowe", {
     list: () => ipcRenderer.invoke("crowe:plugins:list"),
     enable: (id, env) => ipcRenderer.invoke("crowe:plugins:enable", { id, env }),
     disable: (id) => ipcRenderer.invoke("crowe:plugins:disable", { id }),
+  },
+  operator: {
+    status: () => ipcRenderer.invoke("crowe:operator:status"),
+    stopAll: () => ipcRenderer.invoke("crowe:operator:stop-all"),
   },
   getConfig: () => ipcRenderer.invoke("crowe:get-config"),
   setConfig: (patch) => ipcRenderer.invoke("crowe:set-config", patch),

@@ -162,6 +162,9 @@
 
     <main id="workbench">
       <section id="agent">
+        <div class="conversation-toolbar">
+          <button id="copy-conversation" type="button" class="ghost sm" title="Copy the complete conversation as Markdown">Copy conversation</button>
+        </div>
         <div id="transcript">
           <div class="welcome">
             <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
@@ -176,6 +179,8 @@
         </div>
         <form id="composer" autocomplete="off">
           <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
+          <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone">Mic</button>
+          <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud">Speak</button>
           <button id="send" type="submit">Send</button>
           <button id="stop" type="button" class="hidden">Stop</button>
         </form>
@@ -184,57 +189,40 @@
       <div id="divider"></div>
 
       <section id="workspace">
-        <div class="tabs">
-          <button class="tab active" data-pane="term">Terminal</button>
-          <button class="tab" data-pane="browser">Browser</button>
-          <button class="tab" data-pane="files">Files</button>
-          <button class="tab" data-pane="git">Git</button>
-          <button class="tab" data-pane="output">Output</button>
-          <div class="spacer"></div>
-          <span id="cwd" class="cwd"></span>
+        <div class="workspace-toolbar">
+          <button id="panel-add-term" class="ghost sm" title="New terminal panel">+ Terminal</button>
+          <button id="panel-add-browser" class="ghost sm" title="New browser panel">+ Browser</button>
+          <button id="panel-add-operator" class="ghost sm" title="Operator control panel">Operator</button>
+          <button id="panel-add-workflow" class="ghost sm" title="Build and run multi-agent workflows">Workflows</button>
+          <button id="panel-add-agents" class="ghost sm" title="Launch licensed Crowe Agents">Agent Fleet</button>
+          <select id="panel-layout" class="panel-layout" title="Panel layout"><option value="columns">Columns</option><option value="rows">Rows</option><option value="grid">Grid</option><option value="stack">Stack</option></select>
+          <button id="layout-save" class="ghost sm" title="Save the current workspace layout">Save layout</button>
+          <select id="layout-saved" class="panel-layout" title="Saved layouts"><option value="">Saved layouts</option></select>
+          <button id="layout-reset" class="ghost sm" title="Reset and recover workspace panels">Reset</button>
+          <button class="legacy-pane ghost sm" data-pane="files">Files</button>
+          <button class="legacy-pane ghost sm" data-pane="git">Git</button>
+          <button class="legacy-pane ghost sm" data-pane="output">Output</button>
+          <div class="spacer"></div><span id="cwd" class="cwd"></span>
         </div>
+        <div id="panel-deck" class="panel-deck columns"></div>
 
-        <div class="pane active" id="pane-term"><div id="term"></div></div>
-
-        <div class="pane" id="pane-browser">
-          <div class="urlbar">
-            <input id="url-in" type="text" placeholder="https://..." spellcheck="false" />
-            <button id="url-go" class="ghost">Go</button>
-          </div>
-          <webview id="wv" src="https://crowelogic.com" allowpopups></webview>
+        <div class="pane legacy-pane-view" id="pane-files">
+          <div id="files-tree"></div><pre id="files-view"></pre>
         </div>
-
-        <div class="pane" id="pane-files">
-          <div id="files-tree"></div>
-          <pre id="files-view"></pre>
-        </div>
-
-        <div class="pane" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
-
-        <div class="pane" id="pane-git">
-          <div class="git-head">
-            <span class="git-branch-wrap">on <span id="git-branch">-</span></span>
-            <div class="spacer"></div>
-            <button id="git-pull" class="ghost sm" title="git pull --ff-only">Pull</button>
-            <button id="git-push" class="ghost sm" title="git push">Push</button>
-            <button id="git-refresh" class="ghost sm">Refresh</button>
-          </div>
-          <div class="git-body">
-            <div id="git-files" class="git-files"></div>
-            <pre id="git-diff" class="git-diff"></pre>
-          </div>
-          <div class="git-commit">
-            <input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" />
-            <button id="git-commit-btn" class="primary sm">Commit</button>
-          </div>
+        <div class="pane legacy-pane-view" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
+        <div class="pane legacy-pane-view" id="pane-git">
+          <div class="git-head"><span class="git-branch-wrap">on <span id="git-branch">-</span></span><div class="spacer"></div><button id="git-pull" class="ghost sm">Pull</button><button id="git-push" class="ghost sm">Push</button><button id="git-refresh" class="ghost sm">Refresh</button></div>
+          <div class="git-body"><div id="git-files" class="git-files"></div><pre id="git-diff" class="git-diff"></pre></div>
+          <div class="git-commit"><input id="git-msg" type="text" placeholder="Commit message" spellcheck="false" /><button id="git-commit-btn" class="primary sm">Commit</button></div>
         </div>
       </section>
     </main>
   </div>
 
-  <div id="term-drawer" class="hidden" aria-label="Terminal drawer">
-    <div id="td-grip" title="Drag to resize · Ctrl+` to toggle"></div>
-  </div>
+
+  <div id="glass-controls"><button id="glass-arrange" type="button" class="ghost sm" title="Arrange every agent into the visible workspace">Orbit agents</button><button id="glass-minimize-all" type="button" class="ghost sm" title="Minimize all floating agents">Minimize agents</button><button id="glass-restore-all" type="button" class="ghost sm" title="Restore and arrange all floating agents">Restore agents</button></div>
+  <button id="glass-launcher" type="button" title="Open a floating Crowe Logic agent">CL</button>
+  <div id="glass-layer" aria-live="polite"></div>
 
   <div id="hud">
     <span id="hud-model">CroweLM</span>

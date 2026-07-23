@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -26,7 +26,51 @@ const DEFAULTS = {
   autoApprove: false,     // when true, file edits apply without review
   autonomy: "edit",       // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all). Safe default: edit.
   mcpServers: {},         // { name: { command, args, env } }
+  telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
+  onboarded: false,       // set true after the first-run card has been shown
 };
+
+// ─── Crash reporting + minimal telemetry ─────────────────────────────────────
+// Local crash dumps always write to userData/crashes so the user can inspect
+// them. Network submission is opt-out via Settings (config.telemetry); when off,
+// nothing leaves the machine. The report line carries no message content,
+// paths, or tokens - only app/platform metadata.
+function telemetryExtra() {
+  return {
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    channel: app.isPackaged ? "release" : "dev",
+    model: (loadConfig().model || "crowelm"),
+  };
+}
+function initCrashReporting() {
+  const dumps = path.join(app.getPath("userData"), "crashes");
+  try { app.setPath("crashDumps", dumps); } catch {}
+  const enabled = Boolean(loadConfig().telemetry);
+  try {
+    crashReporter.start({
+      productName: "Crowe Logic",
+      companyName: "Crowe Logic, Inc.",
+      submitURL: enabled ? `${(loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "")}/api/telemetry/crash` : "",
+      uploadToServer: enabled,
+      ignoreSystemCrashHandler: false,
+      extra: telemetryExtra(),
+    });
+  } catch { /* crash reporting must never block startup */ }
+}
+function postTelemetry(event, props) {
+  if (!loadConfig().telemetry) return;
+  try {
+    const base = (loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "");
+    fetch(`${base}/api/telemetry/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, props: props || {}, ...telemetryExtra(), at: Date.now() }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => {});
+  } catch { /* best effort */ }
+}
 
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
 function loadConfig() {
@@ -58,6 +102,13 @@ function createWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(["media", "microphone", "notifications", "clipboard-sanitized-write"].includes(permission));
+  });
 }
 
 // ─── Crowe ID auth (OAuth2 Authorization Code + PKCE, loopback redirect) ──────
@@ -401,34 +452,66 @@ const harnessCtx = {
   getPlugins: () => BUILTIN_PLUGINS.filter((p) => PLUGIN_MANAGED.has(p.id)),
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
-let agentRun = { aborted: false, controller: null };
-ipcMain.handle("crowe:agent:stop", () => { agentRun.aborted = true; try { agentRun.controller && agentRun.controller.abort(); } catch {} return { ok: true }; });
-ipcMain.handle("crowe:agent:run", async (evt, { messages }) => {
-  agentRun = { aborted: false, controller: null };
-  const result = await harness.runAgent(harnessCtx, messages.slice(), {
-    gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
-    send: (ev) => evt.sender.send("crowe:agent:event", ev),
-    isAborted: () => agentRun.aborted,
-    setController: (c) => { agentRun.controller = c; },
-  });
-  // Persist the turn to the current session.
-  try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
-  return { done: true };
+const agentRuns = new Map();
+ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
+  const run = agentRuns.get(id);
+  if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
+  return { ok: true };
+});
+ipcMain.handle("crowe:agent:stop-all", () => {
+  for (const run of agentRuns.values()) {
+    run.aborted = true;
+    try { if (run.controller) run.controller.abort(); } catch {}
+  }
+  return { ok: true, stopped: agentRuns.size };
+});
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main" }) => {
+  const run = { aborted: false, controller: null };
+  agentRuns.set(id, run);
+  postTelemetry("agent_turn", { turns: messages.length, agentId: id });
+  try {
+    const result = await harness.runAgent(harnessCtx, messages.slice(), {
+      gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
+      send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
+      isAborted: () => run.aborted,
+      setController: (c) => { run.controller = c; },
+    });
+    if (id === "main") {
+      try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
+    }
+    return { done: true, text: result.text || "" };
+  } finally {
+    agentRuns.delete(id);
+  }
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
-let ptyProc = null;
-ipcMain.handle("crowe:pty:start", (evt, { cols, rows } = {}) => {
+const ptyProcs = new Map();
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable" };
-  if (ptyProc) return { ok: true };
-  ptyProc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
-  ptyProc.onData((d) => { try { evt.sender.send("crowe:pty:data", d); } catch {} });
-  ptyProc.onExit(() => { ptyProc = null; });
+  if (ptyProcs.has(id)) return { ok: true, id };
+  const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
+  ptyProcs.set(id, proc);
+  proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
+  proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
+  return { ok: true, id };
+});
+ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { const proc = ptyProcs.get(id); if (proc) proc.write(data || ""); });
+ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { const proc = ptyProcs.get(id); if (proc) { try { proc.resize(cols, rows); } catch {} } });
+ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { const proc = ptyProcs.get(id); if (proc) { try { proc.kill(); } catch {} ptyProcs.delete(id); } return { ok: true }; });
+ipcMain.handle("crowe:operator:status", () => ({
+  app: "running", agents: agentRuns.size,
+  agentIds: [...agentRuns.keys()], terminals: ptyProcs.size, terminalIds: [...ptyProcs.keys()],
+  mcpServers: Object.keys(MCP).length,
+  mcpTools: Object.values(MCP).reduce((n, server) => n + server.tools.length, 0),
+  cwd: CWD, autonomy: loadConfig().autonomy || "edit", version: app.getVersion(), uptime: Math.round(process.uptime()),
+}));
+ipcMain.handle("crowe:operator:stop-all", () => {
+  for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
+  for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   return { ok: true };
 });
-ipcMain.on("crowe:pty:input", (_e, d) => { if (ptyProc) ptyProc.write(d); });
-ipcMain.on("crowe:pty:resize", (_e, { cols, rows }) => { if (ptyProc) { try { ptyProc.resize(cols, rows); } catch {} } });
 
 // ─── Filesystem ──────────────────────────────────────────────────────────────
 ipcMain.handle("crowe:fs:list", (_e, dir) => {
@@ -508,6 +591,7 @@ ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { 
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
@@ -638,10 +722,13 @@ ipcMain.handle("crowe:update:install", () => { if (autoUpdater) autoUpdater.quit
 ipcMain.handle("crowe:update:state", () => updateState);
 
 app.whenReady().then(async () => {
+  initCrashReporting();
   createWindow();
   buildMenu();
   createTray();
   setupAutoUpdate();
+  postTelemetry("app_launch", { firstRun: !loadConfig().onboarded });
+  process.on("uncaughtException", (e) => { postTelemetry("main_exception", { error: String(e && e.message || e).slice(0, 200) }); });
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
   pluginsConnectAll();
