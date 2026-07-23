@@ -44,6 +44,8 @@ app.whenReady().then(async () => {
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
       glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
       workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save",".awb-attach",".awb-cancel",".awb-workflow",".awb-history",".awb-meter"].every((s) => document.querySelector(s)),
+      licensingControls: [".fleet-workspace",".fleet-refresh",".fleet-billing",".fleet-license .badge"].every((s) => document.querySelector(s)),
+      licensingSettled: document.querySelector(".fleet-license .badge")?.textContent !== "Checking",
       glassAgents: document.querySelectorAll(".glass-agent").length,
       glassArrange: Boolean(document.getElementById("glass-arrange")),
       glassVisible: [...document.querySelectorAll(".glass-agent")].every((el) => { const r=el.getBoundingClientRect(); return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight; }),
@@ -61,6 +63,7 @@ app.whenReady().then(async () => {
     assert(modular.operators >= 1, "operator panel missing");
     assert(modular.workflows >= 1, "workflow panel missing");
     assert(modular.agentFleets >= 1, "agent fleet panel missing");
+    assert(modular.licensingControls && modular.licensingSettled, "customer licensing controls did not initialize");
     assert(modular.workbenches >= 1 && modular.workbenchControls, "agent workbench or its controls missing");
     assert(await js(`document.querySelectorAll(".wf-template").length >= 2 && document.querySelectorAll(".fleet-card").length >= 4`), "workflow templates or licensed agent cards missing");
     assert(modular.browserControls, "browser navigation, history, or bookmark controls missing");

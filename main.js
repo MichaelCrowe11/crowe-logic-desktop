@@ -28,6 +28,7 @@ const DEFAULTS = {
   mcpServers: {},         // { name: { command, args, env } }
   telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
   onboarded: false,       // set true after the first-run card has been shown
+  licenseWorkspaceId: "", // selected Crowe Agents customer workspace
 };
 
 // ─── Crash reporting + minimal telemetry ─────────────────────────────────────
@@ -259,6 +260,54 @@ ipcMain.handle("crowe:auth:status", async () => {
   }
   return { user: u };
 });
+async function licensedFetch(route, method = "GET") {
+  let token = loadConfig().token;
+  if (!token) return { status: 401, data: null };
+  const request = () => fetch(`${loadConfig().baseUrl.replace(/\/$/, "")}${route}`, { method, headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+  let response = await request();
+  if (response.status === 401) { token = await refreshToken(); if (token) response = await request(); }
+  const text = await response.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  return { status: response.status, data };
+}
+async function licenseStatus() {
+  if (!currentUser()) return { authenticated: false, workspaces: [], selectedWorkspaceId: "" };
+  try {
+    const result = await licensedFetch("/api/workspaces");
+    if (result.status >= 400 || !Array.isArray(result.data)) return { authenticated: true, workspaces: [], selectedWorkspaceId: "", error: `License service returned HTTP ${result.status}` };
+    const workspaces = await Promise.all(result.data.map(async (workspace) => {
+      const [entitlement, usage] = await Promise.all([
+        licensedFetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/entitlements/agents`),
+        licensedFetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/usage`),
+      ]);
+      return { ...workspace, agents: entitlement.status < 400 ? entitlement.data : { allowed: false }, usage: usage.status < 400 ? usage.data : null };
+    }));
+    const configured = loadConfig().licenseWorkspaceId;
+    const selectedWorkspaceId = workspaces.some((workspace) => workspace.id === configured) ? configured : (workspaces[0]?.id || "");
+    return { authenticated: true, workspaces, selectedWorkspaceId };
+  } catch { return { authenticated: true, workspaces: [], selectedWorkspaceId: "", error: "License service could not be reached" }; }
+}
+ipcMain.handle("crowe:license:status", licenseStatus);
+ipcMain.handle("crowe:license:select", (_event, { workspaceId } = {}) => {
+  if (typeof workspaceId !== "string" || workspaceId.length > 200) return { error: "Invalid workspace" };
+  saveConfig({ licenseWorkspaceId: workspaceId });
+  return { ok: true, selectedWorkspaceId: workspaceId };
+});
+ipcMain.handle("crowe:license:billing", async () => {
+  try {
+    const result = await licensedFetch("/api/billing/portal/self", "POST");
+    if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
+    const portal = new URL(result.data.url);
+    if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
+    await shell.openExternal(portal.toString()); return { ok: true };
+  } catch { return { error: "Billing portal could not be reached" }; }
+});
+async function requireAgentEntitlement(workspaceId) {
+  const status = await licenseStatus();
+  const id = workspaceId || status.selectedWorkspaceId;
+  const workspace = status.workspaces.find((item) => item.id === id);
+  return workspace?.agents?.allowed ? { ok: true, workspace } : { ok: false, error: status.authenticated ? "An active Crowe Agents entitlement is required" : "Sign in with Crowe ID to use licensed agents" };
+}
 async function gatewayChat(messages, tools, _retried, signal, model) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
@@ -530,7 +579,11 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   }
   return { ok: true, stopped: agentRuns.size };
 });
-ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main" }) => {
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "" }) => {
+  if (licensed) {
+    const entitlement = await requireAgentEntitlement(workspaceId);
+    if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
+  }
   const run = { aborted: false, controller: null };
   agentRuns.set(id, run);
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });

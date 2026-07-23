@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("crowe", {
   // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|final|error}.
   agent: {
-    run: (messages, id = "main") => ipcRenderer.invoke("crowe:agent:run", { messages, id }),
+    run: (messages, id = "main", options = {}) => ipcRenderer.invoke("crowe:agent:run", { messages, id, ...options }),
     stop: (id = "main") => ipcRenderer.invoke("crowe:agent:stop", { id }),
     stopAll: () => ipcRenderer.invoke("crowe:agent:stop-all"),
     onEvent: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:agent:event", h); return () => ipcRenderer.removeListener("crowe:agent:event", h); },
@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld("crowe", {
     login: () => ipcRenderer.invoke("crowe:auth:login"),
     logout: () => ipcRenderer.invoke("crowe:auth:logout"),
     status: () => ipcRenderer.invoke("crowe:auth:status"),
+  },
+  license: {
+    status: () => ipcRenderer.invoke("crowe:license:status"),
+    billing: () => ipcRenderer.invoke("crowe:license:billing"),
+    select: (workspaceId) => ipcRenderer.invoke("crowe:license:select", { workspaceId }),
   },
   // Approve/reject a proposed file edit.
   edit: { decide: (id, approved) => ipcRenderer.invoke("crowe:edit:decide", { id, approved }) },
