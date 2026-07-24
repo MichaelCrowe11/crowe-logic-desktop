@@ -74,18 +74,38 @@ function postTelemetry(event, props) {
 }
 
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
+function authStorePath() { return path.join(app.getPath("userData"), "auth.bin"); }
+function readAuthStore() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return {};
+    return JSON.parse(safeStorage.decryptString(fs.readFileSync(authStorePath())));
+  } catch { return {}; }
+}
+function writeAuthStore(store) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Native credential encryption is unavailable");
+  fs.writeFileSync(authStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
+}
 function loadConfig() {
   try {
-    const cfg = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configPath(), "utf8")) };
+    const stored = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    const auth = readAuthStore();
+    const cfg = { ...DEFAULTS, ...stored, token: auth.token || "", refreshToken: auth.refreshToken || "" };
     // Guard: a stale localhost/loopback gateway URL (a dev artifact) must never
-    // brick a member install — fall back to the real gateway.
+    // brick a member install - fall back to the real gateway.
     if (/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)\b/i.test(cfg.baseUrl || "")) cfg.baseUrl = DEFAULTS.baseUrl;
     return cfg;
-  } catch { return { ...DEFAULTS }; }
+  } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
 function saveConfig(patch) {
-  const merged = { ...loadConfig(), ...patch };
-  fs.writeFileSync(configPath(), JSON.stringify(merged, null, 2), { mode: 0o600 });
+  const current = loadConfig();
+  const merged = { ...current, ...patch };
+  if (Object.hasOwn(patch, "token") || Object.hasOwn(patch, "refreshToken")) {
+    writeAuthStore({ token: merged.token || "", refreshToken: merged.refreshToken || "" });
+  }
+  const persistable = { ...merged };
+  delete persistable.token;
+  delete persistable.refreshToken;
+  fs.writeFileSync(configPath(), JSON.stringify(persistable, null, 2), { mode: 0o600 });
   return merged;
 }
 
@@ -182,12 +202,24 @@ function createWindow() {
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
 const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
 const CROWE_ID_CLIENT = "crowe-cli";
-const AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
+const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
 function persistTokens(d) {
   saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
-  try { fs.mkdirSync(path.dirname(AUTH_JSON), { recursive: true }); fs.writeFileSync(AUTH_JSON, JSON.stringify({ access_token: d.access_token, refresh_token: d.refresh_token }, null, 2), { mode: 0o600 }); } catch {}
+  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+}
+function migrateLegacyAuth() {
+  const cfg = loadConfig();
+  if (cfg.token || cfg.refreshToken) return;
+  let legacy = {};
+  try { legacy = JSON.parse(fs.readFileSync(LEGACY_AUTH_JSON, "utf8")); } catch {}
+  let oldConfig = {};
+  try { oldConfig = JSON.parse(fs.readFileSync(configPath(), "utf8")); } catch {}
+  const token = legacy.access_token || oldConfig.token || "";
+  const refreshToken = legacy.refresh_token || oldConfig.refreshToken || "";
+  if (token || refreshToken) saveConfig({ token, refreshToken });
+  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
 function currentUser() {
   const c = loadConfig(); if (!c.token) return null;
@@ -196,8 +228,7 @@ function currentUser() {
 }
 async function refreshToken() {
   const cfg = loadConfig();
-  let refresh = cfg.refreshToken;
-  if (!refresh) { try { refresh = JSON.parse(fs.readFileSync(AUTH_JSON, "utf8")).refresh_token; } catch {} }
+  const refresh = cfg.refreshToken;
   if (!refresh) return null;
   try {
     const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
@@ -250,7 +281,7 @@ function signIn() {
   });
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
-ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(AUTH_JSON); } catch {} return { ok: true }; });
+ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
 ipcMain.handle("crowe:auth:status", async () => {
   let u = currentUser();
   if (u && u.exp) {
@@ -840,6 +871,7 @@ ipcMain.handle("crowe:update:install", () => { if (autoUpdater) autoUpdater.quit
 ipcMain.handle("crowe:update:state", () => updateState);
 
 app.whenReady().then(async () => {
+  migrateLegacyAuth();
   initCrashReporting();
   createWindow();
   buildMenu();
