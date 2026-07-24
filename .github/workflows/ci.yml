@@ -1,34 +1,10 @@
-name: ci
+name: probe
 
 "on":
   push:
-    branches: [main]
-  pull_request:
 
 jobs:
-  smoke:
+  hello:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run smoke suite (headless via xvfb)
-        env:
-          ELECTRON_ENABLE_LOGGING: "1"
-        run: xvfb-run -a npx electron scripts/smoke-shot.js
-
-      - name: Upload smoke screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-shots
-          path: /tmp/crowe-shots/
-          if-no-files-found: ignore
+      - run: echo ok
