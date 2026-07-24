@@ -1,0 +1,28 @@
+name: Crowe product release orchestration
+on:
+  workflow_dispatch:
+    inputs:
+      cortex_tag: { description: "Cortex tag", required: true }
+      desktop_tag: { description: "Desktop tag", required: true }
+      extension_tag: { description: "Extension tag", required: true }
+permissions:
+  actions: write
+  contents: read
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/MichaelCrowe11/crowe-cortex/git/ref/tags/${{ inputs.cortex_tag }} >/dev/null
+          gh api repos/MichaelCrowe11/crowe-logic-desktop/git/ref/tags/${{ inputs.desktop_tag }} >/dev/null
+          gh api repos/MichaelCrowe11/crowe-logic-browser-extension/git/ref/tags/${{ inputs.extension_tag }} >/dev/null
+      - name: Dispatch native release workflows
+        env:
+          GH_TOKEN: ${{ secrets.CROWE_RELEASE_TOKEN }}
+        run: |
+          gh workflow run release.yml -R MichaelCrowe11/crowe-cortex --ref '${{ inputs.cortex_tag }}'
+          gh workflow run release.yml -R MichaelCrowe11/crowe-logic-desktop --ref '${{ inputs.desktop_tag }}'
+          gh workflow run publish.yml -R MichaelCrowe11/crowe-logic-browser-extension --ref '${{ inputs.extension_tag }}'
