@@ -53,7 +53,7 @@ stable; sign-in, routing, plugins, and the workbench all work end to end.
 | First-run onboarding (sign-up → sign-in → first task) | funnel dies without it | 2-3 days |
 | Gateway hardening: rate limits, plan enforcement, health endpoint (Codex, in flight) | abuse + cost exposure | backend, in flight |
 | Auth keepalive polish (refresh edge cases seen in testing) | silent sign-outs feel broken | 1 day |
-| CI (smoke suite on push; it exists, runs local-only) | regressions ship silently | 1 day |
+| ~~CI (smoke suite on push; it exists, runs local-only)~~ ✅ DONE | xvfb-based GitHub Actions smoke runs on push/PR, screenshots uploaded | done |
 | Legal/support: privacy policy, EULA surfacing, support channel | table stakes | 1-2 days |
 
 **Path: ~2–4 focused weeks to public beta.** Order: signing → auto-update →
