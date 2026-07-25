@@ -46,6 +46,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Electron ships chrome-sandbox unprivileged, and it refuses to start
+      # rather than run unsandboxed.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - if: runner.os == 'Linux'
         run: xvfb-run -a npx electron scripts/smoke-shot.js
       - if: runner.os == 'macOS'
