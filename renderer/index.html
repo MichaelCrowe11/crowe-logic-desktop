@@ -10,28 +10,12 @@
   <header id="bar">
     <span id="mark" role="img" aria-label="Crowe Logic"></span>
     <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
-    <span class="tagline">Operator</span>
-    <div id="spaces" class="seg spaces" title="Spaces: where you are working">
-      <button class="seg-btn active" data-space="chat">Chat</button>
-      <button class="seg-btn" data-space="projects">Projects</button>
-      <button class="seg-btn" data-space="studio">Studio</button>
-      <button class="seg-btn" data-space="cultivation">Cultivation</button>
-    </div>
     <span class="ws-sep" aria-hidden="true"></span>
     <span id="ws-path" class="ws-path" title="Workspace folder"></span>
     <div class="spacer"></div>
-    <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
-      <button class="seg-btn" data-tier="plan">Plan</button>
-      <button class="seg-btn" data-tier="readonly">Read</button>
-      <button class="seg-btn" data-tier="edit">Edit</button>
-      <button class="seg-btn" data-tier="execute">Execute</button>
-    </div>
     <span id="mcp-badge" class="badge alt hidden"></span>
-    <span id="model-badge" class="badge">CroweLM</span>
-    <button id="signin" class="ghost">Sign in with Crowe ID</button>
+    <button id="signin" class="ghost sm">Sign in with Crowe ID</button>
     <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID. Click to sign out."></span>
-    <button id="theme-btn" class="ghost" title="Toggle dark mode">Dark</button>
-    <button id="settings-btn" class="ghost">Settings</button>
   </header>
 
   <div id="update-banner" class="hidden">
@@ -41,52 +25,67 @@
   </div>
 
   <div id="shell">
-    <nav id="rail">
-      <button class="rail-btn" id="rail-new" title="New chat">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+    <nav id="sidebar">
+      <button id="rail-new" class="side-new" title="New chat">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        New chat
       </button>
-      <button class="rail-btn" id="rail-sessions" title="Sessions">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-      </button>
-      <div class="rail-sep"></div>
-      <button class="rail-btn active" data-pane="term" title="Terminal">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
-      </button>
-      <button class="rail-btn" data-pane="browser" title="Browser">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
-      </button>
-      <button class="rail-btn" data-pane="files" title="Files">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
-      </button>
-      <button class="rail-btn" data-pane="git" title="Version control">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="9" r="2"/><path d="M7 9v6M17 11c0 3.2-3.5 3-6 3"/></svg>
-      </button>
-      <div class="spacer"></div>
-      <button class="rail-btn" id="rail-palette" title="Command palette (Cmd+K)">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
-      </button>
-      <button class="rail-btn" id="rail-settings" title="Settings">
-        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M17.5 6.5l-2 2M8.5 15.5l-2 2"/></svg>
-      </button>
-    </nav>
 
-    <aside id="sessions-drawer" class="drawer hidden">
-      <div class="drawer-head"><span>Sessions</span><button id="sess-new" class="ghost sm">New</button></div>
-      <div id="sess-list" class="sess-list"></div>
-    </aside>
+      <div id="spaces" class="side-group" title="Spaces: where you are working">
+        <span class="side-label">Spaces</span>
+        <button class="seg-btn active" data-space="chat">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a7 7 0 0 1-7 7H8l-4 3v-5.5A7 7 0 0 1 11 5h2a7 7 0 0 1 7 7z"/></svg>
+          Chat
+        </button>
+        <button class="seg-btn" data-space="projects">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
+          Projects
+        </button>
+        <button class="seg-btn" data-space="studio">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/></svg>
+          Studio
+        </button>
+        <button class="seg-btn" data-space="cultivation">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-7M5 10a7 7 0 0 1 14 0z"/></svg>
+          Cultivation
+        </button>
+      </div>
 
-    <nav id="space-nav" class="space-nav hidden">
-      <span class="sn-group">Operate</span>
-      <button class="sn-item active" data-lane="home">Home</button>
-      <button class="sn-item" data-lane="sessions">Sessions</button>
-      <span class="sn-group">Work</span>
-      <button class="sn-item" data-lane="deepwork">Deep work</button>
-      <span class="sn-group">Models</span>
-      <button class="sn-item" data-lane="training">Training</button>
-      <button class="sn-item" data-lane="evals">Evals</button>
-      <button class="sn-item" data-lane="deployments">Deployments</button>
-      <span class="sn-group">Data</span>
-      <button class="sn-item" data-lane="storage">Storage</button>
+      <nav id="space-nav" class="space-nav hidden">
+        <span class="sn-group">Operate</span>
+        <button class="sn-item active" data-lane="home">Home</button>
+        <button class="sn-item" data-lane="sessions">Sessions</button>
+        <span class="sn-group">Work</span>
+        <button class="sn-item" data-lane="deepwork">Deep work</button>
+        <span class="sn-group">Models</span>
+        <button class="sn-item" data-lane="training">Training</button>
+        <button class="sn-item" data-lane="evals">Evals</button>
+        <button class="sn-item" data-lane="deployments">Deployments</button>
+        <span class="sn-group">Data</span>
+        <button class="sn-item" data-lane="storage">Storage</button>
+      </nav>
+
+      <aside id="sessions-drawer" class="drawer">
+        <div class="drawer-head"><span>Sessions</span><button id="sess-new" class="side-icon" title="New session">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button></div>
+        <div id="sess-list" class="sess-list"></div>
+      </aside>
+
+      <div class="side-foot">
+        <button id="rail-palette" class="side-foot-btn" title="Command palette (Cmd+K)">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
+          Search
+        </button>
+        <button id="theme-btn" class="side-foot-btn" title="Toggle dark mode">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
+          <span class="side-foot-label">Dark</span>
+        </button>
+        <button id="settings-btn" class="side-foot-btn" title="Settings">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.5 6.5l2 2M15.5 15.5l2 2M17.5 6.5l-2 2M8.5 15.5l-2 2"/></svg>
+          Settings
+        </button>
+      </div>
     </nav>
 
     <section id="surface-home" class="surface hidden">
@@ -179,31 +178,46 @@
         </div>
         <form id="composer" autocomplete="off">
           <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
-          <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone">Mic</button>
-          <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud">Speak</button>
-          <button id="send" type="submit">Send</button>
-          <button id="stop" type="button" class="hidden">Stop</button>
+          <div class="composer-foot">
+            <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
+              <button type="button" class="seg-btn" data-tier="plan">Plan</button>
+              <button type="button" class="seg-btn" data-tier="readonly">Read</button>
+              <button type="button" class="seg-btn" data-tier="edit">Edit</button>
+              <button type="button" class="seg-btn" data-tier="execute">Execute</button>
+            </div>
+            <span id="model-badge" class="badge quiet">CroweLM</span>
+            <div class="spacer"></div>
+            <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone">Mic</button>
+            <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud">Speak</button>
+            <button id="send" type="submit">Send</button>
+            <button id="stop" type="button" class="hidden">Stop</button>
+          </div>
         </form>
       </section>
 
       <div id="divider"></div>
 
       <section id="workspace">
-        <div class="workspace-toolbar">
-          <button id="panel-add-term" class="ghost sm" title="New terminal panel">+ Terminal</button>
-          <button id="panel-add-browser" class="ghost sm" title="New browser panel">+ Browser</button>
-          <button id="panel-add-operator" class="ghost sm" title="Operator control panel">Operator</button>
-          <button id="panel-add-workflow" class="ghost sm" title="Build and run multi-agent workflows">Workflows</button>
-          <button id="panel-add-agents" class="ghost sm" title="Launch licensed Crowe Agents">Agent Fleet</button>
-          <button id="panel-add-workbench" class="ghost sm" title="Compose, compare, and save agent runs">Workbench</button>
-          <select id="panel-layout" class="panel-layout" title="Panel layout"><option value="columns">Columns</option><option value="rows">Rows</option><option value="grid">Grid</option><option value="stack">Stack</option></select>
-          <button id="layout-save" class="ghost sm" title="Save the current workspace layout">Save layout</button>
-          <select id="layout-saved" class="panel-layout" title="Saved layouts"><option value="">Saved layouts</option></select>
-          <button id="layout-reset" class="ghost sm" title="Reset and recover workspace panels">Reset</button>
-          <button class="legacy-pane ghost sm" data-pane="files">Files</button>
-          <button class="legacy-pane ghost sm" data-pane="git">Git</button>
-          <button class="legacy-pane ghost sm" data-pane="output">Output</button>
-          <div class="spacer"></div><span id="cwd" class="cwd"></span>
+        <div class="dock-bar">
+          <div id="dock-tabs" class="dock-tabs">
+            <button class="dock-tab" data-pane="git" title="Version control">Changes</button>
+            <button class="dock-tab" data-pane="files" title="Files">Files</button>
+            <button class="dock-tab" data-pane="output" title="Agent event stream">Output</button>
+            <span class="dock-div" aria-hidden="true"></span>
+          </div>
+          <button id="dock-add" class="dock-icon" title="Add to panel" aria-label="Add to panel">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <div class="spacer"></div>
+          <span id="cwd" class="cwd"></span>
+          <button id="dock-menu" class="dock-icon" title="Layout and saved views" aria-label="Layout and saved views">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
+          </button>
+        </div>
+        <div id="dock-overflow" class="dock-overflow hidden">
+          <label>Layout<select id="panel-layout" class="panel-layout" title="Panel layout"><option value="columns">Columns</option><option value="rows">Rows</option><option value="grid">Grid</option><option value="stack">Stack</option></select></label>
+          <label>Saved<select id="layout-saved" class="panel-layout" title="Saved layouts"><option value="">Saved layouts</option></select></label>
+          <div class="row"><button id="layout-save" class="ghost sm" title="Save the current workspace layout">Save layout</button><button id="layout-reset" class="ghost sm" title="Reset and recover workspace panels">Reset</button></div>
         </div>
         <div id="panel-deck" class="panel-deck columns"></div>
 
@@ -260,6 +274,32 @@
       </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
+    </div>
+  </div>
+
+  <div id="addpanel" class="modal hidden">
+    <div class="palette-card">
+      <div class="pal-head">Add to panel</div>
+      <div class="pal-list">
+        <button id="panel-add-term" class="pal-row" title="New terminal panel">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
+          <span>Terminal</span></button>
+        <button id="panel-add-browser" class="pal-row" title="New browser panel">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
+          <span>Browser</span></button>
+        <button id="panel-add-operator" class="pal-row" title="Operator control panel">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+          <span>Operator control</span></button>
+        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent workflows">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
+          <span>Workflows</span></button>
+        <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
+          <span>Agent fleet</span></button>
+        <button id="panel-add-workbench" class="pal-row" title="Compose, compare, and save agent runs">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+          <span>Workbench</span></button>
+      </div>
     </div>
   </div>
 
