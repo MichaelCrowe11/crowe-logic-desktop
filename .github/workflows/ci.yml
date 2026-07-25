@@ -30,11 +30,14 @@ jobs:
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
-      # Electron ships chrome-sandbox unprivileged, and it refuses to start
-      # rather than run unsandboxed. Grant it the SUID bit so the smoke suite
-      # exercises the same sandboxing that shipped builds use.
-      - name: Configure Electron sandbox helper
+      # Electron 43 has no postinstall hook, so npm ci leaves dist/ empty and the
+      # binary is fetched lazily on first launch. Fetch it up front, then grant
+      # chrome-sandbox the SUID bit it requires: it refuses to start rather than
+      # run unsandboxed. Keeping the sandbox on means CI exercises the same
+      # posture as a shipped build.
+      - name: Install Electron binary and configure its sandbox helper
         run: |
+          node node_modules/electron/install.js
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
 
