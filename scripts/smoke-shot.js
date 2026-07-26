@@ -43,7 +43,8 @@ app.whenReady().then(async () => {
       voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
       glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
-      agentDock: Boolean(document.getElementById("agent-dock")),
+      agentLauncherDocked: Boolean(document.querySelector(".dock-bar #glass-launcher")),
+      nothingFloatsOverDeck: [...document.querySelectorAll("body > *")].every((el) => getComputedStyle(el).position !== "fixed" || el.id === "hud" || el.hidden || getComputedStyle(el).display === "none"),
       agentPanels: document.querySelectorAll('.workspace-panel[data-id^="agent-"]').length,
       systemTerminals: document.querySelectorAll('.workspace-panel[data-id^="system-"]').length,
       workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save",".awb-attach",".awb-cancel",".awb-workflow",".awb-history",".awb-meter"].every((s) => document.querySelector(s)),
@@ -84,7 +85,8 @@ app.whenReady().then(async () => {
     await js(`addPanel("agent",{title:"Research"}); addPanel("agent",{title:"Builder"}); addPanel("agent",{title:"Analyst"}); addPanel("system")`);
     await sleep(600);
     const agents = await metrics();
-    assert(agents.agentDock, "agent dock missing");
+    assert(agents.agentLauncherDocked, "agent launcher missing from the dock bar");
+    assert(agents.nothingFloatsOverDeck, "a fixed-position element is floating over the workspace deck");
     assert(agents.agentPanels >= 3, "stackable workspace agents missing");
     assert(agents.systemTerminals === 1, "isolated system terminal missing or duplicated");
     assert(await js(`document.querySelectorAll(".workspace-agent-node .agent-command-dock").length >= 3`), "agent command docks missing");

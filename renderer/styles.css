@@ -789,7 +789,6 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 
 /* Floating parallel Crowe Logic agents */
 #glass-layer { position:fixed; inset:0; z-index:35; pointer-events:none; overflow:hidden; container-type:size; }
-#glass-launcher { position:fixed; right:18px; bottom:42px; z-index:80; width:48px; height:48px; border-radius:50%; border:1px solid color-mix(in srgb,var(--gold) 65%,transparent); background:color-mix(in srgb,var(--raised) 78%,transparent); color:var(--gold-text); font-weight:750; box-shadow:var(--z4); backdrop-filter:blur(18px) saturate(150%); }
 .glass-agent { position:absolute; width:clamp(260px,25vw,330px); height:clamp(270px,42vh,360px); min-width:240px; min-height:190px; max-width:calc(100vw - 16px); max-height:calc(100vh - 60px); display:flex; flex-direction:column; pointer-events:auto; overflow:hidden; resize:none; border:1px solid color-mix(in srgb,var(--gold) 35%,var(--line)); border-radius:14px; background:color-mix(in srgb,var(--panel) 78%,transparent); box-shadow:var(--z4); backdrop-filter:blur(24px) saturate(145%); transition:box-shadow .18s ease,border-color .18s ease; }
 .glass-agent:hover,.glass-agent:focus-within { border-color:color-mix(in srgb,var(--gold) 62%,var(--line)); box-shadow:0 20px 54px rgba(0,0,0,.28),inset 0 1px 0 var(--glass-edge); }
 .glass-head { display:flex; align-items:center; gap:5px; padding:6px 7px; cursor:grab; border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--raised) 68%,transparent); }
@@ -854,9 +853,6 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 @media(max-width:1050px){.workflow-surface{grid-template-columns:190px minmax(580px,1fr)}.fleet-grid{grid-template-columns:1fr}}
 
 /* Native brand launcher, secure keys, and customer workbench */
-#glass-launcher { display:grid; place-items:center; padding:10px; overflow:hidden; transition:transform .18s var(--ease),box-shadow .18s var(--ease); }
-#glass-launcher:hover { transform:translateY(-2px) scale(1.03); box-shadow:var(--z4),0 0 0 4px var(--accent-wash); }
-#glass-launcher img { width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 2px 7px color-mix(in srgb,var(--gold) 45%,transparent)); }
 .key-manager { margin-top:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:color-mix(in srgb,var(--raised) 86%,transparent); }
 .settings-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 .settings-section-head div { display:flex; flex-direction:column; gap:2px; }.settings-section-head span { color:var(--muted); font-size: var(--fs-cap); }
@@ -1034,11 +1030,7 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 @media (prefers-reduced-motion:reduce) { .agent-reasoning-orbit span { animation:none; } }
 
 /* 2026 operator workspace refinement */
-#agent-dock { position:fixed; right:14px; bottom:38px; z-index:80; display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid #284d80; border-radius:10px; background:#07101fee; box-shadow:0 14px 34px #0008; }
-#agent-dock>span { color:#6ea9ff; font:9px var(--mono); letter-spacing:.16em; }
-#agent-dock #glass-launcher { position:static; width:auto; height:34px; display:flex; align-items:center; gap:7px; padding:5px 10px; border-radius:6px; background:#0c2140; }
-#agent-dock #glass-launcher img { width:22px; height:22px; }
-#agent-dock #glass-launcher b { color:#edf2f7; font:600 11px var(--body); }
+.dock-icon.agent-launch img { width:16px; height:16px; object-fit:contain; }
 .workspace-panel[data-id^="system-"] { border-color:#d5ad45; }
 .workspace-panel[data-id^="system-"] .panel-head { background:#09162a; }
 .workspace-panel[data-id^="system-"] .panel-title { color:#e2bd58; }
@@ -1049,4 +1041,4 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 .agent-operation-chip[data-state="waiting"] { color:#f4bd58; border-color:#f59e0b; }
 .agent-event-runtime span { color:#8fc0ff; }
 .agent-event-input span { color:#b78cff; }
-@media (max-width:760px) { #agent-dock>span,#agent-dock b { display:none; } .agent-reasoning-orbit { width:62px;height:62px;flex-basis:62px; } }
+@media (max-width:760px) { .agent-reasoning-orbit { width:62px;height:62px;flex-basis:62px; } }
