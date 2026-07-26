@@ -46,6 +46,14 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/smoke-shot.js
 
+      - name: Check palette contrast
+        run: node scripts/check-contrast.js
+
+      - name: Run panel behaviour tests (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-panels.js
+
       - name: Upload smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4

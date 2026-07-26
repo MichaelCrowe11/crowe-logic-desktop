@@ -459,7 +459,7 @@ async function mountTerminal(p, body) {
   const tools=document.createElement("div"); tools.className="terminal-tools";
   tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><span class="terminal-state">starting</span>';
   const host=document.createElement("div"); host.className="terminal-host"; body.append(tools,host);
-  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:{background:"#17150f",foreground:"#e9e2cf",cursor:"#c9a227",selectionBackground:"#3a352a"}});
+  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:termTheme()});
   const f=new FitAddon.FitAddon(); t.loadAddon(f); t.open(host); try{f.fit()}catch{}
   const state=tools.querySelector(".terminal-state");
   const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});state.textContent=r&&r.ok!==false?"running":"unavailable";if(!r||r.ok===false)t.write("\r\n  PTY unavailable in this build.\r\n")};
@@ -724,16 +724,46 @@ divider.addEventListener("mousedown", (e) => {
 });
 
 // ── Dark mode ──
+// The terminal is the one surface xterm paints itself, so it cannot inherit
+// the CSS variables. Read them instead, and re-read on every theme flip.
+function termTheme() {
+  const s = getComputedStyle(document.body);
+  const v = (name, fallback) => (s.getPropertyValue(name) || "").trim() || fallback;
+  return {
+    background: v("--term-bg", "#0b0e12"),
+    foreground: v("--term-fg", "#eceae4"),
+    cursor: v("--gold", "#d2ad62"),
+    selectionBackground: v("--line-strong", "rgba(255,255,255,0.16)"),
+  };
+}
+
 function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
   const themeLabel = $("theme-btn").querySelector(".side-foot-label");
   if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
   try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+  const theme = termTheme();
+  terminalPanels.forEach((t) => { try { t.term.options.theme = theme; } catch {} });
   if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
 $("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
 // Dark console is the canonical app surface; light remains one click away.
 try { applyTheme(localStorage.getItem("crowe-theme") !== "light"); } catch { applyTheme(true); }
+
+// ── Sidebar collapse ──
+// Terminals are sized to their container, so the deck has to be refitted once
+// the width transition finishes or xterm keeps the old column count.
+function applySidebarCollapsed(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  const toggle = $("sidebar-toggle");
+  if (toggle) toggle.setAttribute("aria-expanded", String(!collapsed));
+  try { localStorage.setItem("crowe-sidebar", collapsed ? "collapsed" : "open"); } catch {}
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  setTimeout(fitTerminals, reduced ? 0 : 220);
+}
+$("sidebar-toggle").addEventListener("click", () =>
+  applySidebarCollapsed(!document.body.classList.contains("sidebar-collapsed")));
+try { applySidebarCollapsed(localStorage.getItem("crowe-sidebar") === "collapsed"); } catch {}
 
 // ── Cmd+Enter to send ──
 input.addEventListener("keydown", (e) => {
@@ -1152,7 +1182,23 @@ qoInput.addEventListener("keydown", (e) => {
 qopen.addEventListener("click", (e) => { if (e.target === qopen) closeQuickOpen(); });
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); openQuickOpen(); }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    applySidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+  }
 });
+
+// Shortcut hints are authored with Cmd; every binding also accepts Ctrl, so
+// relabel them off the Mac rather than showing a key that isn't on the board.
+const MOD_LABEL = /mac/i.test(navigator.userAgent) ? "Cmd" : "Ctrl";
+if (MOD_LABEL !== "Cmd") {
+  for (const el of document.querySelectorAll("[title*='Cmd'], [placeholder*='Cmd']")) {
+    for (const attr of ["title", "placeholder"]) {
+      const v = el.getAttribute(attr);
+      if (v && v.includes("Cmd")) el.setAttribute(attr, v.split("Cmd").join(MOD_LABEL));
+    }
+  }
+}
 
 // Status bar: branch + dirty count + plugin count, refreshed lazily.
 async function statusTick() {
