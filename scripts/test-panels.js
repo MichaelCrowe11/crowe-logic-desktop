@@ -271,16 +271,25 @@ const tests = [
   },
   {
     name: "the sidebar collapses to zero width and restores",
-    body: `applySidebarCollapsed(false);
-      const open = Math.round($("sidebar").getBoundingClientRect().width);
+    body: `const settle = async () => {
+        let last = -1, same = 0;
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => requestAnimationFrame(r));
+          const w = Math.round($("sidebar").getBoundingClientRect().width);
+          same = w === last ? same + 1 : 0;
+          last = w;
+          if (same >= 3) break;
+        }
+        return last;
+      };
+      applySidebarCollapsed(false);
+      const open = await settle();
       applySidebarCollapsed(true);
-      await new Promise((r) => setTimeout(r, 320));
-      const shut = Math.round($("sidebar").getBoundingClientRect().width);
+      const shut = await settle();
       const flag = localStorage.getItem("crowe-sidebar");
       const aria = $("sidebar-toggle").getAttribute("aria-expanded");
       applySidebarCollapsed(false);
-      await new Promise((r) => setTimeout(r, 320));
-      const back = Math.round($("sidebar").getBoundingClientRect().width);
+      const back = await settle();
       return { opened: open > 200, shut, flag, aria, restored: back === open };`,
     expect: { opened: true, shut: 0, flag: "collapsed", aria: "false", restored: true },
   },
