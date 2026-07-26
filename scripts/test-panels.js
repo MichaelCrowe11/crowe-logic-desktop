@@ -306,6 +306,17 @@ const tests = [
       return { changed: dark !== light, darkIsDark: dark.toLowerCase() === "#0b0e12" };`,
     expect: { changed: true, darkIsDark: true },
   },
+  {
+    name: "shortcut hints match the platform modifier key",
+    body: `const mac = /mac/i.test(navigator.userAgent);
+      const labelled = [...document.querySelectorAll("[title], [placeholder]")]
+        .flatMap((el) => ["title", "placeholder"].map((a) => el.getAttribute(a)))
+        .filter((v) => v && /\\b(Cmd|Ctrl)\\+/.test(v));
+      const wrong = labelled.filter((v) => (mac ? v.includes("Ctrl+") : v.includes("Cmd+")));
+      return { found: labelled.length >= 3, wrong: wrong.length,
+        binding: MOD_LABEL === (mac ? "Cmd" : "Ctrl") };`,
+    expect: { found: true, wrong: 0, binding: true },
+  },
 ];
 
 function compare(actual, expected) {

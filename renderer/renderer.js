@@ -1188,6 +1188,18 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Shortcut hints are authored with Cmd; every binding also accepts Ctrl, so
+// relabel them off the Mac rather than showing a key that isn't on the board.
+const MOD_LABEL = /mac/i.test(navigator.userAgent) ? "Cmd" : "Ctrl";
+if (MOD_LABEL !== "Cmd") {
+  for (const el of document.querySelectorAll("[title*='Cmd'], [placeholder*='Cmd']")) {
+    for (const attr of ["title", "placeholder"]) {
+      const v = el.getAttribute(attr);
+      if (v && v.includes("Cmd")) el.setAttribute(attr, v.split("Cmd").join(MOD_LABEL));
+    }
+  }
+}
+
 // Status bar: branch + dirty count + plugin count, refreshed lazily.
 async function statusTick() {
   try {
