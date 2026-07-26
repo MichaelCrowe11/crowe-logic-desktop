@@ -4,3 +4,4 @@ dist/
 .claude/
 deploy/releases-worker/.wrangler/
 *.tar.gz
+release/

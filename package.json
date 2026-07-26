@@ -13,7 +13,7 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
+    "build:mac": "electron-builder --mac && node scripts/staple-dmg.js release",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
@@ -39,6 +39,9 @@
   "build": {
     "appId": "com.crowelogic.desktop",
     "productName": "Crowe Logic",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "main.js",
       "harness.js",
