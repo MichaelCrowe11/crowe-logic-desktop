@@ -685,18 +685,13 @@ body.dark ::selection { background: rgba(210,173,98,.32); }
 /* Send button gets the gold hover like primary; send/stop share height with input. */
 #send, #stop { align-self: stretch; }
 
-/* Rail: active button gets a gold tick on the left edge. */
-.rail-btn { position: relative; }
-.rail-btn.active::before { content: ""; position: absolute; left: -8px; top: 9px; bottom: 9px;
-  width: 3px; border-radius: var(--r-xs); background: var(--gold); }
-
 /* Cards: gentle lift on hover so surfaces feel alive but not bouncy. */
 .card { transition: transform 140ms var(--ease), box-shadow 140ms var(--ease), border-color 140ms var(--ease); }
 .card:hover { transform: translateY(-2px); box-shadow: var(--z3); border-color: var(--line-strong); }
 .card:hover { border-top-color: var(--gold-soft); }
 
 /* Chips: keyboard focus ring parity with :focus-visible elsewhere. */
-.chip:focus-visible, .krow:focus-visible, .sn-item:focus-visible, .rail-btn:focus-visible {
+.chip:focus-visible, .krow:focus-visible, .sn-item:focus-visible {
   outline: 2px solid var(--gold); outline-offset: 2px; }
 
 /* HUD: live numbers get tabular figures so cost/tokens don't jitter. */
@@ -724,7 +719,6 @@ body.dark .modal { background: rgba(6,5,3,0.66); }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); border: 2px solid transparent; background-clip: content-box; }
 
 /* Modular workspace */
-.workspace-toolbar { display:flex; align-items:center; gap:6px; min-height:40px; padding:6px 10px; border-bottom:1px solid var(--line); background:var(--cream); }
 .panel-layout { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:5px 7px; }
 .panel-deck { flex:1; min-width:0; min-height:0; display:flex; gap:6px; padding:6px; overflow:auto; background:var(--cream); }
 .panel-deck.rows { flex-direction:column; }
@@ -786,8 +780,6 @@ body.dark .modal { background: rgba(6,5,3,0.66); }
 .glass-agent.collapsed { height:43px !important; min-height:43px; }
 .glass-agent.collapsed .glass-transcript,.glass-agent.collapsed .glass-composer,.glass-agent.collapsed .glass-resize { display:none; }
 @media (max-width:700px) { .glass-agent { width:calc(100vw - 24px) !important; left:12px !important; } }
-.workspace-toolbar { flex-wrap:wrap; }
-.workspace-toolbar .cwd { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* Customer agent fleet and workflow cockpit */
 .workflow-surface { display:grid !important; grid-template-columns:230px minmax(620px,1fr); overflow:auto; background:var(--cream); }

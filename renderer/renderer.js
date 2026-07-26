@@ -476,7 +476,7 @@ function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();wind
 function mountBrowser(p, body) {
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
-  bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false"><button class="go ghost sm">Go</button>';
+  bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false" aria-label="Address"><button class="go ghost sm">Go</button>';
   const hist=document.createElement("div");hist.className="browser-history hidden";
   const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");host.appendChild(w);body.append(bar,hist,host);
   const input=bar.querySelector("input");
@@ -594,7 +594,9 @@ function renderDockTabs(){
   dockTabs.querySelectorAll(".dock-tab.panel-tab").forEach((x)=>x.remove());
   panels.forEach((p)=>{
     const t = document.createElement("button");
-    t.className = "dock-tab panel-tab" + (!activeLegacy && p.id === activePanelId ? " active" : "");
+    const isActive = !activeLegacy && p.id === activePanelId;
+    t.className = "dock-tab panel-tab" + (isActive ? " active" : "");
+    if (isActive) t.setAttribute("aria-current", "true");
     t.dataset.id = p.id;
     t.title = PANEL_GLYPH[p.type] || p.title;
     t.innerHTML = `<span class="dock-tab-label"></span><span class="dock-tab-close" role="button" aria-label="Close panel">&times;</span>`;
@@ -739,7 +741,16 @@ input.addEventListener("keydown", (e) => {
 });
 
 // ── Dock tabs ──
-function setRailActive(pane) { document.querySelectorAll(".dock-tab[data-pane]").forEach((x) => x.classList.toggle("active", x.dataset.pane === pane)); }
+// aria-current marks the one active item in each nav set. The dock tabs stay
+// plain buttons rather than role="tab", since they drive two different things
+// (legacy panes and live panels) and have no single tabpanel to point at.
+function setRailActive(pane) {
+  document.querySelectorAll(".dock-tab[data-pane]").forEach((x) => {
+    const on = x.dataset.pane === pane;
+    x.classList.toggle("active", on);
+    if (on) x.setAttribute("aria-current", "true"); else x.removeAttribute("aria-current");
+  });
+}
 document.querySelectorAll(".dock-tab[data-pane]").forEach((b) => b.addEventListener("click", () => switchPane(b.dataset.pane)));
 
 // ── New chat + sessions drawer ──
@@ -875,7 +886,11 @@ const LANES = {
 };
 function setSpace(name) {
   document.body.dataset.space = name;
-  document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.space === name));
+  document.querySelectorAll("#spaces .seg-btn").forEach((b) => {
+    const on = b.dataset.space === name;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+  });
   const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
   workbench.classList.toggle("hidden", !showWb);
   $("space-nav").classList.toggle("hidden", name !== "projects");

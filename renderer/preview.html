@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1784979313257" />
+  <link rel="stylesheet" href="styles.css?v=1785025654717" />
 </head>
 <body>
   <header id="bar">
@@ -30,7 +30,7 @@
   </div>
 
   <div id="shell">
-    <nav id="sidebar">
+    <nav id="sidebar" aria-label="Primary">
       <button id="rail-new" class="side-new" title="New chat">
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
         New chat
@@ -38,7 +38,7 @@
 
       <div id="spaces" class="side-group" title="Spaces: where you are working">
         <span class="side-label">Spaces</span>
-        <button class="seg-btn active" data-space="chat">
+        <button class="seg-btn active" data-space="chat" aria-current="true">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a7 7 0 0 1-7 7H8l-4 3v-5.5A7 7 0 0 1 11 5h2a7 7 0 0 1 7 7z"/></svg>
           Chat
         </button>
@@ -56,7 +56,7 @@
         </button>
       </div>
 
-      <nav id="space-nav" class="space-nav hidden">
+      <nav id="space-nav" class="space-nav hidden" aria-label="Sections">
         <span class="sn-group">Operate</span>
         <button class="sn-item active" data-lane="home">Home</button>
         <button class="sn-item" data-lane="sessions">Sessions</button>
@@ -317,9 +317,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1784979313257"></script>
-  <script src="mark-geometry.js?v=1784979313257"></script>
-  <script src="mark.js?v=1784979313257"></script>
-  <script src="renderer.js?v=1784979313257"></script>
+  <script src="preview-shim.js?v=1785025654717"></script>
+  <script src="mark-geometry.js?v=1785025654717"></script>
+  <script src="mark.js?v=1785025654717"></script>
+  <script src="renderer.js?v=1785025654717"></script>
 </body>
 </html>
