@@ -17,6 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
+    "test": "electron scripts/test-panels.js",
     "preview:gen": "node scripts/gen-preview.js",
     "preview:check": "node scripts/gen-preview.js --check",
     "preview": "node scripts/gen-preview.js && python3 -m http.server 8731 --directory ."
