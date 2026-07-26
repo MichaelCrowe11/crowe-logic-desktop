@@ -43,6 +43,9 @@ app.whenReady().then(async () => {
       voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
       glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
+      agentDock: Boolean(document.getElementById("agent-dock")),
+      agentPanels: document.querySelectorAll('.workspace-panel[data-id^="agent-"]').length,
+      systemTerminals: document.querySelectorAll('.workspace-panel[data-id^="system-"]').length,
       workbenchControls: [".awb-agent",".awb-mode",".awb-context",".awb-prompt",".awb-run",".awb-save",".awb-attach",".awb-cancel",".awb-workflow",".awb-history",".awb-meter"].every((s) => document.querySelector(s)),
       licensingControls: [".fleet-workspace",".fleet-refresh",".fleet-billing",".fleet-license .badge"].every((s) => document.querySelector(s)),
       licensingSettled: document.querySelector(".fleet-license .badge")?.textContent !== "Checking",
@@ -78,15 +81,14 @@ app.whenReady().then(async () => {
     await js(`document.getElementById("settings-btn").click()`); await sleep(200);
     assert(await js(`document.querySelectorAll(".key-provider").length >= 4 && document.getElementById("key-vault-state").textContent.length > 0 && [...document.querySelectorAll(".key-provider input")].every(x=>x.type==="password" && x.autocomplete==="new-password")`), "secure key manager missing or exposes unsafe inputs");
     await js(`document.getElementById("cfg-cancel").click()`);
-    await js(`mountGlassAgent({title:"Research"}); mountGlassAgent({title:"Builder"}); mountGlassAgent({title:"Analyst"}); arrangeGlassAgents()`);
-    await sleep(250);
-    const glass = await metrics();
-    assert(glass.glassAgents >= 3, "parallel floating agents missing");
-    assert(glass.glassArrange, "agent orbit control missing");
-    assert(glass.glassVisible, "agent panel escaped the visible workspace");
-    assert(glass.glassCompact, "agent panels did not autoscale compactly");
-    assert(await js(`document.querySelectorAll(".glass-agent .glass-composer").length >= 3`), "floating agent composers missing");
-    await shoot(win, "floating-parallel-agents");
+    await js(`addPanel("agent",{title:"Research"}); addPanel("agent",{title:"Builder"}); addPanel("agent",{title:"Analyst"}); addPanel("system")`);
+    await sleep(600);
+    const agents = await metrics();
+    assert(agents.agentDock, "agent dock missing");
+    assert(agents.agentPanels >= 3, "stackable workspace agents missing");
+    assert(agents.systemTerminals === 1, "isolated system terminal missing or duplicated");
+    assert(await js(`document.querySelectorAll(".workspace-agent-node .agent-command-dock").length >= 3`), "agent command docks missing");
+    await shoot(win, "workspace-agents");
     await js(`addUser("Copy test"); messages.push({role:"user",content:"Copy test"}); const b=addAssistant(); renderText(b,"Portable answer"); attachCopyButton(b.closest(".msg"),"Portable answer"); messages.push({role:"assistant",content:"Portable answer"})`);
     const copyMetrics = await js(`(() => ({messageCopies:document.querySelectorAll(".message-copy").length, exportText:conversationMarkdown()}))()`);
     assert(copyMetrics.messageCopies >= 2, "per-message copy controls missing");

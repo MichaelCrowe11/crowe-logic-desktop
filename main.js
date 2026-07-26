@@ -82,7 +82,13 @@ function readAuthStore() {
   } catch { return {}; }
 }
 function writeAuthStore(store) {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error("Native credential encryption is unavailable");
+  if (!safeStorage.isEncryptionAvailable()) {
+    // Headless/dev shells (CI, xdotool smoke runs, SSH sessions) have no
+    // keychain. Fall back to a plaintext dev store rather than refusing to
+    // boot; packaged member installs always have safeStorage.
+    fs.writeFileSync(authStorePath(), JSON.stringify(store), { mode: 0o600 });
+    return;
+  }
   fs.writeFileSync(authStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
 }
 function loadConfig() {

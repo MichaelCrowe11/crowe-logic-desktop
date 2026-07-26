@@ -352,69 +352,16 @@ function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.on
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
 
-// Floating Crowe Logic glass agents
-const glassLayer = $("glass-layer");
-let glassSeq = 0, glassZ = 40;
-const glassAgents = new Map();
-function glassId() { return `glass-${Date.now().toString(36)}-${++glassSeq}`; }
-function persistGlassAgents() {
-  const state = [...glassAgents.values()].map(({ id, title, messages, el }) => ({
-    id, title, messages, x: parseInt(el.style.left, 10) || 24, y: parseInt(el.style.top, 10) || 80,
-    width: el.offsetWidth, height: el.offsetHeight, collapsed: el.classList.contains("collapsed"),
-  }));
-  try { localStorage.setItem("crowe-glass-agents", JSON.stringify(state)); } catch {}
-}
-function addGlassMessage(host, role, text) {
-  const row=document.createElement("div");row.className=`glass-message ${role}`;row.innerHTML=`<span>${role === "user" ? "You" : "Crowe Logic"}</span><div>${md(text)}</div>`;host.appendChild(row);host.scrollTop=host.scrollHeight;
-}
-function focusGlass(el) { el.style.zIndex=String(++glassZ); }
-function glassBounds(el, x=el.offsetLeft, y=el.offsetTop, width=el.offsetWidth, height=el.offsetHeight) {
-  const maxWidth=Math.max(240,innerWidth-16),maxHeight=Math.max(190,innerHeight-60);
-  width=Math.min(Math.max(240,width),maxWidth);height=Math.min(Math.max(190,height),maxHeight);
-  return {x:Math.min(Math.max(8,x),Math.max(8,innerWidth-width-8)),y:Math.min(Math.max(48,y),Math.max(48,innerHeight-height-8)),width,height};
-}
-function placeGlass(el,box){const b=glassBounds(el,box.x,box.y,box.width,box.height);el.style.left=`${b.x}px`;el.style.top=`${b.y}px`;el.style.width=`${b.width}px`;el.style.height=`${b.height}px`}
-function arrangeGlassAgents() {
-  const agents=[...glassAgents.values()].filter((a)=>!a.el.classList.contains("collapsed"));if(!agents.length)return;
-  const top=56,gap=10,availableW=Math.max(240,innerWidth-16),availableH=Math.max(190,innerHeight-top-8);
-  const cols=Math.max(1,Math.ceil(Math.sqrt(agents.length*availableW/availableH))),rows=Math.ceil(agents.length/cols);
-  const width=Math.min(330,Math.max(240,(availableW-gap*(cols-1))/cols)),height=Math.min(360,Math.max(190,(availableH-gap*(rows-1))/rows));
-  agents.forEach((a,i)=>placeGlass(a.el,{x:8+(i%cols)*(width+gap),y:top+Math.floor(i/cols)*(height+gap),width,height}));persistGlassAgents();
-}
-function mountGlassAgent(seed={}) {
-  const id=seed.id || glassId(), title=seed.title || `Crowe Agent ${glassAgents.size + 1}`;
-  const el=document.createElement("section");el.className="glass-agent"+(seed.collapsed?" collapsed":"");el.dataset.agentId=id;
-  el.style.left=`${seed.x ?? 18 + (glassAgents.size%4)*28}px`;el.style.top=`${seed.y ?? 62 + (glassAgents.size%4)*28}px`;if(seed.width)el.style.width=`${seed.width}px`;if(seed.height)el.style.height=`${seed.height}px`;
-  el.innerHTML=`<header class="glass-head"><span class="glass-orb"></span><input class="glass-title" value="${esc(title)}" aria-label="Agent name"><span class="glass-state">ready</span><button class="glass-new ghost sm" title="Parallel agent">+</button><button class="glass-merge ghost sm" title="Merge result into main conversation">Merge</button><button class="glass-copy ghost sm" title="Copy this agent transcript">Copy</button><button class="glass-collapse ghost sm" title="Collapse">−</button><button class="glass-close ghost sm" title="Close">Close</button></header><div class="glass-transcript"></div><form class="glass-composer"><textarea rows="2" placeholder="Give this agent a task..."></textarea><button type="button" class="glass-mic voice-btn" title="Dictate">Mic</button><button type="submit" class="primary sm">Run</button><button type="button" class="glass-stop ghost sm hidden">Stop</button></form><div class="glass-resize" title="Resize"></div>`;
-  glassLayer.appendChild(el);focusGlass(el);
-  const state={id,title,messages:seed.messages || [],el,running:false,licensed:Boolean(seed.licensed),workspaceId:seed.workspaceId || ""};glassAgents.set(id,state);placeGlass(el,{x:parseInt(el.style.left,10),y:parseInt(el.style.top,10),width:el.offsetWidth,height:el.offsetHeight});const log=el.querySelector(".glass-transcript");state.messages.forEach((m)=>addGlassMessage(log,m.role,m.content));
-  el.onpointerdown=()=>focusGlass(el);el.querySelector(".glass-title").onchange=(e)=>{state.title=e.target.value;persistGlassAgents()};
-  el.querySelector(".glass-new").onclick=()=>mountGlassAgent();el.querySelector(".glass-close").onclick=()=>{if(state.running)window.crowe.agent.stop(id);glassAgents.delete(id);el.remove();persistGlassAgents()};
-  el.querySelector(".glass-merge").onclick=()=>{const last=[...state.messages].reverse().find((m)=>m.role==="assistant");if(!last)return;const text=`Agent ${state.title}:\n\n${last.content}`;const body=addAssistant();renderText(body,text);attachCopyButton(body.closest(".msg"),text);messages.push({role:"assistant",content:text});scrollBottom()};
-  el.querySelector(".glass-copy").onclick=()=>copyText(state.messages.map((m)=>`## ${m.role==="user"?"You":state.title}\n\n${m.content}`).join("\n\n"),el.querySelector(".glass-copy"));
-  el.querySelector(".glass-collapse").onclick=()=>{el.classList.toggle("collapsed");persistGlassAgents()};
-  const head=el.querySelector(".glass-head");head.onpointerdown=(e)=>{if(e.target.closest("button,input"))return;const sx=e.clientX,sy=e.clientY,ox=el.offsetLeft,oy=el.offsetTop;head.setPointerCapture(e.pointerId);head.onpointermove=(v)=>{const b=glassBounds(el,ox+v.clientX-sx,oy+v.clientY-sy);el.style.left=b.x+"px";el.style.top=b.y+"px"};head.onpointerup=()=>{head.onpointermove=null;persistGlassAgents()}};
-  const grip=el.querySelector(".glass-resize");grip.onpointerdown=(e)=>{e.preventDefault();const sx=e.clientX,sy=e.clientY,sw=el.offsetWidth,sh=el.offsetHeight;grip.setPointerCapture(e.pointerId);grip.onpointermove=(v)=>{const b=glassBounds(el,el.offsetLeft,el.offsetTop,sw+v.clientX-sx,sh+v.clientY-sy);el.style.width=b.width+"px";el.style.height=b.height+"px"};grip.onpointerup=()=>{grip.onpointermove=null;persistGlassAgents()}};
-  const form=el.querySelector(".glass-composer"),box=form.querySelector("textarea"),stop=form.querySelector(".glass-stop"),run=form.querySelector('button[type="submit"]');
-  form.onsubmit=async(e)=>{e.preventDefault();const text=box.value.trim();if(!text||state.running)return;state.messages.push({role:"user",content:text});addGlassMessage(log,"user",text);box.value="";state.running=true;el.querySelector(".glass-state").textContent="running";run.classList.add("hidden");stop.classList.remove("hidden");let answer="";
-    const off=window.crowe.agent.onEvent((ev)=>{if(ev.agentId!==id)return;if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=(ev.type==="assistant"&&answer?"\n\n":"")+(ev.text||"");else if(ev.type==="tool_call")el.querySelector(".glass-state").textContent=ev.name||"tool";else if(ev.type==="error")answer+=`\n${ev.text}`});
-    try{const result=await window.crowe.agent.run(state.messages,id,{licensed:state.licensed,workspaceId:state.workspaceId});answer=answer||(result&&result.text)||"Done."}finally{off();state.running=false;el.querySelector(".glass-state").textContent="ready";run.classList.remove("hidden");stop.classList.add("hidden")};state.messages.push({role:"assistant",content:answer});addGlassMessage(log,"assistant",answer);persistGlassAgents()};
-  stop.onclick=()=>window.crowe.agent.stop(id);
-  el.querySelector(".glass-mic").onclick=()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR)return;const r=new SR();r.onresult=(e)=>{box.value=(box.value+" "+e.results[0][0].transcript).trim()};r.start()};persistGlassAgents();return state;
-}
-$("glass-launcher").onclick=()=>{mountGlassAgent();arrangeGlassAgents()};
-$("glass-arrange").onclick=arrangeGlassAgents;
-$("glass-minimize-all").onclick=()=>{glassAgents.forEach((a)=>a.el.classList.add("collapsed"));persistGlassAgents()};
-$("glass-restore-all").onclick=()=>{glassAgents.forEach((a)=>a.el.classList.remove("collapsed"));arrangeGlassAgents()};
-addEventListener("resize",()=>{clearTimeout(window.__glassResize);window.__glassResize=setTimeout(arrangeGlassAgents,100)});
-try { const saved=JSON.parse(localStorage.getItem("crowe-glass-agents")||"[]");saved.forEach(mountGlassAgent);setTimeout(arrangeGlassAgents,0); } catch {}
+// Crowe Logic agent dock. Agents always open in the stackable workspace.
+// Legacy floating-agent state is intentionally retired to prevent duplicate runtimes.
+try { localStorage.removeItem("crowe-glass-agents"); } catch {}
 
 // ── Modular workspace panels ──
 const panelDeck = $("panel-deck");
 let panels = [], panelSeq = 0, activeLegacy = null;
 const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
-function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [] })) }; }
+function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "" })) }; }
 function savePanelState() {
   try { localStorage.setItem("crowe-workspace-panels", JSON.stringify(panelState())); } catch {}
 }
@@ -443,10 +390,11 @@ function reorderPanel(from, to) {
 function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySelector(`[data-id="${p.id}"]`); if(el) panelDeck.appendChild(el); }); }
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",workbench:"Workbench"};
-  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [] };
+  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal"};
+  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "" };
   panels.push(p); const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
-  if(type === "terminal") await mountTerminal(p, body);
+  if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
+  else if(type === "agent") await mountWorkspaceAgent(p, body, seed);
   else if(type === "browser") mountBrowser(p, body);
   else if(type === "workflow") mountWorkflow(p, body);
   else if(type === "agents") mountAgentFleet(p, body);
@@ -454,7 +402,7 @@ async function addPanel(type, seed={}) {
   else mountOperator(p, body);
   savePanelState(); return p;
 }
-async function mountTerminal(p, body) {
+async function mountTerminal(p, body, systemTerminal=false) {
   const tools=document.createElement("div"); tools.className="terminal-tools";
   tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><span class="terminal-state">starting</span>';
   const host=document.createElement("div"); host.className="terminal-host"; body.append(tools,host);
@@ -463,6 +411,7 @@ async function mountTerminal(p, body) {
   const state=tools.querySelector(".terminal-state");
   const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});state.textContent=r&&r.ok!==false?"running":"unavailable";if(!r||r.ok===false)t.write("\r\n  PTY unavailable in this build.\r\n")};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
+  if (!p.bootstrapped) { p.bootstrapped=true; window.crowe.pty.input(p.id,"crowe-logic\r"); }
   t.onData((data)=>window.crowe.pty.input(p.id,data));
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
@@ -472,6 +421,23 @@ async function mountTerminal(p, body) {
 }
 window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term.write(data)});
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
+async function mountWorkspaceAgent(p, body, seed={}) {
+  body.classList.add("workspace-agent-node");
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-reasoning-orbit" aria-hidden="true"><span></span><span></span><b>CL</b></div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><span class="agent-operation-chip" data-state="running">ACTIVE</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  const slot=body.querySelector(".agent-terminal-slot");
+  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:"#07101f",foreground:"#dce9ff",cursor:"#d5ad45",selectionBackground:"#183c72"}});
+  const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
+  const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
+  const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");status.textContent="Crowe Logic CLI ready";addEvent("runtime","crowe-logic entered automatically")}else{status.textContent="Runtime unavailable";chip.dataset.state="failed"}};
+  terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
+  t.onData(data=>window.crowe.pty.input(p.id,data));
+  const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
+  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;status.textContent="Reasoning and executing";chip.dataset.state="running";addEvent("input",task);window.crowe.pty.input(p.id,task+"\r");box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));status.textContent="Verified";chip.dataset.state="verified"}catch(err){addEvent("error",err.message||String(err));status.textContent="Needs attention";chip.dataset.state="failed"}finally{off();running=false;run.disabled=false}};
+  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);window.crowe.pty.input(p.id,"\x03");status.textContent="Interrupted";chip.dataset.state="waiting";addEvent("status","operator interrupted runtime")};
+  new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
+}
+
 function mountBrowser(p, body) {
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
@@ -521,11 +487,11 @@ function mountAgentFleet(p, body) {
     {name:"Customer Success",role:"Handles follow-up, updates, and retention",prompt:"Act as a customer-success agent. Draft the right follow-up and retention action."},
     {name:"Operations Analyst",role:"Finds missed revenue and operational leakage",prompt:"Act as an operations analyst. Identify revenue leakage, bottlenecks, and corrective actions."},
   ];
-  body.classList.add("agent-fleet");body.innerHTML='<header class="fleet-hero"><div><small>CROWE AGENTS · CUSTOMER CONTROL PLANE</small><h2>Your licensed agent workforce</h2><p>Launch a specialist into a floating glass panel, combine agents in Workflows, or manage the live service at croweagents.com.</p></div><button class="fleet-site primary">Open Crowe Agents</button></header><div class="fleet-license"><span class="health-dot"></span><div><b>Checking workspace license</b><small>Connecting identity, entitlements, and usage.</small></div><select class="fleet-workspace" aria-label="Licensed workspace"></select><button class="fleet-refresh ghost sm">Refresh</button><button class="fleet-billing ghost sm">Manage billing</button><span class="badge">Checking</span></div><div class="fleet-grid"></div>';
+  body.classList.add("agent-fleet");body.innerHTML='<header class="fleet-hero"><div><small>CROWE AGENTS · CUSTOMER CONTROL PLANE</small><h2>Your licensed agent workforce</h2><p>Launch a terminal-backed specialist into the stackable workspace, combine agents in Workflows, or manage the live service at croweagents.com.</p></div><button class="fleet-site primary">Open Crowe Agents</button></header><div class="fleet-license"><span class="health-dot"></span><div><b>Checking workspace license</b><small>Connecting identity, entitlements, and usage.</small></div><select class="fleet-workspace" aria-label="Licensed workspace"></select><button class="fleet-refresh ghost sm">Refresh</button><button class="fleet-billing ghost sm">Manage billing</button><span class="badge">Checking</span></div><div class="fleet-grid"></div>';
   body.querySelector(".fleet-site").onclick=()=>navigate("https://croweagents.com");body.querySelector(".fleet-billing").onclick=async()=>{const r=await window.crowe.license.billing();if(r?.error)alert(r.error)};const grid=body.querySelector(".fleet-grid"),license=body.querySelector(".fleet-license"),workspaceSelect=body.querySelector(".fleet-workspace");let licensed=false,workspaceId="";
   const renderLicense=async()=>{license.querySelector("b").textContent="Checking workspace license";const status=await window.crowe.license.status();workspaceSelect.innerHTML=(status.workspaces||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name||x.id)}</option>`).join("");workspaceId=status.selectedWorkspaceId||status.workspaces?.[0]?.id||"";workspaceSelect.value=workspaceId;const workspace=status.workspaces?.find(x=>x.id===workspaceId),allowed=Boolean(workspace?.agents?.allowed);licensed=allowed;workspaceSelect.disabled=!status.workspaces?.length;license.querySelector(".health-dot").classList.toggle("ok",allowed);license.querySelector("b").textContent=!status.authenticated?"Sign in to Crowe ID":allowed?`${workspace.name||workspace.id} license active`:status.error||"Agent license required";license.querySelector("small").textContent=allowed?`${workspace.plan_id||"Managed"} plan · ${workspace.usage?.agent_jobs||0} agent jobs this period`:"Licensed agents remain locked until an active workspace entitlement is found.";license.querySelector(".badge").textContent=allowed?"Licensed":"Locked";grid.querySelectorAll(".launch,.workflow").forEach(button=>button.disabled=!allowed)};
   workspaceSelect.onchange=async()=>{await window.crowe.license.select(workspaceSelect.value);renderLicense()};body.querySelector(".fleet-refresh").onclick=renderLicense;
-  agents.forEach(a=>{const card=document.createElement("article");card.className="fleet-card";card.innerHTML=`<div class="fleet-avatar">${a.name.split(" ").map(x=>x[0]).join("")}</div><div class="fleet-state"><span></span>Licensed service</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div><button class="launch primary sm" disabled>Launch agent</button><button class="workflow ghost sm" disabled>Add to workflow</button></div>`;card.querySelector(".launch").onclick=()=>{if(!licensed)return;const x=mountGlassAgent({title:a.name,licensed:true,workspaceId,messages:[{role:"assistant",content:`${a.name} is ready. ${a.role}.`} ]});x.el.querySelector("textarea").value=a.prompt};card.querySelector(".workflow").onclick=()=>{if(licensed)addPanel("workflow",{title:`${a.name} Workflow`})};grid.appendChild(card)});renderLicense();
+  agents.forEach(a=>{const card=document.createElement("article");card.className="fleet-card";card.innerHTML=`<div class="fleet-avatar">${a.name.split(" ").map(x=>x[0]).join("")}</div><div class="fleet-state"><span></span>Licensed service</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div><button class="launch primary sm" disabled>Launch agent</button><button class="workflow ghost sm" disabled>Add to workflow</button></div>`;card.querySelector(".launch").onclick=()=>{if(!licensed)return;addPanel("agent",{title:a.name,licensed:true,workspaceId,prompt:a.prompt})};card.querySelector(".workflow").onclick=()=>{if(licensed)addPanel("workflow",{title:`${a.name} Workflow`})};grid.appendChild(card)});renderLicense();
 }
 function workbenchPresets(){try{return JSON.parse(localStorage.getItem("crowe-workbench-presets")||"[]")}catch{return []}}
 function workbenchHistory(){try{return JSON.parse(localStorage.getItem("crowe-workbench-history")||"[]")}catch{return []}}
@@ -552,13 +518,15 @@ function mountOperator(p, body) {
   const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
   body.querySelector(".refresh").onclick=refresh;body.querySelector(".stop-agent").onclick=async()=>{await window.crowe.agent.stop();refresh()};body.querySelector(".stop-voice").onclick=()=>speechSynthesis.cancel();body.querySelector(".emergency").onclick=async()=>{if(!confirm("Stop every agent and terminal process?"))return;await window.crowe.operator.stopAll();speechSynthesis.cancel();for(const x of terminalPanels.values())x.state.textContent="stopped";refresh()};refresh();p.operatorTimer=setInterval(()=>{if(document.body.contains(body))refresh();else clearInterval(p.operatorTimer)},5000);
 }
-function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();savePanelState()}
+function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();savePanelState()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display=""}
 function showPane(name){if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit()}else{hideLegacy();const found=panels.find((p)=>p.type===name);if(!found)addPanel(name)}}
 function switchPane(name){showPane(name);setRailActive(name)}
 function navigate(u){hideLegacy();let p=[...panels].reverse().find((x)=>x.type==="browser");if(!p){addPanel("browser",{url:u});return}const el=panelDeck.querySelector(`[data-id="${p.id}"]`);const input=el?.querySelector("input.browser-url");if(input){input.value=u;el.querySelector(".go").click()}}
-$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");
-$("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;savePanelState();setTimeout(fitTerminals,40)};
+$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-agent").onclick=()=>addPanel("agent",{title:`Crowe Logic Agent ${panels.filter(p=>p.type==="agent").length+1}`});$("panel-add-system").onclick=()=>{const existing=panels.find(p=>p.type==="system");if(existing){panelDeck.querySelector(`[data-id="${existing.id}"]`)?.scrollIntoView({behavior:"smooth",block:"nearest",inline:"nearest"});return}addPanel("system")};$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");
+$("glass-launcher").onclick=()=>$("panel-add-agent").click();
+$("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;savePanelState();requestAnimationFrame(()=>requestAnimationFrame(fitTerminals))};
+new ResizeObserver(()=>fitTerminals()).observe(panelDeck);
 document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(b.dataset.pane));
 window.addEventListener("resize",()=>{clampWorkbenchSplit();fitTerminals()});
 async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("crowe-workspace-panels")||"null")}catch{};st=st||{layout:"columns",panels:[{type:"terminal"}]};$("panel-layout").value=st.layout||"columns";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal")}

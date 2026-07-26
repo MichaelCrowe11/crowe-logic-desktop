@@ -191,6 +191,8 @@
       <section id="workspace">
         <div class="workspace-toolbar">
           <button id="panel-add-term" class="ghost sm" title="New terminal panel">+ Terminal</button>
+          <button id="panel-add-agent" class="ghost sm" title="New terminal-backed Crowe Logic agent">+ Agent</button>
+          <button id="panel-add-system" class="ghost sm" title="Open the isolated CroweLM system terminal">System terminal</button>
           <button id="panel-add-browser" class="ghost sm" title="New browser panel">+ Browser</button>
           <button id="panel-add-operator" class="ghost sm" title="Operator control panel">Operator</button>
           <button id="panel-add-workflow" class="ghost sm" title="Build and run multi-agent workflows">Workflows</button>
@@ -221,9 +223,7 @@
   </div>
 
 
-  <div id="glass-controls"><button id="glass-arrange" type="button" class="ghost sm" title="Arrange every agent into the visible workspace">Orbit agents</button><button id="glass-minimize-all" type="button" class="ghost sm" title="Minimize all floating agents">Minimize agents</button><button id="glass-restore-all" type="button" class="ghost sm" title="Restore and arrange all floating agents">Restore agents</button></div>
-  <button id="glass-launcher" type="button" title="Open a floating Crowe Logic agent" aria-label="Open Crowe Logic agent"><img src="../assets/mark-simple.svg" alt=""></button>
-  <div id="glass-layer" aria-live="polite"></div>
+  <div id="agent-dock" aria-label="Crowe Logic agents"><span>AGENTS</span><button id="glass-launcher" type="button" title="Open a Crowe Logic CLI agent in the workspace" aria-label="Open Crowe Logic agent in workspace"><img src="../assets/mark-simple.svg" alt=""><b>New agent</b></button></div>
 
   <div id="hud">
     <span id="hud-model">CroweLM</span>
