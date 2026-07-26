@@ -177,7 +177,10 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
     backgroundColor: "#f7f3ea", title: "Crowe Logic",
-    icon: path.join(__dirname, "assets", "icon.icns"),
+    // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
+    // and neither can decode .icns, so pointing at the icns left them on the
+    // default Electron icon.
+    icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
