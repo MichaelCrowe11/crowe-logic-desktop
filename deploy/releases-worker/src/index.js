@@ -53,9 +53,11 @@ async function readManifest(env, key) {
 }
 
 async function catalog(env) {
+  // These paths must match electron-builder's ${os} macro in the publish url,
+  // which expands to mac, win and linux.
   const [mac, win, lin] = await Promise.all([
-    readManifest(env, "desktop/channel/darwin/latest-mac.yml"),
-    readManifest(env, "desktop/channel/windows/latest.yml"),
+    readManifest(env, "desktop/channel/mac/latest-mac.yml"),
+    readManifest(env, "desktop/channel/win/latest.yml"),
     readManifest(env, "desktop/channel/linux/latest-linux.yml"),
   ]);
 
