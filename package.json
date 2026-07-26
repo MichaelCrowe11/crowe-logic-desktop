@@ -1,7 +1,7 @@
 {
   "name": "crowe-logic-desktop",
   "productName": "Crowe Logic",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway. Chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
   "author": {
@@ -13,7 +13,7 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
+    "build:mac": "electron-builder --mac && node scripts/staple-dmg.js release",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
@@ -39,6 +39,9 @@
   "build": {
     "appId": "com.crowelogic.desktop",
     "productName": "Crowe Logic",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "main.js",
       "harness.js",
