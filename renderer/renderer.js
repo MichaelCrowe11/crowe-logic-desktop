@@ -421,20 +421,49 @@ async function mountTerminal(p, body, systemTerminal=false) {
 }
 window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term.write(data)});
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
+/* The house thinking mark. Six blue arms on the hex axes, six shorter gold
+   arms on the half-axes, hex heart. It carries reasoning state in its motion:
+   the rotor's speed and the breath's depth are the signal, so the panel does
+   not need a separate spinner. Geometry per docs/design/explorations/
+   crowe_house_thinking_mark_final.html. */
+function thinkingMark(){
+  const arm=(deg,r0,r1,w,kind)=>{
+    const a=(deg-90)*Math.PI/180, c=Math.cos(a), s=Math.sin(a);
+    return `<line class="tm-arm tm-${kind}" x1="${(60+c*r0).toFixed(2)}" y1="${(60+s*r0).toFixed(2)}" x2="${(60+c*r1).toFixed(2)}" y2="${(60+s*r1).toFixed(2)}" stroke-width="${w}" stroke-linecap="round" style="animation-delay:${(deg/360*-1.75).toFixed(2)}s"/>`;
+  };
+  const poly=r=>Array.from({length:6},(_,i)=>{const a=(i*60-90)*Math.PI/180;return `${(60+Math.cos(a)*r).toFixed(1)},${(60+Math.sin(a)*r).toFixed(1)}`}).join(" ");
+  let blue="",gold="";
+  for(let i=0;i<6;i++){blue+=arm(i*60,14,42,6,"blue");gold+=arm(30+i*60,12,29,4.5,"gold")}
+  return `<svg class="tm" viewBox="0 0 120 120" role="img" aria-label="Crowe Logic thinking mark">`
+    +`<polygon class="tm-ping" points="${poly(46)}" fill="none" stroke-width="2"/>`
+    +`<g class="tm-rotor"><g class="tm-breath">${gold}${blue}`
+    +`<g class="tm-core"><polygon class="tm-heart" points="${poly(13)}"/>`
+    +`<polygon class="tm-facet" points="${poly(13)}" fill="none" stroke-width="1.5"/>`
+    +`<circle class="tm-pip" cx="60" cy="60" r="4.2"/></g></g></g></svg>`;
+}
+
 async function mountWorkspaceAgent(p, body, seed={}) {
   body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-reasoning-orbit" aria-hidden="true"><span></span><span></span><b>CL</b></div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><span class="agent-operation-chip" data-state="running">ACTIVE</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-mark" data-state="idle">${thinkingMark()}</div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
   const slot=body.querySelector(".agent-terminal-slot");
-  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:"#07101f",foreground:"#dce9ff",cursor:"#d5ad45",selectionBackground:"#183c72"}});
+  const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
+  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
   const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
   const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
+  const mark=body.querySelector(".agent-mark");
+  const pingMark=()=>{mark.classList.remove("ping");void mark.offsetWidth;mark.classList.add("ping")};
+  /* One call moves the chip, its label and the mark together. They were
+     separate before, which let the chip keep reading ACTIVE in red after the
+     runtime had already failed. */
+  const CHIP={booting:"BOOTING",running:"ACTIVE",verified:"DONE",waiting:"PAUSED",failed:"OFFLINE",idle:"READY"};
+  const setState=(chipState,markState,label)=>{chip.dataset.state=chipState;chip.textContent=CHIP[chipState]||chipState.toUpperCase();mark.dataset.state=markState;if(label)status.textContent=label};
   const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");status.textContent="Crowe Logic CLI ready";addEvent("runtime","crowe-logic entered automatically")}else{status.textContent="Runtime unavailable";chip.dataset.state="failed"}};
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("failed","failed","Runtime unavailable")}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
-  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;status.textContent="Reasoning and executing";chip.dataset.state="running";addEvent("input",task);window.crowe.pty.input(p.id,task+"\r");box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));status.textContent="Verified";chip.dataset.state="verified"}catch(err){addEvent("error",err.message||String(err));status.textContent="Needs attention";chip.dataset.state="failed"}finally{off();running=false;run.disabled=false}};
-  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);window.crowe.pty.input(p.id,"\x03");status.textContent="Interrupted";chip.dataset.state="waiting";addEvent("status","operator interrupted runtime")};
+  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);window.crowe.pty.input(p.id,task+"\r");box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
+  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);window.crowe.pty.input(p.id,"\x03");setState("waiting","idle","Interrupted");addEvent("status","operator interrupted runtime")};
   new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
 }
 

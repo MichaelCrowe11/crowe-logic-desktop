@@ -1005,40 +1005,73 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
   #sidebar { transition: none; }
 }
 
-/* Crowe Logic operational agent nodes */
-.workspace-agent-node { min-height:0; background:#07101f; color:#dce9ff; }
-.agent-operation-head { display:flex; align-items:center; gap:12px; padding:12px; border-bottom:1px solid rgba(72,132,220,.28); background:linear-gradient(135deg,#09162a,#0c2140); }
+/* Crowe Logic operational agent nodes.
+
+   These deliberately use the shared surface tokens rather than a palette of
+   their own. An agent node is a panel like any other panel; when it painted
+   itself navy it read as a widget bolted on rather than part of the app, and
+   it ignored the theme entirely. Brand colour enters only through the mark. */
+.workspace-agent-node { min-height:0; background:var(--cream); color:var(--ink); }
+.agent-operation-head { display:flex; align-items:center; gap:13px; padding:12px 13px; border-bottom:1px solid var(--line); background:var(--panel); }
 .agent-operation-head>div:nth-child(2) { display:flex; flex-direction:column; gap:3px; min-width:0; flex:1; }
-.agent-operation-head small { font:9px var(--mono); letter-spacing:.16em; color:#6ea9ff; }
-.agent-operation-head strong { font-size:13px; color:#f2f6ff; }
-.agent-reasoning-orbit { position:relative; width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center; border-radius:50%; background:radial-gradient(circle,#153963 0,#081528 62%); border:1px solid #2458a6; }
-.agent-reasoning-orbit span { position:absolute; inset:6px; border:2px solid transparent; border-top-color:#4c91f0; border-radius:50%; animation:agent-orbit 2.1s linear infinite; }
-.agent-reasoning-orbit span:nth-child(2) { inset:14px; border-top-color:#d5ad45; animation-direction:reverse; animation-duration:1.35s; }
-.agent-reasoning-orbit b { color:#d5ad45; font:11px var(--mono); }
-.agent-operation-chip { border:1px solid #4c91f0; color:#8fc0ff; padding:3px 7px; font:9px var(--mono); letter-spacing:.08em; }
-.agent-operation-chip[data-state="verified"] { color:#e2bd58; border-color:#d5ad45; }
-.agent-operation-chip[data-state="failed"] { color:#ff8075; border-color:#d9534f; }
-.agent-event-stream { flex:0 0 min(25%,140px); overflow:auto; padding:8px 10px; border-bottom:1px solid rgba(72,132,220,.22); }
+.agent-operation-head small { font:9px var(--mono); letter-spacing:.16em; color:var(--muted); }
+.agent-operation-head strong { font-size:13px; color:var(--ink); font-weight:600; }
+.agent-operation-chip { border:1px solid var(--line-strong); border-radius:4px; color:var(--muted); padding:3px 7px; font:9px var(--mono); letter-spacing:.08em; }
+.agent-operation-chip[data-state="verified"] { color:var(--gold-text); border-color:var(--gold); }
+.agent-operation-chip[data-state="failed"] { color:var(--err-fg,#c0553d); border-color:currentColor; }
+.agent-event-stream { flex:0 0 min(25%,140px); overflow:auto; padding:8px 11px; border-bottom:1px solid var(--line); background:var(--cream); }
 .agent-event { display:grid; grid-template-columns:70px 1fr; gap:8px; padding:4px 0; font:10px var(--mono); }
-.agent-event span { color:#6ea9ff; text-transform:uppercase; }
-.agent-event code { color:#b9cae2; white-space:pre-wrap; }
-.agent-event-tool span { color:#6edee8; } .agent-event-verified span { color:#d5ad45; } .agent-event-error span { color:#ff8075; }
-.agent-terminal-slot { flex:1; min-height:120px; padding:6px; background:#050b14; }
-.agent-command-dock { display:flex; gap:6px; padding:7px; border-top:1px solid rgba(72,132,220,.28); background:#09162a; }
-.agent-command-dock textarea { flex:1; min-width:0; resize:none; color:#e9f1ff; background:#050b14; border:1px solid #234b7f; border-radius:5px; padding:7px; }
-@keyframes agent-orbit { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion:reduce) { .agent-reasoning-orbit span { animation:none; } }
+.agent-event span { color:var(--muted); text-transform:uppercase; }
+.agent-event code { color:var(--ink); white-space:pre-wrap; }
+.agent-event-verified span { color:var(--gold-text); } .agent-event-error span { color:var(--err-fg,#c0553d); }
+.agent-terminal-slot { flex:1; min-height:120px; padding:6px; background:var(--term-bg,var(--cream)); }
+.agent-command-dock { display:flex; gap:6px; padding:8px; border-top:1px solid var(--line); background:var(--panel); }
+.agent-command-dock textarea { flex:1; min-width:0; resize:none; color:var(--ink); background:var(--raised); border:1px solid var(--line-strong); border-radius:6px; padding:7px; }
+
+/* The thinking mark. Motion is the status readout: the rotor's speed and the
+   breath's depth say what the agent is doing, so no separate spinner is
+   needed. The electric blue is held back for the bloom peak, which is what
+   keeps a constantly-animating element from reading as noise. */
+.agent-mark { width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center;
+  --tm-blue:var(--blue); --tm-blue-hot:#4d9fe8; --tm-gold:var(--gold); --tm-gold-hot:var(--gold-soft); }
+.agent-mark .tm { width:100%; height:100%; overflow:visible; }
+.tm-arm, .tm-heart, .tm-facet, .tm-pip, .tm-ping { transform-box:view-box; transform-origin:60px 60px; }
+.tm-blue { stroke:var(--tm-blue); } .tm-gold { stroke:var(--tm-gold); }
+.tm-heart { fill:var(--tm-blue); } .tm-facet { stroke:var(--tm-gold-hot); } .tm-pip { fill:var(--tm-gold); }
+.tm-ping { stroke:var(--tm-gold); opacity:0; }
+.tm-rotor, .tm-breath { transform-box:view-box; transform-origin:60px 60px; }
+@keyframes tm-spin { to { transform:rotate(360deg); } }
+@keyframes tm-idle { 0%,100% { transform:scale(.965); } 50% { transform:scale(1.02); } }
+@keyframes tm-reason { 0% { transform:scale(.46); } 42% { transform:scale(1.09); } 66% { transform:scale(.82); } 100% { transform:scale(.46); } }
+@keyframes tm-gold-recede { 0% { opacity:.9; } 42% { opacity:.08; } 70% { opacity:.5; } 100% { opacity:.9; } }
+@keyframes tm-arm-wob { 0%,100% { transform:scaleY(1); } 50% { transform:scaleY(1.16); } }
+@keyframes tm-blue-heat { 0% { stroke:var(--tm-blue); } 42% { stroke:var(--tm-blue-hot); } 100% { stroke:var(--tm-blue); } }
+@keyframes tm-core-heat { 0% { fill:var(--tm-blue); } 42% { fill:var(--tm-blue-hot); } 100% { fill:var(--tm-blue); } }
+@keyframes tm-ping { 0% { transform:scale(.42); opacity:.92; } 100% { transform:scale(2.5); opacity:0; } }
+@keyframes tm-core-pop { 0%,100% { transform:scale(1); } 40% { transform:scale(1.55); } }
+.agent-mark[data-state="idle"] .tm-rotor { animation:tm-spin 46s linear infinite; }
+.agent-mark[data-state="idle"] .tm-breath { animation:tm-idle 5s ease-in-out infinite; }
+.agent-mark[data-state="idle"] .tm-gold { opacity:.88; }
+.agent-mark[data-state="reasoning"] .tm-rotor { animation:tm-spin 7.5s linear infinite; }
+.agent-mark[data-state="reasoning"] .tm-breath { animation:tm-reason 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.agent-mark[data-state="reasoning"] .tm-gold { animation:tm-gold-recede 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.agent-mark[data-state="reasoning"] .tm-blue { animation:tm-arm-wob 1.75s ease-in-out infinite, tm-blue-heat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.agent-mark[data-state="reasoning"] .tm-heart { animation:tm-core-heat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.agent-mark[data-state="failed"] { --tm-blue:var(--muted); --tm-blue-hot:var(--muted); --tm-gold:var(--muted); --tm-gold-hot:var(--muted); }
+.agent-mark[data-state="failed"] .tm-rotor { animation:none; }
+.agent-mark[data-state="failed"] .tm-breath { transform:scale(.9); }
+.agent-mark.ping .tm-ping { animation:tm-ping .78s cubic-bezier(.16,1,.3,1); }
+.agent-mark.ping .tm-core { animation:tm-core-pop .52s cubic-bezier(.16,1,.3,1); }
+@media (prefers-reduced-motion:reduce) {
+  .tm-rotor, .tm-breath, .tm-arm, .tm-blue, .tm-gold, .tm-heart, .tm-core, .tm-ping { animation:none !important; }
+  .agent-mark .tm-gold { opacity:.55; }
+}
 
 /* 2026 operator workspace refinement */
 .dock-icon.agent-launch img { width:16px; height:16px; object-fit:contain; }
-.workspace-panel[data-id^="system-"] { border-color:#d5ad45; }
-.workspace-panel[data-id^="system-"] .panel-head { background:#09162a; }
-.workspace-panel[data-id^="system-"] .panel-title { color:#e2bd58; }
-.workspace-panel[data-id^="agent-"] { border-color:#2458a6; }
-.agent-reasoning-orbit { width:84px; height:84px; flex-basis:84px; }
-.agent-reasoning-orbit span { inset:8px; }
-.agent-reasoning-orbit span:nth-child(2) { inset:22px; }
-.agent-operation-chip[data-state="waiting"] { color:#f4bd58; border-color:#f59e0b; }
-.agent-event-runtime span { color:#8fc0ff; }
-.agent-event-input span { color:#b78cff; }
-@media (max-width:760px) { .agent-reasoning-orbit { width:62px;height:62px;flex-basis:62px; } }
+.workspace-panel[data-id^="system-"] { border-color:var(--gold); }
+.workspace-panel[data-id^="system-"] .panel-title { color:var(--gold-text); }
+.workspace-panel[data-id^="agent-"] { border-color:var(--line-strong); }
+.agent-operation-chip[data-state="waiting"] { color:var(--gold-text); border-color:var(--gold); }
+.agent-event-input span { color:var(--ink); }
+@media (max-width:760px) { .agent-mark { width:52px; height:52px; flex-basis:52px; } }
