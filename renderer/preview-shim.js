@@ -113,6 +113,7 @@
     },
     pty: {
       async start() { return { ok: false, error: "preview" }; },
+      async close() { return { ok: true }; },
       onData() {}, input() {}, resize() {},
     },
     fs: {
@@ -140,6 +141,50 @@
         },
         defaultModel: "crowelm",
       }; },
+    },
+    // These five mirror the preload namespaces of the same name. The panel
+    // suite asserts the shim covers every namespace preload exposes, since a
+    // missing one throws only at runtime, inside whichever panel touches it.
+    operator: {
+      async status() { return {
+        app: "running", agents: 0, agentIds: [], terminals: 1, terminalIds: ["preview"],
+        mcpServers: 1, mcpTools: 11, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop",
+        autonomy: "edit", version: "0.13.0", uptime: 42,
+      }; },
+      async stopAll() { return { ok: true }; },
+    },
+    license: {
+      async status() { return {
+        authenticated: true, selectedWorkspaceId: "ws-demo",
+        workspaces: [{ id: "ws-demo", name: "Crowe Logic", plan_id: "Managed",
+          agents: { allowed: true }, usage: { agent_jobs: 12 } }],
+      }; },
+      async billing() { return { portalUrl: "" }; },
+      async select() { return { ok: true }; },
+    },
+    update: {
+      async check() { return { status: "dev" }; },
+      async download() { return { status: "dev" }; },
+      async install() { return { ok: true }; },
+      async state() { return { status: "dev" }; },
+      onChange() { return () => {}; },
+    },
+    plugins: {
+      async list() { return { plugins: [
+        { id: "crowe-skills", name: "Crowe Skills", official: true, enabled: true, tools: 6 },
+        { id: "github", name: "GitHub", official: true, enabled: false, tools: 9 },
+      ] }; },
+      async enable() { return { ok: true }; },
+      async disable() { return { ok: true }; },
+    },
+    keys: {
+      async list() { return { providers: [
+        { id: "openai", label: "OpenAI", configured: false, healthy: false },
+        { id: "anthropic", label: "Anthropic", configured: false, healthy: false },
+      ] }; },
+      async set() { return { ok: true }; },
+      async remove() { return { ok: true }; },
+      async test() { return { ok: true, healthy: true }; },
     },
     async chat() { return { content: "" }; },
     async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },

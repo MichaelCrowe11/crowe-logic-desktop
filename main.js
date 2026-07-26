@@ -183,7 +183,10 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
     backgroundColor: "#f7f3ea", title: "Crowe Logic",
-    icon: path.join(__dirname, "assets", "icon.icns"),
+    // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
+    // and neither can decode .icns, so pointing at the icns left them on the
+    // default Electron icon.
+    icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
@@ -897,5 +900,16 @@ app.whenReady().then(async () => {
   }, 4 * 60 * 1000);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch {} });
+// Native children outlive the window unless we kill them. node-pty in
+// particular throws from its destructor if a PTY is still open at exit, which
+// aborts the process with SIGABRT after the app has otherwise shut down
+// cleanly. Tear both down on every quit path.
+function shutdownNativeResources() {
+  for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
+  for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+}
+app.on("before-quit", shutdownNativeResources);
+app.on("will-quit", () => { shutdownNativeResources(); try { globalShortcut.unregisterAll(); } catch {} });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+
+module.exports = { shutdownNativeResources };
