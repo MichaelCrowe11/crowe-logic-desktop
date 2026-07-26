@@ -23,6 +23,7 @@ jobs:
             artifact: windows
             paths: |
               release/*.exe
+              release/*.blockmap
               release/latest.yml
           - os: ubuntu-latest
             command: npm run build:linux
@@ -30,6 +31,7 @@ jobs:
             paths: |
               release/*.AppImage
               release/*.deb
+              release/*.blockmap
               release/latest-linux.yml
           - os: macos-14
             command: npm run build:mac
@@ -37,6 +39,7 @@ jobs:
             paths: |
               release/*.dmg
               release/*.zip
+              release/*.blockmap
               release/latest-mac.yml
     runs-on: ${{ matrix.os }}
     steps:
@@ -80,24 +83,20 @@ jobs:
         with:
           files: ${{ matrix.paths }}
 
-  publish-r2:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      # Only the platforms CI can ship. macOS is published from a release
-      # machine because notarization needs a local keychain profile.
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: "{windows,linux}"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Publish installers and updater metadata to R2
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bash scripts/publish-r2.sh artifacts
+  # There is deliberately no R2 publish job here. It cannot work from CI:
+  #
+  #   - macOS notarization runs through the `crowe-notary` keychain profile
+  #     (build/notarize.js), a local credential a runner has no access to.
+  #   - CLOUDFLARE_API_TOKEN has never had R2 write permission. The job it used
+  #     to run failed every time with 403 Authentication error, which went
+  #     unnoticed because this workflow had never been triggered.
+  #
+  # So the update channel and the download page are published from a release
+  # machine, after the notarized macOS build, with:
+  #
+  #   npm run build:mac
+  #   gh release download v<version> -D release -p '*'   # windows and linux
+  #   GITHUB_REF_NAME=v<version> npm run publish:r2
+  #
+  # Grant an API token R2 write and this can move back into CI, but macOS would
+  # still need App Store Connect API key auth in build/notarize.js.
