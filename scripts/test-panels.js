@@ -299,12 +299,20 @@ const tests = [
       await addPanel("terminal");
       const t = [...terminalPanels.values()][0].term;
       applyTheme(true);
-      const dark = t.options.theme.background;
+      const darkTheme = { ...t.options.theme };
       applyTheme(false);
-      const light = t.options.theme.background;
+      const lightTheme = { ...t.options.theme };
       applyTheme(true);
-      return { changed: dark !== light, darkIsDark: dark.toLowerCase() === "#0b0e12" };`,
-    expect: { changed: true, darkIsDark: true },
+      return {
+        cursorChanged: darkTheme.cursor !== lightTheme.cursor,
+        fgChanged: darkTheme.foreground !== lightTheme.foreground,
+        // The terminal is a console surface in both themes, so its background
+        // is deliberately the same near-black either way.
+        consoleBgBothWays:
+          darkTheme.background.toLowerCase() === "#0b0e12" &&
+          lightTheme.background.toLowerCase() === "#0b0e12",
+      };`,
+    expect: { cursorChanged: true, fgChanged: true, consoleBgBothWays: true },
   },
   {
     name: "shortcut hints match the platform modifier key",
