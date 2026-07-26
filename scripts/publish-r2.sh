@@ -57,7 +57,12 @@ if [ ${#installers[@]} -gt 0 ]; then
   rm -f "$sums"
 fi
 
-for spec in "windows/latest.yml" "darwin/latest-mac.yml" "linux/latest-linux.yml"; do
+# The channel directory has to match electron-builder's ${os} macro in the
+# publish url, which expands to mac, win and linux (Platform.MAC is
+# new Platform("mac", "mac", "darwin"), so it is the build key, not the node
+# platform). Writing to darwin/ and windows/ instead is why macOS clients sat on
+# 0.12.0 and Windows never had a feed at all.
+for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
   os=${spec%%/*}; name=${spec#*/}; file=$(find "$root" -type f -name "$name" -print -quit)
   [ -z "$file" ] || put "desktop/channel/$os/$name" "$file"
 done
