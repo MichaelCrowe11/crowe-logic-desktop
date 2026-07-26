@@ -46,6 +46,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Electron 43 fetches its binary lazily, so materialise it before granting
+      # chrome-sandbox the SUID bit it refuses to start without.
+      - if: runner.os == 'Linux'
+        run: |
+          node node_modules/electron/install.js
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - if: runner.os == 'Linux'
         run: xvfb-run -a npx electron scripts/smoke-shot.js
       - if: runner.os == 'macOS'

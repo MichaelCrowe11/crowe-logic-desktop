@@ -363,6 +363,7 @@ function persistGlassAgents() {
     width: el.offsetWidth, height: el.offsetHeight, collapsed: el.classList.contains("collapsed"),
   }));
   try { localStorage.setItem("crowe-glass-agents", JSON.stringify(state)); } catch {}
+  document.body.classList.toggle("has-agents", glassAgents.size > 0);
 }
 function addGlassMessage(host, role, text) {
   const row=document.createElement("div");row.className=`glass-message ${role}`;row.innerHTML=`<span>${role === "user" ? "You" : "Crowe Logic"}</span><div>${md(text)}</div>`;host.appendChild(row);host.scrollTop=host.scrollHeight;
@@ -411,7 +412,7 @@ try { const saved=JSON.parse(localStorage.getItem("crowe-glass-agents")||"[]");s
 
 // ── Modular workspace panels ──
 const panelDeck = $("panel-deck");
-let panels = [], panelSeq = 0, activeLegacy = null;
+let panels = [], panelSeq = 0, activeLegacy = null, activePanelId = null;
 const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
 function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [] })) }; }
@@ -420,15 +421,15 @@ function savePanelState() {
 }
 function savedLayouts(){try{return JSON.parse(localStorage.getItem("crowe-saved-layouts")||"{}")}catch{return {}}}
 function refreshSavedLayouts(){const select=$("layout-saved"),layouts=savedLayouts();select.innerHTML='<option value="">Saved layouts</option>'+Object.keys(layouts).map((n)=>`<option value="${esc(n)}">${esc(n)}</option>`).join("")}
-async function applyPanelState(st){for(const p of [...panels])closePanel(p.id);$("panel-layout").value=st.layout||"columns";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");fitTerminals()}
+async function applyPanelState(st){for(const p of [...panels])closePanel(p.id);$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");applyStackVisibility();renderDockTabs();fitTerminals()}
 $("layout-save").onclick=()=>{const name=prompt("Layout name");if(!name||!name.trim())return;const layouts=savedLayouts();layouts[name.trim()]=panelState();localStorage.setItem("crowe-saved-layouts",JSON.stringify(layouts));refreshSavedLayouts()};
 $("layout-saved").onchange=async(e)=>{const st=savedLayouts()[e.target.value];if(st)await applyPanelState(st);e.target.value=""};
-$("layout-reset").onclick=()=>applyPanelState({layout:"columns",panels:[{type:"terminal"},{type:"browser",url:"https://crowelogic.com"},{type:"operator"}]});
+$("layout-reset").onclick=()=>applyPanelState({layout:"stack",panels:[{type:"terminal"},{type:"browser",url:"https://crowelogic.com"},{type:"operator"}]});
 refreshSavedLayouts();
 function panelShell(p) {
   const el = document.createElement("section"); el.className = "workspace-panel"; el.dataset.id = p.id; el.draggable = true;
   el.innerHTML = `<div class="panel-head"><input class="panel-title" value="${esc(p.title)}" aria-label="Panel name"><button class="panel-dup ghost sm" title="Duplicate">Copy</button><button class="panel-close ghost sm" title="Close">Close</button></div><div class="panel-body"></div>`;
-  el.querySelector(".panel-title").onchange=(e)=>{p.title=e.target.value;savePanelState()};
+  el.querySelector(".panel-title").onchange=(e)=>{p.title=e.target.value;savePanelState();renderDockTabs()};
   el.querySelector(".panel-close").onclick = () => closePanel(p.id);
   el.querySelector(".panel-dup").onclick = () => addPanel(p.type, { url:p.url, title:p.title+" Copy", history:[...(p.history||[])], bookmarks:[...(p.bookmarks||[])] });
   el.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/panel", p.id));
@@ -438,21 +439,21 @@ function panelShell(p) {
 }
 function reorderPanel(from, to) {
   const a=panels.findIndex((p)=>p.id===from), b=panels.findIndex((p)=>p.id===to); if(a<0||b<0||a===b)return;
-  const [p]=panels.splice(a,1); panels.splice(b,0,p); renderPanelOrder(); savePanelState();
+  const [p]=panels.splice(a,1); panels.splice(b,0,p); renderPanelOrder(); renderDockTabs(); savePanelState();
 }
 function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySelector(`[data-id="${p.id}"]`); if(el) panelDeck.appendChild(el); }); }
 async function addPanel(type, seed={}) {
   hideLegacy();
   const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",workbench:"Workbench"};
   const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [] };
-  panels.push(p); const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
+  panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal") await mountTerminal(p, body);
   else if(type === "browser") mountBrowser(p, body);
   else if(type === "workflow") mountWorkflow(p, body);
   else if(type === "agents") mountAgentFleet(p, body);
   else if(type === "workbench") mountWorkbench(p, body);
   else mountOperator(p, body);
-  savePanelState(); return p;
+  savePanelState(); applyStackVisibility(); renderDockTabs(); return p;
 }
 async function mountTerminal(p, body) {
   const tools=document.createElement("div"); tools.className="terminal-tools";
@@ -475,7 +476,7 @@ function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();wind
 function mountBrowser(p, body) {
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
-  bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false"><button class="go ghost sm">Go</button>';
+  bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false" aria-label="Address"><button class="go ghost sm">Go</button>';
   const hist=document.createElement("div");hist.className="browser-history hidden";
   const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");host.appendChild(w);body.append(bar,hist,host);
   const input=bar.querySelector("input");
@@ -552,16 +553,78 @@ function mountOperator(p, body) {
   const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
   body.querySelector(".refresh").onclick=refresh;body.querySelector(".stop-agent").onclick=async()=>{await window.crowe.agent.stop();refresh()};body.querySelector(".stop-voice").onclick=()=>speechSynthesis.cancel();body.querySelector(".emergency").onclick=async()=>{if(!confirm("Stop every agent and terminal process?"))return;await window.crowe.operator.stopAll();speechSynthesis.cancel();for(const x of terminalPanels.values())x.state.textContent="stopped";refresh()};refresh();p.operatorTimer=setInterval(()=>{if(document.body.contains(body))refresh();else clearInterval(p.operatorTimer)},5000);
 }
-function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();savePanelState()}
-function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display=""}
-function showPane(name){if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit()}else{hideLegacy();const found=panels.find((p)=>p.type===name);if(!found)addPanel(name)}}
+function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
+function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
+function showPane(name){
+  if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
+  const type = name === "term" ? "terminal" : name;
+  hideLegacy();
+  const found = [...panels].reverse().find((p)=>p.type===type);
+  if(found) focusPanel(found.id); else addPanel(type).then((p)=>focusPanel(p.id));
+}
 function switchPane(name){showPane(name);setRailActive(name)}
 function navigate(u){hideLegacy();let p=[...panels].reverse().find((x)=>x.type==="browser");if(!p){addPanel("browser",{url:u});return}const el=panelDeck.querySelector(`[data-id="${p.id}"]`);const input=el?.querySelector("input.browser-url");if(input){input.value=u;el.querySelector(".go").click()}}
 $("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");
-$("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;savePanelState();setTimeout(fitTerminals,40)};
+$("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;applyStackVisibility();savePanelState();setTimeout(fitTerminals,40)};
 document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(b.dataset.pane));
+
+// ── Dock: one tab strip for pinned views and every open panel ──
+const dockTabs = $("dock-tabs");
+const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", operator:"Operator", workflow:"Workflows", agents:"Agent fleet", workbench:"Workbench" };
+function applyStackVisibility(){
+  const stacked = panelDeck.classList.contains("stack");
+  if (stacked && !panels.some((p)=>p.id===activePanelId)) activePanelId = panels.length ? panels[panels.length-1].id : null;
+  panels.forEach((p)=>{
+    const el = panelDeck.querySelector(`[data-id="${p.id}"]`);
+    if (el) el.classList.toggle("stack-active", !stacked || p.id===activePanelId);
+  });
+}
+function focusPanel(id){
+  hideLegacy();
+  setRailActive(null);
+  activePanelId = id;
+  applyStackVisibility();
+  const el = panelDeck.querySelector(`[data-id="${id}"]`);
+  if (el && !panelDeck.classList.contains("stack")) el.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"nearest" });
+  renderDockTabs();
+  setTimeout(fitTerminals, 40);
+}
+function renderDockTabs(){
+  if (!dockTabs) return;
+  dockTabs.querySelectorAll(".dock-tab.panel-tab").forEach((x)=>x.remove());
+  panels.forEach((p)=>{
+    const t = document.createElement("button");
+    const isActive = !activeLegacy && p.id === activePanelId;
+    t.className = "dock-tab panel-tab" + (isActive ? " active" : "");
+    if (isActive) t.setAttribute("aria-current", "true");
+    t.dataset.id = p.id;
+    t.title = PANEL_GLYPH[p.type] || p.title;
+    t.innerHTML = `<span class="dock-tab-label"></span><span class="dock-tab-close" role="button" aria-label="Close panel">&times;</span>`;
+    t.querySelector(".dock-tab-label").textContent = p.title;
+    t.addEventListener("click",(e)=>{ if (e.target.closest(".dock-tab-close")) { closePanel(p.id); return; } focusPanel(p.id); });
+    dockTabs.appendChild(t);
+  });
+  dockTabs.classList.toggle("has-panels", panels.length > 0);
+  const active = dockTabs.querySelector(".dock-tab.panel-tab.active");
+  if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// Add-to-panel palette. The panel-add-* buttons live inside it, so their
+// existing handlers keep working and the overlay just closes behind them.
+const addPanelModal = $("addpanel");
+function openAddPanel(){ addPanelModal.classList.remove("hidden"); }
+function closeAddPanel(){ addPanelModal.classList.add("hidden"); }
+$("dock-add").addEventListener("click", openAddPanel);
+addPanelModal.addEventListener("click",(e)=>{ if (e.target === addPanelModal) closeAddPanel(); });
+addPanelModal.querySelectorAll(".pal-row").forEach((b)=>b.addEventListener("click", closeAddPanel));
+document.addEventListener("keydown",(e)=>{ if (e.key === "Escape" && !addPanelModal.classList.contains("hidden")) closeAddPanel(); });
+
+const dockOverflow = $("dock-overflow");
+$("dock-menu").addEventListener("click",(e)=>{ e.stopPropagation(); dockOverflow.classList.toggle("hidden"); });
+document.addEventListener("click",(e)=>{ if (!dockOverflow.contains(e.target) && !e.target.closest("#dock-menu")) dockOverflow.classList.add("hidden"); });
+
 window.addEventListener("resize",()=>{clampWorkbenchSplit();fitTerminals()});
-async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("crowe-workspace-panels")||"null")}catch{};st=st||{layout:"columns",panels:[{type:"terminal"}]};$("panel-layout").value=st.layout||"columns";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal")}
+async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("crowe-workspace-panels")||"null")}catch{};st=st||{layout:"stack",panels:[{type:"terminal"}]};$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");applyStackVisibility();renderDockTabs()}
 
 // ── Voice input and TTS ──
 let recognition=null;
@@ -663,7 +726,8 @@ divider.addEventListener("mousedown", (e) => {
 // ── Dark mode ──
 function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
-  $("theme-btn").textContent = dark ? "Light" : "Dark";
+  const themeLabel = $("theme-btn").querySelector(".side-foot-label");
+  if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
   try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
   if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
@@ -676,9 +740,18 @@ input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(input.value); }
 });
 
-// ── Pane switching ──
-function setRailActive(pane) { document.querySelectorAll(".rail-btn[data-pane]").forEach((x) => x.classList.toggle("active", x.dataset.pane === pane)); }
-document.querySelectorAll(".rail-btn[data-pane]").forEach((b) => b.addEventListener("click", () => switchPane(b.dataset.pane)));
+// ── Dock tabs ──
+// aria-current marks the one active item in each nav set. The dock tabs stay
+// plain buttons rather than role="tab", since they drive two different things
+// (legacy panes and live panels) and have no single tabpanel to point at.
+function setRailActive(pane) {
+  document.querySelectorAll(".dock-tab[data-pane]").forEach((x) => {
+    const on = x.dataset.pane === pane;
+    x.classList.toggle("active", on);
+    if (on) x.setAttribute("aria-current", "true"); else x.removeAttribute("aria-current");
+  });
+}
+document.querySelectorAll(".dock-tab[data-pane]").forEach((b) => b.addEventListener("click", () => switchPane(b.dataset.pane)));
 
 // ── New chat + sessions drawer ──
 const drawer = $("sessions-drawer");
@@ -687,17 +760,13 @@ async function newChat() {
   messages.length = 0;
   transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark();
   input.value = ""; input.style.height = "auto"; input.focus();
-  drawer.classList.add("hidden");
+  drawer.classList.remove("hidden");
+  renderSessions();
   sessionCost = 0; runCost = 0;
   $("hud-cost").textContent = fmtCost(0); $("hud-tok").textContent = "0 / 0 tok"; $("hud-tps").textContent = "";
 }
 $("rail-new").addEventListener("click", newChat);
 $("sess-new").addEventListener("click", newChat);
-$("rail-sessions").addEventListener("click", () => {
-  const willShow = drawer.classList.contains("hidden");
-  drawer.classList.toggle("hidden", !willShow);
-  if (willShow) renderSessions();
-});
 async function renderSessions() {
   const list = await window.crowe.sessions.list();
   const el = $("sess-list"); el.innerHTML = "";
@@ -817,12 +886,15 @@ const LANES = {
 };
 function setSpace(name) {
   document.body.dataset.space = name;
-  document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.space === name));
+  document.querySelectorAll("#spaces .seg-btn").forEach((b) => {
+    const on = b.dataset.space === name;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+  });
   const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
   workbench.classList.toggle("hidden", !showWb);
-  $("rail").classList.toggle("hidden", name !== "chat");
-  if (name !== "chat") drawer.classList.add("hidden");
   $("space-nav").classList.toggle("hidden", name !== "projects");
+  drawer.classList.toggle("hidden", name !== "chat");
   Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
   if (name === "projects" && !showWb) {
     if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
@@ -1105,7 +1177,7 @@ const PAL_ACTIONS = [
   { label: "Space: Projects", run: () => setSpace("projects") },
   { label: "Space: Studio", run: () => setSpace("studio") },
   { label: "Space: Cultivation", run: () => setSpace("cultivation") },
-  { label: "Sessions", run: () => { setSpace("chat"); $("rail-sessions").click(); } },
+  { label: "Sessions", run: () => { setSpace("chat"); renderSessions(); } },
   { label: "Terminal", run: () => { setSpace("chat"); switchPane("term"); } },
   { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
   { label: "Files", run: () => { setSpace("chat"); switchPane("files"); } },
@@ -1143,7 +1215,6 @@ palInput.addEventListener("keydown", (e) => {
 });
 palette.addEventListener("click", (e) => { if (e.target === palette) closePalette(); });
 $("rail-palette").addEventListener("click", openPalette);
-$("rail-settings").addEventListener("click", () => $("settings-btn").click());
 document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); } });
 
 // ── Menu / tray / global-summon bus (previously fired into the void) ──

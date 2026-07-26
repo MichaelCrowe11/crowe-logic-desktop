@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const OUT = "/tmp/crowe-shots";
 
-require(path.join(__dirname, "..", "main.js"));
+const { shutdownNativeResources } = require(path.join(__dirname, "..", "main.js"));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function shoot(win, name) {
@@ -112,9 +112,17 @@ app.whenReady().then(async () => {
     await js(`setSpace("chat"); document.body.classList.remove("dark"); localStorage.setItem("crowe-space","chat")`);
     await sleep(300);
     console.log("SMOKE-DONE");
-    app.exit(0);
+    await finish(0);
   } catch (error) {
     console.error("SMOKE-FAIL:", error && error.stack ? error.stack : error);
-    app.exit(1);
+    await finish(1);
   }
 });
+
+// app.exit skips the quit events, so run the teardown by hand and give the
+// native children a moment to die before the process goes away.
+async function finish(code) {
+  shutdownNativeResources();
+  await sleep(250);
+  app.exit(code);
+}
