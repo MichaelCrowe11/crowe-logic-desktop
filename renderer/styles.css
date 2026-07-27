@@ -114,8 +114,9 @@ button { font-family: var(--body); }
   border-bottom: 1px solid var(--line); box-shadow: inset 0 1px 0 var(--hair-top); }
 #mark { width: 26px; height: 26px; }
 .lockup { font-family: var(--display); font-weight: 620; font-size: var(--fs-head); letter-spacing: .1px; }
-.lockup .crowe { color: var(--ink); } .lockup .logic { color: var(--gold-deep); margin-left: 4px; font-weight: 480; }
-body.dark .lockup .logic { color: var(--gold); }
+/* Single-colour wordmark — gold means exactly one thing in this identity (the
+   spore in the mark), so the type stays ink like Claude's or Apple's. */
+.lockup .crowe { color: var(--ink); } .lockup .logic { color: var(--ink); margin-left: 4px; font-weight: 480; }
 .tagline { font-family: var(--mono); font-size: var(--fs-cap); letter-spacing: .6px; text-transform: uppercase;
   color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px 9px; margin-left: 4px; }
 .ws-sep { width: 1px; height: 13px; background: var(--line); margin: 0 2px; }
@@ -201,26 +202,47 @@ body.dark .said li::marker { color: var(--gold); }
   padding: 11px 13px; border-radius: var(--r-md); overflow-x: auto; box-shadow: var(--z1); }
 
 /* ── Living mark (see mark.js + mark-geometry.js) ──────────────────────────
-   The corporate double-C hex cube. Fixed brand palette; motion carries state:
-   idle = breath, reasoning = the arrow assembly drives + heats, tool = ring. */
-.cl-mark { position: relative; }
+   The house mark: a gold core with six long blue arms on the hex axes and six
+   short gold arms on the half-axes. The same polygons ship as assets/mark.svg
+   and assets/icon.svg, so the app icon and the running agent are one shape.
+
+   Motion is the status readout — rotor speed and breath depth say what the
+   agent is doing, which is why no panel needs a separate spinner. The hot blue
+   is held back for the bloom peak; that restraint is what keeps a permanently
+   animating element from reading as noise. */
+/* Mono-plus-spore: hyphae in ink (white in dark mode for free), gold only at
+   the core. Royal blue survives solely as the reasoning flash — blue is the
+   thought, not the letterhead. */
+.cl-mark { position: relative; --cm-blue: var(--ink); --cm-blue-hot: #4d9fe8;
+  --cm-gold: var(--gold); --cm-gold-hot: var(--gold-soft); }
 .cl-mk { width: 100%; height: 100%; overflow: visible; display: block; }
-.cm-all, .cm-blue, .cm-gold, .cm-ping { transform-box: view-box; transform-origin: 60px 60px; }
-.cm-ping { opacity: 0; }
-.cl-mark.cm-small .cm-lip { display: none; }
-@keyframes cmBreath { 0%, 100% { transform: scale(.985); } 50% { transform: scale(1.012); } }
-@keyframes cmWork { 0%, 100% { transform: scale(.97); } 45% { transform: scale(1.015); } }
-@keyframes cmDrive { 0%, 100% { transform: translateX(0); } 42% { transform: translateX(2.6px); } 62% { transform: translateX(-.6px); } }
-@keyframes cmHeat { 0%, 100% { filter: brightness(1); } 42% { filter: brightness(1.22) saturate(1.15); } }
-@keyframes cmPing { 0% { transform: scale(.8); opacity: .85; } 100% { transform: scale(1.9); opacity: 0; } }
-@keyframes cmFire { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(3.2px); } }
-.cl-mark[data-state="idle"] .cm-all { animation: cmBreath 6s ease-in-out infinite; }
-.cl-mark[data-state="reasoning"] .cm-all { animation: cmWork 1.9s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] .cm-gold { animation: cmDrive 1.9s cubic-bezier(.37,0,.32,1) infinite, cmHeat 1.9s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark.cl-ping-on .cm-ping { animation: cmPing .72s cubic-bezier(.16,1,.3,1); }
-.cl-mark.cl-ping-on .cm-gold { animation: cmFire .5s cubic-bezier(.16,1,.3,1); }
+.cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { transform-box: view-box; transform-origin: 60px 60px; }
+.cm-blue { fill: var(--cm-blue); }
+.cm-gold, .cm-heart { fill: var(--cm-gold); }
+.cm-ping { stroke: var(--cm-gold); opacity: 0; }
+@keyframes cmSpin { to { transform: rotate(360deg); } }
+@keyframes cmBreath { 0%, 100% { transform: scale(.975); } 50% { transform: scale(1.015); } }
+@keyframes cmWork { 0% { transform: scale(.62); } 42% { transform: scale(1.06); } 66% { transform: scale(.86); } 100% { transform: scale(.62); } }
+@keyframes cmRecede { 0% { opacity: .92; } 42% { opacity: .12; } 70% { opacity: .55; } 100% { opacity: .92; } }
+@keyframes cmHeat { 0%, 100% { fill: var(--cm-blue); } 42% { fill: var(--cm-blue-hot); } }
+@keyframes cmCoreHeat { 0%, 100% { fill: var(--cm-gold); } 42% { fill: var(--cm-gold-hot); } }
+@keyframes cmPing { 0% { transform: scale(.42); opacity: .9; } 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes cmCorePop { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.5); } }
+.cl-mark[data-state="idle"] .cm-rotor { animation: cmSpin 46s linear infinite; }
+.cl-mark[data-state="idle"] .cm-breath { animation: cmBreath 6s ease-in-out infinite; }
+.cl-mark[data-state="reasoning"] .cm-rotor { animation: cmSpin 7.5s linear infinite; }
+.cl-mark[data-state="reasoning"] .cm-breath { animation: cmWork 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.cl-mark[data-state="reasoning"] .cm-gold { animation: cmRecede 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.cl-mark[data-state="reasoning"] .cm-blue { animation: cmHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.cl-mark[data-state="reasoning"] .cm-heart { animation: cmCoreHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.cl-mark[data-state="failed"] { --cm-blue: var(--muted); --cm-blue-hot: var(--muted);
+  --cm-gold: var(--muted); --cm-gold-hot: var(--muted); }
+.cl-mark[data-state="failed"] .cm-breath { transform: scale(.9); }
+.cl-mark.cl-ping-on .cm-ping { animation: cmPing .78s cubic-bezier(.16,1,.3,1); }
+.cl-mark.cl-ping-on .cm-heart { animation: cmCorePop .52s cubic-bezier(.16,1,.3,1); }
 @media (prefers-reduced-motion: reduce) {
-  .cm-all, .cm-blue, .cm-gold, .cm-ping { animation: none !important; }
+  .cm-rotor, .cm-breath, .cm-arm, .cm-blue, .cm-gold, .cm-heart, .cm-ping { animation: none !important; }
+  .cl-mark .cm-gold { opacity: .6; }
 }
 
 /* ── Operator thread: autonomy tier tints the thread and its nodes ── */
@@ -1028,44 +1050,10 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 .agent-command-dock { display:flex; gap:6px; padding:8px; border-top:1px solid var(--line); background:var(--panel); }
 .agent-command-dock textarea { flex:1; min-width:0; resize:none; color:var(--ink); background:var(--raised); border:1px solid var(--line-strong); border-radius:6px; padding:7px; }
 
-/* The thinking mark. Motion is the status readout: the rotor's speed and the
-   breath's depth say what the agent is doing, so no separate spinner is
-   needed. The electric blue is held back for the bloom peak, which is what
-   keeps a constantly-animating element from reading as noise. */
-.agent-mark { width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center;
-  --tm-blue:var(--blue); --tm-blue-hot:#4d9fe8; --tm-gold:var(--gold); --tm-gold-hot:var(--gold-soft); }
-.agent-mark .tm { width:100%; height:100%; overflow:visible; }
-.tm-arm, .tm-heart, .tm-facet, .tm-pip, .tm-ping { transform-box:view-box; transform-origin:60px 60px; }
-.tm-blue { stroke:var(--tm-blue); } .tm-gold { stroke:var(--tm-gold); }
-.tm-heart { fill:var(--tm-blue); } .tm-facet { stroke:var(--tm-gold-hot); } .tm-pip { fill:var(--tm-gold); }
-.tm-ping { stroke:var(--tm-gold); opacity:0; }
-.tm-rotor, .tm-breath { transform-box:view-box; transform-origin:60px 60px; }
-@keyframes tm-spin { to { transform:rotate(360deg); } }
-@keyframes tm-idle { 0%,100% { transform:scale(.965); } 50% { transform:scale(1.02); } }
-@keyframes tm-reason { 0% { transform:scale(.46); } 42% { transform:scale(1.09); } 66% { transform:scale(.82); } 100% { transform:scale(.46); } }
-@keyframes tm-gold-recede { 0% { opacity:.9; } 42% { opacity:.08; } 70% { opacity:.5; } 100% { opacity:.9; } }
-@keyframes tm-arm-wob { 0%,100% { transform:scaleY(1); } 50% { transform:scaleY(1.16); } }
-@keyframes tm-blue-heat { 0% { stroke:var(--tm-blue); } 42% { stroke:var(--tm-blue-hot); } 100% { stroke:var(--tm-blue); } }
-@keyframes tm-core-heat { 0% { fill:var(--tm-blue); } 42% { fill:var(--tm-blue-hot); } 100% { fill:var(--tm-blue); } }
-@keyframes tm-ping { 0% { transform:scale(.42); opacity:.92; } 100% { transform:scale(2.5); opacity:0; } }
-@keyframes tm-core-pop { 0%,100% { transform:scale(1); } 40% { transform:scale(1.55); } }
-.agent-mark[data-state="idle"] .tm-rotor { animation:tm-spin 46s linear infinite; }
-.agent-mark[data-state="idle"] .tm-breath { animation:tm-idle 5s ease-in-out infinite; }
-.agent-mark[data-state="idle"] .tm-gold { opacity:.88; }
-.agent-mark[data-state="reasoning"] .tm-rotor { animation:tm-spin 7.5s linear infinite; }
-.agent-mark[data-state="reasoning"] .tm-breath { animation:tm-reason 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.agent-mark[data-state="reasoning"] .tm-gold { animation:tm-gold-recede 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.agent-mark[data-state="reasoning"] .tm-blue { animation:tm-arm-wob 1.75s ease-in-out infinite, tm-blue-heat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.agent-mark[data-state="reasoning"] .tm-heart { animation:tm-core-heat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.agent-mark[data-state="failed"] { --tm-blue:var(--muted); --tm-blue-hot:var(--muted); --tm-gold:var(--muted); --tm-gold-hot:var(--muted); }
-.agent-mark[data-state="failed"] .tm-rotor { animation:none; }
-.agent-mark[data-state="failed"] .tm-breath { transform:scale(.9); }
-.agent-mark.ping .tm-ping { animation:tm-ping .78s cubic-bezier(.16,1,.3,1); }
-.agent-mark.ping .tm-core { animation:tm-core-pop .52s cubic-bezier(.16,1,.3,1); }
-@media (prefers-reduced-motion:reduce) {
-  .tm-rotor, .tm-breath, .tm-arm, .tm-blue, .tm-gold, .tm-heart, .tm-core, .tm-ping { animation:none !important; }
-  .agent-mark .tm-gold { opacity:.55; }
-}
+/* The agent node's mark is the same mark as the header's — CroweMark.mount()
+   adds .cl-mark, so all motion comes from the living-mark block above. Only
+   the size belongs here. */
+.agent-mark { width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center; }
 
 /* 2026 operator workspace refinement */
 .dock-icon.agent-launch img { width:16px; height:16px; object-fit:contain; }

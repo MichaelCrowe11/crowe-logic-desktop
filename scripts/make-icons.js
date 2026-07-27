@@ -35,15 +35,15 @@ const ICNS_NAMES = {
   1024: ["icon_512x512@2x.png"],
 };
 
-function svgAt(size) {
-  const svg = fs.readFileSync(SRC, "utf8");
+function svgAt(src, size) {
+  const svg = fs.readFileSync(src, "utf8");
   // Give the root an intrinsic size so Chromium rasterizes at the target
   // resolution instead of rendering once and scaling a bitmap.
   return svg.replace(/<svg\b/, `<svg width="${size}" height="${size}"`);
 }
 
-async function render(win, size) {
-  const b64 = Buffer.from(svgAt(size), "utf8").toString("base64");
+async function render(win, src, size) {
+  const b64 = Buffer.from(svgAt(src, size), "utf8").toString("base64");
   const dataUrl = await win.webContents.executeJavaScript(`(async () => {
     const img = new Image();
     img.src = "data:image/svg+xml;base64,${b64}";
@@ -53,6 +53,38 @@ async function render(win, size) {
     const g = c.getContext("2d");
     g.clearRect(0, 0, ${size}, ${size});
     g.drawImage(img, 0, 0, ${size}, ${size});
+    return c.toDataURL("image/png");
+  })()`);
+  return Buffer.from(dataUrl.split(",")[1], "base64");
+}
+
+// Mark + "Crowe Logic" at 2x (240px tall), Fraunces 600, single ink colour.
+// Width is measured from the actual set text, not hardcoded.
+async function renderLockup(win, markFile, ink) {
+  const H = 240, MK = 192, GAP = 52, FONT = 104;
+  const fontB64 = fs.readFileSync(path.join(ASSETS, "fonts", "fraunces-var.woff2")).toString("base64");
+  const markSvg = fs.readFileSync(path.join(ASSETS, markFile), "utf8")
+    .replace(/<svg\b/, `<svg width="${MK}" height="${MK}"`);
+  const markB64 = Buffer.from(markSvg, "utf8").toString("base64");
+  const dataUrl = await win.webContents.executeJavaScript(`(async () => {
+    const ff = new FontFace("Fraunces",
+      Uint8Array.from(atob("${fontB64}"), (c) => c.charCodeAt(0)).buffer,
+      { weight: "100 900" });
+    await ff.load(); document.fonts.add(ff);
+    const img = new Image();
+    img.src = "data:image/svg+xml;base64,${markB64}";
+    await img.decode();
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.font = "600 ${FONT}px Fraunces";
+    const tw = probe.measureText("Crowe Logic").width;
+    const c = document.createElement("canvas");
+    c.width = Math.ceil(8 + ${MK} + ${GAP} + tw + 12); c.height = ${H};
+    const g = c.getContext("2d");
+    g.drawImage(img, 8, ${(H - MK) / 2}, ${MK}, ${MK});
+    g.font = "600 ${FONT}px Fraunces";
+    g.textBaseline = "middle";
+    g.fillStyle = "${ink}";
+    g.fillText("Crowe Logic", 8 + ${MK} + ${GAP}, ${H / 2 + 4});
     return c.toDataURL("image/png");
   })()`);
   return Buffer.from(dataUrl.split(",")[1], "base64");
@@ -92,10 +124,35 @@ async function main() {
 
   const sizes = [...new Set([...ICNS_SIZES, ...ICO_SIZES])].sort((a, b) => a - b);
   const png = new Map();
-  for (const size of sizes) png.set(size, await render(win, size));
+  for (const size of sizes) png.set(size, await render(win, SRC, size));
 
   fs.writeFileSync(path.join(ASSETS, "icon.png"), png.get(1024));
   console.log("wrote assets/icon.png (1024)");
+
+  // tray.png and mark.png had no generator at all, so they kept showing the
+  // retired cube after the mark changed. They come off the same vectors now.
+  // The tray source is oversized: main.js resizes it to 18px, and downsampling
+  // a 44px render beats upscaling an 18px one on a Retina menu bar.
+  for (const [out, src, size] of [
+    ["tray.png", "mark-tray.svg", 44],
+    ["tray-light.png", "mark-tray-light.svg", 44],
+    ["mark.png", "mark.svg", 512],
+  ]) {
+    fs.writeFileSync(path.join(ASSETS, out), await render(win, path.join(ASSETS, src), size));
+    console.log(`wrote assets/${out} (${size}, from ${src})`);
+  }
+
+  // Lockup renders. The lockup SVGs name Fraunces but an SVG loaded as an
+  // image cannot fetch external fonts, so these are composed on a canvas with
+  // the bundled woff2 registered via FontFace — the only way the PNGs come
+  // out in the real brand face rather than the Georgia fallback.
+  for (const [out, markFile, ink] of [
+    ["lockup.png", "mark.svg", "#1a1714"],
+    ["lockup-dark.png", "mark-dark.svg", "#f5f2ea"],
+  ]) {
+    fs.writeFileSync(path.join(ASSETS, out), await renderLockup(win, markFile, ink));
+    console.log(`wrote assets/${out} (Fraunces, from ${markFile})`);
+  }
 
   fs.writeFileSync(path.join(ASSETS, "icon.ico"), buildIco(ICO_SIZES.map((size) => ({ size, png: png.get(size) }))));
   console.log(`wrote assets/icon.ico (${ICO_SIZES.join(", ")})`);

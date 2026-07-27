@@ -83,11 +83,17 @@ function readAuthStore() {
 }
 function writeAuthStore(store) {
   if (!safeStorage.isEncryptionAvailable()) {
-    // Headless/dev shells (CI, xdotool smoke runs, SSH sessions) have no
-    // keychain. Fall back to a plaintext dev store rather than refusing to
-    // boot; packaged member installs always have safeStorage.
-    fs.writeFileSync(authStorePath(), JSON.stringify(store), { mode: 0o600 });
-    return;
+    // Headless shells (CI, xdotool smoke runs, SSH sessions) have no keychain,
+    // so they need somewhere to put a token. That fallback is plaintext, and it
+    // holds the refresh token - the long-lived secret that mints new access
+    // tokens - so it has to be opted into explicitly and can never be reachable
+    // from a packaged build. app.isPackaged is the backstop: even if the env var
+    // leaks into a user's shell, a shipped install still refuses.
+    if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) {
+      fs.writeFileSync(authStorePath(), JSON.stringify(store), { mode: 0o600 });
+      return;
+    }
+    throw new Error("Native credential encryption is unavailable");
   }
   fs.writeFileSync(authStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
 }
@@ -800,7 +806,12 @@ function showWindow() { if (!mainWindow || mainWindow.isDestroyed()) createWindo
 let tray = null;
 function createTray() {
   try {
-    const img = nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png")).resize({ width: 18, height: 18 });
+    // macOS: tray.png is solid black + alpha and flagged as a template image,
+    // so the menu bar recolours it for light/dark/tinted itself. Elsewhere the
+    // white variant covers the (usually dark) taskbar.
+    const trayFile = process.platform === "darwin" ? "tray.png" : "tray-light.png";
+    const img = nativeImage.createFromPath(path.join(__dirname, "assets", trayFile)).resize({ width: 18, height: 18 });
+    if (process.platform === "darwin") img.setTemplateImage(true);
     tray = new Tray(img);
     tray.setToolTip("Crowe Logic");
     tray.setContextMenu(Menu.buildFromTemplate([

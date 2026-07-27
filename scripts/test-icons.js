@@ -48,10 +48,13 @@ function probe(image, size) {
       if (a <= 8) continue;
       if (x < span.minX) span.minX = x;
       if (x > span.maxX) span.maxX = x;
-      // The tile is a near-neutral navy (chroma ~32); the blue and gold of the
-      // mark are far more saturated (chroma 137 and 212).
+      // The tile is a dark near-neutral navy (peak channel < ~60, chroma ~32).
+      // The mark is cream hyphae plus a gold spore: the cream is bright but
+      // unsaturated, the gold saturated — so a mark pixel is either high
+      // chroma or bright. The rim highlight is 14% white over the dark tile
+      // and stays well under both thresholds.
       const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-      if (chroma > 70) {
+      if (chroma > 70 || Math.max(r, g, b) > 150) {
         if (x < mark.minX) mark.minX = x;
         if (x > mark.maxX) mark.maxX = x;
       }
