@@ -55,6 +55,30 @@ const PRELUDE = `
   window.__ids = () => panels.map((p) => p.id);
   window.__visible = () => [...panelDeck.querySelectorAll(".workspace-panel.stack-active")].length;
   window.__tabs = () => [...panelDeck.parentNode.querySelectorAll(".dock-tab.panel-tab")];
+
+  // Workbench helpers. __stubAgent swaps the bridge for a recorder so a run is
+  // deterministic and the synthesis prompt can be inspected; the real shim
+  // streams a scripted transcript that would make the assertions timing-bound.
+  window.__workbench = async () => {
+    const p = await addPanel("workbench");
+    return panelDeck.querySelector('[data-id="' + p.id + '"]');
+  };
+  window.__mode = (el, mode, branches) => {
+    el.querySelector(".awb-mode").value = mode;
+    if (branches) el.querySelector(".awb-branches").value = String(branches);
+    el.querySelector(".awb-mode").onchange();
+  };
+  window.__stubAgent = () => {
+    const calls = [];
+    window.crowe.agent.run = async (messages, id) => {
+      const content = messages[0].content;
+      const merge = /Merge the drafts/.test(content);
+      calls.push({ id, content, merge });
+      return { done: true, text: merge ? "MERGED" : "draft:" + id };
+    };
+    return calls;
+  };
+  window.__settle = () => new Promise((r) => setTimeout(r, 400));
   true;
 `;
 
@@ -324,6 +348,58 @@ const tests = [
       return { found: labelled.length >= 3, wrong: wrong.length,
         binding: MOD_LABEL === (mac ? "Cmd" : "Ctrl") };`,
     expect: { found: true, wrong: 0, binding: true },
+  },
+  {
+    name: "parallel mode lays out a synthesis card plus one card per branch",
+    body: `await __reset();
+      const el = await __workbench();
+      __mode(el, "parallel", 4);
+      const cards = [...el.querySelectorAll(".awb-results article")];
+      return { cards: cards.length, first: cards[0].classList.contains("awb-synthesis"),
+        onlyOneSynthesis: cards.filter((c) => c.classList.contains("awb-synthesis")).length,
+        branchesShown: !el.querySelector(".awb-branch-field").classList.contains("hidden") };`,
+    expect: { cards: 5, first: true, onlyOneSynthesis: 1, branchesShown: true },
+  },
+  {
+    name: "parallel synthesis merges every branch draft into one answer",
+    body: `await __reset();
+      const el = await __workbench();
+      const calls = __stubAgent();
+      __mode(el, "parallel", 3);
+      el.querySelector(".awb-prompt").value = "Plan the spring harvest";
+      el.querySelector(".awb-run").click();
+      await __settle();
+      const merge = calls.find((c) => c.merge), drafts = calls.filter((c) => !c.merge);
+      const cards = [...el.querySelectorAll(".awb-output")];
+      return { total: calls.length, drafts: drafts.length,
+        distinctLenses: new Set(drafts.map((c) => c.content)).size,
+        sawEveryDraft: Boolean(merge) && drafts.every((c) => merge.content.includes("draft:" + c.id)),
+        keptTheTask: Boolean(merge) && merge.content.includes("Plan the spring harvest"),
+        synthesised: cards[0].textContent.includes("MERGED"),
+        branchesRendered: cards.slice(1).every((c) => c.textContent.startsWith("draft:")) };`,
+    expect: { total: 4, drafts: 3, distinctLenses: 3, sawEveryDraft: true,
+      keptTheTask: true, synthesised: true, branchesRendered: true },
+  },
+  {
+    name: "single and compare modes run without a synthesis pass",
+    body: `await __reset();
+      const el = await __workbench();
+      const runs = [];
+      for (const m of ["single", "compare"]) {
+        const calls = __stubAgent();
+        __mode(el, m);
+        el.querySelector(".awb-prompt").value = "Summarise the account";
+        el.querySelector(".awb-run").click();
+        await __settle();
+        runs.push({ agents: calls.length, merges: calls.filter((c) => c.merge).length,
+          cards: el.querySelectorAll(".awb-results article").length });
+      }
+      return { singleAgents: runs[0].agents, singleCards: runs[0].cards,
+        compareAgents: runs[1].agents, compareCards: runs[1].cards,
+        merges: runs[0].merges + runs[1].merges,
+        branchFieldHidden: el.querySelector(".awb-branch-field").classList.contains("hidden") };`,
+    expect: { singleAgents: 1, singleCards: 1, compareAgents: 2, compareCards: 2,
+      merges: 0, branchFieldHidden: true },
   },
 ];
 
