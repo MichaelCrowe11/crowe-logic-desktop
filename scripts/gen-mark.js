@@ -31,11 +31,17 @@ const path = require("path");
 const VIEW = 120;
 const CX = 60, CY = 60;
 const RING = 46;          // bounding hexagon; the tool-call ping rides this
-const HEART = 15.8;       // gold core circumradius
+const HEART = 15.0;       // gold core circumradius
 
 // Arms: radius in/out, width in/out. Blue arms start inside the core radius so
 // they tuck under it and read as emerging from behind, not butting against it.
-const BLUE = { r0: 9.0, r1: 40.0, w0: 8.8, w1: 3.1 };
+// w1 is the tip width and it wants to be nearly nothing: the polygon caps
+// square, so any real width there is a flat perpendicular cut, and twelve
+// scissor-cut filaments is the one detail that still read as manufactured at
+// icon size. Only the primary can afford this — every small variant eases the
+// taper back off (see `taper` below), which is what keeps the tips visible at
+// 16px instead of vanishing.
+const BLUE = { r0: 8.0, r1: 41.0, w0: 9.4, w1: 0.8 };
 
 // Degrees of clockwise drift a hypha accumulates root-to-tip. 22 was chosen
 // against 0/14/32 at five sizes on both grounds: 14 still whispers crystal,
@@ -46,7 +52,15 @@ const CURL = 22;
 // Each blue arm forks — branching is the one thing in this drawing that is
 // literally true of the subject. Branches spring from the parent's tangent,
 // so they inherit the curl instead of fighting it.
-const FORK = { at: 0.58, angle: 26, len: 0.44, w: 0.60 };
+//
+// The branch point is the whole difference between a mycelium and a bug. It sat
+// at 58% of the run, which put a joint in the middle of every arm: six limbs
+// with knees around a bright bulb, and the mark read as a tick at any size big
+// enough to see. Hyphae branch APICALLY — near the advancing tip, off a
+// filament that is already fine — so moving it to 82% both matches the organism
+// and removes the knee. The spore shrank with it, because a large bright centre
+// ringed by limbs is an abdomen no matter how the limbs are drawn.
+const FORK = { at: 0.78, angle: 32, len: 0.30, w: 0.5, side: 1 };
 
 // Mono-plus-spore palette. The hyphae are ink — the mark must survive in one
 // colour, Nike-style, or it isn't a mark — and gold appears in exactly one
@@ -56,6 +70,34 @@ const FORK = { at: 0.58, angle: 26, len: 0.44, w: 0.60 };
 // thought, not the letterhead. The key is still named `blue` because the
 // geometry contract (arms.blue) is shared with renderer/mark.js.
 const C = { blue: "#1a1714", gold: "#EFA71B" };
+
+// The tonal scale. Flat two-colour was the right call for a tray icon and the
+// wrong one for a 104px hero: six thin near-white arms around a flat mustard
+// hexagon read as a spider, not an organism. The scale fixes that without
+// inventing a second identity, because it runs along the axis the mark already
+// means — spore at the centre, hyphae growing outward. Colour is the growth.
+//
+// It is a single userSpaceOnUse RADIAL gradient centred on the spore, so all
+// six arms and both forks inherit it from their own distance out. One gradient,
+// no per-arm alignment, and the drawing stays polygons the animator can keep
+// treating identically.
+//
+// Anything that has to survive small stays flat: the tray, the mono cuts and
+// mark-simple pass no scale at all and are byte-for-byte what they always were.
+const SCALE = {
+  // On paper: gold root cooling to ink, so the tips land on the body text colour.
+  paper: { root: "#F5B01D", mid: "#A9702A", tip: "#241F19", core: "#FFC94A", coreEdge: "#D9911A" },
+  // On a dark ground the same ramp has to end light or the tips vanish, so it
+  // runs bronze -> bone. It used to start at #FFC247, which is the spore's own
+  // colour, and six arms 9.4 wide at the root fill about 60% of the circle at
+  // the core's radius — so the ramp painted a gold ring immediately around a
+  // gold hexagon and the two fused into one bright blob. The spore stopped
+  // being a spore and the mark read as a starfish. Starting the arms in deep
+  // bronze gives the core a dark collar to sit against, and it re-states the
+  // rule the palette is built on: gold appears in exactly one place, the
+  // inoculum. Still monotonic — dark at the root, pale at the tip.
+  dark: { root: "#7E5A2A", mid: "#A87F45", tip: "#F0EADC", core: "#FFD264", coreEdge: "#DA9A1E" },
+};
 
 // ── Geometry helpers ────────────────────────────────────────────────────────
 const P = Math.PI;
@@ -121,12 +163,15 @@ function arms(taper, fork) {
     const span = BLUE.r1 - BLUE.r0;
     const { p, dir } = along([CX, CY], deg, BLUE.r0, BLUE.r1, CURL, FORK.at);
     const bw = (BLUE.w0 + (tipW - BLUE.w0) * FORK.at) * FORK.w;
-    for (const side of [-1, 1]) {
-      blue.push({
-        deg: deg + side * FORK.angle,
-        pts: bent(p, dir + side * FORK.angle, 0, span * FORK.len, bw, tipW * 0.82, CURL * 0.9),
-      });
-    }
+    /* One branch, not two, and always on the same side. A symmetric pair at the
+       tip is a trident — six of them is a claw per arm, which is the creature
+       read the apical move was meant to end. Lateral branching is one-sided in
+       the organism too, and taking the curl's own side makes the whole mark
+       lean one way: the same chirality argument as CURL, now told twice. */
+    blue.push({
+      deg: deg + FORK.side * FORK.angle,
+      pts: bent(p, dir + FORK.side * FORK.angle, 0, span * FORK.len, bw, tipW * 0.82, CURL * 0.9),
+    });
   }
   // gold stays as an (empty) list so the animator's contract doesn't change:
   // gold is only the spore core now, drawn separately as the heart.
@@ -164,16 +209,37 @@ const INK_VIEWBOX = inkBox();
 
 // Draw order: blue hyphae first, then the gold core on top — the spore sits
 // over the roots of the arms so they read as emerging from behind it.
+// `scale` opts into the tonal ramp above. `id` prefixes the gradient ids, which
+// matters because the lockup and the icon tile inline this markup inside a
+// larger document - two marks on one page sharing an id would silently paint
+// the second one with the first one's stops.
 function markSvg(opts) {
-  const { taper = 1, pal = C, ring = false, fork = true } = opts || {};
+  const { taper = 1, pal = C, ring = false, fork = true, scale = null, id = "cl" } = opts || {};
   const A = arms(taper, fork);
+  const hy = scale ? `url(#${id}-hy)` : pal.blue;
+  const co = scale ? `url(#${id}-co)` : pal.gold;
+  // Radial, user-space, centred on the spore and reaching the arm tips: every
+  // arm is warm where it leaves the core and cool where it ends, from one def.
+  // The core's own gradient is offset up-left so the spore reads lit rather
+  // than printed.
+  const defs = scale ? `<defs>
+    <radialGradient id="${id}-hy" gradientUnits="userSpaceOnUse" cx="${CX}" cy="${CY}" r="${BLUE.r1}">
+      <stop offset="0.10" stop-color="${scale.root}"/>
+      <stop offset="0.42" stop-color="${scale.mid}"/>
+      <stop offset="1" stop-color="${scale.tip}"/>
+    </radialGradient>
+    <radialGradient id="${id}-co" gradientUnits="userSpaceOnUse" cx="${CX - HEART * 0.34}" cy="${CY - HEART * 0.38}" r="${HEART * 1.55}">
+      <stop offset="0" stop-color="${scale.core}"/>
+      <stop offset="1" stop-color="${scale.coreEdge}"/>
+    </radialGradient>
+  </defs>\n  ` : "";
   const rows = [
     ring ? `<polygon points="${hex(RING)}" fill="none" stroke="${pal.blue}" stroke-width="1.6" opacity="0.35"/>` : "",
-    ...A.blue.map((a) => `<polygon points="${a.pts}" fill="${pal.blue}"/>`),
-    ...A.gold.map((a) => `<polygon points="${a.pts}" fill="${pal.gold}"/>`),
-    `<polygon points="${hex(HEART)}" fill="${pal.gold}"/>`,
+    ...A.blue.map((a) => `<polygon points="${a.pts}" fill="${hy}"/>`),
+    ...A.gold.map((a) => `<polygon points="${a.pts}" fill="${co}"/>`),
+    `<polygon points="${hex(HEART)}" fill="${co}"/>`,
   ].filter(Boolean).join("\n  ");
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${INK_VIEWBOX}">\n  ${rows}\n</svg>\n`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${INK_VIEWBOX}">\n  ${defs}${rows}\n</svg>\n`;
 }
 
 // ── Emit ────────────────────────────────────────────────────────────────────
@@ -183,7 +249,7 @@ const A = (p) => path.join(__dirname, "..", "assets", p);
 // exists to prevent, one level up.
 const wrote = [];
 const emit = (name, body) => { fs.writeFileSync(A(name), body); wrote.push(name); };
-emit("mark.svg", markSvg());
+emit("mark.svg", markSvg({ scale: SCALE.paper, id: "m" }));
 // Simple: the small-size variant, and it has to actually be simple. It kept the
 // fork while claiming not to, which is why it read no better than the primary —
 // rendered at true 16px the branches broke into detached specks and the gold
@@ -201,7 +267,7 @@ emit("mark-simple-dark.svg", markSvg({ taper: 0, fork: false, pal: { blue: "#f5f
 // anything printed, engraved, or embroidered.
 emit("mark-mono.svg", markSvg({ pal: { blue: C.blue, gold: C.blue } }));
 // Dark-surface version: white hyphae, gold spore intact.
-emit("mark-dark.svg", markSvg({ pal: { blue: "#f5f2ea", gold: C.gold } }));
+emit("mark-dark.svg", markSvg({ scale: SCALE.dark, id: "md" }));
 emit("mark-mono-inverse.svg", markSvg({ pal: { blue: "#f5f2ea", gold: "#f5f2ea" } }));
 // Tray: near-parallel arms, no fork, solid black — a macOS template image
 // (main.js flags it) so the menu bar recolours it for light/dark itself.
@@ -213,8 +279,10 @@ emit("mark-tray-light.svg", markSvg({
   taper: 0.2, fork: false, pal: { blue: "#f5f2ea", gold: "#f5f2ea" },
 }));
 
-// App icon tile: dark graphite-navy rounded square (Big Sur grid), mark centred.
-// The blue lifts on the tile because #2E5AAD on near-black loses its edge.
+// App icon tile: warm graphite rounded square (Big Sur grid), mark centred.
+// It was graphite-navy, which put a cool blue tile under a warm gold mark and
+// made the gold look dirty; the tile is now the same warm charcoal the app's
+// dark theme uses, so icon and window agree.
 const TILE = 1024, GRID = 824, RAD = 186, INSET = (TILE - GRID) / 2;
 // The whorl's ink box is ~81x81 of the 120 canvas — narrower than the cube it
 // replaced, which spanned nearly edge to edge. Scale is set from the ink width,
@@ -224,7 +292,7 @@ const MS = 5.95, MW = VIEW * MS; // mark scale in the tile
 const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#182338"/><stop offset="0.55" stop-color="#101828"/><stop offset="1" stop-color="#0a0e18"/>
+      <stop offset="0" stop-color="#2b2620"/><stop offset="0.55" stop-color="#1a1713"/><stop offset="1" stop-color="#0e0c0a"/>
     </linearGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="rgba(255,255,255,0.14)"/><stop offset="0.2" stop-color="rgba(255,255,255,0.03)"/><stop offset="1" stop-color="rgba(255,255,255,0)"/>
@@ -233,7 +301,14 @@ const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${
   <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="url(#bg)"/>
   <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="url(#rim)" stroke-width="4"/>
   <g transform="translate(${(TILE - MW) / 2} ${(TILE - MW) / 2}) scale(${MS})">${
-  markSvg({ pal: { blue: "#EDE8DC", gold: "#F5B02F" } })
+  // Eased taper, not the full one. This single SVG is rasterised down to the
+  // 32px and 16px rungs of the .icns and .ico, and a tip that tapers to 0.8 of
+  // a 120 canvas is a fifth of a pixel there - the outer third of every
+  // filament washes into the tile and the mark measurably shrinks (see the
+  // "still reads at 32px" check in scripts/test-icons.js, which caught exactly
+  // this). The icon is a small variant at its bottom rungs and takes the same
+  // treatment the tray does; mark.svg and the lockups keep the fine tips.
+  markSvg({ taper: 0.62, scale: SCALE.dark, id: "ic" })
     .replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
 }</g>
 </svg>
@@ -244,11 +319,11 @@ emit("icon.svg", iconSvg);
 // the wordmark is the brand, the mark is its signature. The SVG references
 // the family by name (viewers without Fraunces fall back to Georgia); the
 // pixel-true renders come from make-icons.js, which loads the bundled woff2.
-function lockupSvg(ink, markPal) {
+function lockupSvg(ink, markOpts) {
   const H = 120, MK = 96, MX = 4, TX = MX + MK + 26;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 ${H}">
   <g transform="translate(${MX} ${(H - MK) / 2}) scale(${MK / VIEW})">${
-    markSvg({ pal: markPal }).replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
+    markSvg(markOpts).replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
   }</g>
   <text x="${TX}" y="${H / 2}" dominant-baseline="central" fill="${ink}"
     font-family="Fraunces, Georgia, serif" font-weight="600" font-size="52"
@@ -256,17 +331,41 @@ function lockupSvg(ink, markPal) {
 </svg>
 `;
 }
-emit("lockup.svg", lockupSvg("#1a1714", C));
-emit("lockup-dark.svg", lockupSvg("#f5f2ea", { blue: "#f5f2ea", gold: C.gold }));
+emit("lockup.svg", lockupSvg("#1a1714", { scale: SCALE.paper, id: "lp" }));
+emit("lockup-dark.svg", lockupSvg("#f5f2ea", { scale: SCALE.dark, id: "ld" }));
 
 // Geometry module for the living mark (renderer/mark.js). Arms carry their
 // angle so the animator can stagger them around the ring instead of pulsing
 // all twelve in lockstep.
 const geometry = {
   view: VIEW, cx: CX, cy: CY, r: RING,
+  // The same ink box every static cut uses. The live mark drew itself on the raw
+  // 120 canvas, which meant a third of every mounted pixel was the margin the
+  // static family had already trimmed: the 26px header mark was painting about
+  // 19px of artwork inside a 26px slot while assets/mark.svg at the same size
+  // painted 26. One box for both, and the live mark grows ~36% in place.
+  viewBox: INK_VIEWBOX,
   ring: hex(RING),
   heart: hex(HEART),
   arms: arms(1, true),
+  // The small cut, and the reason it exists: every *static* variant destined for
+  // a small slot eases the taper off (mark-simple and the tray at 0.2, the icon
+  // tile at 0.62) because a tip 0.8 wide on a 120 canvas is a fifth of a pixel
+  // down there and simply is not drawn. The live mark never got that treatment,
+  // so the 26px header and avatar mounts rendered six filaments that faded to
+  // nothing two-thirds of the way out — the arms read as scratches around the
+  // spore rather than as hyphae. 0.45 puts the tip at ~1.6px in a 26px slot:
+  // still visibly tapered, no longer a rounding error. Fork drops for the usual
+  // reason — a 0.9px branch stub is a blur that costs contrast for nothing.
+  armsSmall: arms(0.45, false),
+  // The gradient geometry, emitted rather than restated. renderer/mark.js had
+  // its own copies of these numbers and they had drifted: the live core ramp
+  // still used a radius sized for the larger spore, so the app's mark was lit
+  // differently from the icon it is supposed to be continuous with.
+  ramp: {
+    hy: { cx: CX, cy: CY, r: BLUE.r1 },
+    co: { cx: +(CX - HEART * 0.34).toFixed(2), cy: +(CY - HEART * 0.38).toFixed(2), r: +(HEART * 1.55).toFixed(2) },
+  },
   palette: { blue: C.blue, gold: C.gold, blueHot: "#4D9FE8", goldHot: "#F7C75A" },
 };
 fs.writeFileSync(path.join(__dirname, "..", "renderer", "mark-geometry.js"),

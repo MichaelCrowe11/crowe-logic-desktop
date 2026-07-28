@@ -17,8 +17,9 @@
 //   ping()     one-shot hexagonal ring on each tool call
 //
 // window.CroweMark:
-//   svg()                -> SVG markup string
-//   mount(el, {state})   -> { el, setState(s), ping(), rest() }
+//   svg({small})            -> SVG markup string
+//   mount(el, {state,small}) -> { el, setState(s), ping(), rest() }
+//   `small` selects the eased-taper cut for slots under ~40px.
 //   setState(el, state)  -> 'rest' | 'idle' | 'reasoning' | 'failed'
 //   ping(el)             -> one-shot tool ring
 //   start()/stop()/reseed() kept for API compatibility (no-ops: the corporate
@@ -27,18 +28,57 @@
   "use strict";
   const G = window.CROWE_MARK_GEOMETRY;
 
-  function svg() {
+  /* Instance counter for the gradient ids. Every mounted mark carries its own
+     <defs>, and two marks sharing an id would both resolve to whichever one the
+     document happens to hold first - which then breaks outright when that one is
+     removed (a message avatar scrolling out would drain the header mark). */
+  let seq = 0;
+
+  /* `small` picks the eased-taper, unforked cut of the same drawing. Every
+     static variant bound for a small slot already does this - the tray and
+     mark-simple at taper 0.2, the icon tile at 0.62 - because the primary's
+     tips are 0.8 wide on a 120 canvas and vanish below about 24px. The live
+     mark was the one surface that never got it, which is why the 26px header
+     and avatar mounts showed a gold spore ringed by fading scratches. Anything
+     40px and up (the agent panel head at 58, the welcome hero at 104) keeps the
+     fine geometry. */
+  function svg(opts) {
     if (!G) return "";
+    const small = !!(opts && opts.small);
+    const A = (small && G.armsSmall) || G.arms;
+    const R = G.ramp || { hy: { cx: G.cx, cy: G.cy, r: 41 }, co: { cx: G.cx - 5.1, cy: G.cy - 5.7, r: 23.25 } };
+    const id = "cm" + ++seq;
     // Stagger each arm by its angle so a state change sweeps around the mark
     // instead of snapping all twelve arms at once.
     const arm = (a, kind) =>
-      `<polygon class="cm-arm cm-${kind}" points="${a.pts}" style="animation-delay:${(a.deg / 360 * -1.8).toFixed(2)}s"/>`;
-    return `<svg class="cl-mk" viewBox="0 0 ${G.view} ${G.view}" aria-hidden="true">`
+      `<polygon class="cm-arm cm-${kind}" points="${a.pts}" fill="url(#${id}-${kind === "gold" ? "co" : "hy"})"` +
+      ` style="animation-delay:${(a.deg / 360 * -1.8).toFixed(2)}s"/>`;
+    /* The tonal scale, same construction as scripts/gen-mark.js: one
+       user-space radial centred on the spore, so each arm is warm at the root
+       and cool at the tip without any per-arm alignment. Stops read CSS
+       variables rather than literals so one drawing serves both themes - and so
+       the reasoning state can heat the ramp itself (see --cm-mid/--cm-tip in
+       styles.css) instead of flipping every arm to a flat colour. */
+    /* The ink box, not the raw 120 canvas. The generator trims the margin off
+       every static cut and the live mark used to skip that, so a mounted mark
+       ran about a third smaller than assets/mark.svg in the same box - the
+       single largest thing wrong with the 26px header mark. The ping ring is
+       authored outside this box on purpose and .cl-mk sets overflow: visible;
+       it already animates out to 2.4x regardless. */
+    return `<svg class="cl-mk" viewBox="${G.viewBox || `0 0 ${G.view} ${G.view}`}" aria-hidden="true">`
+      + `<defs>`
+      + `<radialGradient id="${id}-hy" gradientUnits="userSpaceOnUse" cx="${R.hy.cx}" cy="${R.hy.cy}" r="${R.hy.r}">`
+      + `<stop class="cm-s0" offset="0.10"/><stop class="cm-s1" offset="0.42"/><stop class="cm-s2" offset="1"/>`
+      + `</radialGradient>`
+      + `<radialGradient id="${id}-co" gradientUnits="userSpaceOnUse" cx="${R.co.cx}" cy="${R.co.cy}" r="${R.co.r}">`
+      + `<stop class="cm-c0" offset="0"/><stop class="cm-c1" offset="1"/>`
+      + `</radialGradient>`
+      + `</defs>`
       + `<polygon class="cm-ping" points="${G.ring}" fill="none" stroke-width="2"/>`
       + `<g class="cm-rotor"><g class="cm-breath">`
-      + G.arms.blue.map((a) => arm(a, "blue")).join("")
-      + G.arms.gold.map((a) => arm(a, "gold")).join("")
-      + `<polygon class="cm-heart" points="${G.heart}"/>`
+      + A.blue.map((a) => arm(a, "blue")).join("")
+      + A.gold.map((a) => arm(a, "gold")).join("")
+      + `<polygon class="cm-heart" points="${G.heart}" fill="url(#${id}-co)"/>`
       + `</g></g></svg>`;
   }
 
@@ -48,7 +88,7 @@
   function mount(el, opts) {
     opts = opts || {};
     el.classList.add("cl-mark");
-    el.innerHTML = svg();
+    el.innerHTML = svg(opts);
     setState(el, opts.state || "rest");
     return {
       el,
