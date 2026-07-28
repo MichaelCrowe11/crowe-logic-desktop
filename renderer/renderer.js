@@ -1053,13 +1053,34 @@ const SPACES = {
 // to drive a terminal. Chat is never optional — it is the thread every other
 // space funnels into — so it is added back regardless of what is stored.
 let PROFILE = new Set(Object.keys(SPACES));
+
+// What this install shows before anyone has touched the picker. Normally every
+// space; on a build packaged for a narrower job, whatever that build declared -
+// see installSpaces() in main.js.
+//
+// Read on every call rather than snapshotted into a const, so the default is a
+// question the code asks rather than a fact it captured at load. That is what
+// lets a test stand up a narrowed install without relaunching Electron.
+//
+// Filtered against SPACES here, at the one place that knows what a space is.
+// Main deliberately ships the configured names through unchecked, so a typo or
+// a space deleted in a later version lands here and is dropped, rather than
+// putting a dead id into PROFILE and hiding a rail button that has no owner.
+function defaultSpaceIds() {
+  const all = Object.keys(SPACES);
+  const declared = window.crowe && window.crowe.installSpaces;
+  if (!Array.isArray(declared) || !declared.length) return all;
+  const wanted = new Set(declared);
+  return all.filter((id) => id === "chat" || wanted.has(id));
+}
+
 function applySpaceProfile() {
   let ids = null;
   try {
     const raw = localStorage.getItem("crowe-spaces");
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed) && parsed.length) ids = parsed; }
   } catch {}
-  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(Object.keys(SPACES));
+  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(defaultSpaceIds());
   for (const [id, sp] of Object.entries(SPACES)) {
     const on = PROFILE.has(id);
     const btn = document.querySelector(`#spaces .seg-btn[data-space="${id}"]`);
@@ -1073,16 +1094,27 @@ function applySpaceProfile() {
 // Stored as the whole enabled list, chat included, so the value reads the same
 // as what the picker shows rather than as a diff you have to reconstruct.
 //
-// An install with every space on stores nothing at all. That matters for the
-// next version: a saved list is a closed set, so a space added later would be
-// absent from every existing install's list and silently never appear. Storing
-// only a deliberate narrowing means the default stays "everything", and only
-// someone who actually turned a space off keeps a list that can go stale.
+// A picker choice that matches the install default stores nothing at all. That
+// matters for the next version: a saved list is a closed set, so a space added
+// later would be absent from every existing install's list and silently never
+// appear. Storing only a deliberate divergence means an ordinary install's
+// default stays "everything", and only someone who actually changed it keeps a
+// list that can go stale.
+//
+// Compared against defaultSpaceIds() rather than the whole registry, which is
+// the part that breaks if you get it wrong. On a build shipping Chat and
+// Projects only, someone who ticks all four boxes has made a real choice - but
+// against "is this everything?" it looks like a reset, so nothing gets written,
+// and the next launch falls back to the build's two and silently discards what
+// they asked for. Measuring against the default makes both directions storable.
 function setSpaceProfile(ids) {
   const all = Object.keys(SPACES);
   const keep = all.filter((id) => id === "chat" || ids.includes(id));
+  // Both are built by filtering `all`, so they are in registry order and can be
+  // compared as strings rather than as sets.
+  const isDefault = keep.join() === defaultSpaceIds().join();
   try {
-    if (keep.length === all.length) localStorage.removeItem("crowe-spaces");
+    if (isDefault) localStorage.removeItem("crowe-spaces");
     else localStorage.setItem("crowe-spaces", JSON.stringify(keep));
   } catch {}
   applySpaceProfile();

@@ -1,7 +1,21 @@
 // Crowe Logic desktop — preload. Safe, explicit surface for the renderer.
 const { contextBridge, ipcRenderer } = require("electron");
 
+// The spaces this build ships with, or null for all of them. Handed over in
+// argv rather than fetched over IPC because the rail is wired before any
+// promise could settle, and a tab that appears and then vanishes looks broken -
+// see installSpaces() in main.js. A sandboxed preload has no fs and no
+// userData, but it does get process.argv.
+const SPACES_FLAG = "--crowe-spaces=";
+const INSTALL_SPACES = (() => {
+  const arg = (process.argv || []).find((a) => a.startsWith(SPACES_FLAG));
+  if (!arg) return null;
+  const ids = arg.slice(SPACES_FLAG.length).split(",").filter(Boolean);
+  return ids.length ? ids : null;
+})();
+
 contextBridge.exposeInMainWorld("crowe", {
+  installSpaces: INSTALL_SPACES,
   // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|final|error}.
   agent: {
     run: (messages, id = "main", options = {}) => ipcRenderer.invoke("crowe:agent:run", { messages, id, ...options }),

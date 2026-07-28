@@ -199,7 +199,39 @@ ipcMain.handle("crowe:files:read-context", (_e, filePaths) => (Array.isArray(fil
 let CWD = loadConfig().cwd || os.homedir();
 let mainWindow = null;
 
+/* Which spaces this install ships with.
+
+   The picker added in #12 lets someone narrow their own shell, but it writes to
+   renderer localStorage, so there was no way to hand anyone a Chat-and-Projects
+   install - every build shipped every space and the buyer had to go turn two
+   off. This is the missing half: a default the build carries.
+
+   It has to reach the renderer synchronously. applySpaceProfile() runs while the
+   rail is being wired, and anything asynchronous means painting four tabs and
+   then dropping two, which reads as a bug rather than as a build. A sandboxed
+   preload can open neither the filesystem nor userData, but it can read
+   process.argv - so the list rides in on additionalArguments.
+
+   Deliberately a default and not a lock: the picker still wins, and someone who
+   turns Cultivation back on keeps it. A hard lock is a different feature and
+   would need the picker to stop offering what it cannot grant.
+
+   No list of valid ids here on purpose. The registry lives in renderer.js and
+   duplicating it is how the two drift; the renderer already filters against its
+   own SPACES, so main passes the configured names through untouched. */
+function installSpaces() {
+  // The env var is for a one-off run or a CI check. The package.json key is for
+  // a build handed to a customer - electron-builder's extraMetadata sets it at
+  // package time without a patch to the source.
+  let raw = process.env.CROWE_SPACES;
+  if (raw == null) { try { raw = require("./package.json").croweSpaces; } catch {} }
+  if (raw == null) return null;
+  const ids = (Array.isArray(raw) ? raw : String(raw).split(",")).map((s) => String(s).trim()).filter(Boolean);
+  return ids.length ? ids : null;
+}
+
 function createWindow() {
+  const spaces = installSpaces();
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
     backgroundColor: "#f7f3ea", title: "Crowe Logic",
@@ -211,6 +243,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
       sandbox: true,
+      additionalArguments: spaces ? [`--crowe-spaces=${spaces.join(",")}`] : [],
     },
   });
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));

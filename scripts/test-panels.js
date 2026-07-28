@@ -88,9 +88,14 @@ const PRELUDE = `
   // run and quietly narrows PROFILE, so a space test asks for Cultivation and
   // silently gets Chat. That failed roughly one run in five and passed every
   // time it was run alone, which is the worst way for a test to be wrong.
+  //
+  // installSpaces is the same hazard one level up: a test that stands up a
+  // narrowed build and does not put it back leaves every later test running
+  // against an install missing two spaces, and they fail somewhere unrelated.
   window.__resetSpaces = () => {
     localStorage.removeItem("crowe-spaces");
     localStorage.removeItem("crowe-space");
+    window.crowe.installSpaces = null;
     applySpaceProfile();
     projLane = "home";
     cultLane = "home";
@@ -531,6 +536,61 @@ const tests = [
       __resetSpaces();
       return { stored, size };`,
     expect: { stored: null, size: 4 },
+  },
+  {
+    // The picker narrows an install someone already has. This is the other half:
+    // a build that arrives narrowed, so a terminal-driving install never shows a
+    // mushroom farm and a film studio to be turned off.
+    name: "a build can ship fewer spaces than it has",
+    body: `__resetSpaces();
+      window.crowe.installSpaces = ["projects"];
+      applySpaceProfile();
+      const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
+      const hidden = { chat: btn("chat"), projects: btn("projects"), studio: btn("studio"), cultivation: btn("cultivation") };
+      // Nothing is written: this is the build talking, not a choice anyone made,
+      // and storing it here would freeze the set against a later version.
+      const stored = localStorage.getItem("crowe-spaces");
+      __resetSpaces();
+      return { ...hidden, stored, restored: PROFILE.size };`,
+    expect: { chat: false, projects: false, studio: true, cultivation: true, stored: null, restored: 4 },
+  },
+  {
+    // The regression the install default introduces, and the reason
+    // setSpaceProfile compares against defaultSpaceIds() instead of the registry.
+    //
+    // On a build shipping Chat and Projects, ticking all four boxes is a real
+    // choice - but measured against "is this everything?" it reads as a reset,
+    // so the old rule stored nothing, and the next launch fell back to the
+    // build's two and threw the choice away. Silently: the tabs appear, and
+    // vanish again on restart.
+    name: "a build's default does not swallow turning a space back on",
+    body: `__resetSpaces();
+      window.crowe.installSpaces = ["projects"];
+      applySpaceProfile();
+      renderSpacePicker();
+      const box = $("cfg-spaces");
+      for (const id of ["studio", "cultivation"]) box.querySelector('input[data-space="' + id + '"]').click();
+      const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
+      // What the next launch does: re-read storage against the same build.
+      applySpaceProfile();
+      const afterRelaunch = PROFILE.size;
+      __resetSpaces();
+      return { stored, size, afterRelaunch };`,
+    expect: { stored: '["chat","projects","studio","cultivation"]', size: 4, afterRelaunch: 4 },
+  },
+  {
+    // main.js ships the configured names through without checking them, so that
+    // it needs no copy of the space list to drift from renderer.js. That makes
+    // this the place a typo or a space dropped in a later version has to land.
+    name: "a build naming a space that does not exist is ignored",
+    body: `__resetSpaces();
+      window.crowe.installSpaces = ["projects", "warehouse"];
+      applySpaceProfile();
+      const size = PROFILE.size, has = PROFILE.has("warehouse");
+      const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter((b) => !b.classList.contains("hidden")).length;
+      __resetSpaces();
+      return { size, has, rail };`,
+    expect: { size: 2, has: false, rail: 2 },
   },
   {
     name: "the picker cannot turn chat off",
