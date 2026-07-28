@@ -2196,7 +2196,9 @@ async function maybeShowOnboarding(cfg) {
   // Transcript avatars stay at rest on purpose: a hundred of them turning at
   // once is a busy page, and it would spend the reasoning state's signal. The
   // reduced-motion block in styles.css still stops all of it.
-  if (window.CroweMark) { CroweMark.mount($("mark"), { state: "idle", small: true }); mountWelcomeMark(); }
+  // No header mark to mount any more - the logotype carries the spore as the
+  // i's tittle, so the identity is in the word itself.
+  if (window.CroweMark) mountWelcomeMark();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
   setAutonomyBadge((c && c.autonomy) || "edit");
