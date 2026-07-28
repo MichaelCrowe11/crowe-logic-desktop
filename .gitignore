@@ -6,3 +6,4 @@ deploy/releases-worker/.wrangler/
 release-linux-*/
 *.tar.gz
 release/
+release-archive/
