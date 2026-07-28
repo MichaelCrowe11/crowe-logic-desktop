@@ -129,6 +129,32 @@
       ]; },
       async load() { return { messages: [] }; }, async new() { return { id: "x" }; }, async delete() { return { ok: true }; },
     },
+    // Cultivation records. In-memory rather than canned returns, so the preview
+    // exercises add and delete for real — the list is only half the surface.
+    grow: {
+      _db: {
+        blocks: [
+          { id: "b1", code: "260722-01", species: "Oyster", strain: "Blue PO", substrate: "Masters mix", count: "40", spawned: "2026-07-22", stage: "colonizing", notes: "Second run on the new sawdust supplier.", createdAt: Date.now() - 5 * 86400e3 },
+          { id: "b2", code: "260718-01", species: "Lion's mane", strain: "H. erinaceus CS", substrate: "Supplemented sawdust", count: "24", spawned: "2026-07-18", stage: "fruiting", createdAt: Date.now() - 9 * 86400e3 },
+        ],
+        flushes: [{ id: "f1", block: "260718-01", n: "1", date: "2026-07-26", weight: "18.4", grade: "A", notes: "Clean pins, tight clusters.", createdAt: Date.now() - 86400e3 }],
+        contam: [{ id: "c1", block: "260722-01", organism: "Trichoderma", stage: "grain spawn", date: "2026-07-25", action: "discarded", notes: "Two jars from the same PC load.", createdAt: Date.now() - 2 * 86400e3 }],
+        env: [{ id: "e1", room: "Fruiting A", date: "2026-07-27", temp: "64", rh: "88", co2: "780", fae: "4/hr", createdAt: Date.now() - 43200e3 }],
+        strains: [{ id: "s1", name: "Blue PO", species: "P. ostreatus", source: "in-house isolate", gen: "3", acquired: "2026-03-02", createdAt: Date.now() - 120 * 86400e3 }],
+        recipes: [{ id: "r1", name: "Masters mix", base: "Hardwood sawdust", supplement: "Soy hulls 1:1", hydration: "60", process: "Sterilize 2.5h @ 15psi", createdAt: Date.now() - 200 * 86400e3 }],
+        log: [{ id: "l1", date: "2026-07-27", subject: "Swapped the HEPA prefilter", entry: "Fruiting A prefilter was loading up faster than the schedule assumes.", createdAt: Date.now() - 86400e3 }],
+      },
+      async list(type) { return (this._db[type] || []).slice(); },
+      async save(type, record) {
+        if (!this._db[type]) return { ok: false, error: "unknown record type" };
+        const id = record.id || "p-" + Math.random().toString(36).slice(2, 8);
+        const i = this._db[type].findIndex((r) => r.id === id);
+        if (i >= 0) this._db[type][i] = { ...this._db[type][i], ...record };
+        else this._db[type].push({ ...record, id, createdAt: Date.now() });
+        return { ok: true, id };
+      },
+      async delete(type, id) { if (this._db[type]) this._db[type] = this._db[type].filter((r) => r.id !== id); return { ok: true }; },
+    },
     catalog: {
       async get() { return {
         models: DEMO_CATALOG,

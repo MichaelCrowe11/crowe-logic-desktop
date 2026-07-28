@@ -803,6 +803,57 @@ ipcMain.handle("crowe:sessions:load", (_e, id) => {
 ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); return { id: currentSession }; });
 ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {} if (currentSession === id) currentSession = null; return { ok: true }; });
 
+// ─── Cultivation records ─────────────────────────────────────────────────────
+/* The farm's own notebook, on disk beside the sessions. No gateway and no
+   network: a grow room loses its uplink at exactly the moment something is
+   going wrong in it, and a log you cannot write then is not a log. Crowe Sense
+   will sync into this store when it lands rather than replace it, so a row
+   reads the same whether it was typed or measured.
+
+   GROW_TYPES is an allowlist because `type` becomes a filename. A renderer the
+   attacker controls must not be able to steer that path out of userData. */
+const GROW_TYPES = new Set(["blocks", "flushes", "contam", "env", "strains", "recipes", "log"]);
+function growPath(type) {
+  if (!GROW_TYPES.has(type)) return null;
+  const d = path.join(app.getPath("userData"), "grow");
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return path.join(d, type + ".json");
+}
+function growRead(type) {
+  const p = growPath(type); if (!p) return [];
+  try { const v = JSON.parse(fs.readFileSync(p, "utf8")); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+ipcMain.handle("crowe:grow:list", (_e, { type } = {}) => growRead(String(type || "")));
+ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => {
+  const t = String(type || "");
+  if (!GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
+  const rows = growRead(t);
+  const rec = { ...(record || {}) };
+  const now = Date.now();
+  if (rec.id) {
+    const i = rows.findIndex((r) => r && r.id === rec.id);
+    if (i < 0) return { ok: false, error: "no such record" };
+    rows[i] = { ...rows[i], ...rec, updatedAt: now };
+  } else {
+    rec.id = "g-" + now.toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+    rec.createdAt = now; rec.updatedAt = now;
+    rows.push(rec);
+  }
+  // Surface a failed write instead of swallowing it: a log that silently drops
+  // the entry is worse than one that refuses it, because the grower walks away
+  // believing the record exists.
+  try { fs.writeFileSync(growPath(t), JSON.stringify(rows, null, 2)); }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+  return { ok: true, id: rec.id };
+});
+ipcMain.handle("crowe:grow:delete", (_e, { type, id } = {}) => {
+  const t = String(type || "");
+  if (!GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
+  try { fs.writeFileSync(growPath(t), JSON.stringify(growRead(t).filter((r) => r && r.id !== id), null, 2)); }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+  return { ok: true };
+});
+
 // ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
 function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }
 function setAutonomy(tier) { saveConfig({ autonomy: tier }); buildMenu(); relayMenu("autonomy:" + tier); }

@@ -951,6 +951,7 @@ const LANES = {
   deployments: { title: "Deployments", sub: "Every model the gateway serves, with its routing flags." },
   storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
 };
+let cultLane = "home";
 function setSpace(name) {
   document.body.dataset.space = name;
   document.querySelectorAll("#spaces .seg-btn").forEach((b) => {
@@ -961,13 +962,20 @@ function setSpace(name) {
   const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
   workbench.classList.toggle("hidden", !showWb);
   $("space-nav").classList.toggle("hidden", name !== "projects");
+  $("cult-nav").classList.toggle("hidden", name !== "cultivation");
   drawer.classList.toggle("hidden", name !== "chat");
   Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
   if (name === "projects" && !showWb) {
     if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
     else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
   } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
-  else if (name === "cultivation") SURFACES.cultivation.classList.remove("hidden");
+  else if (name === "cultivation") {
+    // Cultivation borrows the same lane surface Projects uses. Its records are
+    // the same kind of thing as the lanes over there — rows you scan, not a
+    // conversation — so they get the same list rather than a parallel one.
+    if (cultLane === "home") SURFACES.cultivation.classList.remove("hidden");
+    else { SURFACES.lane.classList.remove("hidden"); renderGrowLane(cultLane); }
+  }
   if (showWb) setTimeout(() => { clampWorkbenchSplit(); fitTerminals(); }, 30);
   try { localStorage.setItem("crowe-space", name); } catch {}
 }
@@ -976,6 +984,11 @@ document.querySelectorAll("#space-nav .sn-item").forEach((b) => b.addEventListen
   projLane = b.dataset.lane;
   document.querySelectorAll("#space-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
   setSpace("projects");
+}));
+document.querySelectorAll("#cult-nav .sn-item").forEach((b) => b.addEventListener("click", () => {
+  cultLane = b.dataset.cult;
+  document.querySelectorAll("#cult-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
+  setSpace("cultivation");
 }));
 
 function ago(ts) {
@@ -1047,6 +1060,207 @@ async function renderLane(lane) {
   } else {
     body.innerHTML = `<span class="pending">${esc(info.pending || "wire pending")}</span>`;
   }
+}
+
+// ── Cultivation records ──
+/* Grow records list the way the Projects lanes list, because they are the same
+   shape of thing: rows the operator scans for the one that is wrong. One table
+   describes each type — the fields it collects, and how a saved row reads back
+   as id / name / flags — and a single renderer builds both the add form and the
+   list from it. Adding a record type is data, not another surface. */
+const GROW = {
+  blocks: {
+    title: "Blocks", sub: "Every substrate block, spawn to spent.", plural: "blocks", date: "spawned",
+    fields: [
+      { k: "code", label: "Lot code" },
+      { k: "species", label: "Species" },
+      { k: "strain", label: "Strain" },
+      { k: "substrate", label: "Substrate" },
+      { k: "count", label: "Count", type: "number" },
+      { k: "spawned", label: "Spawned", type: "date" },
+      { k: "stage", label: "Stage", opts: ["spawned", "colonizing", "consolidating", "fruiting", "spent", "discarded"] },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    id: (r) => r.code, name: (r) => [r.species, r.strain, r.substrate].filter(Boolean).join(" · "),
+    flags: (r) => [r.stage, r.count ? r.count + "×" : "", growAge(r.spawned)],
+  },
+  flushes: {
+    title: "Flushes", sub: "Harvests, each one keyed to the block it came off.", plural: "flushes", date: "date",
+    fields: [
+      { k: "block", label: "Block lot", list: true },
+      { k: "n", label: "Flush #", type: "number" },
+      { k: "date", label: "Harvested", type: "date" },
+      { k: "weight", label: "Weight (lb)", type: "number" },
+      { k: "grade", label: "Grade", opts: ["A", "B", "cull"] },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    // Block lot plus flush number is how a harvest is identified downstream.
+    // Derived for display only — what the farm's lot format should be is a
+    // question for its traceability SOP, not for this list.
+    id: (r) => (r.block ? r.block + "-F" + (r.n || "?") : "F" + (r.n || "?")),
+    name: (r) => r.date || "", flags: (r) => [r.weight ? r.weight + " lb" : "", r.grade ? "grade " + r.grade : ""],
+  },
+  contam: {
+    title: "Contamination", sub: "What went wrong, where you caught it, what you did.", plural: "events", date: "date",
+    fields: [
+      { k: "block", label: "Block lot", list: true },
+      { k: "organism", label: "Organism", opts: ["Trichoderma", "Penicillium", "Aspergillus", "Neurospora", "bacterial / wet spot", "cobweb", "unknown"] },
+      { k: "stage", label: "Caught at", opts: ["grain spawn", "substrate", "colonizing", "fruiting", "post-harvest"] },
+      { k: "date", label: "Found", type: "date" },
+      { k: "action", label: "Action", opts: ["discarded", "isolated", "salvaged", "monitoring"] },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    id: (r) => r.block || "—", name: (r) => [r.organism, r.stage].filter(Boolean).join(" · "),
+    flags: (r) => [r.action, r.date],
+  },
+  env: {
+    title: "Environment", sub: "Room readings, entered by hand until Crowe Sense writes here too.", plural: "readings", date: "date",
+    fields: [
+      { k: "room", label: "Room" },
+      { k: "date", label: "Date", type: "date" },
+      { k: "temp", label: "Temp °F", type: "number" },
+      { k: "rh", label: "RH %", type: "number" },
+      { k: "co2", label: "CO₂ ppm", type: "number" },
+      { k: "fae", label: "FAE" },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    id: (r) => r.room || "room", name: (r) => r.date || "",
+    flags: (r) => [r.temp ? r.temp + "°F" : "", r.rh ? r.rh + "% RH" : "", r.co2 ? r.co2 + " ppm" : "", r.fae ? "FAE " + r.fae : ""],
+  },
+  strains: {
+    title: "Strains", sub: "The culture library — what you hold and where it came from.", plural: "strains", date: "acquired",
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "species", label: "Species" },
+      { k: "source", label: "Source" },
+      { k: "gen", label: "Generation", type: "number" },
+      { k: "acquired", label: "Acquired", type: "date" },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    id: (r) => r.name, name: (r) => [r.species, r.source].filter(Boolean).join(" · "),
+    flags: (r) => [r.gen ? "G" + r.gen : "", r.acquired],
+  },
+  recipes: {
+    title: "Recipes", sub: "Substrate formulations a block can point back at.", plural: "recipes", date: "",
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "base", label: "Base" },
+      { k: "supplement", label: "Supplement" },
+      { k: "hydration", label: "Hydration %", type: "number" },
+      { k: "process", label: "Sterilize / pasteurize" },
+      { k: "notes", label: "Notes", wide: true },
+    ],
+    id: (r) => r.name, name: (r) => [r.base, r.supplement].filter(Boolean).join(" + "),
+    flags: (r) => [r.hydration ? r.hydration + "%" : "", r.process],
+  },
+  log: {
+    title: "Grow log", sub: "The running journal — anything that does not fit a form.", plural: "entries", date: "date",
+    fields: [
+      { k: "date", label: "Date", type: "date" },
+      { k: "subject", label: "Subject" },
+      { k: "entry", label: "What happened", wide: true },
+    ],
+    id: (r) => r.date || "—", name: (r) => r.subject || "", flags: () => [], note: (r) => r.entry,
+  },
+};
+function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+// Parse as local midnight: bare "2026-07-28" is UTC, which reads a day off for
+// anyone west of Greenwich — including every US grow room.
+function growStamp(d) { const t = Date.parse(String(d) + "T00:00:00"); return Number.isNaN(t) ? NaN : t; }
+function growAge(d) { const t = growStamp(d); return Number.isNaN(t) ? "" : "day " + Math.max(0, Math.round((Date.now() - t) / 86400000)); }
+function growWhen(def, r) { const t = def.date ? growStamp(r[def.date]) : NaN; return Number.isNaN(t) ? (r.createdAt || 0) : t; }
+/* A date-stemmed serial so the lot field is never blank. It is a default, not a
+   scheme: the format a farm's lot codes must take comes from its traceability
+   SOP, so the field stays editable and the app does not claim otherwise. */
+function nextLot(rows) {
+  const stem = today().replace(/-/g, "").slice(2);
+  let n = 0;
+  for (const r of rows) { const m = /^(\d{6})-(\d+)$/.exec(String((r && r.code) || "")); if (m && m[1] === stem) n = Math.max(n, Number(m[2])); }
+  return stem + "-" + String(n + 1).padStart(2, "0");
+}
+function growForm(lane, def, rows, blocks) {
+  const f = document.createElement("form");
+  f.className = "grow-add"; f.autocomplete = "off";
+  // Fields the form answers for the grower. They must not count as evidence the
+  // grower answered anything, or the "did you actually type something" guard
+  // below passes on a form nobody touched.
+  const prefilled = new Set();
+  for (const fd of def.fields) {
+    let el;
+    if (fd.opts) {
+      el = document.createElement("select");
+      // Leading blank: a select that arrives pre-answered puts a guess on the
+      // record. "Trichoderma" is a diagnosis, not a default.
+      el.appendChild(new Option(fd.label, ""));
+      for (const o of fd.opts) el.appendChild(new Option(o, o));
+    } else {
+      el = document.createElement("input");
+      el.type = fd.type || "text";
+      el.placeholder = fd.label;
+      if (fd.type === "number") el.step = "any";
+      if (fd.type === "date") { el.value = today(); prefilled.add(fd.k); }
+      if (fd.wide) el.className = "wide";
+      if (fd.list) el.setAttribute("list", "grow-block-codes");
+    }
+    el.name = fd.k; el.title = fd.label; el.setAttribute("aria-label", fd.label);
+    f.appendChild(el);
+  }
+  if (lane === "blocks") { f.elements.code.value = nextLot(rows); prefilled.add("code"); }
+  if (def.fields.some((fd) => fd.list)) {
+    // Block lots the grower already has, so a flush attaches to a real block
+    // instead of a typo of one.
+    const dl = document.createElement("datalist"); dl.id = "grow-block-codes";
+    for (const code of new Set(blocks.map((b) => b && b.code).filter(Boolean))) dl.appendChild(new Option(code, code));
+    f.appendChild(dl);
+  }
+  const btn = document.createElement("button");
+  btn.type = "submit"; btn.className = "primary sm"; btn.textContent = "Add";
+  f.appendChild(btn);
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const rec = {};
+    for (const fd of def.fields) { const v = String(f.elements[fd.k].value || "").trim(); if (v) rec[fd.k] = v; }
+    // Today's date and the next lot serial arrive already filled in, so a row
+    // carrying only those is a stray Enter, not a record. Refuse it rather than
+    // log an empty day — and burn a lot number on it.
+    if (!def.fields.some((fd) => !prefilled.has(fd.k) && rec[fd.k])) { f.elements[def.fields[0].k].focus(); return; }
+    const res = await window.crowe.grow.save(lane, rec);
+    if (!res || !res.ok) { btn.textContent = "Failed — " + ((res && res.error) || "unknown"); return; }
+    if (cultLane === lane) renderGrowLane(lane);
+  });
+  return f;
+}
+async function renderGrowLane(lane) {
+  const gen = ++laneGen; // shared with renderLane: both own #lane-body
+  const def = GROW[lane]; if (!def) return;
+  $("lane-title").textContent = def.title; $("lane-sub").textContent = def.sub;
+  const body = $("lane-body"); body.innerHTML = "";
+  const [rows, blocks] = await Promise.all([
+    window.crowe.grow.list(lane),
+    def.fields.some((f) => f.list) ? window.crowe.grow.list("blocks") : Promise.resolve([]),
+  ]);
+  if (gen !== laneGen) return;
+  body.appendChild(growForm(lane, def, rows, blocks));
+  const list = document.createElement("div"); list.className = "grow-list";
+  const sorted = rows.slice().sort((a, b) => growWhen(def, b) - growWhen(def, a));
+  if (!sorted.length) list.innerHTML = `<div class="card-empty">No ${esc(def.plural)} yet — the first one goes in above.</div>`;
+  for (const r of sorted) {
+    const row = document.createElement("div"); row.className = "growrow";
+    const flags = (def.flags(r) || []).filter(Boolean);
+    const note = (def.note ? def.note(r) : r.notes) || "";
+    row.innerHTML =
+      `<div class="gr-main"><span class="gr-id">${esc(def.id(r) || "—")}</span>` +
+      `<span class="gr-name">${esc(def.name(r) || "")}</span>` +
+      `<span class="gr-flags">${flags.map((x) => `<em>${esc(x)}</em>`).join("")}</span>` +
+      `<button class="gr-del" title="Delete">Delete</button></div>` +
+      (note ? `<div class="gr-note">${esc(note)}</div>` : "");
+    row.querySelector(".gr-del").addEventListener("click", async () => {
+      await window.crowe.grow.delete(lane, r.id);
+      if (cultLane === lane) renderGrowLane(lane);
+    });
+    list.appendChild(row);
+  }
+  body.appendChild(list);
 }
 $("home-composer").addEventListener("submit", (e) => {
   e.preventDefault();

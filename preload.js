@@ -58,6 +58,13 @@ contextBridge.exposeInMainWorld("crowe", {
     new: () => ipcRenderer.invoke("crowe:sessions:new"),
     delete: (id) => ipcRenderer.invoke("crowe:sessions:delete", id),
   },
+  // Cultivation records — blocks, flushes, contamination, environment, strains,
+  // recipes, grow log. Persisted on disk in the main process, like sessions.
+  grow: {
+    list: (type) => ipcRenderer.invoke("crowe:grow:list", { type }),
+    save: (type, record) => ipcRenderer.invoke("crowe:grow:save", { type, record }),
+    delete: (type, id) => ipcRenderer.invoke("crowe:grow:delete", { type, id }),
+  },
   onBrowserNavigate: (cb) => { const h = (_e, url) => cb(url); ipcRenderer.on("crowe:browser:navigate", h); return () => ipcRenderer.removeListener("crowe:browser:navigate", h); },
   // Native menu / tray / global-shortcut actions: new-chat, palette, focus-composer, toggle-theme, pane:term|browser|files.
   onMenuAction: (cb) => { const h = (_e, a) => cb(a); ipcRenderer.on("crowe:menu", h); return () => ipcRenderer.removeListener("crowe:menu", h); },

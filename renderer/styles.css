@@ -671,6 +671,31 @@ body.dark .mrow .m-id { color: var(--gold); }
 .mrow .m-flags { margin-left: auto; display: flex; gap: 5px; }
 .mrow .m-flags em { font-style: normal; font-size: var(--fs-cap); color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 7px; }
+/* ── Cultivation records: the Projects lane row, with a note line under it ── */
+.grow-add { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 0 0 18px; padding: 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--z2); }
+.grow-add input, .grow-add select { flex: 1 1 128px; min-width: 0; font-family: var(--body); font-size: var(--fs-sm);
+  color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px 9px;
+  transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
+.grow-add input.wide { flex: 2 1 250px; }
+.grow-add input:focus, .grow-add select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.grow-add input::placeholder { color: var(--muted); opacity: .72; }
+.grow-add button { flex: 0 0 auto; }
+.grow-list { display: flex; flex-direction: column; }
+.growrow { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+.growrow:last-child { border-bottom: none; }
+.gr-main { display: flex; align-items: baseline; gap: 12px; font-family: var(--mono); font-size: var(--fs-sm); }
+.gr-id { color: var(--gold-deep); flex: 0 0 auto; }
+body.dark .gr-id { color: var(--gold); }
+.gr-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-flags { margin-left: auto; display: flex; gap: 5px; flex: 0 0 auto; }
+.gr-flags em { font-style: normal; font-size: var(--fs-cap); color: var(--muted);
+  border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 7px; }
+.gr-del { flex: 0 0 auto; opacity: 0; background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: var(--r-sm); padding: 1px 7px; font-size: var(--fs-cap); cursor: pointer; }
+.growrow:hover .gr-del, .gr-del:focus-visible { opacity: 1; }
+.gr-del:hover { color: var(--diff-del-fg); border-color: var(--err-fg); }
+.gr-note { font-family: var(--body); font-size: var(--fs-sm); color: var(--muted); line-height: 1.5; margin-top: 3px; }
 .surface-status { display: flex; align-items: center; gap: 16px; margin-top: 24px; padding-top: 10px;
   border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
 .surface-status .spacer { flex: 1; }
