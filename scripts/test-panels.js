@@ -524,6 +524,61 @@ const tests = [
     expect: { shared: true, cult: true, proj: false },
   },
   {
+    // The watermark is a float, because position:sticky has to be in the flow to
+    // stick to anything. A float also shortens the line boxes beside it, and for
+    // a while this one silently reset Cultivation's subtitle from two lines to
+    // three - a watermark quietly editing the typography of the page it sits
+    // behind. The test above passes either way: it only asks whether a mask is
+    // present, which is exactly the blind spot that let this ship.
+    name: "the cultivation watermark does not reflow the text it sits behind",
+    body: `__resetSpaces(); setSpace("cultivation"); await __settle();
+      const p = [...document.querySelectorAll(".sh-sub")].find((e) => e.offsetParent);
+      const kill = document.createElement("style");
+      document.head.appendChild(kill);
+      const h = () => Math.round(p.getBoundingClientRect().height);
+      const withMark = h();
+      kill.textContent = 'body[data-space="cultivation"] .surface::before{display:none !important}';
+      const without = h();
+      kill.remove();
+      // And it must not hang off the right edge: the badge is a closed drawing,
+      // so a cropped one reads as a mistake rather than as a watermark.
+      const s = [...document.querySelectorAll(".surface")].find((x) => !x.classList.contains("hidden"));
+      const box = getComputedStyle(s, "::before");
+      const overhang = parseFloat(box.marginRight) < 0;
+      __resetSpaces();
+      return { reflowed: withMark !== without, overhang };`,
+    expect: { reflowed: false, overhang: false },
+  },
+  {
+    // The mask shipped for months as an un-normalised edge-detect: nothing in it
+    // exceeded alpha 153, most of the ink sat under 64, and against a .18 opacity
+    // that put roughly 5% ink on screen. It was present, correctly scoped, and
+    // invisible - so every assertion we had was green. Measure the file instead:
+    // presence is meant to be set by the opacity here, which is only true if the
+    // trace underneath it reaches full strength.
+    name: "the cultivation mask is inked strongly enough to see",
+    body: `const img = new Image();
+      img.src = "../assets/cultivation-backdrop.png";
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext("2d").drawImage(img, 0, 0);
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let max = 0, sum = 0, n = 0, edge = 0;
+      const w = c.width, hh = c.height;
+      for (let i = 3, px = 0; i < d.length; i += 4, px++) {
+        const a = d[i];
+        if (a > max) max = a;
+        if (a > 8) {
+          sum += a; n++;
+          const x = px % w, y = (px / w) | 0;
+          if (x === 0 || y === 0 || x === w - 1 || y === hh - 1) edge++;
+        }
+      }
+      return { peaks: max === 255, meanInk: Math.round(sum / n) >= 100, touchesEdge: edge > 0 };`,
+    expect: { peaks: true, meanInk: true, touchesEdge: false },
+  },
+  {
     name: "a profile hides the spaces it leaves out",
     body: `__resetSpaces();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
