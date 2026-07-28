@@ -969,45 +969,106 @@ const LANES = {
   storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
 };
 let cultLane = "home";
+
+// Each space is a descriptor rather than another arm of an if/else. setSpace had
+// grown one branch per space, and adding one meant editing four places that all
+// had to agree: the workbench predicate, both nav toggles, and the surface
+// switch. Forget one and you get a nav bar stuck open over the wrong space.
+// A descriptor keeps a space's answers to those questions in one object, which
+// also makes "which spaces does this install have" a data question — see PROFILE.
+//
+//   workbench()  true when this space wants the terminal workbench instead of a surface
+//   open()       reveal this space's surface (skipped entirely when workbench() wins)
+//   nav          id of the lane rail that belongs to this space, if it has one
+//   laneAttr     the data-* key its rail items carry
+//   lane(v)      read the current lane with no argument, set it with one
+const SPACES = {
+  chat: {
+    label: "Chat",
+    drawer: true,
+    workbench: () => true,
+  },
+  projects: {
+    label: "Projects",
+    nav: "space-nav", laneAttr: "lane",
+    lane: (v) => (v === undefined ? projLane : (projLane = v)),
+    // Deep work is the one lane that wants the workbench rather than a surface.
+    workbench: () => projLane === "deepwork",
+    open() {
+      if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
+      else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
+    },
+  },
+  studio: {
+    label: "Studio",
+    open() { SURFACES.studio.classList.remove("hidden"); },
+  },
+  cultivation: {
+    label: "Cultivation",
+    nav: "cult-nav", laneAttr: "cult",
+    lane: (v) => (v === undefined ? cultLane : (cultLane = v)),
+    // Cultivation borrows the same lane surface Projects uses. Its records are
+    // the same kind of thing as the lanes over there — rows you scan, not a
+    // conversation — so they get the same list rather than a parallel one.
+    open() {
+      if (cultLane === "home") { SURFACES.cultivation.classList.remove("hidden"); refreshCult(); }
+      else if (cultLane === "trace") { SURFACES.lane.classList.remove("hidden"); renderTrace(); }
+      else { SURFACES.lane.classList.remove("hidden"); renderGrowLane(cultLane); }
+    },
+  },
+};
+
+// Which spaces this install shows. Cultivation is a mushroom farm's surface and
+// Studio is a film and music one; neither earns its tab on a machine installed
+// to drive a terminal. Chat is never optional — it is the thread every other
+// space funnels into — so it is added back regardless of what is stored.
+let PROFILE = new Set(Object.keys(SPACES));
+function applySpaceProfile() {
+  let ids = null;
+  try {
+    const raw = localStorage.getItem("crowe-spaces");
+    if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed) && parsed.length) ids = parsed; }
+  } catch {}
+  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(Object.keys(SPACES));
+  for (const [id, sp] of Object.entries(SPACES)) {
+    const on = PROFILE.has(id);
+    const btn = document.querySelector(`#spaces .seg-btn[data-space="${id}"]`);
+    if (btn) btn.classList.toggle("hidden", !on);
+    if (sp.nav && !on) $(sp.nav).classList.add("hidden");
+  }
+  const cur = document.body.dataset.space;
+  if (cur && !PROFILE.has(cur)) setSpace("chat");
+}
+
 function setSpace(name) {
+  // A space that was dropped from the profile can still be reached from restored
+  // state or the palette, so fall back rather than render a half-hidden shell.
+  if (!SPACES[name] || !PROFILE.has(name)) name = "chat";
+  const space = SPACES[name];
   document.body.dataset.space = name;
   document.querySelectorAll("#spaces .seg-btn").forEach((b) => {
     const on = b.dataset.space === name;
     b.classList.toggle("active", on);
     if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
   });
-  const showWb = name === "chat" || (name === "projects" && projLane === "deepwork");
+  const showWb = !!(space.workbench && space.workbench());
   workbench.classList.toggle("hidden", !showWb);
-  $("space-nav").classList.toggle("hidden", name !== "projects");
-  $("cult-nav").classList.toggle("hidden", name !== "cultivation");
-  drawer.classList.toggle("hidden", name !== "chat");
+  for (const [id, sp] of Object.entries(SPACES)) if (sp.nav) $(sp.nav).classList.toggle("hidden", id !== name);
+  drawer.classList.toggle("hidden", !space.drawer);
   Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
-  if (name === "projects" && !showWb) {
-    if (projLane === "home") { SURFACES.home.classList.remove("hidden"); refreshHome(); }
-    else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
-  } else if (name === "studio") SURFACES.studio.classList.remove("hidden");
-  else if (name === "cultivation") {
-    // Cultivation borrows the same lane surface Projects uses. Its records are
-    // the same kind of thing as the lanes over there — rows you scan, not a
-    // conversation — so they get the same list rather than a parallel one.
-    if (cultLane === "home") { SURFACES.cultivation.classList.remove("hidden"); refreshCult(); }
-    else if (cultLane === "trace") { SURFACES.lane.classList.remove("hidden"); renderTrace(); }
-    else { SURFACES.lane.classList.remove("hidden"); renderGrowLane(cultLane); }
-  }
+  if (!showWb && space.open) space.open();
   if (showWb) setTimeout(() => { clampWorkbenchSplit(); fitTerminals(); }, 30);
   try { localStorage.setItem("crowe-space", name); } catch {}
 }
 document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
-document.querySelectorAll("#space-nav .sn-item").forEach((b) => b.addEventListener("click", () => {
-  projLane = b.dataset.lane;
-  document.querySelectorAll("#space-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
-  setSpace("projects");
-}));
-document.querySelectorAll("#cult-nav .sn-item").forEach((b) => b.addEventListener("click", () => {
-  cultLane = b.dataset.cult;
-  document.querySelectorAll("#cult-nav .sn-item").forEach((x) => x.classList.toggle("active", x === b));
-  setSpace("cultivation");
-}));
+for (const [id, space] of Object.entries(SPACES)) {
+  if (!space.nav) continue;
+  document.querySelectorAll(`#${space.nav} .sn-item`).forEach((b) => b.addEventListener("click", () => {
+    space.lane(b.dataset[space.laneAttr]);
+    document.querySelectorAll(`#${space.nav} .sn-item`).forEach((x) => x.classList.toggle("active", x === b));
+    setSpace(id);
+  }));
+}
 
 function ago(ts) {
   if (!ts) return "never";
@@ -1928,10 +1989,9 @@ setInterval(statusTick, 30000);
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
   { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
-  { label: "Space: Chat", run: () => setSpace("chat") },
-  { label: "Space: Projects", run: () => setSpace("projects") },
-  { label: "Space: Studio", run: () => setSpace("studio") },
-  { label: "Space: Cultivation", run: () => setSpace("cultivation") },
+  // Generated from the space registry so a space dropped from the profile does
+  // not survive here as a back door into a shell whose nav is hidden.
+  ...Object.entries(SPACES).map(([id, s]) => ({ label: `Space: ${s.label}`, space: id, run: () => setSpace(id) })),
   { label: "Sessions", run: () => { setSpace("chat"); renderSessions(); } },
   { label: "Terminal", run: () => { setSpace("chat"); switchPane("term"); } },
   { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
@@ -1957,7 +2017,7 @@ function openPalette() { palette.classList.remove("hidden"); palInput.value = ""
 function closePalette() { palette.classList.add("hidden"); }
 function renderPal(q) {
   palList.innerHTML = "";
-  PAL_ACTIONS.filter((a) => a.label.toLowerCase().includes(q.toLowerCase())).forEach((a, i) => {
+  PAL_ACTIONS.filter((a) => (!a.space || PROFILE.has(a.space)) && a.label.toLowerCase().includes(q.toLowerCase())).forEach((a, i) => {
     const d = document.createElement("div"); d.className = "pal-row" + (i === 0 ? " sel" : ""); d.textContent = a.label;
     d.addEventListener("click", () => { closePalette(); a.run(); });
     palList.appendChild(d);
@@ -2062,6 +2122,7 @@ async function maybeShowOnboarding(cfg) {
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
   await maybeShowOnboarding(c);
+  applySpaceProfile();
   try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
   statusTick();
   await restorePanels();
