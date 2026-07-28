@@ -17,7 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/check-contrast.js && node scripts/test-releases-worker.js && electron scripts/test-icons.js && electron scripts/test-panels.js",
+    "test": "node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/test-releases-worker.js && electron scripts/test-icons.js && electron scripts/test-panels.js",
     "check:contrast": "node scripts/check-contrast.js",
     "preview:gen": "node scripts/gen-preview.js",
     "preview:check": "node scripts/gen-preview.js --check",
