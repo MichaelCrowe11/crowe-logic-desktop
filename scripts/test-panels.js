@@ -80,6 +80,22 @@ const PRELUDE = `
     return calls;
   };
   window.__settle = () => new Promise((r) => setTimeout(r, 400));
+
+  // The space profile lives in localStorage, which survives the process. A run
+  // that sets a profile and removes it again can still leave it on disk, because
+  // Chromium flushes localStorage lazily and the harness calls app.exit as soon
+  // as the last test reports. The leftover then reappears at init on the next
+  // run and quietly narrows PROFILE, so a space test asks for Cultivation and
+  // silently gets Chat. That failed roughly one run in five and passed every
+  // time it was run alone, which is the worst way for a test to be wrong.
+  window.__resetSpaces = () => {
+    localStorage.removeItem("crowe-spaces");
+    localStorage.removeItem("crowe-space");
+    applySpaceProfile();
+    projLane = "home";
+    cultLane = "home";
+    setSpace("chat");
+  };
   true;
 `;
 
@@ -408,8 +424,20 @@ const tests = [
   // workbench. These assert the shell is coherent for every space, not just
   // that setSpace ran.
   {
+    // Deliberately leaves crowe-spaces behind. Without __resetSpaces the next
+    // test asks for Cultivation, silently gets Chat, and fails - which is
+    // exactly how this leaked between runs before anyone noticed.
+    name: "a leaked space profile cannot poison the next test",
+    body: `__resetSpaces();
+      localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
+      applySpaceProfile();
+      return { size: PROFILE.size, cultHidden: document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden") };`,
+    expect: { size: 2, cultHidden: true },
+  },
+  {
     name: "each space shows its own nav rail and no other",
-    body: `const rails = {};
+    body: `__resetSpaces();
+      const rails = {};
       for (const id of Object.keys(SPACES)) {
         setSpace(id);
         rails[id] = Object.values(SPACES).filter((s) => s.nav && !$(s.nav).classList.contains("hidden")).length;
@@ -423,7 +451,8 @@ const tests = [
   },
   {
     name: "a space shows either the workbench or a surface, never both",
-    body: `const both = [], neither = [];
+    body: `__resetSpaces();
+      const both = [], neither = [];
       for (const id of Object.keys(SPACES)) {
         setSpace(id);
         const wb = !workbench.classList.contains("hidden");
@@ -437,7 +466,8 @@ const tests = [
   },
   {
     name: "the deep work lane hands Projects the workbench",
-    body: `projLane = "deepwork"; setSpace("projects");
+    body: `__resetSpaces();
+      projLane = "deepwork"; setSpace("projects");
       const wb = !workbench.classList.contains("hidden");
       projLane = "home"; setSpace("projects");
       const surf = !SURFACES.home.classList.contains("hidden");
@@ -447,7 +477,8 @@ const tests = [
   },
   {
     name: "a profile hides the spaces it leaves out",
-    body: `localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
+    body: `__resetSpaces();
+      localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
       applySpaceProfile();
       const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
       const pal = () => { renderPal("Space:"); return [...palList.querySelectorAll(".pal-row")].map((r) => r.textContent).join("|"); };
