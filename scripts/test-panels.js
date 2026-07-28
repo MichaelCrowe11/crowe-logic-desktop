@@ -402,6 +402,67 @@ const tests = [
     expect: { singleAgents: 1, singleCards: 1, compareAgents: 2, compareCards: 2,
       merges: 0, branchFieldHidden: true },
   },
+
+  // Spaces. The registry replaced an if/else whose branches could disagree —
+  // a nav rail left open over the wrong space, a surface showing under the
+  // workbench. These assert the shell is coherent for every space, not just
+  // that setSpace ran.
+  {
+    name: "each space shows its own nav rail and no other",
+    body: `const rails = {};
+      for (const id of Object.keys(SPACES)) {
+        setSpace(id);
+        rails[id] = Object.values(SPACES).filter((s) => s.nav && !$(s.nav).classList.contains("hidden")).length;
+      }
+      setSpace("projects");
+      const own = !$("space-nav").classList.contains("hidden") && $("cult-nav").classList.contains("hidden");
+      setSpace("chat");
+      return { chat: rails.chat, projects: rails.projects, studio: rails.studio,
+        cultivation: rails.cultivation, own };`,
+    expect: { chat: 0, projects: 1, studio: 0, cultivation: 1, own: true },
+  },
+  {
+    name: "a space shows either the workbench or a surface, never both",
+    body: `const both = [], neither = [];
+      for (const id of Object.keys(SPACES)) {
+        setSpace(id);
+        const wb = !workbench.classList.contains("hidden");
+        const surf = Object.values(SURFACES).some((s) => !s.classList.contains("hidden"));
+        if (wb && surf) both.push(id);
+        if (!wb && !surf) neither.push(id);
+      }
+      setSpace("chat");
+      return { both: both.join(","), neither: neither.join(",") };`,
+    expect: { both: "", neither: "" },
+  },
+  {
+    name: "the deep work lane hands Projects the workbench",
+    body: `projLane = "deepwork"; setSpace("projects");
+      const wb = !workbench.classList.contains("hidden");
+      projLane = "home"; setSpace("projects");
+      const surf = !SURFACES.home.classList.contains("hidden");
+      setSpace("chat");
+      return { wb, surf };`,
+    expect: { wb: true, surf: true },
+  },
+  {
+    name: "a profile hides the spaces it leaves out",
+    body: `localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
+      applySpaceProfile();
+      const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
+      const pal = () => { renderPal("Space:"); return [...palList.querySelectorAll(".pal-row")].map((r) => r.textContent).join("|"); };
+      const hidden = { chat: btn("chat"), projects: btn("projects"), studio: btn("studio"), cultivation: btn("cultivation") };
+      const entries = pal();
+      // A space outside the profile is still reachable by name; it must not open.
+      setSpace("cultivation");
+      const landed = document.body.dataset.space;
+      localStorage.removeItem("crowe-spaces");
+      applySpaceProfile();
+      setSpace("chat");
+      return { ...hidden, entries, landed, restored: PROFILE.size };`,
+    expect: { chat: false, projects: false, studio: true, cultivation: true,
+      entries: "Space: Chat|Space: Projects", landed: "chat", restored: 4 },
+  },
 ];
 
 function compare(actual, expected) {
