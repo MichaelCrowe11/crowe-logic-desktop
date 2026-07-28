@@ -315,24 +315,60 @@ const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${
 `;
 emit("icon.svg", iconSvg);
 
-// Horizontal lockup: mark + "Crowe Logic" in Fraunces, single ink colour —
-// the wordmark is the brand, the mark is its signature. The SVG references
-// the family by name (viewers without Fraunces fall back to Georgia); the
-// pixel-true renders come from make-icons.js, which loads the bundled woff2.
+// The wordmark is outlines, not <text>. It used to be a <text> element naming
+// the family, which meant assets/lockup.svg — the logo — rendered in Georgia on
+// every machine without Fraunces installed: GitHub, npm, print, anyone opening
+// the file on its own. Only make-icons.js ever saw the real letters, because it
+// loads the bundled woff2 before rasterising. Outlines have no such dependency.
+// Regenerate with `python3 scripts/gen-wordmark.py` (see that file for why the
+// artefact is committed rather than built).
+const WM = require("./wordmark-data.js");
+
+// Strips the wrapper so a mark can be inlined into a larger document.
+const markInner = (opts) =>
+  markSvg(opts).replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
+
+// The ink box is centred on (CX, CY) by construction, so a mark is placed by
+// moving that centre to the target and scaling the box to the wanted size.
+const [IBX, IBY, IBW, IBH] = INK_VIEWBOX.split(/\s+/).map(Number);
+const placeMark = (cx, cy, size, opts) =>
+  `<g transform="translate(${cx} ${cy}) scale(${(size / IBW).toFixed(5)}) ` +
+  `translate(${-(IBX + IBW / 2)} ${-(IBY + IBH / 2)})">${markInner(opts)}</g>`;
+
+// Horizontal lockup: mark + words, single ink colour. Keeps the i's own dot —
+// the spore is already present at full size on the left, and printing it twice
+// would break the rule the palette runs on, that gold appears in exactly one
+// place.
 function lockupSvg(ink, markOpts) {
-  const H = 120, MK = 96, MX = 4, TX = MX + MK + 26;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 ${H}">
-  <g transform="translate(${MX} ${(H - MK) / 2}) scale(${MK / VIEW})">${
-    markSvg(markOpts).replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
-  }</g>
-  <text x="${TX}" y="${H / 2}" dominant-baseline="central" fill="${ink}"
-    font-family="Fraunces, Georgia, serif" font-weight="600" font-size="52"
-    letter-spacing="0.2">Crowe Logic</text>
+  const H = 120, MK = 96, MX = 4, GAP = 26;
+  const s = 52 / WM.size;                       // wordmark drawn at 52px em
+  const TX = MX + MK * (IBW / VIEW) + GAP;      // gap measured from painted ink
+  const baseline = H / 2 + (WM.capHeight * s) / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${Math.ceil(TX + WM.width * s + MX)} ${H}">
+  ${placeMark(MX + (MK * (IBW / VIEW)) / 2, H / 2, MK * (IBW / VIEW), markOpts)}
+  <g transform="translate(${TX} ${baseline.toFixed(2)}) scale(${s})"><path d="${WM.d}" fill="${ink}"/></g>
 </svg>
 `;
 }
 emit("lockup.svg", lockupSvg("#1a1714", { scale: SCALE.paper, id: "lp" }));
 emit("lockup-dark.svg", lockupSvg("#f5f2ea", { scale: SCALE.dark, id: "ld" }));
+
+// Logotype: the words alone, with the spore standing in for the tittle of the
+// "i". This is the cut that has to work as a logo — one lockup, no separate
+// mark to lose — so the dot is removed from the outline rather than covered.
+const SPORE = 46;   // ink width of the spore, in wordmark em units
+function wordmarkSvg(ink, markOpts) {
+  const t = WM.tittle;
+  const top = Math.min(t.cy - SPORE / 2, -WM.capHeight) - 5;
+  const bottom = -WM.descent + 5;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-5} ${top.toFixed(2)} ${(WM.width + 10).toFixed(2)} ${(bottom - top).toFixed(2)}">
+  <path d="${WM.dDotless}" fill="${ink}"/>
+  ${placeMark(t.cx, t.cy, SPORE, markOpts)}
+</svg>
+`;
+}
+emit("wordmark.svg", wordmarkSvg("#1a1714", { scale: SCALE.paper, id: "wm" }));
+emit("wordmark-dark.svg", wordmarkSvg("#f5f2ea", { scale: SCALE.dark, id: "wd" }));
 
 // Geometry module for the living mark (renderer/mark.js). Arms carry their
 // angle so the animator can stagger them around the ring instead of pulsing
