@@ -753,15 +753,36 @@ button.ghost.sm { padding: 3px 10px; font-size: var(--fs-cap); }
 
    It is a mask, not an image. The source is a flat teal cartoon whose palette
    exists nowhere in this app, so it is carried as contours only and the colour
-   comes from a token here - which is also what lets one 14 KB file serve both
-   themes, gold-on-cream and gold-on-graphite, the same way one mark.svg serves
-   every icon slot. Painting the artwork itself would have meant two files and a
-   teal that fights every other pixel on screen.
+   comes from a token here - which is also what lets one file serve both themes,
+   gold-on-cream and gold-on-graphite, the same way one mark.svg serves every
+   icon slot. Painting the artwork itself would have meant two files and a teal
+   that fights every other pixel on screen.
+
+   The mask was re-cut because the first trace was never normalised: no pixel in
+   it exceeded alpha 153, most of the ink sat under 64, and multiplying that by
+   an .18 opacity left about 5% ink on screen - the reason it read as a smudge
+   at any size. It is now normalised to full range, thickened a pixel so the
+   hairlines survive the downscale, despeckled of the 300-odd orphan dots the
+   edge detector left, and re-canvassed with a margin so the dish rim is not
+   cropped by the edge of its own file. Presence is set here, by opacity alone.
+
+   Small and whole, in the corner, rather than large behind the content. The
+   first pass ran it 620px wide across the middle of the surface, where the
+   cards - which are opaque - covered its lower half and left a sliver of loose
+   curves that read as noise. Sized to clear the card grid it reads as what it
+   is at a glance. Scaling a line drawing up past the point where you can see
+   all of it makes it less legible, not more.
 
    position:sticky rather than fixed or a background on .surface: the surface
    scrolls, and a background-image would scroll away on a long grow log while a
    fixed one would sit over the sidebar. Sticky pins it to the viewport for as
    long as the surface owns it.
+
+   float:right is how a sticky box gets into the flow at all, but a float also
+   shortens the line boxes beside it - the shipped version pushed Cultivation's
+   subtitle from two lines to three. margin-left:-100% collapses the float's
+   footprint back to nothing, so the text sets as if the watermark were not
+   there and simply runs underneath it, which is what a watermark is for.
 
    Scoped to body[data-space], not to #surface-cultivation. Cultivation's home is
    its own surface but its lanes - Blocks, Flushes, Contamination - render into
@@ -774,16 +795,16 @@ button.ghost.sm { padding: 3px 10px; font-size: var(--fs-cap); }
 body[data-space="cultivation"] .surface { position: relative; }
 body[data-space="cultivation"] .surface::before {
   content: ""; position: sticky; top: 0; float: right;
-  width: min(560px, 52vw); height: 0; padding-bottom: min(385px, 36vw);
-  margin: 6vh -4vw 0 0; pointer-events: none; z-index: 0;
-  background: var(--gold-deep); opacity: .18;
+  width: min(230px, 22vw); height: 0; padding-bottom: min(166px, 15.9vw);
+  margin: 10px 0 0 -100%; pointer-events: none; z-index: 0;
+  background: var(--gold-deep); opacity: .34;
   -webkit-mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
   mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
 }
 /* Ink lines lose more to antialiasing on a dark ground than on a light one, so
    the dark theme takes the brighter gold and a touch more presence - the same
    correction mark-simple-dark.svg makes with its wider arms. */
-body.dark[data-space="cultivation"] .surface::before { background: var(--gold); opacity: .24; }
+body.dark[data-space="cultivation"] .surface::before { background: var(--gold); opacity: .4; }
 body[data-space="cultivation"] .surface-inner { position: relative; z-index: 1; }
 @media (prefers-reduced-motion: no-preference) {
   body[data-space="cultivation"] .surface::before { transition: opacity .4s var(--ease); }
