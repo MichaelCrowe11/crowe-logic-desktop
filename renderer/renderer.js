@@ -136,10 +136,6 @@ function addAssistant() {
   if (window.CroweMark) body._mark = CroweMark.mount(markEl, { state: "rest", small: true });
   return body;
 }
-function mountWelcomeMark() {
-  const wm = transcript.querySelector(".welcome-mark");
-  if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
-}
 function renderText(body, text) {
   // Static render (history/rebuild). .said is a <div>: markdown emits block
   // elements a <p> could not contain. Appended: replies read chronologically.
@@ -456,8 +452,10 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
   const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
   const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
-  /* The same CroweMark the header wears, at panel size. The panel used to draw
-     its own radial while the header drew a cube, both calling it "reasoning". */
+  /* CroweMark at panel size. The panel used to draw its own radial while the
+     header drew a cube, both calling it "reasoning". The header wears the
+     logotype now, so this is one of the two places the mark still appears —
+     and here the motion is doing work: it says the runtime is alive. */
   const mark=window.CroweMark?CroweMark.mount(body.querySelector(".agent-mark"),{state:"idle"}):{setState(){},ping(){}};
   const pingMark=()=>mark.ping();
   /* One call moves the chip, its label and the mark together. They were
@@ -872,7 +870,7 @@ const drawer = $("sessions-drawer");
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark();
+  transcript.innerHTML = WELCOME_HTML; bindChips();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
@@ -908,7 +906,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark(); }
+  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
 }
 
 // ── Git / version control pane ──
@@ -2187,18 +2185,12 @@ async function maybeShowOnboarding(cfg) {
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
-  // Header mark is 26px; the welcome hero is 104 and keeps the fine geometry.
-  //
-  // "idle", not "rest": the mark is alive whenever the app is. A 46s rotation
-  // and a 6s breath are slow enough that you never catch it moving — you just
-  // notice, on looking back, that it isn't where it was. That is the whole
-  // point of a chiral mark and it is why the drawing curls in the first place.
-  // Transcript avatars stay at rest on purpose: a hundred of them turning at
-  // once is a busy page, and it would spend the reasoning state's signal. The
-  // reduced-motion block in styles.css still stops all of it.
-  // No header mark to mount any more - the logotype carries the spore as the
-  // i's tittle, so the identity is in the word itself.
-  if (window.CroweMark) mountWelcomeMark();
+  // Nothing to mount at startup any more. The header and the welcome screen
+  // both wear the logotype, which carries the spore as the i's tittle — the
+  // identity is in the word, drawn, and it holds still. CroweMark is now only
+  // mounted where movement reports something: the agent panel (idle, so you
+  // can see the runtime is alive) and transcript avatars (rest, because a
+  // hundred of them turning at once would spend the reasoning state's signal).
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
   setAutonomyBadge((c && c.autonomy) || "edit");

@@ -171,13 +171,11 @@ body.dark button.primary:hover { background: var(--gold-soft); }
 /* ── Transcript ── */
 #transcript { flex: 1; overflow-y: auto; padding: 20px 22px; }
 .welcome { max-width: 470px; margin: 7vh auto; text-align: center; color: var(--muted); }
-/* No drop shadow behind the hero mark. A 24px blur under a fine-line drawing
-   is a grey smudge on paper and a dark bruise on the console — and the mark is
-   flat artwork, not an object above the page. The tonal scale gives it the mass
-   the shadow was there to fake. */
-.welcome-mark { width: 104px; height: 104px; display: block; margin: 0 auto; box-sizing: border-box; }
-.welcome h1 { font-family: var(--display); font-weight: 560; color: var(--ink); font-size: var(--fs-display);
-  letter-spacing: .2px; margin: 18px 0 6px; }
+/* The hero is the logotype now, drawn rather than typed, and it does not move.
+   508.30 x 116.82 in the viewBox, so 46px tall wants 200px wide. */
+.welcome h1.welcome-logotype { width: 200px; height: 46px; margin: 0 auto 14px; padding: 0;
+  background: url("../assets/wordmark.svg") no-repeat center / contain; }
+body.dark .welcome h1.welcome-logotype { background-image: url("../assets/wordmark-dark.svg"); }
 .welcome p { font-size: var(--fs-body); line-height: 1.6; margin: 0 0 4px; }
 .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 /* The opener chips used to lift and cast a shadow on hover. Cards that levitate
