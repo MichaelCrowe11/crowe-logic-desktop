@@ -134,8 +134,8 @@
     grow: {
       _db: {
         blocks: [
-          { id: "b1", code: "260722-01", species: "Oyster", strain: "Blue PO", substrate: "Masters mix", count: "40", spawned: "2026-07-22", stage: "colonizing", notes: "Second run on the new sawdust supplier.", createdAt: Date.now() - 5 * 86400e3 },
-          { id: "b2", code: "260718-01", species: "Lion's mane", strain: "H. erinaceus CS", substrate: "Supplemented sawdust", count: "24", spawned: "2026-07-18", stage: "fruiting", createdAt: Date.now() - 9 * 86400e3 },
+          { id: "b1", code: "260722-01", species: "Oyster", strain: "Blue PO", substrate: "Masters mix", count: "40", room: "Fruiting A", spawned: "2026-07-22", stage: "colonizing", notes: "Second run on the new sawdust supplier.", createdAt: Date.now() - 5 * 86400e3 },
+          { id: "b2", code: "260718-01", species: "Lion's mane", strain: "H. erinaceus CS", substrate: "Supplemented sawdust", count: "24", room: "Fruiting A", spawned: "2026-07-18", stage: "fruiting", createdAt: Date.now() - 9 * 86400e3 },
         ],
         flushes: [{ id: "f1", block: "260718-01", n: "1", date: "2026-07-26", weight: "18.4", grade: "A", notes: "Clean pins, tight clusters.", createdAt: Date.now() - 86400e3 }],
         contam: [{ id: "c1", block: "260722-01", organism: "Trichoderma", stage: "grain spawn", date: "2026-07-25", action: "discarded", notes: "Two jars from the same PC load.", createdAt: Date.now() - 2 * 86400e3 }],
@@ -145,6 +145,9 @@
         log: [{ id: "l1", date: "2026-07-27", subject: "Swapped the HEPA prefilter", entry: "Fruiting A prefilter was loading up faster than the schedule assumes.", createdAt: Date.now() - 86400e3 }],
       },
       async list(type) { return (this._db[type] || []).slice(); },
+      // The preview has no OS save dialog, so an export reports as cancelled -
+      // the same shape the real bridge returns when the user backs out of it.
+      async export() { return { ok: false, canceled: true }; },
       async save(type, record) {
         if (!this._db[type]) return { ok: false, error: "unknown record type" };
         const id = record.id || "p-" + Math.random().toString(36).slice(2, 8);

@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld("crowe", {
     list: (type) => ipcRenderer.invoke("crowe:grow:list", { type }),
     save: (type, record) => ipcRenderer.invoke("crowe:grow:save", { type, record }),
     delete: (type, id) => ipcRenderer.invoke("crowe:grow:delete", { type, id }),
+    // Writes a lot trace to a file the user picks in the OS save dialog.
+    export: (name, text) => ipcRenderer.invoke("crowe:grow:export", { name, text }),
   },
   onBrowserNavigate: (cb) => { const h = (_e, url) => cb(url); ipcRenderer.on("crowe:browser:navigate", h); return () => ipcRenderer.removeListener("crowe:browser:navigate", h); },
   // Native menu / tray / global-shortcut actions: new-chat, palette, focus-composer, toggle-theme, pane:term|browser|files.

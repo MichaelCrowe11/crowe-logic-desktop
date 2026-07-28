@@ -41,7 +41,7 @@
   --body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(.16, 1, .3, 1);
-  --term-bg: #0b0e12; --term-fg: #e9e2cf;
+  --term-bg: #0d0c0a; --term-fg: #e9e2cf;
   --ok: #3f7a3f; --err-fg: #a3341f;
   --err-bg: #faf0ec; --err-line: #e6c9be;
   --diff-bg: #fffdf7; --diff-add-bg: #e6f4e6; --diff-add-fg: #1f5c1f;
@@ -61,7 +61,12 @@
   --on-gold: #14110c; --danger: #9b3d32; --on-danger: #fdf6f4;
   /* Design tokens - radius & type scales. Component rules reference these;
      one-off px values below this block are migrated to the nearest step. */
-  --r-xs: 4px; --r-sm: 8px; --r-md: 8px; --r-lg: 12px; --r-xl: 14px; --r-pill: 999px;
+  /* Radius: the scale was 4/8/8/12/14 with a pill on top, and the large steps
+     plus a pill on every control gave the whole app the soft, uniform roundness
+     that reads as a template rather than a tool. Tightened one step across the
+     board. --r-pill is now for status tokens only — a thing you read, never a
+     thing you press; a pressable pill is the tell. */
+  --r-xs: 3px; --r-sm: 6px; --r-md: 6px; --r-lg: 9px; --r-xl: 11px; --r-pill: 999px;
   /* Type: one caption step, one secondary step, one body step, plus heading and
      display for editorial surfaces. No screen uses more than three at once. */
   --fs-cap: 11px; --fs-sm: 12.5px; --fs-body: 14px;
@@ -71,35 +76,43 @@
   --sidebar-w: 248px; --titlebar-h: 44px;
 }
 body.dark {
-  /* Near-black console. Depth comes from stepped surfaces and a lit top
-     hairline, not from heavier shadows, so each step lightens slightly and
-     carries a brighter top edge. Neutral-cool rather than warm: the previous
-     brown base read as washed out rather than dark. */
-  --cream: #080a0d; --panel: #11151b; --raised: #171c24;
-  --ink: #eceae4; --muted: #a3a097;
+  /* Warm charcoal console. This was a blue-slate (#080a0d / #11151b / #171c24)
+     and it read as blue rather than as dark — every surface had more blue in it
+     than red, which put a cool cast under a warm gold accent and made the gold
+     look dirty. The steps below are the same luminances, rotated to a warm
+     neutral: R > G > B by three or four points, which is enough to stop the
+     screen reading cool and not enough to read brown. The brown base that was
+     tried before this failed on lightness, not on hue.
+
+     Depth still comes from stepped surfaces and a lit top hairline, not from
+     heavier shadows, so each step lightens slightly and carries a brighter top
+     edge. Shadows are warm-black too — a blue shadow under a warm panel is the
+     other half of the same cast. */
+  --cream: #0b0a09; --panel: #161513; --raised: #1e1c18;
+  --ink: #ece9e2; --muted: #a19b8f;
   --gold: #d2ad62; --gold-soft: #e7c984; --gold-deep: #9a7e44;
   --gold-text: var(--gold);
   --focus: var(--gold);
   --blue: #6b9be0;
   --line: rgba(255,255,255,0.08); --line-strong: rgba(255,255,255,0.16);
-  --hair-top: rgba(255,255,255,0.14);
-  --z1: 0 1px 2px rgba(8,10,13,0.4);
-  --z2: 0 4px 12px rgba(8,10,13,0.45), inset 0 1px 0 var(--hair-top);
-  --z3: 0 12px 32px rgba(8,10,13,0.5), inset 0 1px 0 var(--hair-top);
-  --term-bg: #0b0e12; --term-fg: #eceae4;
+  --hair-top: rgba(255,255,255,0.13);
+  --z1: 0 1px 2px rgba(6,5,4,0.42);
+  --z2: 0 4px 12px rgba(6,5,4,0.48), inset 0 1px 0 var(--hair-top);
+  --z3: 0 12px 32px rgba(6,5,4,0.54), inset 0 1px 0 var(--hair-top);
+  --term-bg: #0d0c0a; --term-fg: #ece9e2;
   --ok: #8cb87c; --err-fg: #db7c66;
   --err-bg: rgba(219,124,102,0.14); --err-line: rgba(219,124,102,0.38);
-  --diff-bg: #0b0e12; --diff-add-bg: rgba(140,184,124,0.22); --diff-add-fg: #8cb87c;
+  --diff-bg: #0d0c0a; --diff-add-bg: rgba(140,184,124,0.22); --diff-add-fg: #8cb87c;
   --diff-del-bg: rgba(219,124,102,0.22); --diff-del-fg: #db7c66;
-  --code-bg: rgba(236,234,228,0.08);
-  --overlay: rgba(4,6,8,0.62);
-  --glass: rgba(23,28,36,0.82);
+  --code-bg: rgba(236,233,226,0.08);
+  --overlay: rgba(5,4,3,0.64);
+  --glass: rgba(30,28,24,0.82);
   --glass-edge: rgba(255,255,255,0.10);
-  --z4: 0 16px 42px rgba(8,10,13,0.55), inset 0 1px 0 var(--glass-edge);
+  --z4: 0 16px 42px rgba(6,5,4,0.58), inset 0 1px 0 var(--glass-edge);
   --accent-wash: rgba(210,173,98,0.14);
   --focus-halo: rgba(210,173,98,0.22);
   --selection: rgba(210,173,98,0.32);
-  --on-gold: #0b0e12; --danger: #b8483b; --on-danger: #fdf6f4;
+  --on-gold: #14110c; --danger: #b8483b; --on-danger: #fdf6f4;
 }
 
 * { box-sizing: border-box; }
@@ -131,8 +144,12 @@ button.ghost { background: transparent; border: 1px solid var(--line); color: va
   padding: 4px 12px; border-radius: var(--r-md); cursor: pointer;
   transition: border-color 120ms var(--ease), color 120ms var(--ease), background 120ms var(--ease); }
 button.ghost:hover { border-color: var(--gold); color: var(--gold-text); }
+/* No drop shadow. A 28px button casting a shadow is decoration pretending to be
+   depth — depth in this app is the stepped surfaces, and a control that floats
+   off its own panel undercuts them. Shadows are reserved for things that
+   genuinely sit above the page: overlays, the palette, dragged cards. */
 button.primary { background: var(--ink); color: var(--cream); border: none; border-radius: var(--r-md);
-  padding: 7px 16px; font-weight: 600; cursor: pointer; box-shadow: var(--z1);
+  padding: 7px 16px; font-weight: 600; letter-spacing: .1px; cursor: pointer;
   transition: background 120ms var(--ease), transform 80ms var(--ease); }
 button.primary:hover { background: var(--gold-deep); }
 button.primary:active { transform: translateY(1px); }
@@ -149,17 +166,23 @@ body.dark button.primary:hover { background: var(--gold-soft); }
 /* ── Transcript ── */
 #transcript { flex: 1; overflow-y: auto; padding: 20px 22px; }
 .welcome { max-width: 470px; margin: 7vh auto; text-align: center; color: var(--muted); }
-.welcome-mark { width: 104px; height: 104px; display: block; margin: 0 auto; box-sizing: border-box;
-  filter: drop-shadow(0 10px 24px var(--overlay)); }
-body.dark .welcome-mark { filter: drop-shadow(0 12px 32px rgba(4,6,8,.55)); }
+/* No drop shadow behind the hero mark. A 24px blur under a fine-line drawing
+   is a grey smudge on paper and a dark bruise on the console — and the mark is
+   flat artwork, not an object above the page. The tonal scale gives it the mass
+   the shadow was there to fake. */
+.welcome-mark { width: 104px; height: 104px; display: block; margin: 0 auto; box-sizing: border-box; }
 .welcome h1 { font-family: var(--display); font-weight: 560; color: var(--ink); font-size: var(--fs-display);
   letter-spacing: .2px; margin: 18px 0 6px; }
 .welcome p { font-size: var(--fs-body); line-height: 1.6; margin: 0 0 4px; }
 .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
-.chip { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
-  padding: 10px 13px; font-family: var(--body); font-size: var(--fs-sm); color: var(--ink); cursor: pointer;
-  box-shadow: var(--z1); transition: border-color 120ms var(--ease), transform 120ms var(--ease), box-shadow 120ms var(--ease); }
-.chip:hover { border-color: var(--gold); transform: translateY(-1px); box-shadow: var(--z2); }
+/* The opener chips used to lift and cast a shadow on hover. Cards that levitate
+   under the cursor are the single loudest template tell, and they are also a
+   lie here: nothing is being picked up. Hover now does what hover should — marks
+   which one the cursor is on, with the accent already in the system. */
+.chip { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 9px 12px; font-family: var(--body); font-size: var(--fs-sm); color: var(--ink); cursor: pointer;
+  transition: border-color 120ms var(--ease), background 120ms var(--ease); }
+.chip:hover { border-color: var(--line-strong); background: var(--accent-wash); }
 
 .msg { margin: 0 0 18px; display: flex; gap: 10px; }
 .msg .who { flex: 0 0 26px; }
@@ -210,40 +233,128 @@ body.dark .said li::marker { color: var(--gold); }
    agent is doing, which is why no panel needs a separate spinner. The hot blue
    is held back for the bloom peak; that restraint is what keeps a permanently
    animating element from reading as noise. */
-/* Mono-plus-spore: hyphae in ink (white in dark mode for free), gold only at
-   the core. Royal blue survives solely as the reasoning flash — blue is the
-   thought, not the letterhead. */
-.cl-mark { position: relative; --cm-blue: var(--ink); --cm-blue-hot: #4d9fe8;
-  --cm-gold: var(--gold); --cm-gold-hot: var(--gold-soft); }
+/* The tonal scale. Flat ink hyphae plus a flat gold spore was the right
+   drawing for an 18px tray slot and the wrong one for a 104px hero: six thin
+   near-white arms around a mustard hexagon read as a spider, not an organism.
+
+   So the scale runs along the axis the mark already means — gold at the spore,
+   cooling outward as the hyphae grow. One user-space radial gradient (built in
+   mark.js, matching scripts/gen-mark.js exactly) does it for all twelve arms.
+   The stops are custom properties so one drawing serves both themes, and so
+   reasoning can heat the ramp itself rather than flipping every arm flat.
+
+   Small sizes keep the flat cut: mark-simple.svg and the tray images pass no
+   scale at all and are unchanged. A gradient below ~24px is a smudge. */
+@property --cm-mid { syntax: "<color>"; inherits: true; initial-value: #a9702a; }
+@property --cm-tip { syntax: "<color>"; inherits: true; initial-value: #241f19; }
+@property --cm-core { syntax: "<color>"; inherits: true; initial-value: #ffc94a; }
+.cl-mark { position: relative;
+  --cm-root: #f5b01d; --cm-mid: #a9702a; --cm-tip: #241f19;
+  --cm-core: #ffc94a; --cm-core-edge: #d9911a;
+  /* Royal blue. It heats the middle of the ramp rather than replacing the whole
+     arm, so the wash travels outward the way the spin turns. It used to appear
+     only while the agent was reasoning; it is now the mark's resting behaviour
+     too, just slower — see the idle rules below. */
+  --cm-mid-hot: #4d9fe8; --cm-tip-hot: #9ecbf2; --cm-core-hot: #ffe6a8;
+  /* The trough of the heat cycle: the same values the ramp holds when nothing
+     is animating. Declared once here (and once for dark) instead of inside each
+     state, because cmHeat reads them as its 0%/100% keyframe and both idle and
+     reasoning need the same floor. They cannot be var(--cm-mid) — that is the
+     property the animation writes, and it would close the loop on itself. */
+  --cm-mid-rest: #a9702a; --cm-tip-rest: #241f19; --cm-core-rest: #ffc94a;
+  --cm-gold: var(--gold); }
+body.dark .cl-mark {
+  /* Against a dark ground the ramp has to end light or the tips disappear, so
+     it runs bronze → bone. It must not START gold: the arms are 9.4 wide where
+     they leave the core and six of them fill most of the circle there, so a
+     gold root paints a gold ring around the gold spore and the two fuse. Dark
+     collar, bright inoculum. Mirrors SCALE.dark in scripts/gen-mark.js. */
+  --cm-root: #7e5a2a; --cm-mid: #a87f45; --cm-tip: #f0eadc;
+  --cm-core: #ffd264; --cm-core-edge: #da9a1e;
+  --cm-mid-rest: #a87f45; --cm-tip-rest: #f0eadc; --cm-core-rest: #ffd264;
+}
 .cl-mk { width: 100%; height: 100%; overflow: visible; display: block; }
-.cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { transform-box: view-box; transform-origin: 60px 60px; }
-.cm-blue { fill: var(--cm-blue); }
-.cm-gold, .cm-heart { fill: var(--cm-gold); }
+/* 50% 50%, not 60px 60px. transform-box: view-box measures from the viewBox's
+   own origin, and the live mark now draws on the trimmed ink box (min-x 15.93)
+   rather than the raw 0,0 canvas — a hard 60px there is offset from the spore
+   and the whole mark would orbit instead of spin. The box is square about the
+   centre by construction, so the centre is always 50%. */
+.cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { transform-box: view-box; transform-origin: 50% 50%; }
+.cm-s0 { stop-color: var(--cm-root); } .cm-s1 { stop-color: var(--cm-mid); } .cm-s2 { stop-color: var(--cm-tip); }
+.cm-c0 { stop-color: var(--cm-core); } .cm-c1 { stop-color: var(--cm-core-edge); }
 .cm-ping { stroke: var(--cm-gold); opacity: 0; }
 @keyframes cmSpin { to { transform: rotate(360deg); } }
 @keyframes cmBreath { 0%, 100% { transform: scale(.975); } 50% { transform: scale(1.015); } }
 @keyframes cmWork { 0% { transform: scale(.62); } 42% { transform: scale(1.06); } 66% { transform: scale(.86); } 100% { transform: scale(.62); } }
 @keyframes cmRecede { 0% { opacity: .92; } 42% { opacity: .12; } 70% { opacity: .55; } 100% { opacity: .92; } }
-@keyframes cmHeat { 0%, 100% { fill: var(--cm-blue); } 42% { fill: var(--cm-blue-hot); } }
-@keyframes cmCoreHeat { 0%, 100% { fill: var(--cm-gold); } 42% { fill: var(--cm-gold-hot); } }
 @keyframes cmPing { 0% { transform: scale(.42); opacity: .9; } 100% { transform: scale(2.4); opacity: 0; } }
 @keyframes cmCorePop { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.5); } }
-.cl-mark[data-state="idle"] .cm-rotor { animation: cmSpin 46s linear infinite; }
+/* The heat runs on the mark itself, not on the arms: the gradient is one def,
+   so animating its source variables washes every arm at once from the inside
+   out — which is the picture the spin already tells. */
+@keyframes cmHeat {
+  0%, 100% { --cm-mid: var(--cm-mid-rest); --cm-tip: var(--cm-tip-rest); --cm-core: var(--cm-core-rest); }
+  42% { --cm-mid: var(--cm-mid-hot); --cm-tip: var(--cm-tip-hot); --cm-core: var(--cm-core-hot); }
+}
+/* Idle is the mark's normal life, and it is the same performance as reasoning
+   — turning, breathing, the blue washing out through the ramp — played at a
+   quarter speed. It used to be a 46s rotation with no heat at all, which is a
+   rate you cannot perceive; the mark appeared frozen and the blue only ever
+   showed up while the agent was busy. Now it always turns and always thinks.
+   The states still read apart, because what separates them is tempo: 16s
+   against 7.5s, a 9s heat cycle against 1.75s, and reasoning swaps the calm
+   breath for cmWork's deeper pull. Escalation, not on-versus-off. */
+.cl-mark[data-state="idle"] .cm-rotor { animation: cmSpin 16s linear infinite; }
 .cl-mark[data-state="idle"] .cm-breath { animation: cmBreath 6s ease-in-out infinite; }
+.cl-mark[data-state="idle"] { animation: cmHeat 9s cubic-bezier(.37,0,.32,1) infinite; }
 .cl-mark[data-state="reasoning"] .cm-rotor { animation: cmSpin 7.5s linear infinite; }
 .cl-mark[data-state="reasoning"] .cm-breath { animation: cmWork 1.75s cubic-bezier(.37,0,.32,1) infinite; }
 .cl-mark[data-state="reasoning"] .cm-gold { animation: cmRecede 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] .cm-blue { animation: cmHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] .cm-heart { animation: cmCoreHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="failed"] { --cm-blue: var(--muted); --cm-blue-hot: var(--muted);
-  --cm-gold: var(--muted); --cm-gold-hot: var(--muted); }
+.cl-mark[data-state="reasoning"] { animation: cmHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
+.cl-mark[data-state="failed"] { --cm-root: var(--muted); --cm-mid: var(--muted); --cm-tip: var(--muted);
+  --cm-core: var(--muted); --cm-core-edge: var(--muted); --cm-gold: var(--muted); }
 .cl-mark[data-state="failed"] .cm-breath { transform: scale(.9); }
 .cl-mark.cl-ping-on .cm-ping { animation: cmPing .78s cubic-bezier(.16,1,.3,1); }
 .cl-mark.cl-ping-on .cm-heart { animation: cmCorePop .52s cubic-bezier(.16,1,.3,1); }
 @media (prefers-reduced-motion: reduce) {
-  .cm-rotor, .cm-breath, .cm-arm, .cm-blue, .cm-gold, .cm-heart, .cm-ping { animation: none !important; }
-  .cl-mark .cm-gold { opacity: .6; }
+  .cl-mark, .cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { animation: none !important; }
 }
+
+/* ── Lot trace ──
+   Reads as a document, not a dashboard: one column, sections separated by rule
+   and label rather than by card, identifiers in mono. Harmonized GAP G-6.2 asks
+   for a trace exercise reconciled within four hours, and what an auditor is
+   handed at the end of it is a page — so the screen looks like the page. */
+.trace { max-width: 720px; padding: 4px 2px 28px; }
+.tr-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid var(--line-strong); }
+.tr-code { font-family: var(--mono); font-size: var(--fs-head); color: var(--gold-text); letter-spacing: .3px; }
+.tr-sum { font-size: var(--fs-sm); color: var(--muted); }
+.tr-sec { margin-top: 22px; }
+.tr-sec h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px;
+  font-family: var(--mono); font-size: var(--fs-cap); letter-spacing: .7px; text-transform: uppercase;
+  font-weight: 500; color: var(--muted); }
+.tr-note { text-transform: none; letter-spacing: .1px; font-family: var(--body); opacity: .8; }
+.tr-kv { display: grid; grid-template-columns: 132px 1fr; gap: 2px 14px; }
+.tr-kv .kv { display: contents; }
+.tr-kv .k { font-size: var(--fs-sm); color: var(--muted); text-align: left; }
+/* Left-aligned and wrapping, against whatever the surrounding lane does. A
+   trace that truncates a note has failed at the one job it has: the free-text
+   field is usually where the reason for a contamination or a short flush is
+   written down, and an ellipsis there is a lost record. */
+.tr-kv .v { font-size: var(--fs-sm); color: var(--ink); text-align: left;
+  white-space: normal; overflow: visible; text-overflow: clip; }
+.tr-line { display: grid; grid-template-columns: 132px 1fr; gap: 2px 14px;
+  padding: 5px 0; border-top: 1px solid var(--line); font-size: var(--fs-sm);
+  text-align: left; white-space: normal; }
+.tr-line:first-of-type { border-top: none; }
+.tr-when { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); padding-top: 1px; }
+/* The gaps section is the honest half of the trace and is styled to be read,
+   not skipped: it is the only block on the page with a tint behind it. */
+.tr-gaps { margin: 0; padding: 10px 14px 10px 30px; list-style: disc;
+  background: var(--err-bg); border: 1px solid var(--err-line); border-radius: var(--r-sm);
+  font-size: var(--fs-sm); color: var(--ink); }
+.tr-gaps li { margin: 3px 0; }
 
 /* ── Operator thread: autonomy tier tints the thread and its nodes ── */
 body { --tier: var(--gold); }
@@ -322,11 +433,11 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
 #composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel);
   box-shadow: inset 0 1px 0 var(--hair-top); }
 #input { flex: 1; resize: none; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
-  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px 13px; max-height: 160px;
-  box-shadow: var(--z1); transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 13px; max-height: 160px;
+  transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
 #input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z1); }
-#send { background: var(--ink); color: var(--cream); border: none; border-radius: var(--r-lg); padding: 0 18px;
-  font-weight: 600; cursor: pointer; box-shadow: var(--z1); transition: background 120ms var(--ease), transform 80ms var(--ease); }
+#send { background: var(--ink); color: var(--cream); border: none; border-radius: var(--r-sm); padding: 0 16px;
+  font-weight: 600; letter-spacing: .1px; cursor: pointer; transition: background 120ms var(--ease), transform 80ms var(--ease); }
 #send:hover { background: var(--gold-deep); }
 #send:active { transform: translateY(1px); }
 body.dark #send { background: var(--gold); color: var(--on-gold); }
@@ -500,7 +611,7 @@ body.dark .side-new .ic { color: var(--gold); }
 .sess-del:hover { color: var(--diff-del-fg); border-color: var(--err-fg); }
 
 /* ── Autonomy segmented pill ── */
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-pill); overflow: hidden; background: var(--cream); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; background: var(--cream); }
 .seg-btn { border: none; background: transparent; color: var(--muted); font-size: var(--fs-sm);
   padding: 4px 12px; cursor: pointer; border-right: 1px solid var(--line);
   transition: color 120ms var(--ease), background 120ms var(--ease); }
@@ -671,21 +782,60 @@ body.dark .mrow .m-id { color: var(--gold); }
 .mrow .m-flags { margin-left: auto; display: flex; gap: 5px; }
 .mrow .m-flags em { font-style: normal; font-size: var(--fs-cap); color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 7px; }
+/* ── Cultivation overview: a card per lane, reading out of the same store ── */
+/* A button so it is reachable by keyboard and announced as the control it is;
+   the reset below is only undoing what the UA does to buttons, not restyling
+   the card - it must stay indistinguishable from the .card next to it. */
+.cult-card { font: inherit; text-align: left; cursor: pointer; display: block; width: 100%; }
+.cult-card:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.cult-foot { grid-column: 1 / -1; margin: 4px 0 0; font-size: var(--fs-sm); color: var(--muted); line-height: 1.55; }
+
 /* ── Cultivation records: the Projects lane row, with a note line under it ── */
 .grow-add { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 0 0 18px; padding: 12px;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--z2); }
-.grow-add input, .grow-add select { flex: 1 1 128px; min-width: 0; font-family: var(--body); font-size: var(--fs-sm);
+.grow-add input, .grow-add select { min-width: 0; font-family: var(--body); font-size: var(--fs-sm);
   color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px 9px;
   transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
-.grow-add input.wide { flex: 2 1 250px; }
+/* Fields size to what they hold. A count is three characters and a note is a
+   sentence; letting both flex alike wastes the row and makes the form read as a
+   wall of identical boxes with no hint of which one matters. */
+.grow-add .w-xs { flex: 0 0 96px; } /* wide enough for "CO₂ ppm" - the longest of the short labels */
+.grow-add .w-sm { flex: 0 1 136px; }
+.grow-add .w-md { flex: 1 1 150px; }
+.grow-add .w-lg { flex: 4 1 260px; }
+/* Dates in the form should read like the dates in the rows below it: the native
+   control otherwise arrives in the system UI font, at its own size, and reads as
+   a piece of the OS that wandered into the panel. */
+.grow-add input[type="date"] { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
+.grow-add input[type="date"]::-webkit-calendar-picker-indicator { opacity: .45; cursor: pointer; }
+.grow-add input[type="date"]:hover::-webkit-calendar-picker-indicator { opacity: .85; }
+body.dark .grow-add input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
 .grow-add input:focus, .grow-add select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
 .grow-add input::placeholder { color: var(--muted); opacity: .72; }
-.grow-add button { flex: 0 0 auto; }
+/* The submit gets its own full-width row instead of trailing whichever field
+   happened to wrap last, so the panel keeps one shape across all seven lanes.
+   The caption carries what the placeholders cannot: what this form makes. */
+.grow-go { flex: 1 0 100%; display: flex; align-items: center; gap: 12px; margin-top: 3px;
+  padding-top: 10px; border-top: 1px solid var(--line); }
+.grow-cap { font-family: var(--mono); font-size: var(--fs-cap); font-weight: 500; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted); }
+.grow-go button { margin-left: auto; flex: 0 0 auto; }
 .grow-list { display: flex; flex-direction: column; }
 .growrow { padding: 7px 8px; border-bottom: 1px solid var(--line); }
 .growrow:last-child { border-bottom: none; }
 .gr-main { display: flex; align-items: baseline; gap: 12px; font-family: var(--mono); font-size: var(--fs-sm); }
-.gr-id { color: var(--gold-deep); flex: 0 0 auto; }
+/* The row's own content is the control that opens it for correction — a button
+   so it is tabbable and announced, styled back down to a row so the list still
+   reads as a list rather than a column of buttons. */
+.gr-open { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 12px; text-align: left;
+  font: inherit; background: transparent; border: none; padding: 0; color: inherit; cursor: pointer; }
+.gr-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: var(--r-sm); }
+.growrow.editing { background: var(--raised); box-shadow: inset 2px 0 0 var(--gold); }
+.grow-add.editing { border-color: var(--gold-soft); }
+/* A fixed column so the lot codes stack into a line the eye can run down. It is
+   a floor, not a clamp: a longer code pushes its own row wider rather than being
+   cut, because a truncated lot code is a wrong lot code. */
+.gr-id { color: var(--gold-deep); flex: 0 0 auto; min-width: 104px; }
 body.dark .gr-id { color: var(--gold); }
 .gr-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-flags { margin-left: auto; display: flex; gap: 5px; flex: 0 0 auto; }
@@ -693,8 +843,11 @@ body.dark .gr-id { color: var(--gold); }
   border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 7px; }
 .gr-del { flex: 0 0 auto; opacity: 0; background: transparent; border: 1px solid var(--line); color: var(--muted);
   border-radius: var(--r-sm); padding: 1px 7px; font-size: var(--fs-cap); cursor: pointer; }
-.growrow:hover .gr-del, .gr-del:focus-visible { opacity: 1; }
+.growrow:hover .gr-del, .gr-del:focus-visible, .gr-del.armed { opacity: 1; }
 .gr-del:hover { color: var(--diff-del-fg); border-color: var(--err-fg); }
+/* Armed: it now reads "Delete?" and the next click is final, so it should not
+   look like the same quiet control it was a moment ago. */
+.gr-del.armed { color: var(--diff-del-fg); border-color: var(--err-fg); background: var(--err-bg); }
 .gr-note { font-family: var(--body); font-size: var(--fs-sm); color: var(--muted); line-height: 1.5; margin-top: 3px; }
 .surface-status { display: flex; align-items: center; gap: 16px; margin-top: 24px; padding-top: 10px;
   border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
@@ -777,8 +930,9 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 
 /* Welcome mark: slow ambient float so the first-run screen feels alive. */
 @media (prefers-reduced-motion: no-preference) {
-  .welcome-mark { animation: welcomeFloat 7s ease-in-out infinite; }
-  @keyframes welcomeFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+  /* The hero mark used to bob up and down on a 7s loop as well as rotate. Two
+     idle motions on one element is one too many, and a logo that floats is the
+     other template tell; the slow rotation is the house motion and it stays. */
 }
 
 /* ── Scrollbars ── */

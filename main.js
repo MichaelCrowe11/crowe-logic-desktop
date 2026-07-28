@@ -9,6 +9,7 @@ const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
 const { spawn, exec } = require("child_process");
+const { GROW_TYPES } = require("./grow-schema");
 
 let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
@@ -24,7 +25,7 @@ const DEFAULTS = {
   token: "",
   cwd: os.homedir(),
   autoApprove: false,     // when true, file edits apply without review
-  autonomy: "edit",       // "readonly" (no shell/writes) | "edit" (reviewed writes, no shell) | "execute" (all). Safe default: edit.
+  autonomy: "edit",       // see TIERS: plan | readonly | edit | execute. Safe default: edit.
   mcpServers: {},         // { name: { command, args, env } }
   telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
   onboarded: false,       // set true after the first-run card has been shown
@@ -97,6 +98,18 @@ function writeAuthStore(store) {
   }
   fs.writeFileSync(authStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
 }
+/* The four tiers, and the one place a stored value becomes one of them.
+
+   Spreading DEFAULTS does not settle this: a config carrying `"autonomy": null`
+   or a tier name from a future version overrides the default with something no
+   gate recognises, and the gates disagreed about what to do then. Most read
+   `|| "edit"`; four read `|| "execute"`, including the harness check that is the
+   only thing standing between the agent and a real shell. So an unreadable value
+   showed the operator "Edit" in the badge while the agent ran commands.
+
+   Normalising here makes the tier a closed set before any gate sees it, and the
+   fallback is the safe end: an autonomy setting we cannot read is not consent. */
+const TIERS = new Set(["plan", "readonly", "edit", "execute"]);
 function loadConfig() {
   try {
     const stored = JSON.parse(fs.readFileSync(configPath(), "utf8"));
@@ -105,6 +118,7 @@ function loadConfig() {
     // Guard: a stale localhost/loopback gateway URL (a dev artifact) must never
     // brick a member install - fall back to the real gateway.
     if (/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)\b/i.test(cfg.baseUrl || "")) cfg.baseUrl = DEFAULTS.baseUrl;
+    if (!TIERS.has(cfg.autonomy)) cfg.autonomy = DEFAULTS.autonomy;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
@@ -610,6 +624,12 @@ const harnessCtx = {
   // Only plugin-managed servers are tier-gated; hand-configured MCP servers
   // keep their historic ungated behavior even if named like a manifest id.
   getPlugins: () => BUILTIN_PLUGINS.filter((p) => PLUGIN_MANAGED.has(p.id)),
+  // The grow store, so the cultivation expert can write the record the grower
+  // just dictated instead of describing the row they should go and type. Same
+  // function the form calls - one write path, so an agent-logged flush is
+  // indistinguishable from a hand-logged one and both are equally correctable.
+  growWrite: (type, record) => growWrite(type, record),
+  growRead: (type) => growRead(type),
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();
@@ -625,7 +645,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   }
   return { ok: true, stopped: agentRuns.size };
 });
-ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "" }) => {
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "" }) => {
   if (licensed) {
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
@@ -640,6 +660,11 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       isAborted: () => run.aborted,
       setController: (c) => { run.controller = c; },
       role: String(role || ""),
+      // Per-turn situational state from the renderer - today the cultivation
+      // records. Capped here rather than trusted from the caller: the renderer
+      // decides what is worth saying, the main process decides how much of the
+      // context window a caller may spend saying it.
+      context: String(context || "").slice(0, 8000),
     });
     if (id === "main") {
       try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
@@ -811,8 +836,10 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.j
    reads the same whether it was typed or measured.
 
    GROW_TYPES is an allowlist because `type` becomes a filename. A renderer the
-   attacker controls must not be able to steer that path out of userData. */
-const GROW_TYPES = new Set(["blocks", "flushes", "contam", "env", "strains", "recipes", "log"]);
+   attacker controls must not be able to steer that path out of userData. It
+   comes from grow-schema.js, which is also what tells the agent's log_grow tool
+   which fields exist - one list, so the store, the form and the tool cannot
+   drift apart. */
 function growPath(type) {
   if (!GROW_TYPES.has(type)) return null;
   const d = path.join(app.getPath("userData"), "grow");
@@ -823,8 +850,7 @@ function growRead(type) {
   const p = growPath(type); if (!p) return [];
   try { const v = JSON.parse(fs.readFileSync(p, "utf8")); return Array.isArray(v) ? v : []; } catch { return []; }
 }
-ipcMain.handle("crowe:grow:list", (_e, { type } = {}) => growRead(String(type || "")));
-ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => {
+function growWrite(type, record) {
   const t = String(type || "");
   if (!GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
   const rows = growRead(t);
@@ -844,7 +870,26 @@ ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => {
   // believing the record exists.
   try { fs.writeFileSync(growPath(t), JSON.stringify(rows, null, 2)); }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
-  return { ok: true, id: rec.id };
+  return { ok: true, id: rec.id, record: rows.find((r) => r.id === rec.id) };
+}
+ipcMain.handle("crowe:grow:list", (_e, { type } = {}) => growRead(String(type || "")));
+ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => growWrite(type, record));
+/* A trace leaves the app through the OS save dialog, never to a path the
+   renderer picked. The grower chooses where it lands and sees the filename, so
+   an export is always something they did rather than something that happened to
+   them - and no page-side string ever becomes a write path. */
+ipcMain.handle("crowe:grow:export", async (_e, { name, text } = {}) => {
+  const safe = String(name || "trace").replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 60) || "trace";
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: "Export lot trace",
+    defaultPath: path.join(app.getPath("documents"), `lot-trace-${safe}.txt`),
+    filters: [{ name: "Text", extensions: ["txt"] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try { fs.writeFileSync(filePath, String(text || "")); }
+  catch (e) { return { ok: false, error: String(e.message || e) }; }
+  return { ok: true, path: filePath };
 });
 ipcMain.handle("crowe:grow:delete", (_e, { type, id } = {}) => {
   const t = String(type || "");
@@ -888,7 +933,7 @@ function createTray() {
 
 function buildMenu() {
   const mac = process.platform === "darwin";
-  const tier = loadConfig().autonomy || "execute";
+  const tier = loadConfig().autonomy || "edit";
   const crowe = (label, action, accel) => ({ label, accelerator: accel, click: () => { showWindow(); relayMenu(action); } });
   const template = [
     ...(mac ? [{ role: "appMenu" }] : []),

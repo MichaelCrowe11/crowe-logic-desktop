@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785237498226" />
+  <link rel="stylesheet" href="styles.css?v=1785247242287" />
 </head>
 <body>
   <header id="bar">
@@ -86,6 +86,8 @@
         <button class="sn-item" data-cult="recipes">Recipes</button>
         <span class="sn-group">Journal</span>
         <button class="sn-item" data-cult="log">Grow log</button>
+        <span class="sn-group">Records</span>
+        <button class="sn-item" data-cult="trace">Trace a lot</button>
       </nav>
 
       <aside id="sessions-drawer" class="drawer">
@@ -171,18 +173,14 @@
           <input id="cult-input" type="text" placeholder="Ask the grower — substrate, contamination, fruiting, yield..." spellcheck="false" />
           <button type="submit" class="primary sm">Ask</button>
         </form>
-        <div class="chips surface-chips">
+        <!-- Replaced by refreshCult() with questions drawn from the farm's own
+             records; these three are the empty-store case. -->
+        <div id="cult-chips" class="chips surface-chips">
           <button class="chip cult-chip">Plan an oyster substrate recipe for a 10-bag run, with sterilization steps</button>
           <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
           <button class="chip cult-chip">Set fruiting conditions for lion's mane in a Martha tent this week</button>
         </div>
-        <div class="cards" style="margin-top: 18px;">
-          <div class="card lane-card">
-            <div class="card-h">Crowe Sense telemetry</div>
-            <p>Live grow-room sensors and farmlog outcomes, on this surface.</p>
-            <span class="pending">wire pending · 0.8</span>
-          </div>
-        </div>
+        <div id="cult-state" class="cards" style="margin-top: 18px;"></div>
       </div>
     </section>
 
@@ -344,9 +342,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785237498226"></script>
-  <script src="mark-geometry.js?v=1785237498226"></script>
-  <script src="mark.js?v=1785237498226"></script>
-  <script src="renderer.js?v=1785237498226"></script>
+  <script src="preview-shim.js?v=1785247242287"></script>
+  <script src="mark-geometry.js?v=1785247242287"></script>
+  <script src="mark.js?v=1785247242287"></script>
+  <script src="renderer.js?v=1785247242287"></script>
 </body>
 </html>

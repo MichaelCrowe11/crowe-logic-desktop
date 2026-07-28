@@ -19,6 +19,7 @@
 const { app, BrowserWindow } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
+const fs = require("fs");
 
 const ROOT = path.join(__dirname, "..");
 const PORT = process.env.PREVIEW_PORT || "8743";
@@ -333,8 +334,8 @@ const tests = [
         // The terminal is a console surface in both themes, so its background
         // is deliberately the same near-black either way.
         consoleBgBothWays:
-          darkTheme.background.toLowerCase() === "#0b0e12" &&
-          lightTheme.background.toLowerCase() === "#0b0e12",
+          darkTheme.background.toLowerCase() === "#0d0c0a" &&
+          lightTheme.background.toLowerCase() === "#0d0c0a",
       };`,
     expect: { cursorChanged: true, fgChanged: true, consoleBgBothWays: true },
   },
@@ -473,6 +474,41 @@ app.whenReady().then(async () => {
       console.log("ok      preview shim covers every preload namespace");
     }
 
+    /* The grow schema is declared twice: grow-schema.js for main and the harness,
+       GROW in renderer.js for the form and the lanes. They cannot be one module -
+       renderer.js is a plain script with no require, and grow-schema.js must not
+       drag in labels and widths that only the DOM cares about.
+
+       So the duplication is deliberate and this test is the price of it. A field
+       on one side and not the other is silent data loss: the agent logs a key the
+       lane never renders, or the grower types one that main refuses. */
+    const laneKeys = (() => {
+      const src = fs.readFileSync(path.join(__dirname, "..", "renderer", "renderer.js"), "utf8");
+      const table = src.match(/^const GROW = \{[\s\S]*?\n\};/m);
+      if (!table) return null;
+      return Object.fromEntries([...table[0].matchAll(/^  (\w+): \{([\s\S]*?)\n  \},/gm)]
+        .map(([, lane, body]) => [lane, [...body.matchAll(/\{ k: "(\w+)"/g)].map((m) => m[1])]));
+    })();
+    const drift = [];
+    if (!laneKeys) drift.push("could not parse the GROW table out of renderer.js");
+    else {
+      const { GROW_SCHEMA } = require(path.join(__dirname, "..", "grow-schema.js"));
+      for (const lane of new Set([...Object.keys(GROW_SCHEMA), ...Object.keys(laneKeys)])) {
+        const a = GROW_SCHEMA[lane] ? GROW_SCHEMA[lane].fields.map((f) => f.k) : null;
+        const b = laneKeys[lane] || null;
+        if (!a) { drift.push(`${lane}: in renderer.js, missing from grow-schema.js`); continue; }
+        if (!b) { drift.push(`${lane}: in grow-schema.js, missing from renderer.js`); continue; }
+        if (a.join() !== b.join()) drift.push(`${lane}: grow-schema.js has [${a}], renderer.js has [${b}]`);
+      }
+    }
+    if (drift.length) {
+      failures++;
+      console.log("not ok  grow-schema.js matches the GROW table in renderer.js");
+      drift.forEach((d) => console.log(`        ${d}`));
+    } else {
+      console.log("ok      grow-schema.js matches the GROW table in renderer.js");
+    }
+
     if (pageErrors.length) {
       failures++;
       console.log("not ok  renderer logged no console errors");
@@ -481,7 +517,7 @@ app.whenReady().then(async () => {
       console.log("ok      renderer logged no console errors");
     }
 
-    const total = tests.length + 2;
+    const total = tests.length + 3;
     console.log(`\n${total - failures}/${total} passed`);
   } catch (error) {
     failures++;

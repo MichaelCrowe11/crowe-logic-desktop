@@ -7,12 +7,15 @@
 //   proposeEdit(relPath, newContent): Promise<string>,   // review-gated write
 //   mcpTools(): tool[], mcpCall(name, args): Promise<string>,
 //   openUrl(u): void,
+//   growWrite(type, record): { ok, id } | { ok: false, error },  // grower's store
+//   growRead(type): row[],
 //   appVersion: string,
 // }
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { exec, execFile } = require("child_process");
+const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
 const MAX_ROUNDS = 24;
@@ -85,7 +88,36 @@ const BUILTIN_TOOLS = [
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
 ];
 
-function allTools(ctx) { return [...BUILTIN_TOOLS, ...ctx.mcpTools()]; }
+/* The grower's own store, writable.
+
+   Until now the cultivation expert could read the farm's records and nothing
+   else, so "log 8 lb off 260722-01" got an answer about how one might record it.
+   The records were right there. This is the other half of that wire.
+
+   Offered only on a cultivation turn, so the coding expert is never holding a
+   tool for a store it has no business in, and the tool list a git question pays
+   for stays the seven it needs. The description is built from grow-schema.js
+   rather than written out, because a field list maintained by hand in a prompt
+   is a field list that goes stale silently. */
+const GROW_TOOL = { type: "function", function: {
+  name: "log_grow",
+  description: "Write a record into the grower's own cultivation store - the same records the Cultivation lanes show. " +
+    "Use this when the user tells you something happened on the farm and it belongs on the books: a harvest, a contamination, " +
+    "a room reading, a new block, a journal note. State plainly what you logged. Do not log something the user only asked about " +
+    "hypothetically, and do not invent values they did not give you - a blank field means unrecorded, which is honest; a guessed " +
+    "one is a false record. To correct an existing row, pass its id.\n\nRecord types and their fields:\n" +
+    Object.entries(GROW_SCHEMA).map(([t, def]) =>
+      `- ${t} (${def.what}): ` + def.fields.map((f) => f.k + (f.opts ? ` [${f.opts.join("|")}]` : f.d ? ` (${f.d})` : "")).join(", ")
+    ).join("\n"),
+  parameters: { type: "object", properties: {
+    type: { type: "string", enum: [...GROW_TYPES], description: "Which record type to write." },
+    record: { type: "object", description: "Field names to values, using only the fields listed for that type. Include `id` to correct an existing record." },
+  }, required: ["type", "record"] } } };
+
+function allTools(ctx, route) {
+  const grow = route && route.expert === "cultivation" ? [GROW_TOOL] : [];
+  return [...BUILTIN_TOOLS, ...grow, ...ctx.mcpTools()];
+}
 
 // ─── Path + shell helpers ────────────────────────────────────────────────────
 function resolvePath(ctx, p) {
@@ -218,18 +250,23 @@ function pluginToolTier(ctx, fullName) {
   }
   return "edit";
 }
-async function execTool(ctx, name, args) {
+/* `route` is the expert this turn resolved to. It is a second gate, not a
+   convenience: leaving a tool out of allTools() only stops a well-behaved model
+   from asking for it. A hallucinated name, a replayed tool call, or a gateway
+   response someone else shaped all arrive here regardless of what was offered.
+   Every check that matters runs on this side of the call. */
+async function execTool(ctx, name, args, route) {
   try {
     if (name && name.startsWith("mcp__")) {
       const need = pluginToolTier(ctx, name);
       if (need) {
-        const tier = ctx.loadConfig().autonomy || "execute";
+        const tier = ctx.loadConfig().autonomy || "edit";
         if ((TIER_RANK[need] ?? 1) > (TIER_RANK[tier] ?? 2))
           return `blocked: this plugin tool requires "${need}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
       }
       return await ctx.mcpCall(name, args);
     }
-    const tier = ctx.loadConfig().autonomy || "execute";
+    const tier = ctx.loadConfig().autonomy || "edit";
     if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
       return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";
     if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
@@ -249,6 +286,25 @@ async function execTool(ctx, name, args) {
     if (name === "write_file") {
       if (isSecretPath(resolvePath(ctx, args.path))) return SECRET_BLOCK(args.path);
       return await ctx.proposeEdit(args.path, args.content ?? "");
+    }
+    /* Writing a record is a write, and it is gated like one: plan and read-only
+       cannot log. It deliberately does NOT go through proposeEdit - that reviews
+       a file diff, and a grow record is a row in a store, not a patch to source.
+       The review that matters here is the lane itself, which refreshes the moment
+       the write lands so the grower sees the row appear and can correct or delete
+       it in place. Nothing is written that the grower cannot immediately undo. */
+    if (name === "log_grow") {
+      if (!route || route.expert !== "cultivation")
+        return "blocked: the grow store is only writable on a cultivation turn, and this turn routed elsewhere. Ask the user to put the request to the grower on its own.";
+      if (tier === "plan" || tier === "readonly")
+        return `blocked: logging a record is a write, and "${tier}" autonomy is read-only. Tell the user what you would log and ask them to switch to Edit.`;
+      if (!ctx.growWrite) return "blocked: this build has no grow store attached.";
+      const v = growValidate(String(args.type || ""), args.record);
+      if (!v.ok) return `rejected: ${v.error}`;
+      const res = ctx.growWrite(String(args.type), v.record);
+      if (!res || !res.ok) return `error: could not write the record - ${(res && res.error) || "unknown"}`;
+      const shown = Object.entries(v.record).filter(([k]) => k !== "id").map(([k, x]) => `${k}=${x}`).join(", ");
+      return `${v.record.id ? "corrected" : "logged"} ${args.type} record ${res.id}: ${shown}`;
     }
     if (name === "search") return await toolSearch(ctx, args);
     if (name === "list_dir") return toolListDir(ctx, args);
@@ -286,7 +342,7 @@ const TIER_LINES = {
 async function buildSystemPrompt(ctx) {
   const cwd = ctx.getCwd();
   const cfg = ctx.loadConfig();
-  const tier = cfg.autonomy || "execute";
+  const tier = cfg.autonomy || "edit";
   const notes = workspaceNotes(cwd);
   const git = await gitBrief(cwd);
   return [
@@ -379,10 +435,10 @@ function routeTurn(ctx, messages, pin = "") {
 // Each turn is a block. route() selects the expert; the tool loop below is the
 // retrieve/reason/synthesize body; the operator thread is the residual backbone.
 // deps = { gatewayChat(msgs, tools, signal), send(ev), isAborted(), setController(c),
-//          role } - role optionally pins the expert instead of classifying text.
+//          role, context } - role optionally pins the expert instead of
+//          classifying text; context is situational state for this turn only.
 async function runAgent(ctx, messages, deps) {
   const sys = await buildSystemPrompt(ctx);
-  let msgs = [{ role: "system", content: sys }, ...messages];
   let assistantText = "";
   let totIn = 0, totOut = 0, totMs = 0, capped = false;
 
@@ -392,6 +448,20 @@ async function runAgent(ctx, messages, deps) {
   let fellBack = false;
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
 
+  /* Situational state rides on the system message rather than being pushed into
+     `messages`. Two reasons: the caller's array is what gets persisted as the
+     session, and a snapshot of the grow store has no business outliving the
+     turn that read it; and the model should read it as standing context about
+     the world, not as something the user said.
+
+     Attached after routing, and only to the expert it belongs to. The renderer
+     sends the grow records on every turn because it cannot know where a turn
+     will land - a mushroom question typed into plain Chat routes to cultivation
+     just as surely as one asked from the grower's surface, and it deserves the
+     same records. Gating here means the operator answering a git question does
+     not pay context for a substrate library it will never mention. */
+  let msgs = [{ role: "system", content: deps.context && route.expert === "cultivation" ? sys + "\n\n" + deps.context : sys }, ...messages];
+
   // ── RETRIEVE / REASON / SYNTHESIZE ── the tool loop attends the workspace,
   // reasons, and emits reviewed steps; every round appends to the thread.
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -399,7 +469,7 @@ async function runAgent(ctx, messages, deps) {
     const controller = new AbortController();
     deps.setController(controller);
     msgs = compactMessages(msgs);
-    const r = await deps.gatewayChat(msgs, allTools(ctx), controller.signal, activeModel);
+    const r = await deps.gatewayChat(msgs, allTools(ctx, route), controller.signal, activeModel);
     if (r && r.aborted) { deps.send({ type: "stopped" }); break; }
     if (r.error) {
       // Fallback-first: a routed expert that errors must never sink the turn.
@@ -425,7 +495,7 @@ async function runAgent(ctx, messages, deps) {
       if (deps.isAborted()) break;
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
       deps.send({ type: "tool_call", name: tc.function?.name, args: a });
-      const result = await execTool(ctx, tc.function?.name, a);
+      const result = await execTool(ctx, tc.function?.name, a, route);
       deps.send({ type: "tool_result", name: tc.function?.name, result: String(result).slice(0, 4000) });
       let content = String(result);
       if (round >= WRAP_UP_AT && c === calls.length - 1) {
