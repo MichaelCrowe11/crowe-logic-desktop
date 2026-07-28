@@ -1058,6 +1058,20 @@ $("home-composer").addEventListener("submit", (e) => {
   send(t);
   $("home-input").value = "";
 });
+/* The grower's own way in. Until now the surface had no input at all - the
+   chips were the only thing you could do on it, and they were fixed sentences.
+   Pinned to cultivation, so a question that doesn't happen to contain a word
+   the router recognises still reaches the mycology expert. */
+$("cult-composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const t = $("cult-input").value.trim(); if (!t) return;
+  setSpace("chat");
+  // Seed the chat composer first, same reason as the projects composer above:
+  // send() clears it only once its guards pass, so a draft survives a bounce.
+  input.value = t;
+  send(t, { role: "cultivation" });
+  $("cult-input").value = "";
+});
 $("studio-film").addEventListener("click", (e) => {
   // Never inject keystrokes into the live PTY — a foregrounded vim/REPL would
   // receive them as commands. Copy instead; the user pastes at their prompt.

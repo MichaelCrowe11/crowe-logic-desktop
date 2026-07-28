@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785157887387" />
+  <link rel="stylesheet" href="styles.css?v=1785236174537" />
 </head>
 <body>
   <header id="bar">
@@ -151,7 +151,11 @@
 
     <section id="surface-cultivation" class="surface hidden">
       <div class="surface-inner">
-        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Questions here route to crowelm-grower, the mycology expert.</p></header>
+        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Anything you ask here goes straight to crowelm-grower, the mycology expert — no need to phrase it for the router.</p></header>
+        <form id="cult-composer" class="surface-composer" autocomplete="off">
+          <input id="cult-input" type="text" placeholder="Ask the grower — substrate, contamination, fruiting, yield..." spellcheck="false" />
+          <button type="submit" class="primary sm">Ask</button>
+        </form>
         <div class="chips surface-chips">
           <button class="chip cult-chip">Plan an oyster substrate recipe for a 10-bag run, with sterilization steps</button>
           <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
@@ -325,9 +329,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785157887387"></script>
-  <script src="mark-geometry.js?v=1785157887387"></script>
-  <script src="mark.js?v=1785157887387"></script>
-  <script src="renderer.js?v=1785157887387"></script>
+  <script src="preview-shim.js?v=1785236174537"></script>
+  <script src="mark-geometry.js?v=1785236174537"></script>
+  <script src="mark.js?v=1785236174537"></script>
+  <script src="renderer.js?v=1785236174537"></script>
 </body>
 </html>

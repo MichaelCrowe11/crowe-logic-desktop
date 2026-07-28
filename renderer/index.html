@@ -146,7 +146,11 @@
 
     <section id="surface-cultivation" class="surface hidden">
       <div class="surface-inner">
-        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. These go straight to crowelm-grower, the mycology expert.</p></header>
+        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Anything you ask here goes straight to crowelm-grower, the mycology expert — no need to phrase it for the router.</p></header>
+        <form id="cult-composer" class="surface-composer" autocomplete="off">
+          <input id="cult-input" type="text" placeholder="Ask the grower — substrate, contamination, fruiting, yield..." spellcheck="false" />
+          <button type="submit" class="primary sm">Ask</button>
+        </form>
         <div class="chips surface-chips">
           <button class="chip cult-chip">Plan an oyster substrate recipe for a 10-bag run, with sterilization steps</button>
           <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
