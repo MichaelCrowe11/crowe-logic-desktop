@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Merged into gen/apple/app_iOS/Info.plist at build time. Kept here rather than
+  edited in gen/, because `cargo tauri ios init` rewrites everything under gen/.
+
+  The two usage strings are not optional paperwork: <input type="file"
+  capture="environment"> reaches for AVCaptureDevice, and iOS terminates the
+  process outright - not a denied permission, a crash - if the matching
+  NS*UsageDescription key is absent. The wording is what the grower reads in the
+  system prompt, so it says what the photo is for.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Crowe Logic uses the camera to photograph substrate, cultures and fruiting blocks so Crowe Vision can check them for contamination and growth stage.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Crowe Logic can analyse grow photos you have already taken, so you can check a block you photographed earlier.</string>
+</dict>
+</plist>

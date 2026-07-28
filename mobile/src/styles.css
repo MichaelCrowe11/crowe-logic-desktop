@@ -1,0 +1,203 @@
+/* Crowe Logic mobile.
+ *
+ * Tokens are lifted from renderer/styles.css rather than reinvented, so the
+ * phone and the desktop are recognisably the same product. Only the subset this
+ * app actually uses is copied - carrying the whole sheet across would import
+ * terminal, diff and panel tokens for screens that do not exist here.
+ *
+ * Dark is the default on mobile, which is the one deliberate departure. A grow
+ * room is dim, the phone is often the brightest thing in it, and a cream field
+ * at full brightness ruins your night vision while you are looking at substrate.
+ */
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("fonts/fraunces-var.woff2") format("woff2-variations");
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/inter-var.woff2") format("woff2-variations");
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+
+:root {
+  --ink: #f5f2ea;
+  --muted: #a49b8a;
+  --bg: #131110;
+  --panel: #1c1917;
+  --raised: #241f1c;
+  --gold: #d2a24c;
+  --gold-text: #dbb268;
+  --line: rgba(245,242,234,0.12);
+  --line-strong: rgba(245,242,234,0.24);
+  --ok: #79b479;
+  --warn: #d8a24a;
+  --err-fg: #e08b74;
+  --err-bg: #2a1a15;
+  --err-line: #5a3226;
+  --display: "Fraunces", Georgia, serif;
+  --body: "Inter", system-ui, -apple-system, sans-serif;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+  --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
+  --accent-wash: rgba(210,162,76,0.14);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body);
+  /* The webview must not rubber-band or pinch: it is an app, not a page. */
+  overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none;
+}
+
+body {
+  display: flex; flex-direction: column;
+  /* Respect the notch and the home indicator. Without this the wordmark sits
+     under the status bar on every iPhone since the X. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* ── header ─────────────────────────────────────────────────────── */
+
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px 12px; border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+/* The logotype, not a name set in a font: the spore is the tittle of the i. */
+header .wordmark { height: 26px; width: auto; display: block; }
+header .gear {
+  appearance: none; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); width: 36px; height: 36px; border-radius: var(--r-md);
+  font-size: 17px; line-height: 1; display: grid; place-items: center;
+}
+header .gear:active { background: var(--raised); }
+header .gear svg { width: 18px; height: 18px; }
+
+main { flex: 1 1 auto; overflow-y: auto; padding: 20px; -webkit-overflow-scrolling: touch; }
+
+h1 {
+  font-family: var(--display); font-weight: 600; font-size: 25px;
+  margin: 4px 0 6px; letter-spacing: -0.01em;
+}
+.sub { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 0 0 20px; }
+
+/* ── analysis type ──────────────────────────────────────────────── */
+
+.types { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 18px; }
+.types button {
+  appearance: none; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); border-radius: var(--r-md); padding: 11px 8px;
+  font-family: var(--body); font-size: 13px; font-weight: 500;
+  transition: background .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.types button[aria-pressed="true"] {
+  background: var(--accent-wash); border-color: var(--gold); color: var(--gold-text);
+}
+
+/* ── capture ────────────────────────────────────────────────────── */
+
+.shot {
+  position: relative; display: block; width: 100%;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-lg);
+  background: var(--panel); min-height: 210px;
+  display: grid; place-items: center; text-align: center;
+  padding: 26px 20px; overflow: hidden;
+}
+.shot input { position: absolute; inset: 0; opacity: 0; }
+/* Stacked explicitly. These were inline spans, so the icon, the label and the
+   hint ran together on one line and margin-bottom did nothing. */
+.shot .shot-body { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.shot .glyph { width: 30px; height: 30px; margin-bottom: 6px; color: var(--gold); opacity: .85; }
+.shot .label { font-size: 15px; font-weight: 500; }
+.shot .hint { font-size: 12.5px; color: var(--muted); }
+.shot img.preview {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: var(--r-lg);
+}
+.shot.has-image { border-style: solid; }
+/* The preview covers the whole tile, so the label has to come back over the top
+   of it or "Retake" is invisible and the tile looks inert. Anchored to the
+   bottom on a scrim, because the middle of the frame is the part you want to
+   look at. */
+.shot.has-image .shot-body {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  /* The preview is appended after this element, so without a z-index the image
+     wins on paint order and the label disappears under it. */
+  z-index: 1;
+  padding: 26px 14px 11px; gap: 1px;
+  background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.shot.has-image .glyph { display: none; }
+.shot.has-image .hint { color: rgba(245,242,234,.72); }
+
+.actions { display: flex; gap: 10px; margin-top: 16px; }
+button.primary, button.ghost {
+  appearance: none; border-radius: var(--r-md); font-family: var(--body);
+  font-size: 15px; font-weight: 560; padding: 14px 16px; flex: 1;
+  transition: opacity .18s var(--ease);
+}
+button.primary { border: 1px solid var(--gold); background: var(--gold); color: #14110c; }
+button.ghost { border: 1px solid var(--line); background: transparent; color: var(--muted); flex: 0 0 auto; padding: 14px 18px; }
+button:disabled { opacity: .42; }
+button.primary:active:not(:disabled) { opacity: .8; }
+
+/* ── result ─────────────────────────────────────────────────────── */
+
+.card {
+  margin-top: 20px; border: 1px solid var(--line); background: var(--panel);
+  border-radius: var(--r-lg); padding: 16px 17px;
+}
+.card.error { background: var(--err-bg); border-color: var(--err-line); }
+.card h2 {
+  font-family: var(--display); font-size: 17px; font-weight: 600;
+  margin: 0 0 9px; display: flex; align-items: center; gap: 8px;
+}
+.card .verdict { font-size: 13px; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
+.card .verdict.ok { background: rgba(121,180,121,.16); color: var(--ok); }
+.card .verdict.warn { background: var(--accent-wash); color: var(--warn); }
+.card .verdict.bad { background: rgba(224,139,116,.16); color: var(--err-fg); }
+.card p { margin: 0 0 9px; font-size: 14.5px; line-height: 1.55; }
+.card p:last-child { margin-bottom: 0; }
+.card .meta { color: var(--muted); font-size: 12.5px; }
+.card pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--body); font-size: 14px; line-height: 1.55;
+  -webkit-user-select: text; user-select: text;
+}
+
+.spinner {
+  width: 15px; height: 15px; border: 2px solid var(--line-strong);
+  border-top-color: var(--gold); border-radius: 50%;
+  animation: spin .7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── settings sheet ─────────────────────────────────────────────── */
+
+dialog {
+  border: none; padding: 0; background: transparent; max-width: 100%; width: 100%;
+  margin: auto auto 0; color: var(--ink);
+}
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog .sheet {
+  background: var(--raised); border-top: 1px solid var(--line);
+  border-radius: var(--r-lg) var(--r-lg) 0 0; padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+}
+dialog h2 { font-family: var(--display); font-size: 19px; margin: 0 0 4px; }
+dialog .sub { margin-bottom: 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+input[type="text"], input[type="password"] {
+  width: 100%; padding: 12px 13px; margin-bottom: 14px;
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  font-family: var(--body); font-size: 15px;
+  -webkit-user-select: text; user-select: text;
+}
+input:focus { outline: 2px solid var(--gold); outline-offset: 1px; border-color: transparent; }
