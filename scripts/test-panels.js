@@ -494,6 +494,75 @@ const tests = [
     expect: { chat: false, projects: false, studio: true, cultivation: true,
       entries: "Space: Chat|Space: Projects", landed: "chat", restored: 4 },
   },
+  {
+    // The profile above was only ever reachable by hand-editing localStorage.
+    // These drive the settings control instead, because a picker that renders
+    // correctly and writes nothing looks identical to one that works.
+    name: "unchecking a space in the picker narrows the shell",
+    body: `__resetSpaces();
+      renderSpacePicker();
+      const box = $("cfg-spaces");
+      const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
+      // .click() runs the real activation behaviour - it toggles checked and
+      // fires input and change itself - so this exercises what a mouse does
+      // rather than a change event we handed the element ourselves.
+      cb("studio").click(); cb("cultivation").click();
+      const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
+      const hidden = document.querySelector('#spaces .seg-btn[data-space="studio"]').classList.contains("hidden");
+      // Re-enabling has to bring the tab back, not just stop hiding new ones.
+      cb("studio").click();
+      const back = !document.querySelector('#spaces .seg-btn[data-space="studio"]').classList.contains("hidden");
+      __resetSpaces();
+      return { stored, size, hidden, back };`,
+    expect: { stored: '["chat","projects"]', size: 2, hidden: true, back: true },
+  },
+  {
+    // Storing nothing when everything is on is what keeps a space added in a
+    // later version from being invisible on every install that ever saved.
+    name: "an all-on selection stores no profile at all",
+    body: `__resetSpaces();
+      localStorage.setItem("crowe-spaces", JSON.stringify(["chat","projects"]));
+      applySpaceProfile();
+      renderSpacePicker();
+      const box = $("cfg-spaces");
+      const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
+      for (const id of ["studio", "cultivation"]) cb(id).click();
+      const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
+      __resetSpaces();
+      return { stored, size };`,
+    expect: { stored: null, size: 4 },
+  },
+  {
+    name: "the picker cannot turn chat off",
+    body: `__resetSpaces();
+      renderSpacePicker();
+      const chat = $("cfg-spaces").querySelector('input[data-space="chat"]');
+      // Belt and braces: the checkbox is disabled, and the writer re-adds chat
+      // even when handed a list without it.
+      setSpaceProfile(["projects"]);
+      const kept = PROFILE.has("chat");
+      __resetSpaces();
+      return { disabled: chat.disabled, checked: chat.checked, kept };`,
+    expect: { disabled: true, checked: true, kept: true },
+  },
+  {
+    // The tests above call .click() on the element, which skips hit testing. A
+    // row that has been laid out under something else still passes them and is
+    // still dead to a mouse, so check each box is what the cursor would find at
+    // the point it is drawn.
+    name: "every space checkbox is reachable where it is drawn",
+    body: `__resetSpaces();
+      $("settings").classList.remove("hidden");
+      renderSpacePicker();
+      const covered = [];
+      for (const i of $("cfg-spaces").querySelectorAll("input")) {
+        const b = i.getBoundingClientRect();
+        if (document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) !== i) covered.push(i.dataset.space);
+      }
+      $("settings").classList.add("hidden");
+      return { covered: covered.join(",") };`,
+    expect: { covered: "" },
+  },
 ];
 
 function compare(actual, expected) {

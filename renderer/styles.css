@@ -1057,6 +1057,9 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .key-manager { margin-top:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:color-mix(in srgb,var(--raised) 86%,transparent); }
 .settings-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 .settings-section-head div { display:flex; flex-direction:column; gap:2px; }.settings-section-head span { color:var(--muted); font-size: var(--fs-cap); }
+.space-picker { display:flex; flex-wrap:wrap; gap:6px 18px; }
+.space-picker .chk { gap:7px; font-size: var(--fs-sm); }
+.space-picker .chk:has(input:disabled) { color: var(--muted); }
 .key-provider { display:grid; grid-template-columns:minmax(120px,1fr) minmax(150px,1.4fr) auto auto auto; align-items:center; gap:6px; padding:7px 0; border-top:1px solid var(--line); }
 .key-provider>div { display:flex; flex-direction:column; }.key-provider>div span { color:var(--muted); font-size: var(--fs-cap); }.key-provider input { min-width:0; }
 .agent-workbench { display:grid !important; grid-template-columns:190px minmax(560px,1fr); overflow:auto; background:linear-gradient(145deg,var(--cream),var(--panel)); }

@@ -727,12 +727,42 @@ async function renderKeyManager(){
   host.innerHTML=(result.providers||[]).map(x=>`<div class="key-provider" data-provider="${x.id}"><div><b>${esc(x.label)}</b><span>${x.configured?(x.healthy?"Connected · tested ":"Configured securely · ")+(x.testedAt?new Date(x.testedAt).toLocaleDateString():"not tested"):"Not configured"}</span></div><input type="password" autocomplete="new-password" spellcheck="false" placeholder="${x.configured?"Replace existing key":"Enter API key"}"><button class="key-save ghost sm">Save</button><button class="key-test ghost sm" ${x.configured?"":"disabled"}>Test</button><button class="key-remove ghost sm" ${x.configured?"":"disabled"}>Remove</button></div>`).join("");
   host.querySelectorAll(".key-provider").forEach(row=>{const id=row.dataset.provider,input=row.querySelector("input");row.querySelector(".key-save").onclick=async()=>{if(!input.value.trim())return;await window.crowe.keys.set(id,input.value.trim());input.value="";renderKeyManager()};row.querySelector(".key-test").onclick=async e=>{e.currentTarget.textContent="Testing";const r=await window.crowe.keys.test(id);e.currentTarget.textContent=r.ok?"Connected":"Failed"};row.querySelector(".key-remove").onclick=async()=>{if(!confirm(`Remove the ${id} credential from the native vault?`))return;await window.crowe.keys.remove(id);renderKeyManager()}});
 }
+// Rows are built from the space registry rather than listed here, so a space
+// added to SPACES is offered without a second edit — the same reason the nav
+// handlers and palette entries are generated from it.
+//
+// This one writes through on change instead of waiting for Save, matching the
+// key manager and the plugin rows either side of it: the effect is visible
+// behind the modal, so a toggle that did nothing until Save would read as
+// broken. Cancel does not undo it, for the same reason it does not un-enable a
+// plugin.
+function renderSpacePicker() {
+  const box = $("cfg-spaces"); if (!box) return;
+  box.innerHTML = "";
+  for (const [id, sp] of Object.entries(SPACES)) {
+    const fixed = id === "chat"; // the thread every other space funnels into
+    const row = document.createElement("label");
+    row.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.dataset.space = id;
+    cb.checked = PROFILE.has(id); cb.disabled = fixed;
+    cb.addEventListener("change", () => {
+      setSpaceProfile([...box.querySelectorAll("input:checked")].map((i) => i.dataset.space));
+    });
+    const name = document.createElement("span");
+    name.textContent = sp.label;
+    row.append(cb, name);
+    if (fixed) { const tag = document.createElement("em"); tag.className = "plug-tag"; tag.textContent = "always on"; row.append(tag); }
+    box.append(row);
+  }
+}
+
 $("settings-btn").addEventListener("click", async () => {
   const c = await window.crowe.getConfig();
   $("cfg-base").value = c.baseUrl; $("cfg-cwd").value = c.cwd || ""; $("cfg-token").value = "";
   $("cfg-auto").checked = Boolean(c.autoApprove);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderPlugins(); renderKeyManager();
+  renderSpacePicker(); renderPlugins(); renderKeyManager();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));
@@ -1038,6 +1068,24 @@ function applySpaceProfile() {
   }
   const cur = document.body.dataset.space;
   if (cur && !PROFILE.has(cur)) setSpace("chat");
+}
+
+// Stored as the whole enabled list, chat included, so the value reads the same
+// as what the picker shows rather than as a diff you have to reconstruct.
+//
+// An install with every space on stores nothing at all. That matters for the
+// next version: a saved list is a closed set, so a space added later would be
+// absent from every existing install's list and silently never appear. Storing
+// only a deliberate narrowing means the default stays "everything", and only
+// someone who actually turned a space off keeps a list that can go stale.
+function setSpaceProfile(ids) {
+  const all = Object.keys(SPACES);
+  const keep = all.filter((id) => id === "chat" || ids.includes(id));
+  try {
+    if (keep.length === all.length) localStorage.removeItem("crowe-spaces");
+    else localStorage.setItem("crowe-spaces", JSON.stringify(keep));
+  } catch {}
+  applySpaceProfile();
 }
 
 function setSpace(name) {
