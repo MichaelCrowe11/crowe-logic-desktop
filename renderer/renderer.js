@@ -280,7 +280,10 @@ function addRouteNode(body, ev) {
   el.innerHTML = `<span class="rc-dot"></span><span class="rc-label">routed to ${esc(label)}</span>`;
   body.appendChild(el); scrollBottom();
 }
-async function send(text) {
+// opts.role pins the expert for this turn. Surfaces built around one specialty
+// pass it so the routing matches what the surface says it does, instead of
+// depending on the operator happening to use the right vocabulary.
+async function send(text, opts = {}) {
   if (!text.trim() || running) return;
   // Re-validate live: a token that expired since launch must not eat the turn.
   if (!(await refreshAuth())) { showSignInPrompt(); return; }
@@ -338,7 +341,7 @@ async function send(text) {
     else if (ev.type === "stopped") { finishSaid(); hideThinking(body); addStopped(body); }
     else if (ev.type === "error") { finishSaid(); hideThinking(body); addError(body, ev.text); }
   });
-  try { await window.crowe.agent.run(messages); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  try { await window.crowe.agent.run(messages, "main", opts.role ? { role: opts.role } : {}); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   finishSaid(); hideThinking(body);
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
@@ -410,9 +413,15 @@ async function mountTerminal(p, body, systemTerminal=false) {
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:termTheme()});
   const f=new FitAddon.FitAddon(); t.loadAddon(f); t.open(host); try{f.fit()}catch{}
   const state=tools.querySelector(".terminal-state");
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});state.textContent=r&&r.ok!==false?"running":"unavailable";if(!r||r.ok===false)t.write("\r\n  PTY unavailable in this build.\r\n")};
+  /* Say why the shell did not open. It always claimed "unavailable in this
+     build", which is wrong and unactionable when the real answer is that the
+     autonomy tier withholds the shell and the operator can just raise it. */
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok)t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`)};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
-  if (!p.bootstrapped) { p.bootstrapped=true; window.crowe.pty.input(p.id,"crowe-logic\r"); }
+  /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
+     which made every terminal a Crowe Logic CLI whether the operator wanted
+     one or not - and left no ordinary shell to run anything else from. The
+     agent panel is the one place the CLI is entered for you. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
@@ -440,12 +449,22 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   const CHIP={booting:"BOOTING",running:"ACTIVE",verified:"DONE",waiting:"PAUSED",failed:"OFFLINE",idle:"READY"};
   const setState=(chipState,markState,label)=>{chip.dataset.state=chipState;chip.textContent=CHIP[chipState]||chipState.toUpperCase();mark.setState(markState);if(label)status.textContent=label};
   const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("failed","failed","Runtime unavailable")}};
+  /* This panel is the one place the Crowe Logic CLI is entered for you. When
+     the tier withholds the shell the dock still works - the objective runs on
+     the gateway - so this is a degraded panel, not a dead one. */
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
-  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);window.crowe.pty.input(p.id,task+"\r");box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
-  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);window.crowe.pty.input(p.id,"\x03");setState("waiting","idle","Interrupted");addEvent("status","operator interrupted runtime")};
+  /* The dock runs the objective on the gateway agent, and only there. It used
+     to also type the objective into the PTY, so every task ran twice - two
+     bills, two sets of side effects on the same working tree. The terminal
+     below stays interactive for anything the operator wants to run by hand. */
+  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
+  /* Interrupt stops the agent run, not the terminal. It used to also send
+     Ctrl-C to the PTY, killing whatever the operator had running by hand for
+     a run that was never happening there. Ctrl-C in the terminal still works. */
+  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);setState("waiting","idle","Interrupted");addEvent("status","operator interrupted the agent run")};
   new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
 }
 
@@ -1053,7 +1072,7 @@ $("studio-music").addEventListener("click", () => {
   input.value = "Compose with Talon: ";
   input.focus(); input.setSelectionRange(input.value.length, input.value.length);
 });
-document.querySelectorAll(".cult-chip").forEach((c) => c.addEventListener("click", () => { setSpace("chat"); send(c.textContent); }));
+document.querySelectorAll(".cult-chip").forEach((c) => c.addEventListener("click", () => { setSpace("chat"); send(c.textContent, { role: "cultivation" }); }));
 
 // ── Official plugins (Settings picker; manifest lives in main) ──
 let pluginGlyphs = {};

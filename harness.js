@@ -359,22 +359,27 @@ function catalogModelForRole(catalog, role) {
   const m = catalog.find((x) => x && x.featured && x.available !== false && x.gateway_tool_calling !== false && x.role === role);
   return m ? m.model : null;
 }
-function routeTurn(ctx, messages) {
+// `pin` names the expert outright, for callers that already know which one they
+// want - a surface dedicated to a specialty knows its own role better than a
+// regex reading the sentence. Keyword classification stays the fallback, so an
+// unpinned turn behaves exactly as before.
+function routeTurn(ctx, messages, pin = "") {
   const cfg = ctx.loadConfig();
   const dflt = cfg.model || "crowelm";
   const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
-  const role = classifyRole(String((last && last.content) || ""));
+  const role = pin && pin !== "default" ? pin : classifyRole(String((last && last.content) || ""));
   if (role === "default") return { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
   const dynamic = catalogModelForRole(ctx.getCatalog ? ctx.getCatalog() : [], role);
   const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
   const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
-  return { expert: role, model, reason: `${role} · ${src}`, fallback: dflt };
+  return { expert: role, model, reason: `${role} · ${src}${pin ? " · pinned" : ""}`, fallback: dflt };
 }
 
 // ─── Agent loop (block: route -> retrieve/reason/synthesize) ──────────────────
 // Each turn is a block. route() selects the expert; the tool loop below is the
 // retrieve/reason/synthesize body; the operator thread is the residual backbone.
-// deps = { gatewayChat(msgs, tools, signal), send(ev), isAborted(), setController(c) }
+// deps = { gatewayChat(msgs, tools, signal), send(ev), isAborted(), setController(c),
+//          role } - role optionally pins the expert instead of classifying text.
 async function runAgent(ctx, messages, deps) {
   const sys = await buildSystemPrompt(ctx);
   let msgs = [{ role: "system", content: sys }, ...messages];
@@ -382,7 +387,7 @@ async function runAgent(ctx, messages, deps) {
   let totIn = 0, totOut = 0, totMs = 0, capped = false;
 
   // ── ROUTE ── pick the expert deployment for this block, fallback-first.
-  const route = routeTurn(ctx, messages);
+  const route = routeTurn(ctx, messages, deps.role || "");
   let activeModel = route.model;
   let fellBack = false;
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });

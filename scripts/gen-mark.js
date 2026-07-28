@@ -106,6 +106,8 @@ function along(o, deg, d0, d1, curl, t) {
 // ease it off: a tip that tapers to 3.4 of a 120 canvas is under half a pixel
 // at 16px and simply disappears. `fork` is dropped for the same reason — below
 // about 20px the branches merge into a blur and cost legibility for nothing.
+// Every variant meant for small sizes passes fork: false. That sentence was
+// here before the code did it, and mark-simple.svg spent a release forked.
 function arms(taper, fork) {
   const w = (a) => a.w0 + (a.w1 - a.w0) * taper;
   const blue = [];
@@ -131,6 +133,35 @@ function arms(taper, fork) {
   return { blue, gold: [] };
 }
 
+// The arms reach about 81 of the 120 canvas, so a third of every rendered pixel
+// was margin the mark had already paid for: at a 16px tray slot only ~11px was
+// artwork. The box below is the ink, not the canvas.
+//
+// It is one box shared by every variant, not a per-variant fit. Easing the taper
+// widens the tips, so the small variants actually reach *further* than the
+// primary — fitting each one to itself would make the mark change size the
+// moment you swapped mark.svg for mark-simple.svg in the same slot. Taking the
+// union and squaring it about the centre keeps the family interchangeable.
+const INK_PAD = 1; // keeps tip antialiasing off the viewBox edge
+function inkBox() {
+  let far = 0;
+  // Extent is driven by taper (tip width) and fork; the corners of that space
+  // bound everything between them.
+  for (const taper of [0, 1]) {
+    for (const fork of [false, true]) {
+      for (const a of arms(taper, fork).blue) {
+        for (const pair of a.pts.trim().split(/\s+/)) {
+          const [x, y] = pair.split(",").map(Number);
+          far = Math.max(far, Math.abs(x - CX), Math.abs(y - CY));
+        }
+      }
+    }
+  }
+  const half = far + INK_PAD, side = half * 2;
+  return `${(CX - half).toFixed(2)} ${(CY - half).toFixed(2)} ${side.toFixed(2)} ${side.toFixed(2)}`;
+}
+const INK_VIEWBOX = inkBox();
+
 // Draw order: blue hyphae first, then the gold core on top — the spore sits
 // over the roots of the arms so they read as emerging from behind it.
 function markSvg(opts) {
@@ -142,7 +173,7 @@ function markSvg(opts) {
     ...A.gold.map((a) => `<polygon points="${a.pts}" fill="${pal.gold}"/>`),
     `<polygon points="${hex(HEART)}" fill="${pal.gold}"/>`,
   ].filter(Boolean).join("\n  ");
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VIEW} ${VIEW}">\n  ${rows}\n</svg>\n`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${INK_VIEWBOX}">\n  ${rows}\n</svg>\n`;
 }
 
 // ── Emit ────────────────────────────────────────────────────────────────────
@@ -153,12 +184,18 @@ const A = (p) => path.join(__dirname, "..", "assets", p);
 const wrote = [];
 const emit = (name, body) => { fs.writeFileSync(A(name), body); wrote.push(name); };
 emit("mark.svg", markSvg());
-// Simple: taper eased off so the tips still carry mass in the low twenties.
-emit("mark-simple.svg", markSvg({ taper: 0.45 }));
-// Same taper for dark surfaces. Without this the small-size variant is the one
-// hole in the matrix: ink hyphae on a dark ground disappear at the exact sizes
-// this file exists to survive.
-emit("mark-simple-dark.svg", markSvg({ taper: 0.45, pal: { blue: "#f5f2ea", gold: C.gold } }));
+// Simple: the small-size variant, and it has to actually be simple. It kept the
+// fork while claiming not to, which is why it read no better than the primary —
+// rendered at true 16px the branches broke into detached specks and the gold
+// core was the only thing left. Same geometry the tray has always used, because
+// the tray was the only variant that survived that test, but in full colour: the
+// core is what carries the brand once the arms go thin.
+emit("mark-simple.svg", markSvg({ taper: 0.2, fork: false }));
+// Dark surfaces need more mass than light ones at the same size — ink on a dark
+// ground loses a half-pixel of stroke to antialiasing that light never gives
+// back. Parallel-sided arms are the widest this geometry offers, so the dark
+// small variant takes them.
+emit("mark-simple-dark.svg", markSvg({ taper: 0, fork: false, pal: { blue: "#f5f2ea", gold: C.gold } }));
 // Strict one-colour versions — the Nike test. If the silhouette doesn't carry
 // the mark without the gold, the mark is wrong; these are also what goes on
 // anything printed, engraved, or embroidered.

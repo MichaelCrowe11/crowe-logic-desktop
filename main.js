@@ -625,7 +625,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   }
   return { ok: true, stopped: agentRuns.size };
 });
-ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "" }) => {
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "" }) => {
   if (licensed) {
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
@@ -639,6 +639,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
       isAborted: () => run.aborted,
       setController: (c) => { run.controller = c; },
+      role: String(role || ""),
     });
     if (id === "main") {
       try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
@@ -652,8 +653,17 @@ ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, n
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
 const ptyProcs = new Map();
+/* The shell is the one capability the autonomy menu names out loud: two of its
+   four tiers say "no shell" in the label the user picked. Nothing enforced it -
+   every tier opened a full login shell - so the promise was decoration, and the
+   safe-by-default tier was the least safe thing in the app. Only Execute grants
+   a shell. The env stays process.env: that is the operator's own login
+   environment, the same one Terminal.app would give them, and the gateway token
+   is not in it - it lives in the auth store. */
+function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
 ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
-  if (!pty) return { ok: false, error: "pty unavailable" };
+  if (!pty) return { ok: false, error: "pty unavailable in this build" };
+  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
   ptyProcs.set(id, proc);
