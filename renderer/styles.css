@@ -773,14 +773,14 @@ body[data-space="cultivation"] .surface::before {
   content: ""; position: sticky; top: 0; float: right;
   width: min(560px, 52vw); height: 0; padding-bottom: min(385px, 36vw);
   margin: 6vh -4vw 0 0; pointer-events: none; z-index: 0;
-  background: var(--gold-deep); opacity: .09;
+  background: var(--gold-deep); opacity: .18;
   -webkit-mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
   mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
 }
 /* Ink lines lose more to antialiasing on a dark ground than on a light one, so
    the dark theme takes the brighter gold and a touch more presence - the same
    correction mark-simple-dark.svg makes with its wider arms. */
-body.dark[data-space="cultivation"] .surface::before { background: var(--gold); opacity: .13; }
+body.dark[data-space="cultivation"] .surface::before { background: var(--gold); opacity: .24; }
 body[data-space="cultivation"] .surface-inner { position: relative; z-index: 1; }
 @media (prefers-reduced-motion: no-preference) {
   body[data-space="cultivation"] .surface::before { transition: opacity .4s var(--ease); }
