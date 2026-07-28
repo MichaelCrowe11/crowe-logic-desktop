@@ -476,6 +476,30 @@ const tests = [
     expect: { wb: true, surf: true },
   },
   {
+    // Cultivation carries a watermark of the growers' badge. It is scoped to
+    // body[data-space], not to #surface-cultivation, because Cultivation's lanes
+    // render into the same #surface-lane element Projects uses - keying on the
+    // element put the mark on the overview and dropped it on every lane.
+    //
+    // So the assertion that matters is the negative one: the SAME element, once
+    // under each space. A test that only checked Cultivation would still pass if
+    // the rule leaked onto Projects and watermarked the whole app.
+    name: "the cultivation watermark follows the space, not the surface",
+    body: `__resetSpaces();
+      const read = () => {
+        const s = [...document.querySelectorAll(".surface")].find((x) => !x.classList.contains("hidden"));
+        const cs = s && getComputedStyle(s, "::before");
+        return { id: s ? s.id : null, on: !!cs && cs.maskImage !== "none" && cs.maskImage !== "" };
+      };
+      cultLane = "flushes"; setSpace("cultivation");
+      const cult = read();
+      projLane = "sessions"; setSpace("projects");
+      const proj = read();
+      __resetSpaces();
+      return { shared: cult.id === proj.id && cult.id === "surface-lane", cult: cult.on, proj: proj.on };`,
+    expect: { shared: true, cult: true, proj: false },
+  },
+  {
     name: "a profile hides the spaces it leaves out",
     body: `__resetSpaces();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
