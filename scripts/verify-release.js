@@ -49,10 +49,24 @@ const CHANNELS = [
   { os: 'linux', feed: 'latest-linux.yml' },
 ];
 
-// electron-builder emits a blockmap beside these so the updater can download a
-// diff. A deb has none. A missing blockmap costs bandwidth, not correctness, so
-// it is a warning rather than a failure.
-const BLOCKMAPPED = /\.(exe|dmg|zip|AppImage)$/;
+// electron-builder ships the updater's blockmap two different ways, and this
+// check got it wrong for AppImage until 0.16.0 was verified by hand.
+//
+// NsisTarget and ArchiveTarget call createBlockmap(), which writes a separate
+// <artifact>.blockmap beside the installer. AppImage calls appendBlockmap()
+// instead (app-builder-lib/out/targets/appimage/appImageUtil.js), which has no
+// out file: the compressed blockmap is appended to the AppImage itself,
+// followed by its own length as a big-endian uint32, and the length is
+// published in the feed as blockMapSize. electron-updater then reads it back
+// from `fileSize - (blockMapSize + 4)`
+// (differentialDownloader/FileWithEmbeddedBlockMapDifferentialDownloader.js).
+//
+// So there is no such object as Crowe Logic-x.y.z.AppImage.blockmap, and asking
+// for one warned on every release that a Linux update would download in full
+// when differential updates were working the whole time. A checker that cries
+// wolf is worse than no checker, because the next warning gets waved through.
+const SIDECAR_BLOCKMAP = /\.(exe|dmg|zip)$/;
+const EMBEDDED_BLOCKMAP = /\.AppImage$/;
 
 const args = process.argv.slice(2);
 const full = args.includes('--full');
@@ -90,7 +104,9 @@ function parseFeed(text) {
     const sha = /^\s+sha512:\s*(\S+)/.exec(line);
     if (sha) { cur.sha512 = sha[1]; continue; }
     const size = /^\s+size:\s*(\d+)/.exec(line);
-    if (size) cur.size = Number(size[1]);
+    if (size) { cur.size = Number(size[1]); continue; }
+    const bms = /^\s+blockMapSize:\s*(\d+)/.exec(line);
+    if (bms) cur.blockMapSize = Number(bms[1]);
   }
   return { version, files };
 }
@@ -125,6 +141,46 @@ async function probe(channelUrl, file) {
     return { okay: false, why: `feed declares ${file.size} bytes, object is ${total}` };
   }
   return { okay: true, total };
+}
+
+// Read the AppImage's trailing blockmap exactly as electron-updater does, and
+// inflate it. Deflate is unforgiving: a tail that is off by a byte, or an
+// object some proxy re-encoded, fails here rather than on a user's machine
+// halfway through an update.
+async function verifyEmbeddedBlockmap(channelUrl, file) {
+  if (file.blockMapSize == null) return 'feed declares no blockMapSize';
+  if (file.size == null) return 'feed declares no size';
+  const start = file.size - (file.blockMapSize + 4);
+  if (start < 0) return `blockMapSize ${file.blockMapSize} exceeds the ${file.size} byte object`;
+
+  const res = await get(channelUrl, { headers: { Range: `bytes=${start}-${file.size - 1}` } });
+  if (res.status !== 206) {
+    await res.arrayBuffer().catch(() => {});
+    return `expected 206 for the blockmap tail, got ${res.status}`;
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length !== file.blockMapSize + 4) {
+    return `asked for ${file.blockMapSize + 4} tail bytes, got ${buf.length}`;
+  }
+  // The last four bytes repeat the length. They disagreeing with the feed means
+  // the feed and the object came from different builds.
+  const declared = buf.readUInt32BE(buf.length - 4);
+  if (declared !== file.blockMapSize) {
+    return `object's trailer says ${declared} bytes, feed says ${file.blockMapSize}`;
+  }
+  let map;
+  try {
+    map = JSON.parse(require('zlib').inflateRawSync(buf.subarray(0, buf.length - 4)).toString());
+  } catch (err) {
+    return `blockmap does not inflate: ${err.message}`;
+  }
+  const chunks = map.files && map.files[0] && map.files[0].sizes;
+  if (!Array.isArray(chunks) || chunks.length === 0) return 'blockmap names no chunks';
+  // The chunks have to describe the payload, not some prefix of it: they should
+  // account for every byte up to where the blockmap itself begins.
+  const covered = chunks.reduce((a, b) => a + b, 0);
+  if (covered !== start) return `chunks cover ${covered} bytes of a ${start} byte payload`;
+  return null;
 }
 
 async function verifySha512(channelUrl, file) {
@@ -168,7 +224,7 @@ async function verifySha512(channelUrl, file) {
       if (result.okay) ok(`${os}: ${file.url} resolves and serves ranges`);
       else fail(`${os}: ${file.url} resolves and serves ranges`, result.why);
 
-      if (BLOCKMAPPED.test(file.url)) {
+      if (SIDECAR_BLOCKMAP.test(file.url)) {
         try {
           const res = await get(at(`desktop/channel/${os}/${file.url}.blockmap`), { headers: { Range: 'bytes=0-0' } });
           await res.arrayBuffer().catch(() => {});
@@ -177,6 +233,14 @@ async function verifySha512(channelUrl, file) {
         } catch (err) {
           warn(`${os}: ${file.url}.blockmap present`, err.message);
         }
+      } else if (EMBEDDED_BLOCKMAP.test(file.url)) {
+        // Fetch the tail the updater will fetch and read it the way the updater
+        // reads it. Checking that the feed merely mentions blockMapSize would
+        // pass on a truncated or re-compressed object, which is the case where
+        // the update actually breaks.
+        const why = await verifyEmbeddedBlockmap(url, file);
+        if (why) warn(`${os}: ${file.url} carries its blockmap`, `${why} - updates will download in full`);
+        else ok(`${os}: ${file.url} carries its blockmap`);
       }
 
       if (full && file.sha512 && result.okay) {
