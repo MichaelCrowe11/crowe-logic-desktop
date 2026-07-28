@@ -14,29 +14,48 @@
 // scripts/smoke-shot.js, which asserts that panels mount rather than that they
 // behave.
 //
-// Requires the preview server. Started automatically unless PREVIEW_URL is set.
+// Serves the checkout itself on an ephemeral port unless PREVIEW_URL is set.
 
 const { app, BrowserWindow } = require("electron");
-const { spawn } = require("child_process");
+const http = require("http");
 const path = require("path");
 const fs = require("fs");
 
 const ROOT = path.join(__dirname, "..");
-const PORT = process.env.PREVIEW_PORT || "8743";
-const URL = process.env.PREVIEW_URL || `http://127.0.0.1:${PORT}/renderer/preview.html`;
 
 let server = null;
 
+// This used to spawn `python3 -m http.server` on a fixed port. If something was
+// already listening there - an orphan from a killed run, a second checkout, the
+// `npm run preview` server - python exited with "address already in use" into a
+// discarded stdio, the readiness poll got a 200 from the stranger, and the suite
+// tested that stranger's files while reporting on this one's. It cost an hour of
+// chasing a watermark failure in a worktree whose CSS was never being loaded.
+//
+// So: serve in-process on an ephemeral port. There is no port to collide with,
+// nothing to leave orphaned, and the files served are this ROOT by construction.
+const MIME = {
+  ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".woff2": "font/woff2",
+};
+
 function startServer() {
-  server = spawn("python3", ["-m", "http.server", PORT, "--directory", ROOT], { stdio: "ignore" });
+  server = http.createServer((req, res) => {
+    const rel = decodeURIComponent(req.url.split("?")[0]).replace(/^\/+/, "");
+    const file = path.join(ROOT, rel);
+    // Climbing out of ROOT is the same defect the fixed port was: it would serve
+    // bytes this checkout does not control.
+    if (file !== ROOT && !file.startsWith(ROOT + path.sep)) return res.writeHead(403).end();
+    fs.readFile(file, (err, buf) => {
+      if (err) return res.writeHead(404).end();
+      res.writeHead(200, { "content-type": MIME[path.extname(file)] || "application/octet-stream" });
+      res.end(buf);
+    });
+  });
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 10000;
-    (function poll() {
-      fetch(URL).then(resolve).catch(() => {
-        if (Date.now() > deadline) reject(new Error("preview server did not start"));
-        else setTimeout(poll, 150);
-      });
-    })();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () =>
+      resolve(`http://127.0.0.1:${server.address().port}/renderer/preview.html`));
   });
 }
 
@@ -597,13 +616,13 @@ function preloadNamespaces() {
 app.whenReady().then(async () => {
   let failures = 0;
   try {
-    if (!process.env.PREVIEW_URL) await startServer();
+    const url = process.env.PREVIEW_URL || (await startServer());
     const win = new BrowserWindow({ width: 1280, height: 860, show: false, webPreferences: { webviewTag: true } });
     const pageErrors = [];
     win.webContents.on("console-message", (_e, level, message) => {
       if (level >= 2 && !/Security Warning/.test(message)) pageErrors.push(message);
     });
-    await win.loadURL(URL + "?t=" + Date.now());
+    await win.loadURL(url + "?t=" + Date.now());
     await new Promise((r) => setTimeout(r, 3000));
     await win.webContents.executeJavaScript(PRELUDE);
 
@@ -622,6 +641,23 @@ app.whenReady().then(async () => {
       } else {
         console.log(`ok      ${t.name}`);
       }
+    }
+
+    /* Every check above reads the page and compares it to a file on disk, and all
+       of them are worthless if the page came from a different checkout. The
+       in-process server makes that impossible for the default path, but
+       PREVIEW_URL can still point anywhere, so ask the page what it actually
+       loaded rather than trusting the address. */
+    const onDisk = fs.readFileSync(path.join(ROOT, "renderer", "renderer.js"), "utf8");
+    const served = await win.webContents.executeJavaScript(
+      `fetch(new URL("renderer.js", location.href)).then((r) => r.ok ? r.text() : null)`);
+    if (served !== onDisk) {
+      failures++;
+      console.log("not ok  the page under test was served from this checkout");
+      console.log(served === null ? "        the page's origin has no renderer/renderer.js"
+        : `        served ${served.length} bytes, ${ROOT} has ${onDisk.length}`);
+    } else {
+      console.log("ok      the page under test was served from this checkout");
     }
 
     const want = preloadNamespaces();
@@ -678,13 +714,13 @@ app.whenReady().then(async () => {
       console.log("ok      renderer logged no console errors");
     }
 
-    const total = tests.length + 3;
+    const total = tests.length + 4;
     console.log(`\n${total - failures}/${total} passed`);
   } catch (error) {
     failures++;
     console.error("harness error:", error && error.stack ? error.stack : error);
   } finally {
-    if (server) server.kill();
+    if (server) server.close();
     app.exit(failures ? 1 : 0);
   }
 });
