@@ -1,0 +1,45 @@
+name: Verify release
+
+# The update feed is the one part of this project that fails without telling
+# anyone. A feed naming a file the bucket does not have makes every client 404
+# in the background and sit on its old version forever, and nothing surfaces
+# that - not the build, not the publish, not the download page.
+#
+# So check the live release on a schedule as well as on demand. This needs no
+# secrets: it reads the same public URLs a client reads.
+#
+# The scheduled run checks the version in package.json on the default branch,
+# which is the released version except in the window between a release commit
+# landing and the artifacts being published from the release machine. A failure
+# in that window is real - main claims a version nobody can install yet.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to verify (default: the one in package.json)"
+        required: false
+        type: string
+      full:
+        description: "Download every artifact and verify its sha512 (~0.5 GB)"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 13 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No npm ci: the verifier reads package.json and uses only node builtins,
+      # so installing 400 MB of Electron to make three HTTP requests is waste.
+      - run: node scripts/verify-release.js ${{ inputs.version }} ${{ inputs.full && '--full' || '' }}
