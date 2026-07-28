@@ -38,11 +38,37 @@ npm run build:win     # NSIS .exe   (build on Windows or an ephemeral Windows VM
 npm run build:linux   # AppImage + deb
 ```
 
+### Shipping a narrower build
+
+Every build shows all four spaces by default. To hand someone an install that
+opens with only the spaces their job needs — no mushroom farm, no film studio on
+a machine bought to drive a terminal — name them at package time:
+
+```bash
+npx electron-builder --mac --config.extraMetadata.croweSpaces=chat,projects
+```
+
+Call electron-builder directly rather than `npm run build:mac -- …`: that script
+is `electron-builder --mac && node scripts/staple-dmg.js release`, and npm
+appends extra arguments to the end of the whole string, so the flag would reach
+the stapler instead of the builder and be silently ignored.
+
+Chat is never optional and is added back whether or not it is listed. Unknown
+names are ignored, so a build outliving a space that gets removed still opens.
+
+This is the install's **default**, not a lock: Settings › Spaces still offers the
+full set, and someone who turns Studio back on keeps it across restarts. To try
+a profile without building, set the same list in the environment:
+
+```bash
+CROWE_SPACES=chat,projects npm start
+```
+
 ## Architecture
 
 - `main.js` — window + the gateway bridge. Holds the token; POSTs to
   `{baseUrl}/api/gateway/chat`, forwarding `tools` and returning `tool_calls`.
-- `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig}` (contextIsolation on, nodeIntegration off).
+- `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig,installSpaces}` (contextIsolation on, nodeIntegration off).
 - `renderer/` — the Crowe editorial UI (cream/ink/gold, self-hosted
   Fraunces/Inter/JetBrains Mono), chat loop, tool-call cards, settings.
 - `assets/` — brand assets, all derived from one source of truth.

@@ -60,6 +60,10 @@
   }
 
   window.crowe = {
+    // Null is an ordinary install: every space. A test narrows it by assigning
+    // here and calling applySpaceProfile(), which is what a packaged build with
+    // a croweSpaces key looks like from the renderer's side.
+    installSpaces: null,
     agent: {
       onEvent(fn) { agentListeners.push(fn); return () => { agentListeners = agentListeners.filter((f) => f !== fn); }; },
       async run(messages) {
