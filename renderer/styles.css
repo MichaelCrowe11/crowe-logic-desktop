@@ -742,6 +742,49 @@ button.ghost.sm { padding: 3px 10px; font-size: var(--fs-cap); }
 /* ── Surfaces (Home, lanes, Studio, Cultivation) ── */
 .surface { flex: 1; min-width: 0; overflow-y: auto; background: var(--cream); }
 .surface-inner { max-width: 880px; margin: 0 auto; padding: 34px 32px 26px; }
+
+/* Cultivation carries a watermark of the growers' badge - lion's mane, shiitake
+   and oyster on a dish - so the space is recognisable before you have read a
+   word of it. The other surfaces stay plain: a watermark everywhere is
+   wallpaper, and stops telling you which room you are in.
+
+   It is a mask, not an image. The source is a flat teal cartoon whose palette
+   exists nowhere in this app, so it is carried as contours only and the colour
+   comes from a token here - which is also what lets one 14 KB file serve both
+   themes, gold-on-cream and gold-on-graphite, the same way one mark.svg serves
+   every icon slot. Painting the artwork itself would have meant two files and a
+   teal that fights every other pixel on screen.
+
+   position:sticky rather than fixed or a background on .surface: the surface
+   scrolls, and a background-image would scroll away on a long grow log while a
+   fixed one would sit over the sidebar. Sticky pins it to the viewport for as
+   long as the surface owns it.
+
+   Scoped to body[data-space], not to #surface-cultivation. Cultivation's home is
+   its own surface but its lanes - Blocks, Flushes, Contamination - render into
+   #surface-lane, which Projects borrows too. Keying on the id put the watermark
+   on the overview and dropped it the moment you opened a lane, which is the
+   half of the space you actually spend time in. setSpace() already writes
+   body.dataset.space, so the room is the thing being asked about rather than
+   the element that happens to be mounted. .hidden is display:none, so only the
+   surface on screen draws one. */
+body[data-space="cultivation"] .surface { position: relative; }
+body[data-space="cultivation"] .surface::before {
+  content: ""; position: sticky; top: 0; float: right;
+  width: min(560px, 52vw); height: 0; padding-bottom: min(385px, 36vw);
+  margin: 6vh -4vw 0 0; pointer-events: none; z-index: 0;
+  background: var(--gold-deep); opacity: .09;
+  -webkit-mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
+  mask: url("../assets/cultivation-backdrop.png") no-repeat center / contain;
+}
+/* Ink lines lose more to antialiasing on a dark ground than on a light one, so
+   the dark theme takes the brighter gold and a touch more presence - the same
+   correction mark-simple-dark.svg makes with its wider arms. */
+body.dark[data-space="cultivation"] .surface::before { background: var(--gold); opacity: .13; }
+body[data-space="cultivation"] .surface-inner { position: relative; z-index: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  body[data-space="cultivation"] .surface::before { transition: opacity .4s var(--ease); }
+}
 .sh h1 { font-family: var(--display); font-weight: 560; font-size: var(--fs-display); letter-spacing: .2px; margin: 0 0 5px; }
 .sh-sub { color: var(--muted); font-size: var(--fs-body); margin: 0 0 20px; }
 .surface-composer { display: flex; gap: 8px; margin: 0 0 20px; }

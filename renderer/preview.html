@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785255216889" />
+  <link rel="stylesheet" href="styles.css?v=1785267498098" />
 </head>
 <body>
   <header id="bar">
@@ -54,7 +54,21 @@
           Studio
         </button>
         <button class="seg-btn" data-space="cultivation">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v-7M5 10a7 7 0 0 1 14 0z"/></svg>
+          <!-- A cap fruiting from a substrate block, not a bare mushroom. One cap
+               on one stem is the universal mushroom pictogram, so it read as an
+               umbrella and said nothing about this space in particular; the block
+               is what Cultivation actually tracks - Blocks is one of its lanes,
+               next to Flushes and Contamination - and it is the difference
+               between growing and foraging. Kept to two shapes because a third
+               turned to mud at 24px: a version with the badge's whole cluster in
+               a dish was unreadable at rail size.
+
+               The block is 5 units tall rather than the 4 it wants to be. .ic
+               draws at 16px, not the 24 of the viewBox, so a 4-unit block leaves
+               1.6px of daylight inside a 1.07px stroke and closes up into a solid
+               brick on a 1x display - fine on retina, wrong everywhere else. Five
+               units buys 2.3px and the rectangle stays open. -->
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16h14v5H5z"/><path d="M12 16v-4M6 12a6 6 0 0 1 12 0z"/></svg>
           Cultivation
         </button>
       </div>
@@ -343,9 +357,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785255216889"></script>
-  <script src="mark-geometry.js?v=1785255216889"></script>
-  <script src="mark.js?v=1785255216889"></script>
-  <script src="renderer.js?v=1785255216889"></script>
+  <script src="preview-shim.js?v=1785267498098"></script>
+  <script src="mark-geometry.js?v=1785267498098"></script>
+  <script src="mark.js?v=1785267498098"></script>
+  <script src="renderer.js?v=1785267498098"></script>
 </body>
 </html>
