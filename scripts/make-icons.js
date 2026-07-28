@@ -58,36 +58,34 @@ async function render(win, src, size) {
   return Buffer.from(dataUrl.split(",")[1], "base64");
 }
 
-// Mark + "Crowe Logic" at 2x (240px tall), Fraunces 600, single ink colour.
-// Width is measured from the actual set text, not hardcoded.
-async function renderLockup(win, markFile, ink) {
-  const H = 240, MK = 192, GAP = 52, FONT = 104;
-  const fontB64 = fs.readFileSync(path.join(ASSETS, "fonts", "fraunces-var.woff2")).toString("base64");
-  const markSvg = fs.readFileSync(path.join(ASSETS, markFile), "utf8")
-    .replace(/<svg\b/, `<svg width="${MK}" height="${MK}"`);
-  const markB64 = Buffer.from(markSvg, "utf8").toString("base64");
+// Non-square rasteriser for the wide assets (lockup, wordmark), sized off the
+// SVG's own viewBox so the PNG cannot come out a different shape than the vector.
+//
+// This used to compose the lockup on a canvas: draw mark.svg, register the
+// bundled woff2 via FontFace, then fillText("Crowe Logic"). That made the PNG
+// and the SVG two independent drawings of the same logo, and they drifted the
+// moment the SVG switched to outlines — the vector carries opsz 144 while the
+// bundled subset is pinned at opsz 9, so the two disagreed on letterforms.
+// The SVG is the single source now; this only rasterizes it.
+async function renderWide(win, src, height) {
+  const svg = fs.readFileSync(src, "utf8");
+  const vb = svg.match(/viewBox="([-\d.]+)\s+([-\d.]+)\s+([\d.]+)\s+([\d.]+)"/);
+  if (!vb) throw new Error(`${path.basename(src)} has no viewBox to size from`);
+  const width = Math.round((Number(vb[3]) / Number(vb[4])) * height);
+  const b64 = Buffer.from(
+    svg.replace(/<svg\b/, `<svg width="${width}" height="${height}"`), "utf8").toString("base64");
   const dataUrl = await win.webContents.executeJavaScript(`(async () => {
-    const ff = new FontFace("Fraunces",
-      Uint8Array.from(atob("${fontB64}"), (c) => c.charCodeAt(0)).buffer,
-      { weight: "100 900" });
-    await ff.load(); document.fonts.add(ff);
     const img = new Image();
-    img.src = "data:image/svg+xml;base64,${markB64}";
+    img.src = "data:image/svg+xml;base64,${b64}";
     await img.decode();
-    const probe = document.createElement("canvas").getContext("2d");
-    probe.font = "600 ${FONT}px Fraunces";
-    const tw = probe.measureText("Crowe Logic").width;
     const c = document.createElement("canvas");
-    c.width = Math.ceil(8 + ${MK} + ${GAP} + tw + 12); c.height = ${H};
+    c.width = ${width}; c.height = ${height};
     const g = c.getContext("2d");
-    g.drawImage(img, 8, ${(H - MK) / 2}, ${MK}, ${MK});
-    g.font = "600 ${FONT}px Fraunces";
-    g.textBaseline = "middle";
-    g.fillStyle = "${ink}";
-    g.fillText("Crowe Logic", 8 + ${MK} + ${GAP}, ${H / 2 + 4});
+    g.clearRect(0, 0, ${width}, ${height});
+    g.drawImage(img, 0, 0, ${width}, ${height});
     return c.toDataURL("image/png");
   })()`);
-  return Buffer.from(dataUrl.split(",")[1], "base64");
+  return { png: Buffer.from(dataUrl.split(",")[1], "base64"), width };
 }
 
 // ICO with PNG-compressed entries (supported since Windows Vista), which keeps
@@ -142,16 +140,19 @@ async function main() {
     console.log(`wrote assets/${out} (${size}, from ${src})`);
   }
 
-  // Lockup renders. The lockup SVGs name Fraunces but an SVG loaded as an
-  // image cannot fetch external fonts, so these are composed on a canvas with
-  // the bundled woff2 registered via FontFace — the only way the PNGs come
-  // out in the real brand face rather than the Georgia fallback.
-  for (const [out, markFile, ink] of [
-    ["lockup.png", "mark.svg", "#1a1714"],
-    ["lockup-dark.png", "mark-dark.svg", "#f5f2ea"],
+  // Wide renders, straight off the vectors. Loading an SVG as an <img> cannot
+  // fetch an external font, which is why these once had to be re-typeset on a
+  // canvas — but gen-wordmark.py bakes "Crowe Logic" to outlines, so there is
+  // no font left to resolve and the raster matches the vector exactly.
+  for (const [out, src, height] of [
+    ["lockup.png", "lockup.svg", 240],
+    ["lockup-dark.png", "lockup-dark.svg", 240],
+    ["wordmark.png", "wordmark.svg", 240],
+    ["wordmark-dark.png", "wordmark-dark.svg", 240],
   ]) {
-    fs.writeFileSync(path.join(ASSETS, out), await renderLockup(win, markFile, ink));
-    console.log(`wrote assets/${out} (Fraunces, from ${markFile})`);
+    const { png, width } = await renderWide(win, path.join(ASSETS, src), height);
+    fs.writeFileSync(path.join(ASSETS, out), png);
+    console.log(`wrote assets/${out} (${width}x${height}, from ${src})`);
   }
 
   fs.writeFileSync(path.join(ASSETS, "icon.ico"), buildIco(ICO_SIZES.map((size) => ({ size, png: png.get(size) }))));
