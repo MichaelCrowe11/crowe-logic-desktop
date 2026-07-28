@@ -31,25 +31,81 @@ put() {
   done
 }
 
-# Installers and their blockmaps are stored once per release. The updater asks
-# for them relative to the channel prefix; the releases worker maps that back
-# onto these keys rather than storing a second copy per channel.
-installers=()
-while IFS= read -r -d '' file; do
-  put "desktop/$version/$(basename "$file")" "$file"
-  case "$file" in *.blockmap) ;; *) installers+=("$file") ;; esac
-done < <(find "$root" -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.blockmap' \) -print0)
+# What gets uploaded is decided by the update feeds, not by globbing the release
+# directory, because the two disagree in ways that break updates silently.
+#
+# GitHub rewrites spaces to dots in release asset names, so a file downloaded
+# back with `gh release download` arrives as Crowe.Logic.Setup.0.16.0.exe while
+# latest.yml still advertises "Crowe Logic Setup 0.16.0.exe". Uploading under
+# basename put the object at the dotted key, the updater asked for the spaced
+# one, and every Windows and Linux client got a 404 it had no way to report.
+# Nobody sees a failed background update.
+#
+# Globbing also swept up artifacts from previous releases still sitting in the
+# directory and republished them under this version's prefix, and into this
+# version's SHA256SUMS.
+#
+# Reading the feeds fixes both: the key is the url the updater will actually
+# request, and a stale artifact no feed mentions is simply never uploaded.
+feeds=()
+for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
+  file=$(find "$root" -type f -name "${spec#*/}" -print -quit)
+  [ -z "$file" ] || feeds+=("$file")
+done
+if [ ${#feeds[@]} -eq 0 ]; then
+  echo "publish-r2: no latest*.yml under $root - nothing to publish" >&2
+  exit 1
+fi
+
+wanted=$(mktemp)
+for file in "${feeds[@]}"; do
+  sed -n 's/^[[:space:]]*-[[:space:]]*url:[[:space:]]*//p' "$file" >> "$wanted"
+done
+sort -u -o "$wanted" "$wanted"
+
+# The name in the feed may not be the name on disk. Try it verbatim, then the
+# dotted form GitHub hands back.
+resolve() {
+  local want="$1" hit
+  hit=$(find "$root" -type f -name "$want" -print -quit)
+  [ -n "$hit" ] || hit=$(find "$root" -type f -name "${want// /.}" -print -quit)
+  printf '%s' "$hit"
+}
+
+installers=() names=() missing=()
+while IFS= read -r url; do
+  [ -n "$url" ] || continue
+  file=$(resolve "$url")
+  if [ -z "$file" ]; then missing+=("$url"); continue; fi
+  put "desktop/$version/$url" "$file"
+  installers+=("$file"); names+=("$url")
+  # Blockmaps are requested as <url>.blockmap, so they follow the feed's naming
+  # too, not the local file's.
+  bmap=$(resolve "$url.blockmap")
+  [ -z "$bmap" ] || put "desktop/$version/$url.blockmap" "$bmap"
+done < "$wanted"
+rm -f "$wanted"
+
+# A feed that names a file we cannot find is exactly the failure this script
+# used to ship silently. Refuse to leave a half-published channel behind.
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "publish-r2: these files are named in a feed but absent from $root:" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  exit 1
+fi
 
 # The download page tells people to run `sha256sum -c SHA256SUMS`, so the file
-# has to exist. Names are basenames because that is what lands in a download
-# folder, and the artifacts arrive here in per-platform subdirectories.
+# has to exist. The name listed is the feed's, which is both what the object is
+# keyed on and what lands in a download folder - checking a file against a line
+# naming some other spelling of it is worse than having no checksum at all.
 if [ ${#installers[@]} -gt 0 ]; then
   sums=$(mktemp)
-  for file in "${installers[@]}"; do
+  for i in "${!installers[@]}"; do
+    file="${installers[$i]}"
     if command -v sha256sum >/dev/null; then
-      printf '%s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$(basename "$file")" >> "$sums"
+      printf '%s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "${names[$i]}" >> "$sums"
     else
-      printf '%s  %s\n' "$(shasum -a 256 "$file" | cut -d' ' -f1)" "$(basename "$file")" >> "$sums"
+      printf '%s  %s\n' "$(shasum -a 256 "$file" | cut -d' ' -f1)" "${names[$i]}" >> "$sums"
     fi
   done
   sort -k2 -o "$sums" "$sums"
