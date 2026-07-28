@@ -45,8 +45,13 @@ opens with only the spaces their job needs — no mushroom farm, no film studio 
 a machine bought to drive a terminal — name them at package time:
 
 ```bash
-npm run build:mac -- --config.extraMetadata.croweSpaces=chat,projects
+npx electron-builder --mac --config.extraMetadata.croweSpaces=chat,projects
 ```
+
+Call electron-builder directly rather than `npm run build:mac -- …`: that script
+is `electron-builder --mac && node scripts/staple-dmg.js release`, and npm
+appends extra arguments to the end of the whole string, so the flag would reach
+the stapler instead of the builder and be silently ignored.
 
 Chat is never optional and is added back whether or not it is listed. Unknown
 names are ignored, so a build outliving a space that gets removed still opens.
