@@ -98,5 +98,10 @@ jobs:
   #   gh release download v<version> -D release -p '*'   # windows and linux
   #   GITHUB_REF_NAME=v<version> npm run publish:r2
   #
+  # publish:r2 ends by running scripts/verify-release.js against the live feeds,
+  # so a release that uploaded but did not resolve fails there rather than in
+  # silence on a user's machine. The verify-release workflow runs the same check
+  # daily and on demand.
+  #
   # Grant an API token R2 write and this can move back into CI, but macOS would
   # still need App Store Connect API key auth in build/notarize.js.

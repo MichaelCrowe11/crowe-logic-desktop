@@ -122,3 +122,10 @@ for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
   os=${spec%%/*}; name=${spec#*/}; file=$(find "$root" -type f -name "$name" -print -quit)
   [ -z "$file" ] || put "desktop/channel/$os/$name" "$file"
 done
+
+# Uploading is not publishing. A feed that names a file the bucket does not have
+# reports nothing to anyone - the updater 404s in the background and users simply
+# never move off the old version. So prove the release over the network before
+# calling it done, from here, where there is still someone watching.
+echo "publish-r2: verifying the published release"
+node scripts/verify-release.js "$version"
