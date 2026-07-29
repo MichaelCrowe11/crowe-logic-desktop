@@ -14,6 +14,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { exec, execFile } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
 
@@ -27,6 +28,13 @@ const SEARCH_MAX_CHARS = 16000;
 const LIST_MAX_ENTRIES = 400;
 const CONTEXT_BUDGET_CHARS = 180000;   // rough chars across msgs before elision
 const KEEP_RECENT_TOOL_MSGS = 6;
+const VERIFY_MAX_ROUNDS = 8;           // the verifier's own tool budget
+const MAX_REPAIRS = 1;                 // rejected turns get this many repair blocks
+const DEFAULT_TURN_BUDGET_USD = 2;     // hard ceiling on model spend per turn
+const BUDGET_WARN_AT = 0.8;            // fraction of the ceiling that starts the wrap-up
+const TRANSIENT_RETRIES = 2;           // gateway retries before falling back
+const RETRY_BASE_MS = 400;
+const CACHE_POINTER_AFTER = 3;         // identical calls before we stop resending the body
 
 // Secrets the agent must never read or edit through its own tools.
 const SECRET_FILE_RE = /(^|\/)\.env($|\.|-)|\.pem$|\.key$|\.p12$|\.keystore$|(^|\/)id_(rsa|ed25519|ecdsa)(\.|$)|(^|\/)auth\.json$|\.keychain(-db)?$/i;
@@ -40,6 +48,179 @@ function elide(text, maxChars, label) {
   const head = s.slice(0, Math.floor(maxChars * 0.7));
   const tail = s.slice(-Math.floor(maxChars * 0.2));
   return `${head}\n\n[... ${label || "output"} truncated: ${s.length} chars total, middle elided ...]\n\n${tail}`;
+}
+
+/* Truncation used to throw the middle away, which is exactly where a 4000-line
+   test run keeps the first failure. The output is spooled to a content-addressed
+   file first and the pointer travels with the head and tail, so the part that did
+   not fit is one grep away instead of gone. Content-addressed because the same
+   output written twice is the same artifact, and because the name is then a
+   checksum of what it holds - a tool result can be quoted later and still be
+   provably the thing that was produced. */
+function artifactDir(ctx) {
+  try {
+    const d = ctx && ctx.artifactDir ? ctx.artifactDir() : path.join(os.tmpdir(), "crowe-artifacts");
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  } catch { return null; }
+}
+function writeArtifact(ctx, text, label) {
+  const dir = artifactDir(ctx);
+  if (!dir) return null;
+  try {
+    const sum = crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+    const file = path.join(dir, `${String(label || "output").replace(/[^a-z0-9]+/gi, "-")}-${sum}.txt`);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, text, { mode: 0o600 });
+    return file;
+  } catch { return null; }
+}
+function spool(ctx, text, maxChars, label) {
+  const s = String(text ?? "");
+  if (s.length <= maxChars) return s;
+  const file = writeArtifact(ctx, s, label);
+  const head = s.slice(0, Math.floor(maxChars * 0.7));
+  const tail = s.slice(-Math.floor(maxChars * 0.2));
+  const where = file
+    ? `full ${label || "output"} saved to ${file} - read or grep that file for the middle`
+    : `middle elided and not recoverable`;
+  return `${head}\n\n[... ${label || "output"} truncated: ${s.length} chars total, ${where} ...]\n\n${tail}`;
+}
+
+// ─── Delivery semantics ──────────────────────────────────────────────────────
+/* Every tool declares what re-running it means. Without this, "retry with the
+   same correlation id" is a coin flip: replaying a read is free, replaying a
+   deploy is an incident. Four classes, and every gate below reads from this one
+   table rather than from its own opinion:
+
+     read_only     - observes, changes nothing. Safe to serve from cache.
+     idempotent    - same input, same end state, however many times it runs.
+     compensatable - changes something that can be put back (a reviewed edit;
+                     the diff and the undo are both in front of the user).
+     irreversible  - cannot be undone from here (a remote, a registry, a disk).
+
+   Only read_only results are ever cached, and only irreversible actions are what
+   the approval gate exists for. Anything unknown - an MCP tool from a server we
+   did not write - is treated as compensatable at best, never as read_only. */
+const DELIVERY = {
+  read_file: "read_only", search: "read_only", list_dir: "read_only", open_url: "read_only",
+  edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
+  run_shell: "unknown",     // resolved per command by classifyCommand
+  submit_verdict: "read_only",
+};
+function deliveryOf(ctx, name, args) {
+  if (name === "run_shell") {
+    const c = classifyCommand(args && args.command);
+    return c.risk === RISK.AUTO && c.readOnly ? "read_only" : c.risk === RISK.STRICT ? "irreversible" : "compensatable";
+  }
+  if (String(name || "").startsWith("mcp__")) {
+    const tier = pluginToolTier(ctx, name);
+    return tier === "readonly" || tier === "plan" ? "read_only" : "compensatable";
+  }
+  return DELIVERY[name] || "compensatable";
+}
+
+// ─── Action risk and the approval gate ───────────────────────────────────────
+/* The autonomy tier answers one question: may this agent touch the shell at all.
+   It cannot answer the next one: may it run THIS. Inside Execute - the tier every
+   real session runs in - `ls`, `rm -rf ~/work`, `git push --force`, and a curl
+   piped into zsh all got the same answer, yes, because the tier is consent to a
+   capability and not consent to an irreversible act. The system prompt asked the
+   model to be careful with destructive commands; the model is the thing being
+   gated, so that line was a wish.
+
+   So a second axis, orthogonal to autonomy: how recoverable is this action.
+   AUTO runs. REVIEW is recoverable but reaches past the working tree - a remote,
+   a dependency set, a build config. STRICT is irreversible, outward-facing, or
+   privileged, and asks the user every time, including in Execute.
+
+   The classifier is deliberately literal, a pattern table with no model call, so
+   it costs nothing and cannot be argued out of a verdict. It is also the only
+   policy surface: gates read it, they do not each carry their own list. */
+const RISK = { AUTO: 0, REVIEW: 1, STRICT: 2 };
+const RISK_NAMES = ["auto", "review", "strict"];
+
+// Commands that only look. Kept narrow on purpose: being wrong in this direction
+// means an extra verification pass or a missed cache hit, while being wrong the
+// other way means a mutation the harness thought was a read.
+const READ_ONLY_CMD_RE = /^\s*(ls|pwd|cat|bat|head|tail|wc|echo|printf|which|type|file|stat|du|df|env|printenv|date|uname|hostname|whoami|id|tree|jq|yq|rg|grep|egrep|find|fd|awk|cmp|diff|sort|uniq|column|column -t|basename|dirname|realpath|readlink|sed -n|node -v|node --version|npm (ls|list|view|outdated|why)|python3? -[Vc]|pip (list|show|freeze)|cargo (tree|metadata|--version)|go (version|list|env)|rustc --version|git (status|diff|log|show|branch|remote|rev-parse|describe|blame|ls-files|shortlog|tag|config --get|worktree list)|docker (ps|images|logs|inspect)|kubectl (get|describe|logs)|gh (pr view|pr list|issue view|issue list|run view|run list|repo view)|brew (list|info|--version)|systemctl status|launchctl list|ps|top -l 1|lsof|netstat|dig|nslookup|curl -s?I)\b/;
+
+const RISK_RULES = [
+  // Irreversible, outward-facing, or privileged. These ask even in Execute.
+  { risk: RISK.STRICT, why: "deletes a directory tree with no prompt and no undo",
+    re: /\brm\b(?=[^;|&\n]*\s-[^\s;|&]*[rR])(?=[^;|&\n]*\s-[^\s;|&]*f)/ },
+  { risk: RISK.STRICT, why: "rewrites a remote branch's history",
+    re: /\bgit\s+push\b[^;|&\n]*(--force(-with-lease)?\b|\s-f\b|--mirror\b|--delete\b)/ },
+  { risk: RISK.STRICT, why: "discards uncommitted work in the working tree",
+    re: /\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f|checkout\s+--\s|restore\s+(--staged\s+)?\.|filter-branch)\b/ },
+  { risk: RISK.STRICT, why: "runs with root privileges", re: /(^|[;|&]\s*|\|\s*)sudo\b|(^|[;|&]\s*)doas\b/ },
+  { risk: RISK.STRICT, why: "pipes a downloaded script straight into a shell",
+    re: /\b(curl|wget|fetch)\b[^;\n]*\|\s*(sudo\s+)?(ba|z|k|fi|da)?sh\b/ },
+  { risk: RISK.STRICT, why: "writes directly to a disk device or formats a volume",
+    re: /\b(mkfs\S*|diskutil\s+(erase|partition|reformat)|dd\b[^;\n]*\bof=\/dev\/|newfs\S*)\b|>\s*\/dev\/(disk|sd|nvme)/ },
+  { risk: RISK.STRICT, why: "drops or truncates a database object",
+    re: /\b(drop\s+(database|table|schema|index)|truncate\s+table|delete\s+from\b(?![^;\n]*\bwhere\b))/i },
+  { risk: RISK.STRICT, why: "publishes or deploys outside this machine",
+    re: /\b(npm|pnpm|yarn|bun)\s+publish\b|\bwrangler\s+(deploy|publish|d1\s+execute|r2\s+object\s+delete|secret\s+put)\b|\bvercel\s+(deploy|--prod)\b|\bgh\s+release\s+create\b|\bfly\s+deploy\b|\bterraform\s+(apply|destroy)\b|\bkubectl\s+(apply|delete|rollout)\b|\baws\s+s3\s+(rm|sync)\b|\btwine\s+upload\b|\bdocker\s+push\b|\bcargo\s+publish\b|\beas\s+submit\b/ },
+  { risk: RISK.STRICT, why: "sends a credentials file off this machine",
+    re: /\b(curl|wget|nc|scp|rsync|ssh)\b[^;\n]*(\.env\b|id_rsa|id_ed25519|\.pem\b|\.p12\b|credentials\.json|auth\.json)/ },
+  { risk: RISK.STRICT, why: "makes files world-writable or world-executable",
+    re: /\bchmod\s+(-R\s+)?0?777\b|\bchmod\s+-R\s+a\+rwx\b/ },
+  { risk: RISK.STRICT, why: "powers down or restarts the machine", re: /(^|[;|&]\s*)(shutdown|reboot|halt|pmset\s+sleepnow)\b/ },
+  { risk: RISK.STRICT, why: "rewrites the shell's own startup files",
+    re: />>?\s*~?\/?(\.zshrc|\.bashrc|\.bash_profile|\.zprofile|\.profile)\b/ },
+
+  // Recoverable, but reaches past this working tree. Asked for in strict mode,
+  // and whenever review of the change itself has been switched off.
+  { risk: RISK.REVIEW, why: "deletes files recursively", re: /\brm\s+(-[a-zA-Z]*\s+)*-?[a-zA-Z]*[rR]\b|\brm\b[^;|&\n]*\*/ },
+  { risk: RISK.REVIEW, why: "pushes to a remote", re: /\bgit\s+push\b/ },
+  { risk: RISK.REVIEW, why: "changes which dependency versions this project uses",
+    re: /\b(npm|pnpm|yarn|bun)\s+(i|install|add|remove|uninstall|update|upgrade|dedupe)\b|\bpip3?\s+(install|uninstall)\b|\buv\s+(add|remove|pip\s+install)\b|\bcargo\s+(add|remove|update)\b|\bgo\s+get\b|\bbrew\s+(install|uninstall|upgrade)\b|\bgem\s+install\b/ },
+  { risk: RISK.REVIEW, why: "rewrites local history or merges branches", re: /\bgit\s+(rebase|merge|cherry-pick|revert|stash\s+(drop|clear))\b/ },
+  { risk: RISK.REVIEW, why: "changes CI configuration or repository secrets", re: /\bgh\s+(workflow|secret|variable|api\s+-X\s*(POST|PATCH|PUT|DELETE))\b/ },
+  { risk: RISK.REVIEW, why: "removes containers, images, or volumes", re: /\bdocker\s+(rm|rmi|volume\s+rm|system\s+prune|container\s+prune)\b/ },
+  { risk: RISK.REVIEW, why: "kills processes outside this command", re: /\b(killall|pkill)\b|\bkill\s+-9\b/ },
+];
+function classifyCommand(command) {
+  const c = String(command || "");
+  for (const r of RISK_RULES) if (r.re.test(c)) return { risk: r.risk, why: r.why, readOnly: false };
+  return { risk: RISK.AUTO, why: "", readOnly: READ_ONLY_CMD_RE.test(c) };
+}
+
+/* Paths whose contents decide how software is built, shipped, or resolved. A
+   reviewed edit to one of these is fine - the user is looking at the diff. An
+   auto-approved one is a silent change to a deploy pipeline or a dependency set,
+   which is the one case where "apply edits without asking" was not consent to
+   what actually happened. */
+const RISK_PATH_RE = /(^|\/)(\.github\/workflows\/|\.circleci\/|\.gitlab-ci\.ya?ml$|Jenkinsfile$|azure-pipelines\.ya?ml$|wrangler\.(toml|jsonc?)$|fly\.toml$|Dockerfile$|docker-compose\.ya?ml$|vercel\.json$|netlify\.toml$|\.npmrc$|Procfile$|package\.json$|(package-lock\.json|pnpm-lock\.ya?ml|yarn\.lock|Cargo\.lock|poetry\.lock|uv\.lock)$|[^/]+\.entitlements$|[^/]+\.plist$)/i;
+
+/* An approval is bound to the exact action that asked for it, used once, and
+   expires. Loosen any of the three and it stops being an approval: a standing
+   yes that outlives the sentence it was given for is just a wider tier, granted
+   without the user knowing they granted it. The record of the decision goes to
+   the journal, so what was allowed and when is answerable after the fact. */
+async function gateAction(ctx, state, req) {
+  const cfg = ctx.loadConfig();
+  const mode = cfg.approvals || "high-risk";       // off | high-risk | strict
+  if (req.risk === RISK.AUTO) return { ok: true };
+  if (mode === "off") {
+    if (state) state.journal({ event_type: "APPROVAL_SKIPPED", tool_id: req.kind, input_hash: req.hash, output_summary: `approvals off: ${req.why}` });
+    return { ok: true };
+  }
+  const floor = mode === "strict" || req.floorReview ? RISK.REVIEW : RISK.STRICT;
+  if (req.risk < floor) return { ok: true };
+  if (typeof ctx.requestApproval !== "function") {
+    return { ok: false, text: `blocked: this action ${req.why}, which needs the user's explicit approval, and this build has no way to ask for it. Tell the user exactly what you wanted to run and let them run it themselves.` };
+  }
+  if (state) state.journal({ event_type: "APPROVAL_REQUESTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${RISK_NAMES[req.risk]}: ${req.why}` });
+  let decision;
+  try {
+    decision = await ctx.requestApproval({ kind: req.kind, title: req.title, detail: req.detail, why: req.why, risk: RISK_NAMES[req.risk], hash: req.hash });
+  } catch { decision = false; }
+  const ok = decision === true || (decision && decision.approved === true);
+  if (state) state.journal({ event_type: ok ? "APPROVAL_GRANTED" : "APPROVAL_DENIED", tool_id: req.kind, input_hash: req.hash, output_summary: req.why });
+  if (ok) return { ok: true, approved: true };
+  const how = decision && decision.expired ? "did not answer in time, so it was denied" : "DENIED this action";
+  return { ok: false, text: `blocked: the user ${how} (${req.why}). Do not retry it and do not work around it by another route. Say what you were trying to achieve and ask them how they want it done.` };
 }
 
 // ─── Tool schemas ────────────────────────────────────────────────────────────
@@ -131,7 +312,7 @@ function runShell(ctx, command, timeoutMs) {
       (err, stdout, stderr) => {
         const out = (stdout || "") + (stderr || "");
         const tail = err ? `\n(exit ${err.killed ? "timeout" : err.code ?? 1})` : "";
-        resolve(elide(out, SHELL_MAX_CHARS, "command output") + tail || "(no output)");
+        resolve(spool(ctx, out, SHELL_MAX_CHARS, "command output") + tail || "(no output)");
       });
   });
 }
@@ -148,7 +329,7 @@ function toolReadFile(ctx, args) {
   const limit = Math.max(1, Math.floor(args.limit || READ_DEFAULT_LINES));
   const slice = lines.slice(offset - 1, offset - 1 + limit);
   let out = slice.map((l, i) => `${String(offset + i).padStart(5)}\t${l}`).join("\n");
-  out = elide(out, READ_MAX_CHARS, "file content");
+  out = spool(ctx, out, READ_MAX_CHARS, "file content");
   if (offset > 1 || offset - 1 + limit < lines.length) {
     out += `\n[file has ${lines.length} lines; showing ${offset}..${Math.min(lines.length, offset - 1 + slice.length)}. Use offset/limit for more.]`;
   }
@@ -201,13 +382,13 @@ function toolSearch(ctx, args) {
     execFile("rg", [...rgArgs(args), target], { maxBuffer: 16 * 1024 * 1024, timeout: 30000 }, (err, stdout) => {
       if (!err || err.code === 1) {  // rg exits 1 on no matches
         const out = dropSecretHits(stdout || "");
-        return resolve(out ? elide(out, SEARCH_MAX_CHARS, "search results") : "(no matches)");
+        return resolve(out ? spool(ctx, out, SEARCH_MAX_CHARS, "search results") : "(no matches)");
       }
       // rg unavailable: grep fallback, still shell-free (execFile, pattern as argv).
       const gargs = ["-rnI", "-E", ...SECRET_GREP_EXCLUDES, "--", args.pattern, target];
       execFile("grep", gargs, { maxBuffer: 16 * 1024 * 1024, timeout: 30000 }, (_e2, so2) => {
         const out = dropSecretHits(so2 || "").split("\n").slice(0, cap).join("\n");
-        resolve(out ? elide(out, SEARCH_MAX_CHARS, "search results") : "(no matches)");
+        resolve(out ? spool(ctx, out, SEARCH_MAX_CHARS, "search results") : "(no matches)");
       });
     });
   });
@@ -255,8 +436,18 @@ function pluginToolTier(ctx, fullName) {
    from asking for it. A hallucinated name, a replayed tool call, or a gateway
    response someone else shaped all arrive here regardless of what was offered.
    Every check that matters runs on this side of the call. */
-async function execTool(ctx, name, args, route) {
+async function execTool(ctx, name, args, route, state) {
   try {
+    /* The verifier is read-only by construction, not by instruction. A checker
+       that can reach for edit_file will fix what it found and report a pass, and
+       the pass then describes a workspace nobody reviewed. Its independence is
+       this block: it may look and it may build, and that is all. */
+    if (route && route.verify) {
+      if (name === "edit_file" || name === "write_file" || name === "log_grow" || (name && name.startsWith("mcp__")))
+        return "blocked: the verifier does not change anything. Record what is wrong in your verdict and let the operator fix it.";
+      if (name === "run_shell" && classifyCommand(args.command).risk >= RISK.REVIEW)
+        return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
+    }
     if (name && name.startsWith("mcp__")) {
       const need = pluginToolTier(ctx, name);
       if (need) {

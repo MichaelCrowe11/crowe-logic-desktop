@@ -14,3 +14,9 @@ __pycache__/
 
 # macOS Finder droppings — never part of a build
 .DS_Store
+
+# Model output from run-aegis-multimodel. The prompt is the input worth keeping;
+# what four models said back to it is a run, and a run that times out writes
+# "Generation failed" into files shaped exactly like a corpus.
+corpus/aegis-multimodel/*
+!corpus/aegis-multimodel/prompt.md
