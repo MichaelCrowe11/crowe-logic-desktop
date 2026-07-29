@@ -615,7 +615,12 @@ const tests = [
         // a background-image cannot produce these; only the inlined <style> can
         wordAnim: anim("#wordmark-letterforms"),
         bladeAnim: anim("#rotor-crowe-blades"),
-        sporeAnim: anim("#gold-thinking-mark"),
+        // The spore carries two: the entrance, then a perpetual drift delayed
+        // past it. Split so the arrival stays pinned by name and the drift is
+        // checked as its own fact — a comma-joined string would let either one
+        // silently disappear behind a rewrite of the other.
+        sporeAnim: anim("#gold-thinking-mark").split(",")[0].trim(),
+        sporeDrifts: anim("#gold-thinking-mark").includes("spore-drift"),
         // ink is currentColor, so the logotype tracks the palette
         inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
         // the static mask is the fallback and must be hidden once live, but
@@ -626,7 +631,7 @@ const tests = [
     expect: {
       anyLockup: true, allLive: true, allInlined: true,
       wordAnim: "wordmark-arrive", bladeAnim: "blades-arrive",
-      sporeAnim: "thinking-mark-arrive",
+      sporeAnim: "thinking-mark-arrive", sporeDrifts: true,
       inherits: "currentColor", maskPresent: true, maskHidden: true,
     },
   },
@@ -660,6 +665,46 @@ const tests = [
       extra.remove();
       return { multiple: svgs.length > 1, dupes: dupes.join(",") || "none", bound, doubled };`,
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
+  },
+  {
+    // The thinking indicator is the logotype with its rotors turning. Two ways
+    // that dies without anything looking broken. First, the indicator gets
+    // rebuilt per stage — it used to — and every tool call resets the rotors to
+    // zero, so the mark twitches instead of turning and nobody can say why.
+    // Second, a tool card lands under the indicator and the move to the bottom
+    // re-inserts the node, which restarts the animations just the same. Both
+    // leave a logotype on screen that never completes a revolution, which reads
+    // as a stutter, not a bug. Assert the clock, not the appearance.
+    name: "the thinking mark keeps turning across a stage change",
+    body: `const body = document.createElement("div");
+      body.className = "body";
+      document.body.appendChild(body);
+      showThinking(body, "reasoning");
+      const deadline = Date.now() + 3000;
+      while (!body.querySelector(".wm-blades-crowe") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const clock = () => {
+        const el = body.querySelector(".wm-blades-crowe");
+        const a = el && el.getAnimations()[0];
+        return a ? a.currentTime : -1;
+      };
+      const turning = clock() >= 0 &&
+        getComputedStyle(body.querySelector(".wm-blades-crowe")).animationName === "blade-turn";
+      await new Promise((r) => setTimeout(r, 250));
+      const before = clock();
+      // a tool card landing under the indicator is what forces the move
+      body.insertAdjacentHTML("beforeend", '<div class="tool">run_shell</div>');
+      showThinking(body, "executing");
+      const after = clock();
+      const atBottom = body.lastElementChild.classList.contains("thinking");
+      const label = body.querySelector(".th-label").textContent;
+      const svgs = body.querySelectorAll(".th-logotype svg").length;
+      // the retired hexagons must not come back with it
+      const noGlyph = !body.querySelector(".tg");
+      body.remove();
+      return { turning, kept: before > 0 && after >= before, atBottom, label, svgs, noGlyph };`,
+    expect: { turning: true, kept: true, atBottom: true, label: "executing", svgs: 1, noGlyph: true },
   },
   {
     // The console is collapsed because the objective runs on the gateway agent,

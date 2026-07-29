@@ -102,13 +102,99 @@
     }
   }
 
+  /* ── Continuous cuts ──────────────────────────────────────────────────────
+     Driven by classes, not ids, because the thinking indicator inlines this
+     file once per message body and an id animates only the first copy in the
+     document. Every rule below therefore works on any number of logotypes.
+
+     The rings never move. The ring is the dish; the blades are what is growing
+     in it, and a dish that spins with its own culture is a loading spinner
+     wearing a logo. Holding the ring still is what makes the turn read as an
+     engine seen through a window rather than as a progress indicator. */
+  .wm-letterforms,
+  .wm-rotor,
+  .wm-blades,
+  .wm-spore {
+    transform-box: fill-box;
+  }
+
+  .wm-blades { transform-origin: center; }
+  .wm-spore  { transform-origin: 50% 80%; }
+
+  /* The spore turns wherever the logotype appears, in every space and every
+     state. It is the one piece of the brand on screen at all times, and a still
+     picture of a living mark is worse than no mark at all. Slow and eased, so
+     it reads as the app breathing rather than as something loading. */
+  .wm-spore {
+    animation: spore-drift 9s ease-in-out infinite;
+  }
+
+  /* After the entrance, not instead of it: two comma-separated animations on
+     one element, the perpetual one delayed past the arrival it would otherwise
+     fight for the same transform. */
+  .is-animated #gold-thinking-mark {
+    animation:
+      thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both,
+      spore-drift 9s ease-in-out 2000ms infinite;
+  }
+
+  /* Thinking is a colour change as much as a movement. At the sizes this mark
+     is actually used - the rotors measure about six pixels across in the agent
+     panel and under four in the transcript - ink turning inside ink is a
+     smudge. There is nothing for the eye to catch, so the animation is real and
+     invisible at the same time. Gold gives the moving parts the one property
+     the still parts do not have, and the O's read as running engines at a size
+     where rotation alone cannot carry it.
+
+     Only the blades take it. Rings and letterforms stay ink, because the claim
+     is that the engines are turning, not that the word has changed colour. */
+  .is-thinking .wm-blades { color: var(--gold-soft, #c9a227); }
+
+  /* Thinking. The two turbines counter-rotate at durations that do not divide
+     into each other, so they drift in and out of phase instead of locking into
+     a synchronised pair - two cultures on their own clocks, which is the whole
+     idea. The spore speeds up to match. */
+  .is-thinking .wm-blades-crowe {
+    animation: blade-turn 2.6s linear infinite;
+  }
+
+  .is-thinking .wm-blades-logic {
+    animation: blade-turn-reverse 3.1s linear infinite;
+  }
+
+  .is-thinking .wm-spore {
+    animation: spore-quicken 1.6s ease-in-out infinite;
+  }
+
+  @keyframes blade-turn {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes blade-turn-reverse {
+    to { transform: rotate(-360deg); }
+  }
+
+  @keyframes spore-drift {
+    0%, 100% { transform: rotate(0) scale(1); }
+    50%      { transform: rotate(180deg) scale(1.04); }
+  }
+
+  @keyframes spore-quicken {
+    0%, 100% { transform: rotate(0) scale(1); }
+    50%      { transform: rotate(180deg) scale(1.12); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .is-animated #wordmark-letterforms,
     .is-animated #rotor-crowe,
     .is-animated #rotor-logic,
     .is-animated #rotor-crowe-blades,
     .is-animated #rotor-logic-blades,
-    .is-animated #gold-thinking-mark {
+    .is-animated #gold-thinking-mark,
+    .wm-spore,
+    .is-thinking .wm-blades-crowe,
+    .is-thinking .wm-blades-logic,
+    .is-thinking .wm-spore {
       animation: none;
     }
   }
