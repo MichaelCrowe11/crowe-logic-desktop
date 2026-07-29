@@ -446,7 +446,7 @@ window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 async function mountWorkspaceAgent(p, body, seed={}) {
   body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-mark" role="img" aria-label="Crowe Logic"></div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-mark" role="img" aria-label="Crowe Logic"></div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
   const slot=body.querySelector(".agent-terminal-slot");
   const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
@@ -480,6 +480,24 @@ async function mountWorkspaceAgent(p, body, seed={}) {
      Ctrl-C to the PTY, killing whatever the operator had running by hand for
      a run that was never happening there. Ctrl-C in the terminal still works. */
   body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);setState("waiting","idle","Interrupted");addEvent("status","operator interrupted the agent run")};
+  /* The terminal is a manual console, not the engine. An objective typed into
+     the dock runs on the gateway agent and never touches this PTY, and the
+     event stream above is fed by agent.onEvent - so the panel already tells
+     the whole story of a run without the shell being on screen. It stays one
+     click away for anything the operator wants to run by hand.
+
+     Fitting is deferred to reveal because xterm measures a cell against the
+     live DOM: fit() on a display:none slot computes zero columns, and the PTY
+     told that width wraps every later line at the wrong place. */
+  const consoleBtn=body.querySelector(".agent-console-toggle");
+  const showConsole=(open)=>{
+    body.classList.toggle("console-open",open);
+    consoleBtn.setAttribute("aria-expanded",String(open));
+    localStorage.setItem("crowe-agent-console",open?"open":"closed");
+    if(open)requestAnimationFrame(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}});
+  };
+  consoleBtn.onclick=()=>showConsole(!body.classList.contains("console-open"));
+  showConsole(localStorage.getItem("crowe-agent-console")==="open");
   new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
 }
 
