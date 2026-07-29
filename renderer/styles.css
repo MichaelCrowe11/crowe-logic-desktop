@@ -21,8 +21,8 @@
 
 :root {
   /* paper surfaces (rise = lighter + top light) */
-  --cream: #f7f3ea; --panel: #fbf8f1; --raised: #fffdf7;
-  --ink: #1a1714; --muted: #6b6457;
+  --cream: #f6f6f8; --panel: #fafafc; --raised: #ffffff;
+  --ink: #17171a; --muted: #63636c;
   --gold: #b8893a; --gold-soft: #c9a227; --gold-deep: #8c682c;
   /* Gold as text needs a darker step on paper to clear 4.5:1; as a border or
      fill it does not. --gold-text is the text-safe one, per theme. */
@@ -32,7 +32,7 @@
      on --gold. */
   --focus: var(--gold-deep);
   --blue: #2E5AAD;
-  --line: rgba(26,23,20,0.11); --line-strong: rgba(26,23,20,0.22);
+  --line: rgba(23,23,26,0.11); --line-strong: rgba(23,23,26,0.22);
   --hair-top: rgba(255,255,255,0.65);
   --z1: 0 1px 2px rgba(26,23,20,0.05);
   --z2: 0 1px 2px rgba(26,23,20,0.05), 0 10px 28px -14px rgba(26,23,20,0.18), inset 0 1px 0 var(--hair-top);
@@ -41,10 +41,10 @@
   --body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(.16, 1, .3, 1);
-  --term-bg: #0d0c0a; --term-fg: #e9e2cf;
+  --term-bg: #0c0c0d; --term-fg: #e9e9ec;
   --ok: #3f7a3f; --err-fg: #a3341f;
   --err-bg: #faf0ec; --err-line: #e6c9be;
-  --diff-bg: #fffdf7; --diff-add-bg: #e6f4e6; --diff-add-fg: #1f5c1f;
+  --diff-bg: #ffffff; --diff-add-bg: #e6f4e6; --diff-add-fg: #1f5c1f;
   --diff-del-bg: #fae7e1; --diff-del-fg: #8a3320;
   --code-bg: rgba(26,23,20,0.06);
   --overlay: rgba(26,23,20,0.38);
@@ -76,39 +76,47 @@
   --sidebar-w: 248px; --titlebar-h: 44px;
 }
 body.dark {
-  /* Warm charcoal console. This was a blue-slate (#080a0d / #11151b / #171c24)
-     and it read as blue rather than as dark — every surface had more blue in it
-     than red, which put a cool cast under a warm gold accent and made the gold
-     look dirty. The steps below are the same luminances, rotated to a warm
-     neutral: R > G > B by three or four points, which is enough to stop the
-     screen reading cool and not enough to read brown. The brown base that was
-     tried before this failed on lightness, not on hue.
+  /* Neutral graphite console. Two earlier attempts both failed by tinting the
+     neutrals: a blue-slate (#080a0d / #11151b / #171c24) put a cool cast under
+     a warm gold and made the gold look dirty, and the warm charcoal that
+     replaced it over-corrected into chocolate.
+
+     The mistake both times was treating the base as something that needs a hue.
+     It does not. Warmth is the accent's job, and an accent can only read as
+     warm against something that is not. The tell was not the base at all - it
+     was --muted at R-B +18, a tan that paints every label and rail heading in
+     the app, and --ink at +10, which made every word on screen warm cream
+     rather than white. With those two warm and a +112 gold on top, nothing was
+     left for the gold to be warm against, and the whole screen browned.
+
+     So: greys are grey, a hair cool (R-B of -1 to -8) so they read as neutral
+     rather than as beige, and the gold is the only warm thing on screen.
 
      Depth still comes from stepped surfaces and a lit top hairline, not from
      heavier shadows, so each step lightens slightly and carries a brighter top
-     edge. Shadows are warm-black too — a blue shadow under a warm panel is the
-     other half of the same cast. */
-  --cream: #0b0a09; --panel: #161513; --raised: #1e1c18;
-  --ink: #ece9e2; --muted: #a19b8f;
+     edge. Shadows go near-black rather than warm-black - a brown shadow under a
+     neutral panel is the same mistake one layer down. */
+  --cream: #0a0a0b; --panel: #141416; --raised: #1c1c1f;
+  --ink: #e9e9ec; --muted: #9a9aa2;
   --gold: #d2ad62; --gold-soft: #e7c984; --gold-deep: #9a7e44;
   --gold-text: var(--gold);
   --focus: var(--gold);
   --blue: #6b9be0;
   --line: rgba(255,255,255,0.08); --line-strong: rgba(255,255,255,0.16);
   --hair-top: rgba(255,255,255,0.13);
-  --z1: 0 1px 2px rgba(6,5,4,0.42);
-  --z2: 0 4px 12px rgba(6,5,4,0.48), inset 0 1px 0 var(--hair-top);
-  --z3: 0 12px 32px rgba(6,5,4,0.54), inset 0 1px 0 var(--hair-top);
-  --term-bg: #0d0c0a; --term-fg: #ece9e2;
+  --z1: 0 1px 2px rgba(3,3,5,0.42);
+  --z2: 0 4px 12px rgba(3,3,5,0.48), inset 0 1px 0 var(--hair-top);
+  --z3: 0 12px 32px rgba(3,3,5,0.54), inset 0 1px 0 var(--hair-top);
+  --term-bg: #0c0c0d; --term-fg: #e9e9ec;
   --ok: #8cb87c; --err-fg: #db7c66;
   --err-bg: rgba(219,124,102,0.14); --err-line: rgba(219,124,102,0.38);
-  --diff-bg: #0d0c0a; --diff-add-bg: rgba(140,184,124,0.22); --diff-add-fg: #8cb87c;
+  --diff-bg: #0c0c0d; --diff-add-bg: rgba(140,184,124,0.22); --diff-add-fg: #8cb87c;
   --diff-del-bg: rgba(219,124,102,0.22); --diff-del-fg: #db7c66;
-  --code-bg: rgba(236,233,226,0.08);
-  --overlay: rgba(5,4,3,0.64);
-  --glass: rgba(30,28,24,0.82);
+  --code-bg: rgba(233,233,236,0.08);
+  --overlay: rgba(4,4,6,0.64);
+  --glass: rgba(28,28,31,0.82);
   --glass-edge: rgba(255,255,255,0.10);
-  --z4: 0 16px 42px rgba(6,5,4,0.58), inset 0 1px 0 var(--glass-edge);
+  --z4: 0 16px 42px rgba(3,3,5,0.58), inset 0 1px 0 var(--glass-edge);
   --accent-wash: rgba(210,173,98,0.14);
   --focus-halo: rgba(210,173,98,0.22);
   --selection: rgba(210,173,98,0.32);

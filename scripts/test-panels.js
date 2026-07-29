@@ -369,15 +369,22 @@ const tests = [
       const lightTheme = { ...t.options.theme };
       applyTheme(true);
       return {
+        // The accent is the half of the theme the console does follow, so this
+        // is what proves the flip re-read the variables rather than keeping a
+        // stale theme object.
         cursorChanged: darkTheme.cursor !== lightTheme.cursor,
-        fgChanged: darkTheme.foreground !== lightTheme.foreground,
-        // The terminal is a console surface in both themes, so its background
-        // is deliberately the same near-black either way.
-        consoleBgBothWays:
-          darkTheme.background.toLowerCase() === "#0d0c0a" &&
-          lightTheme.background.toLowerCase() === "#0d0c0a",
+        selectionChanged: darkTheme.selectionBackground !== lightTheme.selectionBackground,
+        // The terminal is a console surface in both themes: same near-black
+        // ground, same text on it. Its foreground used to be a warm cream in
+        // light and a cool white in dark, which tinted identical output two
+        // different colours depending on a theme the console does not follow.
+        // Read the tokens rather than pinning hexes - the point is that the two
+        // themes agree, not what they agreed on.
+        consoleStable:
+          darkTheme.background === lightTheme.background &&
+          darkTheme.foreground === lightTheme.foreground,
       };`,
-    expect: { cursorChanged: true, fgChanged: true, consoleBgBothWays: true },
+    expect: { cursorChanged: true, selectionChanged: true, consoleStable: true },
   },
   {
     name: "shortcut hints match the platform modifier key",
