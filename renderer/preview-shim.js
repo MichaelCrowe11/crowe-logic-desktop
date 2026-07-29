@@ -235,7 +235,7 @@
       async test() { return { ok: true, healthy: true }; },
     },
     async chat() { return { content: "" }; },
-    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },
+    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },
     async setConfig() { return this.getConfig(); },
     onBrowserNavigate() {}, onMenuAction() {},
   };

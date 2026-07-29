@@ -711,9 +711,24 @@ body.dark .gatecard.risk-review { border-color: var(--gold); }
 body.dark .gatecard.risk-review .ec-title { color: var(--gold); }
 .gc-why { padding: 9px 11px; font-size: var(--fs-body); border-bottom: 1px solid var(--line); }
 .gatecard .ec-diff { padding: 8px 11px; white-space: pre-wrap; word-break: break-all; }
-.gatecard .ec-actions .approve { background: var(--err-fg); color: var(--cream); }
-.gatecard .ec-actions .approve:hover { background: var(--ink); }
-body.dark .gatecard .ec-actions .approve { color: #17171a; }
+/* The button that authorizes an irreversible act must not look like Send.
+   Two things had to be right and neither was: the fill uses the design system's
+   own destructive pair (--danger/--on-danger, already contrast-gated) rather than
+   an error-text colour, and the selector carries body.dark, because the base rule
+   `body.dark .ec-actions .approve` scores (0,3,1) and outranked a plain
+   .gatecard-prefixed (0,3,0). In dark mode the force-push button rendered in the
+   same gold as Send, which is the whole signal of the gate, lost. */
+.gatecard .ec-actions .approve,
+body.dark .gatecard .ec-actions .approve { background: var(--danger); color: var(--on-danger); }
+.gatecard .ec-actions .approve:hover,
+body.dark .gatecard .ec-actions .approve:hover { background: var(--ink); color: var(--cream); }
+/* Review risk is recoverable, so it wears the workspace accent, not the alarm. */
+.gatecard.risk-review .ec-actions .approve { background: var(--gold-deep); color: var(--cream); }
+body.dark .gatecard.risk-review .ec-actions .approve { background: var(--gold); color: var(--on-gold); }
+/* "Allow once" and the shortcut hint both broke mid-phrase in a 900px window.
+   The row wraps as a whole instead of the words inside it. */
+.ec-actions { flex-wrap: wrap; }
+.ec-actions .approve, .ec-actions .reject, .ec-hint { white-space: nowrap; }
 .gatecard.applied { border-color: var(--ok); } .gatecard.rejected { border-color: var(--line-strong); }
 
 /* ── Verdict receipt ── what the independent pass actually checked. ── */
