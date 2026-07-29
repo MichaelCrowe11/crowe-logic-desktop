@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785277203173" />
+  <link rel="stylesheet" href="styles.css?v=1785308821592" />
 </head>
 <body>
   <header id="bar">
@@ -315,6 +315,20 @@
       <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
       <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
       <section class="key-manager"><div class="settings-section-head"><div><b>Spaces</b><span>Which spaces this install shows. Chat is always on, and changes apply as you toggle them.</span></div></div><div id="cfg-spaces" class="space-picker"></div></section>
+      <!-- Guardrails sits below Spaces deliberately: the space checkboxes have to
+           stay above the fold of a scrolling card, and test-panels.js hit-tests
+           them where they are drawn to keep it that way. -->
+      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+        <label>Ask before an action that cannot be taken back
+          <select id="cfg-approvals">
+            <option value="high-risk">Irreversible actions only (recommended)</option>
+            <option value="strict">Anything past the working tree</option>
+            <option value="off">Never ask</option>
+          </select>
+        </label>
+        <label class="chk"><input id="cfg-verifier" type="checkbox" /> Check a mutating turn independently before reporting it done</label>
+        <label>Cost ceiling per turn, in dollars (0 for none) <input id="cfg-budget" type="number" min="0" step="0.25" /></label>
+      </section>
       <label>Official plugins</label>
       <div id="cfg-plugins" class="plugs"></div>
       <label>MCP servers — advanced (JSON: {"name":{"command":"...","args":[...]}})
@@ -366,9 +380,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785277203173"></script>
-  <script src="mark-geometry.js?v=1785277203173"></script>
-  <script src="mark.js?v=1785277203173"></script>
-  <script src="renderer.js?v=1785277203173"></script>
+  <script src="preview-shim.js?v=1785308821592"></script>
+  <script src="mark-geometry.js?v=1785308821592"></script>
+  <script src="mark.js?v=1785308821592"></script>
+  <script src="renderer.js?v=1785308821592"></script>
 </body>
 </html>
