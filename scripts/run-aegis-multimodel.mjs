@@ -89,7 +89,11 @@ function run(target) {
 
 await mkdir(corpusDir, { recursive: true });
 const startedAt = new Date().toISOString();
-const results = await Promise.all(targets.map(run));
+const results = [];
+for (const target of targets) {
+  console.log(`Running ${target.id}...`);
+  results.push(await run(target));
+}
 
 const records = results
   .filter((result) => result.status === "complete")

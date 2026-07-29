@@ -26,4 +26,4 @@ Provide:
 9. A concrete directory structure and data schemas
 10. A phased implementation roadmap
 
-Favor practical implementation details, explicit interfaces, operational simplicity, and failure handling over broad advice. Identify contradictions and unsafe assumptions in your own design. Do not browse, inspect local files, or use external tools. Do not use em dashes.
+Favor practical implementation details, explicit interfaces, operational simplicity, and failure handling over broad advice. Identify contradictions and unsafe assumptions in your own design. Limit the response to 1,800 words. Do not browse, inspect local files, or use external tools. Do not use em dashes.
