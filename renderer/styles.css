@@ -1340,6 +1340,13 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 .agent-event code { color:var(--ink); white-space:pre-wrap; }
 .agent-event-verified span { color:var(--gold-text); } .agent-event-error span { color:var(--err-fg,#c0553d); }
 .agent-terminal-slot { flex:1; min-height:120px; padding:6px; background:var(--term-bg,var(--cream)); }
+/* The console is collapsed by default. The panel's own account of a run - head,
+   event stream, dock - is the whole story, because the objective runs on the
+   gateway agent and not in this shell. With the slot out of flow the event
+   stream takes the height it was giving up to a terminal nobody was reading. */
+.workspace-agent-node:not(.console-open) .agent-terminal-slot { display:none; }
+.workspace-agent-node:not(.console-open) .agent-event-stream { flex:1; border-bottom:0; }
+.agent-console-toggle[aria-expanded="true"] { color:var(--gold-text); border-color:var(--gold); }
 .agent-command-dock { display:flex; gap:6px; padding:8px; border-top:1px solid var(--line); background:var(--panel); }
 .agent-command-dock textarea { flex:1; min-width:0; resize:none; color:var(--ink); background:var(--raised); border:1px solid var(--line-strong); border-radius:6px; padding:7px; }
 

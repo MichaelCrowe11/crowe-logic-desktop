@@ -662,6 +662,28 @@ const tests = [
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
   },
   {
+    // The console is collapsed because the objective runs on the gateway agent,
+    // not in this PTY - the shell was a second window onto something nobody was
+    // driving. Two ways that regresses silently: the display rule gets dropped
+    // and the terminal comes back for everyone, or the event stream keeps the
+    // fixed basis it had when it was sharing height and the panel shows a 140px
+    // log above dead space. Assert the collapsed geometry, not just the class.
+    name: "the agent console is collapsed until it is asked for",
+    body: `const host = document.createElement("div");
+      host.className = "workspace-agent-node";
+      host.innerHTML = '<div class="agent-event-stream"></div><div class="agent-terminal-slot"></div>';
+      document.body.appendChild(host);
+      const slot = host.querySelector(".agent-terminal-slot");
+      const stream = host.querySelector(".agent-event-stream");
+      const closed = { slot: getComputedStyle(slot).display, grow: getComputedStyle(stream).flexGrow };
+      host.classList.add("console-open");
+      const open = { slot: getComputedStyle(slot).display, grow: getComputedStyle(stream).flexGrow };
+      host.remove();
+      return { closedSlot: closed.slot, closedStreamGrows: closed.grow === "1",
+        openSlot: open.slot, openStreamFixed: open.grow === "0" };`,
+    expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
+  },
+  {
     name: "a profile hides the spaces it leaves out",
     body: `__resetSpaces();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
