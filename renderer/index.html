@@ -11,8 +11,12 @@
     <button id="sidebar-toggle" class="bar-icon" title="Toggle sidebar (Cmd+B)" aria-label="Toggle sidebar" aria-expanded="true" aria-controls="sidebar">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
     </button>
-    <span id="mark" role="img" aria-label="Crowe Logic"></span>
-    <div class="lockup"><span class="crowe">Crowe</span><span class="logic">Logic</span></div>
+    <!-- The logotype, not the name set in a font. The spore is the tittle of
+         the i, so the mark is inside the word and does not need to sit beside
+         it - which is why the separate #mark span that used to live here is
+         gone. The animated mark still speaks, but as a spinner and as an agent
+         avatar, where movement means something. -->
+    <span class="lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></span>
     <span class="ws-sep" aria-hidden="true"></span>
     <span id="ws-path" class="ws-path" title="Workspace folder"></span>
     <div class="spacer"></div>
@@ -124,9 +128,9 @@
 
     <section id="surface-home" class="surface hidden">
       <div class="surface-inner">
-        <header class="sh"><h1>Projects</h1><p class="sh-sub">Coding, development, and research — run by the operator.</p></header>
+        <header class="sh"><h1>Projects</h1><p class="sh-sub">Coding, development, and research. Run by the operator.</p></header>
         <form id="home-composer" class="surface-composer" autocomplete="off">
-          <input id="home-input" type="text" placeholder="Start a task — it opens in Chat, routed to the right expert..." spellcheck="false" />
+          <input id="home-input" type="text" placeholder="Start a task. It opens in Chat, routed to the right expert..." spellcheck="false" />
           <button type="submit" class="primary sm">Send</button>
         </form>
         <div class="cards">
@@ -154,7 +158,7 @@
 
     <section id="surface-studio" class="surface hidden">
       <div class="surface-inner">
-        <header class="sh"><h1>Crowe Logic Studio</h1><p class="sh-sub">The creative house — film, music, and the studio itself, under one roof.</p></header>
+        <header class="sh"><h1>Crowe Logic Studio</h1><p class="sh-sub">The creative house: film, music, and the studio itself, under one roof.</p></header>
         <div class="cards">
           <div class="card lane-card">
             <div class="card-h">Film · Parallel Synth</div>
@@ -177,9 +181,9 @@
 
     <section id="surface-cultivation" class="surface hidden">
       <div class="surface-inner">
-        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Anything you ask here goes straight to crowelm-grower, the mycology expert — no need to phrase it for the router.</p></header>
+        <header class="sh"><h1>Cultivation</h1><p class="sh-sub">The grower's space. Anything you ask here goes straight to crowelm-grower, the mycology expert. No need to phrase it for the router.</p></header>
         <form id="cult-composer" class="surface-composer" autocomplete="off">
-          <input id="cult-input" type="text" placeholder="Ask the grower — substrate, contamination, fruiting, yield..." spellcheck="false" />
+          <input id="cult-input" type="text" placeholder="Ask the grower: substrate, contamination, fruiting, yield..." spellcheck="false" />
           <button type="submit" class="primary sm">Ask</button>
         </form>
         <!-- Replaced by refreshCult() with questions drawn from the farm's own
@@ -200,8 +204,13 @@
         </div>
         <div id="transcript">
           <div class="welcome">
-            <span class="welcome-mark" role="img" aria-label="Crowe Logic"></span>
-            <h1>Crowe Logic</h1>
+            <!-- The logotype, held still. This was a 104px mark animating at
+                 idle with the name retyped in Fraunces underneath: the hyphae
+                 turning under a wordmark reads as an animated novelty rather
+                 than as an identity, and the words below it were the third time
+                 the same name appeared on screen. The mark still moves where
+                 motion reports something - thinking glyphs and agent panels. -->
+            <h1 class="welcome-logotype lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></h1>
             <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
             <div class="chips">
               <button class="chip">List the files here and summarize the project</button>

@@ -369,15 +369,22 @@ const tests = [
       const lightTheme = { ...t.options.theme };
       applyTheme(true);
       return {
+        // The accent is the half of the theme the console does follow, so this
+        // is what proves the flip re-read the variables rather than keeping a
+        // stale theme object.
         cursorChanged: darkTheme.cursor !== lightTheme.cursor,
-        fgChanged: darkTheme.foreground !== lightTheme.foreground,
-        // The terminal is a console surface in both themes, so its background
-        // is deliberately the same near-black either way.
-        consoleBgBothWays:
-          darkTheme.background.toLowerCase() === "#0d0c0a" &&
-          lightTheme.background.toLowerCase() === "#0d0c0a",
+        selectionChanged: darkTheme.selectionBackground !== lightTheme.selectionBackground,
+        // The terminal is a console surface in both themes: same near-black
+        // ground, same text on it. Its foreground used to be a warm cream in
+        // light and a cool white in dark, which tinted identical output two
+        // different colours depending on a theme the console does not follow.
+        // Read the tokens rather than pinning hexes - the point is that the two
+        // themes agree, not what they agreed on.
+        consoleStable:
+          darkTheme.background === lightTheme.background &&
+          darkTheme.foreground === lightTheme.foreground,
       };`,
-    expect: { cursorChanged: true, fgChanged: true, consoleBgBothWays: true },
+    expect: { cursorChanged: true, selectionChanged: true, consoleStable: true },
   },
   {
     name: "shortcut hints match the platform modifier key",
@@ -522,6 +529,137 @@ const tests = [
       __resetSpaces();
       return { shared: cult.id === proj.id && cult.id === "surface-lane", cult: cult.on, proj: proj.on };`,
     expect: { shared: true, cult: true, proj: false },
+  },
+  {
+    // The watermark is a float, because position:sticky has to be in the flow to
+    // stick to anything. A float also shortens the line boxes beside it, and for
+    // a while this one silently reset Cultivation's subtitle from two lines to
+    // three - a watermark quietly editing the typography of the page it sits
+    // behind. The test above passes either way: it only asks whether a mask is
+    // present, which is exactly the blind spot that let this ship.
+    name: "the cultivation watermark does not reflow the text it sits behind",
+    body: `__resetSpaces(); setSpace("cultivation"); await __settle();
+      const p = [...document.querySelectorAll(".sh-sub")].find((e) => e.offsetParent);
+      const kill = document.createElement("style");
+      document.head.appendChild(kill);
+      const h = () => Math.round(p.getBoundingClientRect().height);
+      const withMark = h();
+      kill.textContent = 'body[data-space="cultivation"] .surface::before{display:none !important}';
+      const without = h();
+      kill.remove();
+      // And it must not hang off the right edge: the badge is a closed drawing,
+      // so a cropped one reads as a mistake rather than as a watermark.
+      const s = [...document.querySelectorAll(".surface")].find((x) => !x.classList.contains("hidden"));
+      const box = getComputedStyle(s, "::before");
+      const overhang = parseFloat(box.marginRight) < 0;
+      __resetSpaces();
+      return { reflowed: withMark !== without, overhang };`,
+    expect: { reflowed: false, overhang: false },
+  },
+  {
+    // The mask shipped for months as an un-normalised edge-detect: nothing in it
+    // exceeded alpha 153, most of the ink sat under 64, and against a .18 opacity
+    // that put roughly 5% ink on screen. It was present, correctly scoped, and
+    // invisible - so every assertion we had was green. Measure the file instead:
+    // presence is meant to be set by the opacity here, which is only true if the
+    // trace underneath it reaches full strength.
+    name: "the cultivation mask is inked strongly enough to see",
+    body: `const img = new Image();
+      img.src = "../assets/cultivation-backdrop.png";
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext("2d").drawImage(img, 0, 0);
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let max = 0, sum = 0, n = 0, edge = 0;
+      const w = c.width, hh = c.height;
+      for (let i = 3, px = 0; i < d.length; i += 4, px++) {
+        const a = d[i];
+        if (a > max) max = a;
+        if (a > 8) {
+          sum += a; n++;
+          const x = px % w, y = (px / w) | 0;
+          if (x === 0 || y === 0 || x === w - 1 || y === hh - 1) edge++;
+        }
+      }
+      return { peaks: max === 255, meanInk: Math.round(sum / n) >= 100, touchesEdge: edge > 0 };`,
+    expect: { peaks: true, meanInk: true, touchesEdge: false },
+  },
+  {
+    // The logotype is the only brand surface on every screen, and the whole
+    // point of this cut is that it moves. It is also the easiest thing in the
+    // app to silently kill: revert one CSS line to a background-image and the
+    // header still LOOKS right in a screenshot while being a dead picture. So
+    // assert the live swap happened, that the choreography is actually bound,
+    // and that the ink layer stood in until it did.
+    name: "the header logotype goes live instead of staying a picture",
+    // Deliberately does NOT call liveLockups(): the thing that breaks is the
+    // wiring at init, and a test that runs the swap itself would repair the very
+    // regression it exists to catch. Waits instead, because the swap is a fetch.
+    body: `const deadline = Date.now() + 3000;
+      while (!document.querySelector(".lockup.live") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const els = [...document.querySelectorAll(".lockup")];
+      const svgs = els.map((e) => e.querySelector("svg"));
+      const anim = (sel) => {
+        const el = svgs[0] && svgs[0].querySelector(sel);
+        return el ? getComputedStyle(el).animationName : "none";
+      };
+      return {
+        // not pinned to a count: the welcome hero is a lockup too, and earlier
+        // tests may have cleared the welcome screen by then
+        anyLockup: els.length > 0,
+        allLive: els.every((e) => e.classList.contains("live")),
+        allInlined: svgs.every(Boolean),
+        // a background-image cannot produce these; only the inlined <style> can
+        wordAnim: anim("#wordmark-letterforms"),
+        bladeAnim: anim("#rotor-crowe-blades"),
+        sporeAnim: anim("#gold-thinking-mark"),
+        // ink is currentColor, so the logotype tracks the palette
+        inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
+        // the static mask is the fallback and must be hidden once live, but
+        // must still exist so a failed fetch leaves a logo on screen
+        maskPresent: els.every((e) => !!e.querySelector(".lockup-ink")),
+        maskHidden: getComputedStyle(els[0].querySelector(".lockup-ink")).display === "none",
+      };`,
+    expect: {
+      anyLockup: true, allLive: true, allInlined: true,
+      wordAnim: "wordmark-arrive", bladeAnim: "blades-arrive",
+      sporeAnim: "thinking-mark-arrive",
+      inherits: "currentColor", maskPresent: true, maskHidden: true,
+    },
+  },
+  {
+    // Two inlined copies of one SVG put every id in the file into the document
+    // twice. Duplicated ids do not throw — the browser silently binds both
+    // animations to whichever element it finds first, so the welcome hero would
+    // drive the header's blades and one of them would sit still. The bug is
+    // invisible without this check.
+    name: "a second logotype does not collide ids with the first",
+    // A second lockup is built here rather than leaned on: the welcome hero is
+    // one, but earlier tests may have cleared the welcome screen, and a guard
+    // against duplicate ids that only fires when some other test happens to
+    // leave the right DOM behind is not a guard.
+    body: `await liveLockups();
+      const extra = document.createElement("span");
+      extra.className = "lockup";
+      extra.innerHTML = '<span class="lockup-ink"></span>';
+      document.body.appendChild(extra);
+      await liveLockups();
+      const svgs = [...document.querySelectorAll(".lockup svg")];
+      const ids = svgs.flatMap((s) => [...s.querySelectorAll("[id]")].map((e) => e.id));
+      const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+      // every animated element must resolve to one inside its OWN svg
+      const bound = svgs.every((s) => {
+        const blades = s.querySelector('[id^="rotor-crowe-blades"]');
+        return blades && getComputedStyle(blades).animationName === "blades-arrive";
+      });
+      // calling twice must not stack a second copy inside the same wrapper
+      const doubled = [...document.querySelectorAll(".lockup")].some((e) => e.querySelectorAll("svg").length > 1);
+      extra.remove();
+      return { multiple: svgs.length > 1, dupes: dupes.join(",") || "none", bound, doubled };`,
+    expect: { multiple: true, dupes: "none", bound: true, doubled: false },
   },
   {
     name: "a profile hides the spaces it leaves out",

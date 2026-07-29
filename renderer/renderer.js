@@ -136,10 +136,6 @@ function addAssistant() {
   if (window.CroweMark) body._mark = CroweMark.mount(markEl, { state: "rest", small: true });
   return body;
 }
-function mountWelcomeMark() {
-  const wm = transcript.querySelector(".welcome-mark");
-  if (wm && !wm.querySelector("svg") && window.CroweMark) CroweMark.mount(wm, { state: "idle" });
-}
 function renderText(body, text) {
   // Static render (history/rebuild). .said is a <div>: markdown emits block
   // elements a <p> could not contain. Appended: replies read chronologically.
@@ -456,8 +452,10 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
   const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
   const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
-  /* The same CroweMark the header wears, at panel size. The panel used to draw
-     its own radial while the header drew a cube, both calling it "reasoning". */
+  /* CroweMark at panel size. The panel used to draw its own radial while the
+     header drew a cube, both calling it "reasoning". The header wears the
+     logotype now, so this is one of the two places the mark still appears —
+     and here the motion is doing work: it says the runtime is alive. */
   const mark=window.CroweMark?CroweMark.mount(body.querySelector(".agent-mark"),{state:"idle"}):{setState(){},ping(){}};
   const pingMark=()=>mark.ping();
   /* One call moves the chip, its label and the mark together. They were
@@ -872,7 +870,7 @@ const drawer = $("sessions-drawer");
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark();
+  transcript.innerHTML = WELCOME_HTML; bindChips();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
@@ -908,7 +906,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); mountWelcomeMark(); }
+  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
 }
 
 // ── Git / version control pane ──
@@ -993,10 +991,10 @@ const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), studio: $("
 let projLane = "home";
 const LANES = {
   sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
-  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending — lands with the crowe-nimbus training API." },
-  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending — /api/gateway/evals is on the nimbus roadmap." },
+  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending. Lands with the crowe-nimbus training API." },
+  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending. /api/gateway/evals is on the nimbus roadmap." },
   deployments: { title: "Deployments", sub: "Every model the gateway serves, with its routing flags." },
-  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
+  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending. Release downloads are already live." },
 };
 let cultLane = "home";
 
@@ -1295,7 +1293,7 @@ const GROW = {
     flags: (r) => [r.temp ? r.temp + "°F" : "", r.rh ? r.rh + "% RH" : "", r.co2 ? r.co2 + " ppm" : "", r.fae ? "FAE " + r.fae : ""],
   },
   strains: {
-    title: "Strains", sub: "The culture library — what you hold and where it came from.", one: "strain", plural: "strains", date: "acquired",
+    title: "Strains", sub: "The culture library: what you hold and where it came from.", one: "strain", plural: "strains", date: "acquired",
     fields: [
       { k: "name", label: "Name" },
       { k: "species", label: "Species" },
@@ -1321,7 +1319,7 @@ const GROW = {
     flags: (r) => [r.hydration ? r.hydration + "%" : "", r.process],
   },
   log: {
-    title: "Grow log", sub: "The running journal — anything that does not fit a form.", one: "entry", plural: "entries", date: "date",
+    title: "Grow log", sub: "The running journal: anything that does not fit a form.", one: "entry", plural: "entries", date: "date",
     fields: [
       { k: "date", label: "Date", type: "date", w: "sm" },
       { k: "subject", label: "Subject" },
@@ -1570,7 +1568,7 @@ function growTrace(code, d) {
 async function renderTrace() {
   const gen = ++laneGen;
   $("lane-title").textContent = "Trace a lot";
-  $("lane-sub").textContent = "One lot, everything recorded about it — spawn to harvest.";
+  $("lane-sub").textContent = "One lot, everything recorded about it, spawn to harvest.";
   const body = $("lane-body"); body.innerHTML = "";
   const t = ["blocks", "flushes", "contam", "env", "strains", "recipes", "log"];
   const got = await Promise.all(t.map((x) => window.crowe.grow.list(x)));
@@ -1742,7 +1740,7 @@ async function refreshCult() {
   // write into the same store, and this line goes when it does.
   const foot = document.createElement("p");
   foot.className = "cult-foot";
-  foot.textContent = "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands — until then, environment is hand-logged.";
+  foot.textContent = "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands. Until then, environment is hand-logged.";
   host.appendChild(foot);
 
   /* The openers, which shipped as three sentences about a farm that isn't this
@@ -2184,19 +2182,64 @@ async function maybeShowOnboarding(cfg) {
   b.appendChild(row); scrollBottom();
 }
 
+/* Swaps the static masked logotype for the animated one. The motion cut has to
+   be INLINE, not an <img> or a background: its choreography is a <style> block
+   that only runs when the SVG is part of this document, and its ink is
+   currentColor, which an <img> would resolve against nothing.
+
+   Every id in that file is document-global once inlined, so a second copy would
+   collide — #rotor-crowe-blades would then animate whichever one the document
+   happened to hold first, the same class of bug mark.js carries its own gradient
+   counter to avoid. There is one lockup today; the suffix keeps that true if a
+   second ever appears rather than leaving a trap for whoever adds it.
+
+   Failure is quiet on purpose. If the fetch fails the mask is already on screen
+   and correct, so the header keeps its logo and the app has nothing to report. */
+async function liveLockups() {
+  const els = [...document.querySelectorAll(".lockup")];
+  // Indexed over ALL lockups, not just the pending ones, so the id suffix a
+  // lockup gets never changes: calling this again after a new one appears must
+  // not renumber — and therefore re-break — the ones already on screen.
+  const todo = els.filter((el) => !el.classList.contains("live"));
+  if (!todo.length) return;
+  let markup;
+  try {
+    const res = await fetch("../assets/wordmark-motion.svg");
+    if (!res.ok) return;
+    markup = await res.text();
+  } catch { return; }
+  markup = markup.replace(/<\?xml[^>]*\?>/, "").trim();
+  els.forEach((el, i) => {
+    if (!todo.includes(el)) return;
+    const scoped = i === 0 ? markup
+      : markup.replace(/(\bid="|url\(#|#)(crowe-logic-motion|rotor-[a-z-]+|wordmark-letterforms|gold-thinking-mark)\b/g,
+        (_, lead, id) => `${lead}${id}-${i}`);
+    el.insertAdjacentHTML("beforeend", scoped);
+    // The inlined <svg> carries role="img" and its own <title>; the wrapper
+    // already announces "Crowe Logic", so let the wrapper speak and hide the
+    // copy rather than reading the name twice.
+    const svg = el.lastElementChild;
+    svg.setAttribute("aria-hidden", "true");
+    svg.removeAttribute("role");
+    el.classList.add("live");
+  });
+}
+
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
-  // Header mark is 26px; the welcome hero is 104 and keeps the fine geometry.
-  //
-  // "idle", not "rest": the mark is alive whenever the app is. A 46s rotation
-  // and a 6s breath are slow enough that you never catch it moving — you just
-  // notice, on looking back, that it isn't where it was. That is the whole
-  // point of a chiral mark and it is why the drawing curls in the first place.
-  // Transcript avatars stay at rest on purpose: a hundred of them turning at
-  // once is a busy page, and it would spend the reasoning state's signal. The
-  // reduced-motion block in styles.css still stops all of it.
-  if (window.CroweMark) { CroweMark.mount($("mark"), { state: "idle", small: true }); mountWelcomeMark(); }
+  // The header and the welcome screen both wear the logotype, which carries the
+  // spore as the i's tittle. That spore turns: it is the one piece of the brand
+  // on screen in every space, in every state, and a still picture of a living
+  // mark is worse than no mark at all. `idle` is the slow cut — a breath and a
+  // drift, not a spinner — so it reads as the app being awake rather than as
+  // something loading. The o's hold the same whorl but are drawn into the
+  // asset and never move; three turning marks in one word would be a carousel.
+  // Elsewhere CroweMark still only appears where movement reports something:
+  // the agent panel (idle, so you can see the runtime is alive) and transcript
+  // avatars (rest, because a hundred of them turning at once would spend the
+  // reasoning state's signal).
+  liveLockups();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
   setAutonomyBadge((c && c.autonomy) || "edit");

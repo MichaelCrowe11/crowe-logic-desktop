@@ -7,3 +7,10 @@ release-linux-*/
 *.tar.gz
 release/
 release-archive/
+
+# Python bytecode from the asset/mark generation scripts.
+__pycache__/
+*.pyc
+
+# macOS Finder droppings — never part of a build
+.DS_Store

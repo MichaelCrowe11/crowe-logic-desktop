@@ -1,0 +1,114 @@
+/* GENERATED-ADJACENT: the entrance choreography for assets/wordmark-motion.svg.
+   Kept as its own file so the timing can be edited without touching the
+   generator, and inlined verbatim by scripts/gen-mark.js. */
+  #wordmark-letterforms,
+  #rotor-crowe,
+  #rotor-logic,
+  #rotor-crowe-blades,
+  #rotor-logic-blades,
+  #gold-thinking-mark {
+    transform-box: fill-box;
+    will-change: opacity, transform;
+  }
+
+  #wordmark-letterforms {
+    transform-origin: center;
+  }
+
+  #rotor-crowe,
+  #rotor-logic {
+    transform-origin: center;
+  }
+
+  #rotor-crowe-blades,
+  #rotor-logic-blades {
+    transform-origin: center;
+  }
+
+  #gold-thinking-mark {
+    transform-origin: 50% 80%;
+  }
+
+  .is-animated #wordmark-letterforms {
+    animation: wordmark-arrive 1400ms cubic-bezier(.2, .75, .25, 1) 120ms both;
+  }
+
+  .is-animated #rotor-crowe {
+    animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) both;
+  }
+
+  .is-animated #rotor-logic {
+    animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) 140ms both;
+  }
+
+  .is-animated #rotor-crowe-blades {
+    animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) both;
+  }
+
+  .is-animated #rotor-logic-blades {
+    animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) 140ms both;
+  }
+
+  .is-animated #gold-thinking-mark {
+    animation: thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both;
+  }
+
+  @keyframes wordmark-arrive {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes rotor-arrive {
+    from {
+      opacity: 0;
+      transform: scale(.45);
+    }
+    72% {
+      opacity: 1;
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes blades-arrive {
+    from {
+      transform: rotate(-300deg);
+    }
+    to {
+      transform: rotate(0);
+    }
+  }
+
+  @keyframes thinking-mark-arrive {
+    from {
+      opacity: 0;
+      transform: translateY(7px) scale(.5) rotate(-16deg);
+    }
+    65% {
+      opacity: 1;
+      transform: translateY(-1px) scale(1.08) rotate(3deg);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1) rotate(0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .is-animated #wordmark-letterforms,
+    .is-animated #rotor-crowe,
+    .is-animated #rotor-logic,
+    .is-animated #rotor-crowe-blades,
+    .is-animated #rotor-logic-blades,
+    .is-animated #gold-thinking-mark {
+      animation: none;
+    }
+  }
