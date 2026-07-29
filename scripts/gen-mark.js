@@ -353,22 +353,119 @@ function lockupSvg(ink, markOpts) {
 emit("lockup.svg", lockupSvg("#1a1714", { scale: SCALE.paper, id: "lp" }));
 emit("lockup-dark.svg", lockupSvg("#f5f2ea", { scale: SCALE.dark, id: "ld" }));
 
-// Logotype: the words alone, with the spore standing in for the tittle of the
-// "i". This is the cut that has to work as a logo — one lockup, no separate
-// mark to lose — so the dot is removed from the outline rather than covered.
+// Logotype: the words alone, with the mark twice inside them. The spore is the
+// tittle of the "i" and a monochrome whorl is each "o" — the letters ARE the
+// drawing, so there is no separate mark to lose and no way to ship the words
+// without it.
+//
+// Why the o's are ink and only the tittle is gold: the palette runs on gold
+// appearing in exactly one place. Three gold radials inside a 96px word would
+// read as glitter. Drawn in the body ink, the whorl is a letterform — a round
+// counter built of hyphae — and the eye reads "Cr(o)we L(o)gic" before it
+// notices what the o is made of. That is the point: the mark is not applied to
+// the name, it is the name's own construction.
+//
+// The o's take the unforked, eased-taper cut for the same reason every small
+// slot does: at header size an "o" is 8.6px across and the primary's 0.8-wide
+// tips disappear, leaving a gold-less scratch ball where a letter should be.
 const SPORE = 46;   // ink width of the spore, in wordmark em units
-function wordmarkSvg(ink, markOpts) {
+
+// The o is drawn, not borrowed. Fraunces' own "o" at this cut is 45.72 wide
+// with a counter of 21.34 x 44.24 — two 12-unit vertical strokes joined by
+// 0.8-unit hairlines. There is no round hole to put anything in, and dropping
+// the letter for the bare mark reads as an asterisk at every size (rendered and
+// checked). So the logotype's o is a monoline ring at the letter's own width,
+// with the whorl living inside it. The ring is what carries the word: at 8.6px
+// in the header it collapses to a legible o, and the mycelium inside only
+// resolves as you scale up. Degrading into a letter is the whole requirement.
+const O_OUTER = 45.72;   // matches the glyph it stands in for
+// Weighed against the letters at 200px: 6.4 leaves the o's visibly lighter than
+// the C and the w; 8.0 matches them. 8.0 it is, and it is also the ring the
+// motion cut below was authored against — the rotor ids in that file assume
+// r=22.86 outer / 14.86 inner, so changing this moves the drawing out from
+// under the animation.
+const O_STROKE = 8.0;
+const O_MARK = (O_OUTER - 2 * O_STROKE) * 0.99;
+const oCut = (ink, id) => ({ pal: { blue: ink, gold: ink }, taper: 0.45, fork: false, id });
+const ring = (cx, cy, r) =>
+  `M${(cx - r).toFixed(2)} ${cy.toFixed(2)}a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(2 * r).toFixed(2)} 0` +
+  `a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(-2 * r).toFixed(2)} 0`;
+// Ring and blades come back separately: the static cuts glue them together, and
+// the motion cut needs them in two groups so the blades can spin inside a ring
+// that holds still. One source for both, so they cannot drift apart.
+const oParts = (ink, g, id) => ({
+  ring: `<path fill="${ink}" fill-rule="evenodd" d="${ring(g.cx, g.cy, O_OUTER / 2)}${ring(g.cx, g.cy, O_OUTER / 2 - O_STROKE)}"/>`,
+  blades: placeMark(g.cx, g.cy, O_MARK, oCut(ink, id)),
+});
+const oGlyph = (ink, g, id) => {
+  const p = oParts(ink, g, id);
+  return `${p.ring}\n  ${p.blades}`;
+};
+
+function wordmarkSvg(ink, markOpts, opts) {
+  const { spore = true, id = "wm" } = opts || {};
   const t = WM.tittle;
   const top = Math.min(t.cy - SPORE / 2, -WM.capHeight) - 5;
   const bottom = -WM.descent + 5;
+  const os = WM.glyphs.filter((g) => g.ch === "o")
+    .map((g, i) => oGlyph(ink, g, `${id}o${i}`))
+    .join("\n  ");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-5} ${top.toFixed(2)} ${(WM.width + 10).toFixed(2)} ${(bottom - top).toFixed(2)}">
-  <path d="${WM.dDotless}" fill="${ink}"/>
-  ${placeMark(t.cx, t.cy, SPORE, markOpts)}
+  <path d="${WM.dNoOs}" fill="${ink}"/>
+  ${os}
+  ${spore ? placeMark(t.cx, t.cy, SPORE, markOpts) : ""}
 </svg>
 `;
 }
-emit("wordmark.svg", wordmarkSvg("#1a1714", { scale: SCALE.paper, id: "wm" }));
-emit("wordmark-dark.svg", wordmarkSvg("#f5f2ea", { scale: SCALE.dark, id: "wd" }));
+emit("wordmark.svg", wordmarkSvg("#1a1714", { scale: SCALE.paper, id: "wm" }, { id: "wm" }));
+emit("wordmark-dark.svg", wordmarkSvg("#f5f2ea", { scale: SCALE.dark, id: "wd" }, { id: "wd" }));
+
+// Mask cut: the same drawing minus the tittle, in flat black. The renderer uses
+// it as a CSS mask so one file serves both themes from --ink, and so the hole
+// where the spore belongs can be filled by a live, animating mark instead of a
+// frozen picture of one. Same viewBox as above, which is what lets the renderer
+// position that mark by fraction and land it on the tittle exactly.
+emit("wordmark-ink.svg", wordmarkSvg("#000", null, { spore: false, id: "wi" }));
+
+// Motion cut: the same drawing, taken apart into the pieces that move. The
+// rings hold still while the blades inside them unwind, the letters rise, and
+// the spore lands on the i last. Choreography lives in scripts/wordmark-motion.css
+// and is inlined here verbatim — the timing was authored by hand and the
+// generator's job is only to keep the geometry under it current.
+//
+// Ink is `currentColor` and the spore is flat gold, so one file serves both
+// themes from whatever --ink the host sets. That is also the mark's canonical
+// form: mono, with gold in exactly one place. The gradient cuts above are for
+// paper and for the hero, where there is room for a tonal ramp to read.
+//
+// The viewBox carries 25 units of padding the static cuts do not need, because
+// the blades scale up from 0.45 and the spore overshoots to 1.08 on the way in;
+// without the margin the entrance clips against its own edges.
+function wordmarkMotionSvg() {
+  const css = fs.readFileSync(path.join(__dirname, "wordmark-motion.css"), "utf8");
+  const t = WM.tittle;
+  const [c, l] = WM.glyphs.filter((g) => g.ch === "o");
+  const rotor = (name, g) => {
+    const p = oParts("currentColor", g, `mo-${name}`);
+    return `<g id="rotor-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine">
+  ${p.ring.replace("<path ", `<path id="rotor-${name}-ring" `)}
+  <g id="rotor-${name}-blades" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine blades">${p.blades}</g>
+</g>`;
+  };
+  return `<svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
+  <title id="crowe-logic-motion-title">Crowe Logic</title>
+  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae; the tittle of the i is the gold spore.</desc>
+  <style>
+${css.replace(/^/gm, "  ").trimEnd()}
+  </style>
+  <g id="wordmark-letterforms"><path d="${WM.dNoOs}" fill="currentColor"/></g>
+  ${rotor("crowe", c)}
+  ${rotor("logic", l)}
+  <g id="gold-thinking-mark" aria-label="Gold thinking mark">${placeMark(t.cx, t.cy, SPORE, { pal: { blue: "currentColor", gold: C.gold }, id: "mo-spore" })}</g>
+</svg>
+`;
+}
+emit("wordmark-motion.svg", wordmarkMotionSvg());
 
 // Geometry module for the living mark (renderer/mark.js). Arms carry their
 // angle so the animator can stagger them around the ring instead of pulsing

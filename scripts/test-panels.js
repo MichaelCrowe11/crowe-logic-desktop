@@ -586,6 +586,82 @@ const tests = [
     expect: { peaks: true, meanInk: true, touchesEdge: false },
   },
   {
+    // The logotype is the only brand surface on every screen, and the whole
+    // point of this cut is that it moves. It is also the easiest thing in the
+    // app to silently kill: revert one CSS line to a background-image and the
+    // header still LOOKS right in a screenshot while being a dead picture. So
+    // assert the live swap happened, that the choreography is actually bound,
+    // and that the ink layer stood in until it did.
+    name: "the header logotype goes live instead of staying a picture",
+    // Deliberately does NOT call liveLockups(): the thing that breaks is the
+    // wiring at init, and a test that runs the swap itself would repair the very
+    // regression it exists to catch. Waits instead, because the swap is a fetch.
+    body: `const deadline = Date.now() + 3000;
+      while (!document.querySelector(".lockup.live") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const els = [...document.querySelectorAll(".lockup")];
+      const svgs = els.map((e) => e.querySelector("svg"));
+      const anim = (sel) => {
+        const el = svgs[0] && svgs[0].querySelector(sel);
+        return el ? getComputedStyle(el).animationName : "none";
+      };
+      return {
+        // not pinned to a count: the welcome hero is a lockup too, and earlier
+        // tests may have cleared the welcome screen by then
+        anyLockup: els.length > 0,
+        allLive: els.every((e) => e.classList.contains("live")),
+        allInlined: svgs.every(Boolean),
+        // a background-image cannot produce these; only the inlined <style> can
+        wordAnim: anim("#wordmark-letterforms"),
+        bladeAnim: anim("#rotor-crowe-blades"),
+        sporeAnim: anim("#gold-thinking-mark"),
+        // ink is currentColor, so the logotype tracks the palette
+        inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
+        // the static mask is the fallback and must be hidden once live, but
+        // must still exist so a failed fetch leaves a logo on screen
+        maskPresent: els.every((e) => !!e.querySelector(".lockup-ink")),
+        maskHidden: getComputedStyle(els[0].querySelector(".lockup-ink")).display === "none",
+      };`,
+    expect: {
+      anyLockup: true, allLive: true, allInlined: true,
+      wordAnim: "wordmark-arrive", bladeAnim: "blades-arrive",
+      sporeAnim: "thinking-mark-arrive",
+      inherits: "currentColor", maskPresent: true, maskHidden: true,
+    },
+  },
+  {
+    // Two inlined copies of one SVG put every id in the file into the document
+    // twice. Duplicated ids do not throw — the browser silently binds both
+    // animations to whichever element it finds first, so the welcome hero would
+    // drive the header's blades and one of them would sit still. The bug is
+    // invisible without this check.
+    name: "a second logotype does not collide ids with the first",
+    // A second lockup is built here rather than leaned on: the welcome hero is
+    // one, but earlier tests may have cleared the welcome screen, and a guard
+    // against duplicate ids that only fires when some other test happens to
+    // leave the right DOM behind is not a guard.
+    body: `await liveLockups();
+      const extra = document.createElement("span");
+      extra.className = "lockup";
+      extra.innerHTML = '<span class="lockup-ink"></span>';
+      document.body.appendChild(extra);
+      await liveLockups();
+      const svgs = [...document.querySelectorAll(".lockup svg")];
+      const ids = svgs.flatMap((s) => [...s.querySelectorAll("[id]")].map((e) => e.id));
+      const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+      // every animated element must resolve to one inside its OWN svg
+      const bound = svgs.every((s) => {
+        const blades = s.querySelector('[id^="rotor-crowe-blades"]');
+        return blades && getComputedStyle(blades).animationName === "blades-arrive";
+      });
+      // calling twice must not stack a second copy inside the same wrapper
+      const doubled = [...document.querySelectorAll(".lockup")].some((e) => e.querySelectorAll("svg").length > 1);
+      extra.remove();
+      return { multiple: svgs.length > 1, dupes: dupes.join(",") || "none", bound, doubled };`,
+    expect: { multiple: true, dupes: "none", bound: true, doubled: false },
+  },
+  {
     name: "a profile hides the spaces it leaves out",
     body: `__resetSpaces();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));

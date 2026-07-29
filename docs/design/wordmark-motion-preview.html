@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crowe Logic Motion Wordmark</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background: #111;
+      color: #f5f2ea;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 42%, #24211d 0, #111 48%, #090909 100%);
+    }
+
+    main {
+      width: min(92vw, 1280px);
+      display: grid;
+      gap: 2rem;
+      justify-items: center;
+    }
+
+    object {
+      display: block;
+      width: 100%;
+      height: auto;
+      filter: drop-shadow(0 20px 36px rgb(0 0 0 / 35%));
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgb(245 242 234 / 18%);
+      border-radius: 999px;
+      padding: .7rem 1.15rem;
+      background: rgb(245 242 234 / 8%);
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+
+    button:hover {
+      border-color: rgb(245 242 234 / 34%);
+      background: rgb(245 242 234 / 13%);
+    }
+
+    button:focus-visible {
+      outline: 2px solid #f5b01d;
+      outline-offset: 4px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <object
+      id="motion-wordmark"
+      data="../../assets/wordmark-motion.svg"
+      type="image/svg+xml"
+      aria-label="Animated Crowe Logic wordmark"
+    ></object>
+    <button id="replay" type="button">Replay animation</button>
+  </main>
+  <script>
+    const wordmark = document.querySelector("#motion-wordmark");
+    document.querySelector("#replay").addEventListener("click", () => {
+      const source = wordmark.data.split("?")[0];
+      wordmark.data = `${source}?replay=${Date.now()}`;
+    });
+  </script>
+</body>
+</html>

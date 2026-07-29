@@ -991,10 +991,10 @@ const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), studio: $("
 let projLane = "home";
 const LANES = {
   sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
-  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending — lands with the crowe-nimbus training API." },
-  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending — /api/gateway/evals is on the nimbus roadmap." },
+  training: { title: "Training", sub: "Fine-tune runs for the CroweLM experts.", pending: "Endpoint pending. Lands with the crowe-nimbus training API." },
+  evals: { title: "Evals", sub: "Capability suites across the deployment fleet.", pending: "Endpoint pending. /api/gateway/evals is on the nimbus roadmap." },
   deployments: { title: "Deployments", sub: "Every model the gateway serves, with its routing flags." },
-  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending — release downloads are already live." },
+  storage: { title: "Storage", sub: "Releases, datasets, and artifacts.", pending: "R2 browser pending. Release downloads are already live." },
 };
 let cultLane = "home";
 
@@ -1293,7 +1293,7 @@ const GROW = {
     flags: (r) => [r.temp ? r.temp + "°F" : "", r.rh ? r.rh + "% RH" : "", r.co2 ? r.co2 + " ppm" : "", r.fae ? "FAE " + r.fae : ""],
   },
   strains: {
-    title: "Strains", sub: "The culture library — what you hold and where it came from.", one: "strain", plural: "strains", date: "acquired",
+    title: "Strains", sub: "The culture library: what you hold and where it came from.", one: "strain", plural: "strains", date: "acquired",
     fields: [
       { k: "name", label: "Name" },
       { k: "species", label: "Species" },
@@ -1319,7 +1319,7 @@ const GROW = {
     flags: (r) => [r.hydration ? r.hydration + "%" : "", r.process],
   },
   log: {
-    title: "Grow log", sub: "The running journal — anything that does not fit a form.", one: "entry", plural: "entries", date: "date",
+    title: "Grow log", sub: "The running journal: anything that does not fit a form.", one: "entry", plural: "entries", date: "date",
     fields: [
       { k: "date", label: "Date", type: "date", w: "sm" },
       { k: "subject", label: "Subject" },
@@ -1568,7 +1568,7 @@ function growTrace(code, d) {
 async function renderTrace() {
   const gen = ++laneGen;
   $("lane-title").textContent = "Trace a lot";
-  $("lane-sub").textContent = "One lot, everything recorded about it — spawn to harvest.";
+  $("lane-sub").textContent = "One lot, everything recorded about it, spawn to harvest.";
   const body = $("lane-body"); body.innerHTML = "";
   const t = ["blocks", "flushes", "contam", "env", "strains", "recipes", "log"];
   const got = await Promise.all(t.map((x) => window.crowe.grow.list(x)));
@@ -1740,7 +1740,7 @@ async function refreshCult() {
   // write into the same store, and this line goes when it does.
   const foot = document.createElement("p");
   foot.className = "cult-foot";
-  foot.textContent = "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands — until then, environment is hand-logged.";
+  foot.textContent = "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands. Until then, environment is hand-logged.";
   host.appendChild(foot);
 
   /* The openers, which shipped as three sentences about a farm that isn't this
@@ -2182,15 +2182,64 @@ async function maybeShowOnboarding(cfg) {
   b.appendChild(row); scrollBottom();
 }
 
+/* Swaps the static masked logotype for the animated one. The motion cut has to
+   be INLINE, not an <img> or a background: its choreography is a <style> block
+   that only runs when the SVG is part of this document, and its ink is
+   currentColor, which an <img> would resolve against nothing.
+
+   Every id in that file is document-global once inlined, so a second copy would
+   collide — #rotor-crowe-blades would then animate whichever one the document
+   happened to hold first, the same class of bug mark.js carries its own gradient
+   counter to avoid. There is one lockup today; the suffix keeps that true if a
+   second ever appears rather than leaving a trap for whoever adds it.
+
+   Failure is quiet on purpose. If the fetch fails the mask is already on screen
+   and correct, so the header keeps its logo and the app has nothing to report. */
+async function liveLockups() {
+  const els = [...document.querySelectorAll(".lockup")];
+  // Indexed over ALL lockups, not just the pending ones, so the id suffix a
+  // lockup gets never changes: calling this again after a new one appears must
+  // not renumber — and therefore re-break — the ones already on screen.
+  const todo = els.filter((el) => !el.classList.contains("live"));
+  if (!todo.length) return;
+  let markup;
+  try {
+    const res = await fetch("../assets/wordmark-motion.svg");
+    if (!res.ok) return;
+    markup = await res.text();
+  } catch { return; }
+  markup = markup.replace(/<\?xml[^>]*\?>/, "").trim();
+  els.forEach((el, i) => {
+    if (!todo.includes(el)) return;
+    const scoped = i === 0 ? markup
+      : markup.replace(/(\bid="|url\(#|#)(crowe-logic-motion|rotor-[a-z-]+|wordmark-letterforms|gold-thinking-mark)\b/g,
+        (_, lead, id) => `${lead}${id}-${i}`);
+    el.insertAdjacentHTML("beforeend", scoped);
+    // The inlined <svg> carries role="img" and its own <title>; the wrapper
+    // already announces "Crowe Logic", so let the wrapper speak and hide the
+    // copy rather than reading the name twice.
+    const svg = el.lastElementChild;
+    svg.setAttribute("aria-hidden", "true");
+    svg.removeAttribute("role");
+    el.classList.add("live");
+  });
+}
+
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
-  // Nothing to mount at startup any more. The header and the welcome screen
-  // both wear the logotype, which carries the spore as the i's tittle — the
-  // identity is in the word, drawn, and it holds still. CroweMark is now only
-  // mounted where movement reports something: the agent panel (idle, so you
-  // can see the runtime is alive) and transcript avatars (rest, because a
-  // hundred of them turning at once would spend the reasoning state's signal).
+  // The header and the welcome screen both wear the logotype, which carries the
+  // spore as the i's tittle. That spore turns: it is the one piece of the brand
+  // on screen in every space, in every state, and a still picture of a living
+  // mark is worse than no mark at all. `idle` is the slow cut — a breath and a
+  // drift, not a spinner — so it reads as the app being awake rather than as
+  // something loading. The o's hold the same whorl but are drawn into the
+  // asset and never move; three turning marks in one word would be a carousel.
+  // Elsewhere CroweMark still only appears where movement reports something:
+  // the agent panel (idle, so you can see the runtime is alive) and transcript
+  // avatars (rest, because a hundred of them turning at once would spend the
+  // reasoning state's signal).
+  liveLockups();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
   setAutonomyBadge((c && c.autonomy) || "edit");

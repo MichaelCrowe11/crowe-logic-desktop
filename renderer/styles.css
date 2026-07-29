@@ -137,12 +137,43 @@ button { font-family: var(--body); }
    read as the product's name rather than as its logo, and rendered in the
    Georgia fallback anywhere the font had not loaded yet. The SVG is outlines,
    so it cannot fall back and cannot drift from assets/wordmark.svg.
-   508.30 x 116.82 in the viewBox, so 22px tall wants 96px wide. */
-.lockup { width: 96px; height: 22px; display: block;
-  background: url("../assets/wordmark.svg") no-repeat center / contain; }
-/* The ink in the light cut goes muddy on a dark ground; the dark cut carries
-   the lifted ink and the wider hyphae, the same correction the marks make. */
-body.dark .lockup { background-image: url("../assets/wordmark-dark.svg"); }
+   508.30 x 116.82 in the viewBox, so 22px tall wants 96px wide.
+
+   The logotype is now two layers rather than one flat picture, because it has
+   to move. A background-image cannot run CSS animation, so the header wore a
+   still photograph of the mark while every other surface in the app had it
+   turning — the one place the brand appears on every screen was the one place
+   it was dead.
+
+   Layer one, .lockup-ink, is always there: assets/wordmark-ink.svg as a mask
+   over --ink, so one file serves both themes and the logotype tracks the
+   palette instead of carrying its own baked ink. Layer two is the whole of
+   assets/wordmark-motion.svg, inlined by renderer.js. Inlined and not <img>,
+   because the animation is CSS inside the document and the ink is
+   currentColor — both need the SVG to be part of the page. If that inline
+   never happens (script error, a context with no JS at all) the mask is what
+   shows, which is the same drawing holding still. There is no state where the
+   header has no logo.
+
+   aspect-ratio, not a fixed height: everything below is a percentage of this
+   box, so it has to match the viewBox exactly or every fraction lands a little
+   off. 96 x 22 was a 0.3% lie. */
+.lockup { width: 96px; aspect-ratio: 508.3 / 116.82; display: block; position: relative;
+  color: var(--ink); }
+.lockup-ink { position: absolute; inset: 0; background: currentColor;
+  -webkit-mask: url("../assets/wordmark-ink.svg") no-repeat center / 100% 100%;
+  mask: url("../assets/wordmark-ink.svg") no-repeat center / 100% 100%; }
+.lockup.live .lockup-ink { display: none; }
+/* The motion cut is drawn in a viewBox padded by 20 units left and 13.68 up, so
+   the entrance (blades scaling from 0.45, the spore overshooting to 1.08) has
+   somewhere to happen without clipping. These four numbers undo exactly that
+   padding, so the letters land on the same pixels the mask did:
+     width  548.30 / 508.30            height 150 / 116.82
+     left   (-25 + 5)   / 508.30       top    (-100 + 86.32) / 116.82
+   Derived, not eyeballed — re-running the generator cannot shift the word out
+   from under the header without these changing too. */
+.lockup > svg { position: absolute; width: 107.8693%; height: 128.4027%;
+  left: -3.9347%; top: -11.7104%; overflow: visible; }
 .tagline { font-family: var(--mono); font-size: var(--fs-cap); letter-spacing: .6px; text-transform: uppercase;
   color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px 9px; margin-left: 4px; }
 .ws-sep { width: 1px; height: 13px; background: var(--line); margin: 0 2px; }
@@ -179,11 +210,14 @@ body.dark button.primary:hover { background: var(--gold-soft); }
 /* ── Transcript ── */
 #transcript { flex: 1; overflow-y: auto; padding: 20px 22px; }
 .welcome { max-width: 470px; margin: 7vh auto; text-align: center; color: var(--muted); }
-/* The hero is the logotype now, drawn rather than typed, and it does not move.
-   508.30 x 116.82 in the viewBox, so 46px tall wants 200px wide. */
-.welcome h1.welcome-logotype { width: 200px; height: 46px; margin: 0 auto 14px; padding: 0;
-  background: url("../assets/wordmark.svg") no-repeat center / contain; }
-body.dark .welcome h1.welcome-logotype { background-image: url("../assets/wordmark-dark.svg"); }
+/* The hero is the logotype, drawn rather than typed — and it carries .lockup as
+   well, so it inherits the mask-plus-inlined-motion machinery above instead of
+   owning a second copy of it. This is the largest the brand ever appears and
+   the first thing on an empty chat, which makes it the one place the entrance
+   animation actually earns its 1.7 seconds. Only width is set here; the
+   aspect-ratio comes from .lockup, which is what keeps the overlay maths true
+   at any size. */
+.welcome h1.welcome-logotype { width: 200px; margin: 0 auto 14px; padding: 0; }
 .welcome p { font-size: var(--fs-body); line-height: 1.6; margin: 0 0 4px; }
 .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 /* The opener chips used to lift and cast a shadow on hover. Cards that levitate
