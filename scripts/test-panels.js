@@ -718,27 +718,45 @@ const tests = [
       while (!body.querySelector(".wm-blades-crowe") && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 25));
       }
-      const clock = () => {
-        const el = body.querySelector(".wm-blades-crowe");
-        const a = el && el.getAnimations()[0];
-        return a ? a.currentTime : -1;
-      };
-      const turning = clock() >= 0 &&
-        getComputedStyle(body.querySelector(".wm-blades-crowe")).animationName === "blade-turn";
+      const rotor = () => body.querySelector(".wm-blades-crowe");
+      const animOf = (el) => (el && el.getAnimations()[0]) || null;
+      const el0 = rotor(), anim0 = animOf(el0);
+      const turning = !!anim0 && getComputedStyle(el0).animationName === "blade-turn";
       await new Promise((r) => setTimeout(r, 250));
-      const before = clock();
+      const before = anim0 ? anim0.currentTime : -1;
       // a tool card landing under the indicator is what forces the move
       body.insertAdjacentHTML("beforeend", '<div class="tool">run_shell</div>');
       showThinking(body, "executing");
-      const after = clock();
+      const el1 = rotor(), anim1 = animOf(el1);
+      const after = anim1 ? anim1.currentTime : -1;
       const atBottom = body.lastElementChild.classList.contains("thinking");
       const label = body.querySelector(".th-label").textContent;
       const svgs = body.querySelectorAll(".th-logotype svg").length;
       // the retired hexagons must not come back with it
       const noGlyph = !body.querySelector(".tg");
       body.remove();
-      return { turning, kept: before > 0 && after >= before, atBottom, label, svgs, noGlyph };`,
-    expect: { turning: true, kept: true, atBottom: true, label: "executing", svgs: 1, noGlyph: true },
+      /* Two readings, because neither one is sufficient alone.
+
+         sameRotor holds everywhere: keepAtBottom has to MOVE the node, and a
+         version that re-rendered the indicator would hand back a different
+         element. That is the regression in structural form.
+
+         kept is the clock, and the clock is what anyone actually sees - a
+         restart resets currentTime to 0, so after < before is the failure. It
+         is only decisive where the compositor is producing frames: under xvfb
+         currentTime sits at 0 all run, which makes the comparison true for the
+         wrong reason. So it is written as "did not go backwards" rather than as
+         "advanced", which would fail in CI on a machine, not on a bug.
+
+         Not asserted on Animation object identity: Chromium hands back a fresh
+         CSSAnimation wrapper after the move even when the clock is preserved
+         (measured 15.8ms -> 266.7ms across it, no reset), and startTime goes
+         null while the animation re-associates. Both would fail here on a
+         correct implementation. */
+      return { turning, sameRotor: el1 === el0, kept: after >= before,
+        atBottom, label, svgs, noGlyph };`,
+    expect: { turning: true, sameRotor: true, kept: true,
+      atBottom: true, label: "executing", svgs: 1, noGlyph: true },
   },
   {
     // The caret has to sit on the last line of the reply. As ::after on the
