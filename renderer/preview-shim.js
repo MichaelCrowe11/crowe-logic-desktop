@@ -94,6 +94,20 @@
         await sleep(900);
         emit({ type: "assistant_delta", text: "\n\nThe secret guard misses `.env.local`: the pattern anchors at `.env` end-of-string. The fix above widens it to any `.env.*` file. One reviewed edit, tests green after." });
         emit({ type: "telemetry", promptTokens: 6120, completionTokens: 512, cost: 0.0182, tps: 46 });
+        await sleep(600);
+        // The gate and the receipt, so both can be reviewed in a browser.
+        emit({ type: "approval_request", id: 1, kind: "run_shell", risk: "strict",
+          why: "rewrites a remote branch's history",
+          detail: "git push --force origin main", expiresInMs: 300000 });
+        await sleep(900);
+        emit({ type: "verdict", status: "pass", model: "crowelm-fast",
+          summary: "The widened pattern blocks .env.local, and the rest of the suite still passes.",
+          checks: [
+            { name: "npm test", result: "pass", evidence: "46 passing, 0 failing" },
+            { name: "re-read harness.js:33", result: "pass", evidence: "return /\\.env(\\.|$)|id_rsa|auth\\.json/.test(p);" },
+            { name: "search for other callers of isSecretPath", result: "pass", evidence: "3 call sites, all read-path guards" },
+          ] });
+        emit({ type: "telemetry", promptTokens: 7340, completionTokens: 604, cost: 0.0219, tps: 46 });
         await sleep(400);
       },
       async stop() {},
@@ -104,6 +118,7 @@
       async logout() { return { ok: true }; },
     },
     edit: { decide() {} },
+    approval: { decide() {} },
     git: {
       async status() {
         return { repo: true, branch: "main", files: [
@@ -220,7 +235,7 @@
       async test() { return { ok: true, healthy: true }; },
     },
     async chat() { return { content: "" }; },
-    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },
+    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },
     async setConfig() { return this.getConfig(); },
     onBrowserNavigate() {}, onMenuAction() {},
   };

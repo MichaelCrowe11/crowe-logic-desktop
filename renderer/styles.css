@@ -542,7 +542,9 @@ body.dark #send:hover { background: var(--gold-soft); }
 .modal-card label { display: block; font-size: var(--fs-sm); color: var(--muted); margin: 12px 0 4px; }
 .modal-card input { width: 100%; font-family: var(--mono); font-size: var(--fs-sm); background: var(--cream); color: var(--ink);
   border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; }
-.modal-card input:focus, .modal-card textarea:focus { outline: none; border-color: var(--focus); }
+.modal-card select { width: 100%; font-family: var(--body); font-size: var(--fs-sm); background: var(--cream); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; }
+.modal-card input:focus, .modal-card textarea:focus, .modal-card select:focus { outline: none; border-color: var(--focus); }
 .modal-card .row { display: flex; gap: 10px; margin-top: 18px; }
 .hint { font-size: var(--fs-sm); color: var(--muted); margin-top: 10px; }
 .hidden { display: none !important; }
@@ -705,6 +707,71 @@ body.dark .ec-actions .approve:hover { background: var(--ok); color: var(--cream
 .ec-actions .reject:hover { border-color: var(--err-fg); color: var(--diff-del-fg); }
 .ec-hint { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); margin-left: auto; align-self: center; }
 .ec-status { font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); }
+
+/* ── Approval gate ── an action that cannot be taken back, held at the door.
+   Weighted heavier than the edit card: the reason it needs asking reads first,
+   the command itself sits underneath in mono, and the left edge carries the
+   accent so the card is identifiable in a long thread at a glance. ── */
+.gatecard { border-color: var(--err-fg); }
+.gatecard.risk-review { border-color: var(--gold-deep); }
+body.dark .gatecard.risk-review { border-color: var(--gold); }
+.gatecard .ec-head { border-bottom-color: var(--line-strong); }
+.gatecard .ec-title { color: var(--err-fg); }
+.gatecard.risk-review .ec-title { color: var(--gold-deep); }
+body.dark .gatecard.risk-review .ec-title { color: var(--gold); }
+.gc-why { padding: 9px 11px; font-size: var(--fs-body); border-bottom: 1px solid var(--line); }
+.gatecard .ec-diff { padding: 8px 11px; white-space: pre-wrap; word-break: break-all; }
+/* The button that authorizes an irreversible act must not look like Send.
+   Two things had to be right and neither was: the fill uses the design system's
+   own destructive pair (--danger/--on-danger, already contrast-gated) rather than
+   an error-text colour, and the selector carries body.dark, because the base rule
+   `body.dark .ec-actions .approve` scores (0,3,1) and outranked a plain
+   .gatecard-prefixed (0,3,0). In dark mode the force-push button rendered in the
+   same gold as Send, which is the whole signal of the gate, lost. */
+.gatecard .ec-actions .approve,
+body.dark .gatecard .ec-actions .approve { background: var(--danger); color: var(--on-danger); }
+.gatecard .ec-actions .approve:hover,
+body.dark .gatecard .ec-actions .approve:hover { background: var(--ink); color: var(--cream); }
+/* Review risk is recoverable, so it wears the workspace accent, not the alarm. */
+.gatecard.risk-review .ec-actions .approve { background: var(--gold-deep); color: var(--cream); }
+body.dark .gatecard.risk-review .ec-actions .approve { background: var(--gold); color: var(--on-gold); }
+/* "Allow once" and the shortcut hint both broke mid-phrase in a 900px window.
+   The row wraps as a whole instead of the words inside it. */
+.ec-actions { flex-wrap: wrap; }
+.ec-actions .approve, .ec-actions .reject, .ec-hint { white-space: nowrap; }
+.gatecard.applied { border-color: var(--ok); } .gatecard.rejected { border-color: var(--line-strong); }
+
+/* ── Verdict receipt ── what the independent pass actually checked. ── */
+.verdictcard { border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: var(--r-lg);
+  margin: 10px 0; background: var(--panel); overflow: hidden; }
+.verdictcard.pass { border-left-color: var(--ok); }
+.verdictcard.fail { border-left-color: var(--err-fg); }
+.verdictcard.inconclusive { border-left-color: var(--gold-deep); }
+body.dark .verdictcard.inconclusive { border-left-color: var(--gold); }
+.vc-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 11px 0; }
+.vc-title { font-weight: 600; font-size: var(--fs-sm); }
+.verdictcard.pass .vc-title { color: var(--ok); }
+.verdictcard.fail .vc-title { color: var(--err-fg); }
+.vc-model { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); margin-left: auto; }
+.vc-summary { padding: 4px 11px 9px; font-size: var(--fs-body); }
+.vc-checks { border-top: 1px solid var(--line); }
+.vc-check { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 7px 11px; border-bottom: 1px solid var(--line); }
+.vc-check:last-child { border-bottom: none; }
+.vc-name { font-family: var(--mono); font-size: var(--fs-sm); }
+.vc-res { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.vc-check.pass .vc-res { color: var(--ok); }
+.vc-check.fail .vc-res { color: var(--err-fg); }
+.vc-check.unknown .vc-res { color: var(--gold-deep); }
+body.dark .vc-check.unknown .vc-res { color: var(--gold); }
+.vc-note { margin: 0 11px 9px; padding: 6px 9px; font-size: var(--fs-sm); color: var(--muted);
+  border-left: 2px solid var(--line-strong); background: var(--cream); border-radius: var(--r-sm); }
+.vc-ev { grid-column: 1 / -1; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  white-space: pre-wrap; max-height: 120px; overflow: auto; }
+
+.notice { font-size: var(--fs-sm); color: var(--muted); border-left: 2px solid var(--line-strong);
+  padding: 5px 0 5px 10px; margin: 8px 0; }
+.notice.budget { border-left-color: var(--gold-deep); }
+body.dark .notice.budget { border-left-color: var(--gold); }
 
 /* ── Git / version-control pane ── */
 #pane-git { padding: 0; }

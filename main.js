@@ -30,7 +30,17 @@ const DEFAULTS = {
   telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
   onboarded: false,       // set true after the first-run card has been shown
   licenseWorkspaceId: "", // selected Crowe Agents customer workspace
+  // Which actions stop for an explicit yes, independently of the autonomy tier:
+  // off | high-risk (irreversible only) | strict (anything past the working tree).
+  approvals: "high-risk",
+  verifier: true,         // check a mutating turn independently before reporting it done
+  turnBudgetUsd: 2,       // hard ceiling on model spend per turn; 0 = no ceiling
+  // Backstop for the ceiling above. Dollars are priced from display rates, so a
+  // model whose rate this app does not know would otherwise run uncapped. Tokens
+  // are the unit every provider agrees on. 0 = no backstop.
+  turnTokenCap: 400000,
 };
+const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
 
 // ─── Crash reporting + minimal telemetry ─────────────────────────────────────
 // Local crash dumps always write to userData/crashes so the user can inspect
@@ -119,6 +129,14 @@ function loadConfig() {
     // brick a member install - fall back to the real gateway.
     if (/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)\b/i.test(cfg.baseUrl || "")) cfg.baseUrl = DEFAULTS.baseUrl;
     if (!TIERS.has(cfg.autonomy)) cfg.autonomy = DEFAULTS.autonomy;
+    // Same closed-set rule as the tier, and for the same reason: a value no gate
+    // recognises must land on the safe end, not on whatever `||` reaches first.
+    if (!APPROVAL_MODES.has(cfg.approvals)) cfg.approvals = DEFAULTS.approvals;
+    if (typeof cfg.verifier !== "boolean") cfg.verifier = DEFAULTS.verifier;
+    const budget = Number(cfg.turnBudgetUsd);
+    cfg.turnBudgetUsd = Number.isFinite(budget) && budget >= 0 ? budget : DEFAULTS.turnBudgetUsd;
+    const tokenCap = Number(cfg.turnTokenCap);
+    cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
@@ -610,6 +628,93 @@ async function proposeEdit(filePath, newContent) {
   return `the user REJECTED the edit to ${filePath}; do not reapply it unless they ask`;
 }
 
+// ─── Action approval (approve/deny, expiring) ────────────────────────────────
+/* The edit review above answers "do you want this diff". This answers a different
+   question - "do you want this to happen at all" - and it is the only gate in
+   front of an action that cannot be taken back. Three properties make it an
+   approval rather than a wider tier: it names the exact action, it is used once,
+   and it expires. An unanswered prompt is a denial, because a window left open
+   overnight is not consent, and a turn that hangs forever waiting for one is a
+   worse outcome than a turn that stopped and said why. */
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+let approvalSeq = 0; const pendingApprovals = new Map();
+ipcMain.handle("crowe:approval:decide", (_e, { id, approved }) => {
+  const r = pendingApprovals.get(id);
+  if (r) { pendingApprovals.delete(id); r({ approved: Boolean(approved) }); }
+  return { ok: true };
+});
+// Stopping a run has to release whatever it was waiting on. A Stop that leaves
+// the turn parked on an unanswered approval is a hang, and it looks like a bug in
+// Stop rather than what it is.
+function denyPendingApprovals(agentId) {
+  for (const [id, done] of [...pendingApprovals]) {
+    if (agentId && done.agentId && done.agentId !== agentId) continue;
+    pendingApprovals.delete(id);
+    if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id });
+    done({ approved: false });
+  }
+}
+function requestApproval(req) {
+  if (!mainWindow) return Promise.resolve({ approved: false });
+  const id = ++approvalSeq;
+  mainWindow.webContents.send("crowe:agent:event", {
+    type: "approval_request", id, kind: req.kind, title: req.title,
+    detail: req.detail, why: req.why, risk: req.risk, hash: req.hash,
+    expiresInMs: APPROVAL_TIMEOUT_MS,
+  });
+  journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });
+  return new Promise((resolve) => {
+    const done = (v) => { pendingApprovals.delete(id); clearTimeout(timer); resolve(v); };
+    const timer = setTimeout(() => {
+      if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id });
+      done({ approved: false, expired: true });
+    }, APPROVAL_TIMEOUT_MS);
+    done.agentId = req.agentId || "main";
+    pendingApprovals.set(id, done);
+  });
+}
+
+// ─── The journal (append-only, hash-chained) ─────────────────────────────────
+/* What ran, what it was asked to run on, what came back, what the user allowed.
+   Two rules keep it honest. It is never read back as state - the loop does not
+   depend on it, so a missing or corrupt journal degrades to no journal and never
+   to a wrong decision. And each line carries the digest of the line before it, so
+   a file that has been edited or truncated in the middle stops verifying at that
+   point. A receipt nobody can quietly rewrite is the only kind worth keeping. */
+function journalDir() { const d = path.join(app.getPath("userData"), "journal"); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
+let journalPrev = null, journalDay = "";
+function journalWrite(event) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const file = path.join(journalDir(), `${day}.jsonl`);
+    if (day !== journalDay) {
+      journalDay = day;
+      journalPrev = null;
+      try {                                     // resume the chain across restarts
+        const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+        const last = JSON.parse(lines[lines.length - 1]);
+        journalPrev = last && last.hash ? last.hash : null;
+      } catch { /* first line of the day */ }
+    }
+    const body = { event_id: crypto.randomUUID(), timestamp: new Date().toISOString(), ...event, prev: journalPrev };
+    const hash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 32);
+    journalPrev = hash;
+    fs.appendFileSync(file, JSON.stringify({ ...body, hash }) + "\n", { mode: 0o600 });
+  } catch { /* a receipt that cannot be written must not break the turn */ }
+}
+// Spooled tool output, content-addressed. Pruned by age rather than on write, so
+// a long turn never pays for housekeeping mid-loop.
+function artifactDir() { const d = path.join(app.getPath("userData"), "artifacts"); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
+function pruneArtifacts(maxAgeMs = 7 * 24 * 3600 * 1000) {
+  try {
+    const dir = artifactDir(), now = Date.now();
+    for (const f of fs.readdirSync(dir)) {
+      const p = path.join(dir, f);
+      try { if (now - fs.statSync(p).mtimeMs > maxAgeMs) fs.unlinkSync(p); } catch {}
+    }
+  } catch {}
+}
+
 // Rough per-1M-token cost for the CroweLM daily driver (gpt-5.6 class), for the
 // HUD/status bar. Display only; not billing.
 const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;
@@ -650,6 +755,12 @@ const harnessCtx = {
   setCwd: (p) => { CWD = p; },
   loadConfig,
   proposeEdit,
+  // The gate in front of anything that cannot be taken back, and the receipt
+  // stream that records what was allowed. Both live here rather than in the
+  // harness because both need the window and the user's own data directory.
+  requestApproval,
+  journal: journalWrite,
+  artifactDir,
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
@@ -669,6 +780,7 @@ const agentRuns = new Map();
 ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   const run = agentRuns.get(id);
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
+  denyPendingApprovals(id);
   return { ok: true };
 });
 ipcMain.handle("crowe:agent:stop-all", () => {
@@ -676,6 +788,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
     run.aborted = true;
     try { if (run.controller) run.controller.abort(); } catch {}
   }
+  denyPendingApprovals();
   return { ok: true, stopped: agentRuns.size };
 });
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "" }) => {
@@ -693,6 +806,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       isAborted: () => run.aborted,
       setController: (c) => { run.controller = c; },
       role: String(role || ""),
+      agentId: String(id || "main"),
       // Per-turn situational state from the renderer - today the cultivation
       // records. Capped here rather than trusted from the caller: the renderer
       // decides what is worth saying, the main process decides how much of the
@@ -741,6 +855,7 @@ ipcMain.handle("crowe:operator:status", () => ({
 }));
 ipcMain.handle("crowe:operator:stop-all", () => {
   for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
+  denyPendingApprovals();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   return { ok: true };
 });
@@ -823,6 +938,7 @@ ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { 
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
@@ -832,6 +948,7 @@ ipcMain.handle("crowe:set-config", async (_e, patch) => {
   if (patch && patch.cwd) CWD = patch.cwd;
   if (patch && patch.mcpServers) await mcpConnectAll();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
@@ -1041,6 +1158,7 @@ app.whenReady().then(async () => {
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
   pluginsConnectAll();
+  pruneArtifacts();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.

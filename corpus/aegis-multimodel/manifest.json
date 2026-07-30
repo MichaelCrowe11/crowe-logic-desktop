@@ -1,0 +1,78 @@
+{
+  "corpus_id": "aegis-multimodel-v1",
+  "version": 1,
+  "created_at": "2026-07-28",
+  "prompt_sha256": "c2c8e6d616678bd4635af03ea2b7006e3b8df12b0d18dd01f7ded69991de6f70",
+  "completed_models": [
+    {
+      "id": "glm-5.2",
+      "provider_model": "z.ai/glm-5.2",
+      "source": "user-provided z.ai response"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "provider_model": "azure/deepseek-v4-pro",
+      "source": "OpenCode CLI"
+    },
+    {
+      "id": "claude-opus",
+      "provider_model": "claude/opus",
+      "source": "Claude Code CLI"
+    },
+    {
+      "id": "kimi-k2.6",
+      "provider_model": "azure/Kimi-K2-6",
+      "source": "Azure AI Services REST via CLI"
+    },
+    {
+      "id": "codex-gpt-5",
+      "provider_model": "openai/gpt-5",
+      "source": "Codex agent"
+    }
+  ],
+  "blocked_models": [
+    {
+      "id": "gemini-3.1-pro",
+      "provider_model": "google/gemini-3.1-pro-preview",
+      "reason": "Vertex OAuth and API enablement succeeded, but Google Lightning dunning denied both billed projects; GitHub Copilot premium usage is also exhausted"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "glm-5.2",
+      "provider_model": "z.ai/glm-5.2",
+      "characters": 10572,
+      "words": 1408,
+      "headings": 10
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "provider_model": "azure/deepseek-v4-pro",
+      "characters": 14331,
+      "words": 1865,
+      "headings": 11
+    },
+    {
+      "id": "claude-opus",
+      "provider_model": "claude/opus",
+      "characters": 15067,
+      "words": 2116,
+      "headings": 12
+    },
+    {
+      "id": "kimi-k2.6",
+      "provider_model": "azure/Kimi-K2-6",
+      "characters": 8739,
+      "words": 1252,
+      "headings": 0
+    },
+    {
+      "id": "codex-gpt-5",
+      "provider_model": "openai/gpt-5",
+      "characters": 11124,
+      "words": 1429,
+      "headings": 12
+    }
+  ],
+  "record_count": 5
+}

@@ -285,6 +285,68 @@ function addEditProposal(body, ev) {
 }
 function addError(body, text) { const e = document.createElement("div"); e.className = "err"; e.textContent = text; body.appendChild(e); }
 
+/* The approval card. It looks like the edit card on purpose - the gesture is the
+   same one the user already knows - but it is answering a different question. The
+   edit card asks whether a diff is right. This asks whether something that cannot
+   be undone should happen at all, so it leads with what the command does rather
+   than with the command, and the command is shown verbatim underneath. */
+function addApproval(body, ev) {
+  const card = document.createElement("div");
+  card.className = `editcard gatecard risk-${ev.risk === "review" ? "review" : "strict"}`;
+  card.dataset.approvalId = String(ev.id);
+  card.innerHTML = `<div class="ec-head"><span class="ec-title">${ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone"}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
+    <div class="gc-why">This ${esc(ev.why || "action needs your approval")}.</div>
+    <div class="ec-diff"><div class="dl ctx">${esc(ev.detail || "")}</div></div>
+    <div class="ec-actions"><button class="approve">Allow once</button><button class="reject">Deny</button><span class="ec-hint">a allow · r deny</span></div>`;
+  card.tabIndex = 0;
+  body.appendChild(card); card.focus(); scrollBottom();
+  const done = (ok) => {
+    if (card.dataset.decided) return;
+    card.dataset.decided = "1";
+    window.crowe.approval.decide(ev.id, ok);
+    card.querySelector(".ec-actions").innerHTML = `<span class="ec-status">${ok ? "allowed once" : "denied"}</span>`;
+    card.classList.add(ok ? "applied" : "rejected");
+  };
+  card.querySelector(".approve").onclick = () => done(true);
+  card.querySelector(".reject").onclick = () => done(false);
+  card.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "a") done(true); else if (k === "r") done(false);
+  });
+}
+function expireApproval(id) {
+  const card = document.querySelector(`.gatecard[data-approval-id="${id}"]`);
+  if (!card || card.dataset.decided) return;
+  card.dataset.decided = "1";
+  card.classList.add("rejected");
+  const actions = card.querySelector(".ec-actions");
+  if (actions) actions.innerHTML = '<span class="ec-status">no answer, so it was denied</span>';
+}
+// The receipt from the independent check. Checks are listed with their evidence
+// because a verdict with nothing behind it is the thing this pass exists to stop.
+function addVerdict(body, ev) {
+  const card = document.createElement("div");
+  card.className = `verdictcard ${ev.status || "inconclusive"}`;
+  const head = ev.status === "pass" ? "Verified" : ev.status === "fail" ? "Verification failed" : "Verification inconclusive";
+  const checks = (ev.checks || []).map((c) => `<div class="vc-check ${esc(c.result || "")}">
+      <span class="vc-name">${esc(c.name || "")}</span><span class="vc-res">${esc(c.result || "")}</span>
+      ${c.evidence ? `<div class="vc-ev">${esc(String(c.evidence).slice(0, 500))}</div>` : ""}</div>`).join("");
+  // Said on the card as well as in the text, because the caveat travels with the
+  // verdict rather than with the prose about it.
+  const caveat = ev.independent === false
+    ? '<div class="vc-note">Checked by the same model that made the change. Weigh the evidence, not the verdict.</div>'
+    : "";
+  card.innerHTML = `<div class="vc-head"><span class="vc-title">${head}</span><span class="vc-model">${esc(ev.model || "")}</span></div>
+    <div class="vc-summary">${esc(ev.summary || "")}</div>${caveat}${checks ? `<div class="vc-checks">${checks}</div>` : ""}`;
+  body.appendChild(card); scrollBottom();
+}
+function addNotice(body, text, cls) {
+  const n = document.createElement("div");
+  n.className = `notice ${cls || ""}`.trim();
+  n.textContent = text;
+  body.appendChild(n); scrollBottom();
+}
+
 let running = false;
 let sessionCost = 0, runCost = 0;
 function fmtCost(c) { return "$" + (c || 0).toFixed(4); }
@@ -382,6 +444,17 @@ async function send(text, opts = {}) {
       showThinking(body, "reasoning");
     }
     else if (ev.type === "edit_proposal") { finishSaid(); hideThinking(body); addEditProposal(body, ev); }
+    else if (ev.type === "approval_request") { finishSaid(); hideThinking(body); addApproval(body, ev); }
+    else if (ev.type === "approval_expired") { expireApproval(ev.id); }
+    else if (ev.type === "verdict") { finishSaid(); hideThinking(body); addVerdict(body, ev); }
+    else if (ev.type === "budget") {
+      finishSaid();
+      const spent = /token/.test(ev.limit || "")
+        ? `${(ev.tokens || 0).toLocaleString()} of ${(ev.tokenCeiling || 0).toLocaleString()} tokens`
+        : `$${(ev.spent || 0).toFixed(2)} of $${(ev.ceiling || 0).toFixed(2)}`;
+      addNotice(body, `Stopped at this turn's ${ev.limit || "ceiling"}: ${spent}. Raise it in Settings if this turn needed more.`, "budget");
+    }
+    else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
     else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) $("hud-model").textContent = ev.model; }
     else if (ev.type === "stopped") { finishSaid(); hideThinking(body); addStopped(body); }
     else if (ev.type === "error") { finishSaid(); hideThinking(body); addError(body, ev.text); }
@@ -844,13 +917,19 @@ $("settings-btn").addEventListener("click", async () => {
   const c = await window.crowe.getConfig();
   $("cfg-base").value = c.baseUrl; $("cfg-cwd").value = c.cwd || ""; $("cfg-token").value = "";
   $("cfg-auto").checked = Boolean(c.autoApprove);
+  $("cfg-approvals").value = c.approvals || "high-risk";
+  $("cfg-verifier").checked = c.verifier !== false;
+  $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
   renderSpacePicker(); renderPlugins(); renderKeyManager();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));
 $("cfg-save").addEventListener("click", async () => {
-  const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked };
+  const budget = Number($("cfg-budget").value);
+  const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked,
+    approvals: $("cfg-approvals").value, verifier: $("cfg-verifier").checked,
+    turnBudgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 2 };
   const tok = $("cfg-token").value.trim(); if (tok) patch.token = tok;
   const mcpRaw = $("cfg-mcp").value.trim();
   if (mcpRaw) { try { patch.mcpServers = JSON.parse(mcpRaw); } catch { $("cfg-status").textContent = "MCP JSON is invalid."; return; } }
