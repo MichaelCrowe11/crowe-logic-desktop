@@ -1106,9 +1106,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    answered both by falling back to another model, which spends a worse answer on
    a problem that would have cleared on its own; and a bad gateway minute turned
    into a failed turn. Backoff with jitter first, fall back second. */
-async function chatWithRetry(deps, msgs, tools, model, signal, state) {
+async function chatWithRetry(deps, msgs, tools, model, signal, state, onDelta) {
   for (let attempt = 0; ; attempt++) {
-    const r = await deps.gatewayChat(msgs, tools, signal, model);
+    let sent = 0;
+    const sink = onDelta ? (chunk) => { sent += String(chunk).length; onDelta(chunk); } : undefined;
+    const r = await deps.gatewayChat(msgs, tools, signal, model, sink);
+    /* A failed call that already streamed has shown the user a half-sentence.
+       Whatever happens next - a retry here, a model fallback in the caller -
+       repeats the answer from the top, so the partial has to be taken back
+       first or the transcript keeps attempt one's fragment ahead of attempt
+       two's whole. An abort is the exception: the operator stopped it, and the
+       fragment plus "stopped" is the honest record of that. */
+    if (r && r.error && !r.aborted && sent) deps.send({ type: "stream_reset", chars: sent });
     if (!r || !r.error || r.aborted) return r;
     if (attempt >= TRANSIENT_RETRIES || !isTransient(r.error)) return r;
     const wait = Math.round(RETRY_BASE_MS * 2 ** attempt * (1 + Math.random()));
@@ -1159,7 +1168,8 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
     const controller = new AbortController();
     deps.setController(controller);
     msgs = compactMessages(msgs, state);
-    const r = await chatWithRetry(deps, msgs, opts.tools, ref.model, controller.signal, state);
+    const r = await chatWithRetry(deps, msgs, opts.tools, ref.model, controller.signal, state,
+      opts.silent ? undefined : (chunk) => deps.send({ type: "assistant_delta", text: chunk }));
     if (r && r.aborted) { stop = "aborted"; break; }
     if (r.error) {
       // Fallback-first: a routed expert that errors must never sink the turn.
@@ -1176,7 +1186,9 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
     meterCall(state, deps, r);
     if (r.content) {
       text += (text ? "\n\n" : "") + r.content;
-      if (!opts.silent) deps.send({ type: "assistant", text: r.content });
+      // streamed marks a burst the deltas already delivered: surfaces keep the
+      // full text as the record but must not append it a second time.
+      if (!opts.silent) deps.send({ type: "assistant", text: r.content, streamed: Boolean(r.streamed) });
     }
     const calls = r.tool_calls || [];
     if (!calls.length) break;
@@ -1231,10 +1243,11 @@ async function closingCall(ctx, deps, msgs, state, route, reason) {
   deps.setController(controller);
   // Spending past a ceiling should be earmarked and recorded, not incidental.
   state.journal({ event_type: "RESERVE_SPEND", tool_id: route.fallback, output_summary: `closing answer after reaching the ${reason === "budget" ? budgetReason(state) : "tool-round limit"}` });
-  const r = await chatWithRetry(deps, compactMessages(msgs, state), [], route.fallback, controller.signal, state);
+  const r = await chatWithRetry(deps, compactMessages(msgs, state), [], route.fallback, controller.signal, state,
+    (chunk) => deps.send({ type: "assistant_delta", text: chunk }));
   if (!r || r.error || r.aborted || !r.content) return "";
   meterCall(state, deps, r);
-  deps.send({ type: "assistant", text: r.content });
+  deps.send({ type: "assistant", text: r.content, streamed: Boolean(r.streamed) });
   return r.content;
 }
 
@@ -1322,7 +1335,7 @@ function verdictReceipt(verdict, rollback) {
 // ─── The turn ────────────────────────────────────────────────────────────────
 // A turn is a block, then a check, then at most one repair. The session is the
 // residual backbone: every block attends back through the message thread.
-// deps = { gatewayChat(msgs, tools, signal, model), send(ev), isAborted(),
+// deps = { gatewayChat(msgs, tools, signal, model, onDelta?), send(ev), isAborted(),
 //          setController(c), role, context, agentId }
 async function runAgent(ctx, messages, deps) {
   const cfg = ctx.loadConfig();

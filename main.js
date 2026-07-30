@@ -419,7 +419,7 @@ async function requireAgentEntitlement(workspaceId) {
   const workspace = status.workspaces.find((item) => item.id === id);
   return workspace?.agents?.allowed ? { ok: true, workspace } : { ok: false, error: status.authenticated ? "An active Crowe Agents entitlement is required" : "Sign in with Crowe ID to use licensed agents" };
 }
-async function gatewayChat(messages, tools, _retried, signal, model) {
+async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
   const cfg = loadConfig();
   if (!cfg.token) return { error: "Not signed in. Click \"Sign in with Crowe ID\" to continue." };
   const useModel = model || cfg.model;
@@ -428,10 +428,51 @@ async function gatewayChat(messages, tools, _retried, signal, model) {
     const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify({ model: useModel, messages, tools: tools || undefined }),
+      body: JSON.stringify({ model: useModel, messages, tools: tools || undefined, stream: onDelta ? true : undefined }),
       signal,
     });
-    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal, model); }
+    if (resp.status === 401 && !_retried) { const t = await refreshToken(); if (t) return gatewayChat(messages, tools, true, signal, model, onDelta); }
+    /* Streaming is decided by the response, not the request. stream:true is an
+       ask; a gateway build that ignores it answers with JSON, and this path has
+       to keep working against both - so the branch keys on content-type, and
+       everything below the branch returns the same shape either way. */
+    if (resp.ok && onDelta && String(resp.headers.get("content-type") || "").includes("text/event-stream")) {
+      let content = "", usage = {}, gotModel = useModel, buf = "";
+      const toolCalls = [];
+      const handle = (payload) => {
+        if (payload === "[DONE]") return;
+        let d; try { d = JSON.parse(payload); } catch { return; }
+        // The gateway's non-stream reply is its own shape ({content, tool_calls}),
+        // so accept its delta both ways: OpenAI-style choices[0].delta, or the
+        // same flat shape sliced thin. One handler, both dialects.
+        const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
+        const chunk = typeof delta.content === "string" ? delta.content : "";
+        if (chunk) { content += chunk; onDelta(chunk); }
+        for (const t of delta.tool_calls || []) {
+          const i = Number.isInteger(t.index) ? t.index : toolCalls.length;
+          const cur = toolCalls[i] || (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
+          if (t.id) cur.id = t.id;
+          if (t.function?.name) cur.function.name = t.function.name;
+          if (t.function?.arguments) cur.function.arguments += t.function.arguments;
+        }
+        if (d.usage) usage = d.usage;
+        if (d.model) gotModel = d.model;
+      };
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+          if (line.startsWith("data:")) handle(line.slice(5).trim());
+        }
+      }
+      return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel,
+               usage, elapsedMs: Date.now() - t0, streamed: content.length };
+    }
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
@@ -809,7 +850,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
     const result = await harness.runAgent(harnessCtx, messages.slice(), {
-      gatewayChat: (msgs, tools, signal, model) => gatewayChat(msgs, tools, false, signal, model),
+      gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
       send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
       isAborted: () => run.aborted,
       setController: (c) => { run.controller = c; },

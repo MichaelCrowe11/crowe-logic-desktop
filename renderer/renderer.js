@@ -404,9 +404,10 @@ async function send(text, opts = {}) {
   const typeTick = () => {
     if (!curSaid || shownLen >= curText.length) { typerOn = false; return; }
     const backlog = curText.length - shownLen;
-    // Readable token cadence: ~120 chars/s base, ramping gently on a deep
-    // backlog, hard-capped so a whole reply never flashes in at once.
-    shownLen += Math.min(8, 2 + Math.floor(backlog / 600));
+    // Readable cadence: ~120 chars/s base, ramping gently on a deep backlog,
+    // hard-capped low so a burst that arrived whole still reads as writing.
+    // With real deltas the backlog stays shallow and the base rate carries it.
+    shownLen += Math.min(5, 2 + Math.floor(backlog / 800));
     curSaid.innerHTML = md(curText.slice(0, shownLen));
     scrollBottom();
     requestAnimationFrame(typeTick);
@@ -428,8 +429,23 @@ async function send(text, opts = {}) {
        chat would draw a workflow node's approval card and the user would be
        answering for an action they are not looking at. */
     if (ev.agentId && ev.agentId !== "main") return;
-    if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; pushText(ev.text, true); }
+    // A streamed burst has already arrived character by character; the closing
+    // assistant event is its receipt, not more text to append.
+    if (ev.type === "assistant") { if (!ev.streamed) { runText += (runText ? "\n\n" : "") + ev.text; pushText(ev.text, true); } }
     else if (ev.type === "assistant_delta") { runText += ev.text || ""; pushText(ev.text || "", false); }
+    else if (ev.type === "stream_reset") {
+      // A retried call repeats its answer from the top; the harness says how
+      // many streamed characters to take back so the fragment is not kept
+      // ahead of the whole.
+      const n = ev.chars || 0;
+      runText = runText.slice(0, Math.max(0, runText.length - n));
+      if (curSaid) {
+        curText = curText.slice(0, Math.max(0, curText.length - n));
+        shownLen = Math.min(shownLen, curText.length);
+        if (!curText) { curSaid.remove(); curSaid = null; }
+        else curSaid.innerHTML = md(curText.slice(0, shownLen));
+      }
+    }
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
     else if (ev.type === "tool_call") {
       finishSaid(); addToolCard(body, ev);
@@ -620,7 +636,7 @@ async function mountWorkspaceAgent(p, body, seed={}) {
      to also type the objective into the PTY, so every task ran twice - two
      bills, two sets of side effects on the same working tree. The terminal
      below stays interactive for anything the operator wants to run by hand. */
-  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant"||ev.type==="assistant_delta")answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
+  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
   /* Interrupt stops the agent run, not the terminal. It used to also send
      Ctrl-C to the PTY, killing whatever the operator had running by hand for
      a run that was never happening there. Ctrl-C in the terminal still works. */
@@ -723,7 +739,7 @@ function mountWorkflow(p, body) {
     const off=window.crowe.agent.onEvent(ev=>{
       if(ev.agentId!==id)return;
       if(ev.type==="route")composeState.textContent=`Designing · ${ev.expert||"operator"} · ${ev.model||""}`.trim();
-      else if(ev.type==="assistant"||ev.type==="assistant_delta")text+=(ev.text||"");
+      else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))text+=(ev.text||"");
       else if(ev.type==="error")failure=ev.text||"the gateway call failed";
     });
     try{
@@ -767,7 +783,7 @@ function mountWorkflow(p, body) {
     const off=window.crowe.agent.onEvent(ev=>{
       if(ev.agentId!==id)return;
       if(ev.type==="route"){routed=`${ev.expert||"operator"} · ${ev.model||""}`.trim();if(routeEl)routeEl.textContent=routed;say("Reasoning")}
-      else if(ev.type==="assistant"||ev.type==="assistant_delta")text+=(ev.text||"");
+      else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))text+=(ev.text||"");
       else if(ev.type==="tool_call"){tools++;say(`Running ${ev.name||"tool"}`)}
       else if(ev.type==="approval_request"){say("Waiting on your approval");if(dot)dot.classList.add("waiting");if(gate)addApproval(gate,ev)}
       else if(ev.type==="approval_expired"){expireApproval(ev.id);if(dot)dot.classList.remove("waiting")}
@@ -846,7 +862,7 @@ function mountWorkbench(p, body) {
   const renderShells=(placeholder="Results appear here.")=>{results.innerHTML=shellSpecs().map(s=>`<article class="${s.cls||""}"><header><b>${esc(s.title)}</b><span>${esc(s.sub)}</span></header><div class="awb-output">${esc(placeholder)}</div></article>`).join("");outputs=[...results.querySelectorAll(".awb-output")]};
   const syncMode=()=>{branchField.classList.toggle("hidden",mode.value!=="parallel");renderShells()};
   const cardTitle=x=>x.closest("article").querySelector("b").textContent;
-  const runAgent=async(id,content)=>{let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId===id&&(ev.type==="assistant"||ev.type==="assistant_delta"))answer+=(ev.text||"")});try{const r=await window.crowe.agent.run([{role:"user",content}],id);return answer||(r&&r.text)||"Completed."}catch(e){return `Run failed: ${e.message||e}`}finally{off()}};
+  const runAgent=async(id,content)=>{let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId===id&&(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed)))answer+=(ev.text||"")});try{const r=await window.crowe.agent.run([{role:"user",content}],id);return answer||(r&&r.text)||"Completed."}catch(e){return `Run failed: ${e.message||e}`}finally{off()}};
   const renderLibrary=()=>{const list=workbenchPresets(),runs=workbenchHistory();body.querySelector(".awb-presets").innerHTML='<small>SAVED CONFIGURATIONS</small>'+list.map((x,i)=>`<button data-i="${i}"><b>${esc(x.name)}</b><span>${esc(x.mode)}</span></button>`).join("");body.querySelector(".awb-history").innerHTML='<small>RUN HISTORY</small>'+runs.slice(0,10).map((x,i)=>`<button data-i="${i}"><b>${esc(x.name)}</b><span>${new Date(x.at).toLocaleString()}</span></button>`).join("");body.querySelectorAll(".awb-presets button").forEach(b=>b.onclick=()=>{const x=list[+b.dataset.i];prompt.value=x.prompt;context.value=x.context;mode.value=x.mode;syncMode()});body.querySelectorAll(".awb-history button").forEach(b=>b.onclick=()=>{const x=runs[+b.dataset.i];prompt.value=x.prompt;mode.value=x.mode;if(x.branches)branches.value=String(x.branches);syncMode();x.outputs.forEach((v,i)=>{if(outputs[i])outputs[i].innerHTML=md(v)})})};
   mode.onchange=syncMode;branches.onchange=syncMode;
   body.querySelector(".awb-temp").oninput=e=>e.target.nextElementSibling.value=e.target.value;

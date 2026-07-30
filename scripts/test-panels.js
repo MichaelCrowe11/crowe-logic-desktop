@@ -606,6 +606,36 @@ const tests = [
     expect: { failed: true, nodes: 0, empty: true, enabled: true },
   },
   {
+    // Real streaming's two hazards, in one turn: the closing assistant event
+    // repeats text the deltas already delivered (streamed:true means "receipt,
+    // not more text"), and a retried call repeats its answer from the top after
+    // a partial (stream_reset takes the fragment back). Either one showing
+    // through reads as the transcript stuttering.
+    name: "the transcript keeps a streamed reply single and honest across a retry",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "assistant_delta", text: "half a sen" },
+        { type: "stream_reset", chars: 10 },
+        { type: "assistant_delta", text: "The whole answer." },
+        { type: "assistant", text: "The whole answer.", streamed: true },
+      ]);
+      await send("stream it");
+      const said = () => transcript.querySelector(".msg .said");
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && (!said() || !/whole answer/.test(said().textContent))) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      const t = said() ? said().textContent : "";
+      const result = {
+        once: (t.match(/whole answer/g) || []).length === 1,
+        noFragment: !/half a sen/.test(t),
+        recorded: messages[messages.length - 1].content === "The whole answer.",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { once: true, noFragment: true, recorded: true },
+  },
+  {
     // The chat transcript's listener is registered per turn and used to take
     // every event on the channel. With a panel or a workflow node running
     // alongside a chat turn, that meant the transcript drew another agent's
