@@ -445,11 +445,19 @@ function wordmarkMotionSvg() {
   const css = fs.readFileSync(path.join(__dirname, "wordmark-motion.css"), "utf8");
   const t = WM.tittle;
   const [c, l] = WM.glyphs.filter((g) => g.ch === "o");
+  /* Every moving part carries a class as well as its id. The ids drive the
+     entrance, which happens once to a logotype that is unique in the document.
+     The continuous cuts are driven by the classes, because the thinking
+     indicator inlines this file once per message body and ids are global: two
+     of them and `#rotor-crowe-blades` animates whichever copy the document
+     happened to hold first, which is the collision liveLockups() already scopes
+     around. Classes make a copy self-contained, so no scoping is needed and
+     nothing renumbers when an indicator is removed. */
   const rotor = (name, g) => {
     const p = oParts("currentColor", g, `mo-${name}`);
-    return `<g id="rotor-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine">
-  ${p.ring.replace("<path ", `<path id="rotor-${name}-ring" `)}
-  <g id="rotor-${name}-blades" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine blades">${p.blades}</g>
+    return `<g id="rotor-${name}" class="wm-rotor wm-rotor-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine">
+  ${p.ring.replace("<path ", `<path id="rotor-${name}-ring" class="wm-ring" `)}
+  <g id="rotor-${name}-blades" class="wm-blades wm-blades-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine blades">${p.blades}</g>
 </g>`;
   };
   return `<svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
@@ -458,10 +466,10 @@ function wordmarkMotionSvg() {
   <style>
 ${css.replace(/^/gm, "  ").trimEnd()}
   </style>
-  <g id="wordmark-letterforms"><path d="${WM.dNoOs}" fill="currentColor"/></g>
+  <g id="wordmark-letterforms" class="wm-letterforms"><path d="${WM.dNoOs}" fill="currentColor"/></g>
   ${rotor("crowe", c)}
   ${rotor("logic", l)}
-  <g id="gold-thinking-mark" aria-label="Gold thinking mark">${placeMark(t.cx, t.cy, SPORE, { pal: { blue: "currentColor", gold: C.gold }, id: "mo-spore" })}</g>
+  <g id="gold-thinking-mark" class="wm-spore" aria-label="Gold thinking mark">${placeMark(t.cx, t.cy, SPORE, { pal: { blue: "currentColor", gold: C.gold }, id: "mo-spore" })}</g>
 </svg>
 `;
 }

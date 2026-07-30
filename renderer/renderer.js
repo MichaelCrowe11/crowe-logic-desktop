@@ -143,49 +143,91 @@ function renderText(body, text) {
   const t = body.querySelector(".thinking"); if (t) t.remove();
   p.innerHTML = md(text); scrollBottom();
 }
-// ── Thinking glyphs: the eight tournament directions as animated states ──
-// These are per-turn cognition glyphs, not identity. The identity mark is
-// CroweMark (mark.js) and it is the only thing allowed to speak for the brand.
-// Fixed brand palette (Royal Blue / Logic Gold), one per turn.
-const TG_B = "#2E5CB8", TG_G = "#D4A62A";
-const TG_HEX8 = "12,4 18.9,8 18.9,16 12,20 5.1,16 5.1,8";
-const TG_HEX3 = "12,9 14.6,10.5 14.6,13.5 12,15 9.4,13.5 9.4,10.5";
-const TG_SPOKES = [[12, 8.5, 12, 4.5], [15, 10.3, 18.5, 8.3], [15, 13.8, 18.5, 15.8], [12, 15.5, 12, 19.5], [9, 13.8, 5.5, 15.8], [9, 10.3, 5.5, 8.3]];
-function tgLines(w, extra) { return TG_SPOKES.map((p) => `<line x1="${p[0]}" y1="${p[1]}" x2="${p[2]}" y2="${p[3]}" stroke="${TG_B}" stroke-width="${w}" stroke-linecap="round"${extra || ""}/>`).join(""); }
-const TG_DRAW = {
-  meridian: () => `<polygon points="${TG_HEX8}" fill="none" stroke="${TG_B}" stroke-width="1.5" opacity=".35"/><g fill="${TG_B}"><circle cx="18.9" cy="8" r="1.6"/><circle cx="18.9" cy="16" r="1.6"/><circle cx="12" cy="20" r="1.6"/><circle cx="5.1" cy="16" r="1.6"/><circle cx="5.1" cy="8" r="1.6"/></g><g class="a"><circle cx="12" cy="4" r="2.2" fill="${TG_G}"/></g><circle cx="12" cy="12" r="1.9" fill="${TG_G}"/>`,
-  iris: () => `<polygon points="12,3.5 19.4,7.8 19.4,16.3 12,20.5 4.6,16.3 4.6,7.8" fill="${TG_B}"/><polygon points="12,7 16.3,9.5 16.3,14.5 12,17 7.7,14.5 7.7,9.5" fill="var(--panel)"/><polygon class="a" points="${TG_HEX3}" fill="${TG_G}"/>`,
-  coalesce: () => `<g class="a" fill="${TG_B}"><polygon points="12,3.5 10.3,9.1 13.7,9.1"/><polygon points="19.4,7.8 13.7,9.1 15.4,12"/><polygon points="19.4,16.3 15.4,12 13.7,14.9"/><polygon points="12,20.5 13.7,14.9 10.3,14.9"/><polygon points="4.6,16.3 10.3,14.9 8.6,12"/><polygon points="4.6,7.8 8.6,12 10.3,9.1"/></g><circle cx="12" cy="12" r="2" fill="${TG_G}"/>`,
-  convergent: () => `<polygon points="${TG_HEX8}" fill="none" stroke="${TG_B}" stroke-width="1.3" opacity=".3"/><g class="a" fill="${TG_B}"><circle cx="12" cy="4" r="1.9"/><circle cx="18.9" cy="8" r="1.9"/><circle cx="18.9" cy="16" r="1.9"/><circle cx="12" cy="20" r="1.9"/><circle cx="5.1" cy="16" r="1.9"/><circle cx="5.1" cy="8" r="1.9"/></g><circle cx="12" cy="12" r="2.2" fill="${TG_G}"/>`,
-  hexbloom: () => `<g class="a">${tgLines(3.2)}<circle cx="12" cy="12" r="1.8" fill="${TG_G}"/><circle cx="12" cy="3.4" r="1.1" fill="${TG_G}"/><circle cx="19.4" cy="16.4" r="1.1" fill="${TG_G}"/><circle cx="4.6" cy="16.4" r="1.1" fill="${TG_G}"/></g>`,
-  mycelial: () => `${tgLines(1.6)}<polygon points="${TG_HEX3}" fill="${TG_G}"/>`,
-  meshwork: () => `<polygon class="a" style="transform-box:view-box;transform-origin:9px 12px" points="9,5.5 14.6,8.8 14.6,15.3 9,18.5 3.4,15.3 3.4,8.8" fill="none" stroke="${TG_B}" stroke-width="2"/><polygon class="o" style="transform-box:view-box;transform-origin:16.5px 12px" points="16.5,7 20.8,9.5 20.8,14.5 16.5,17 12.2,14.5 12.2,9.5" fill="none" stroke="${TG_G}" stroke-width="2"/>`,
-  facet: () => `<polygon points="12,12 12,3.5 19.4,7.8" fill="${TG_B}"/><polygon points="12,12 19.4,7.8 19.4,16.3" fill="${TG_G}"/><polygon points="12,12 19.4,16.3 12,20.5" fill="${TG_B}"/><polygon points="12,12 12,20.5 4.6,16.3" fill="${TG_G}"/><polygon points="12,12 4.6,16.3 4.6,7.8" fill="${TG_B}"/><polygon points="12,12 4.6,7.8 12,3.5" fill="${TG_G}"/>`,
-};
-const THINKERS = Object.keys(TG_DRAW);
-let thinkerIdx = Math.floor(Date.now() / 1000) % THINKERS.length;
-function thinkerSvg(kind) {
-  const k = kind && TG_DRAW[kind] ? kind : THINKERS[thinkerIdx++ % THINKERS.length];
-  return `<svg class="tg tg-${k}" viewBox="0 0 24 24" aria-hidden="true">${TG_DRAW[k]()}</svg>`;
+/* ── The thinking indicator is the logotype ──────────────────────────────────
+   This used to be a bank of eight blue-and-gold hexagons, one drawn per turn,
+   on the theory that a turn deserved its own cognition glyph. It didn't. Eight
+   marks that nobody could name meant the moment the user actually watches -
+   waiting - was the one moment the product wore something other than its own
+   name, in a palette the identity had already left behind. Now the wait is the
+   wordmark: CROWE LOGIC with its rotors turning inside the O's. One mark,
+   everywhere, and the animation is the only thing that changes.
+
+   The stage still gets a word, because "editing" and "executing" are not
+   interchangeable to anyone watching a file get written. The picture is
+   constant; the label carries the difference. */
+function stageLabel(name) {
+  if (name === "run_shell") return "executing";
+  if (name === "write_file" || name === "edit_file") return "editing";
+  if (name === "open_url") return "browsing";
+  if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
+  return "retrieving";
 }
-// The glyph tracks the block stage: what the operator is doing right now.
-function toolGlyph(name) {
-  if (name === "run_shell") return ["meshwork", "executing"];
-  if (name === "write_file" || name === "edit_file") return ["facet", "editing"];
-  if (name === "open_url") return ["iris", "browsing"];
-  if (name && name.startsWith("mcp__")) {
-    const id = name.split("__")[1];
-    return [pluginGlyphs[id] || "hexbloom", "calling " + id];
+/* The motion logotype, fetched once and held. Both the header lockups and every
+   thinking indicator draw from this, so a session pays for the file once. */
+let wordmarkMotion = null, wordmarkMotionPending = null;
+function wordmarkMotionMarkup() {
+  if (wordmarkMotion) return Promise.resolve(wordmarkMotion);
+  if (!wordmarkMotionPending) {
+    wordmarkMotionPending = fetch("../assets/wordmark-motion.svg")
+      .then((r) => (r.ok ? r.text() : null))
+      .then((t) => (wordmarkMotion = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
+      .catch(() => null);
   }
-  return ["mycelial", "retrieving"];
+  return wordmarkMotionPending;
 }
+
+/* A thinking copy keeps the drawing and drops everything that only made sense
+   for the one logotype in the header: the ids, which are document-global and
+   would have the entrance CSS animate whichever copy loaded first, and the
+   labelling, since the indicator's own label already says what is happening.
+   Stripping ids is safe here only because the motion cut has no url(#) fills -
+   its ink is currentColor and its spore is flat gold. `is-thinking` replaces
+   `is-animated`: an indicator that played the arrival every time it appeared
+   would be a logo swooping in on every tool call. */
+async function mountMotionLogotype(host, cls) {
+  const markup = await wordmarkMotionMarkup();
+  if (!markup || host.firstElementChild) return null;
+  host.insertAdjacentHTML("beforeend", markup
+    .replace(/\sid="[^"]*"/g, "")
+    .replace(/\saria-labelledby="[^"]*"/g, "")
+    .replace('class="is-animated"', `class="${cls || ""}"`));
+  const svg = host.firstElementChild;
+  if (svg) { svg.setAttribute("aria-hidden", "true"); svg.removeAttribute("role"); }
+  return svg;
+}
+
+/* The indicator has to stay under whatever the turn has appended since, and
+   appendChild is how you do that — but re-inserting a node restarts every CSS
+   animation under it, so the rotors would snap back to zero each time a tool
+   card landed. That is precisely the moment the motion is meant to cover.
+
+   So the move is made and the clocks are carried across it. Each keyframe name
+   appears once in the logotype, which is what makes matching by name enough. */
+function keepAtBottom(t, body) {
+  if (t.parentNode === body && body.lastElementChild === t) return;
+  const was = new Map();
+  for (const a of t.getAnimations({ subtree: true })) if (a.currentTime != null) was.set(a.animationName, a.currentTime);
+  body.appendChild(t);
+  for (const a of t.getAnimations({ subtree: true })) if (was.has(a.animationName)) a.currentTime = was.get(a.animationName);
+}
+
 // One indicator per message body; it moves to the bottom and morphs per stage.
-function showThinking(body, kind, label) {
+function showThinking(body, label) {
   let t = body.querySelector(".thinking");
-  if (!t) { t = document.createElement("div"); t.className = "thinking"; t.dataset.since = Date.now(); }
+  if (!t) {
+    t = document.createElement("div"); t.className = "thinking"; t.dataset.since = Date.now();
+    t.innerHTML = '<span class="th-logotype" role="img" aria-label="Crowe Logic"></span>'
+      + '<span class="th-label"></span><span class="th-elapsed"></span>';
+    mountMotionLogotype(t.firstElementChild, "is-thinking");
+  }
+  /* Only the label is rewritten per stage. This used to rebuild innerHTML on
+     every event, which with a turning mark restarts its animation - the blades
+     would snap back to zero on each tool call instead of running through the
+     whole turn, which is the one thing continuous motion is for. */
   t.dataset.label = label || "working";
-  t.innerHTML = thinkerSvg(kind) + `<span class="th-label">${esc(label || "working")}</span><span class="th-elapsed"></span>`;
-  body.appendChild(t); scrollBottom();
+  t.querySelector(".th-label").textContent = label || "working";
+  keepAtBottom(t, body);
+  scrollBottom();
 }
 // Elapsed-time pulse: long model calls show visible progress, not dead air.
 setInterval(() => {
@@ -391,7 +433,7 @@ async function send(text, opts = {}) {
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
     else if (ev.type === "tool_call") {
       finishSaid(); addToolCard(body, ev);
-      const [g, gl] = toolGlyph(ev.name); showThinking(body, g, gl);
+      showThinking(body, stageLabel(ev.name));
       $("hud-status").textContent = ev.name || "tool";
       if (mark) mark.ping();
     }
@@ -524,17 +566,42 @@ window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 async function mountWorkspaceAgent(p, body, seed={}) {
   body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-mark" role="img" aria-label="Crowe Logic"></div><div><small>CROWE LOGIC CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
   const slot=body.querySelector(".agent-terminal-slot");
   const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
   const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
   const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
-  /* CroweMark at panel size. The panel used to draw its own radial while the
-     header drew a cube, both calling it "reasoning". The header wears the
-     logotype now, so this is one of the two places the mark still appears —
-     and here the motion is doing work: it says the runtime is alive. */
-  const mark=window.CroweMark?CroweMark.mount(body.querySelector(".agent-mark"),{state:"idle"}):{setState(){},ping(){}};
+  /* The panel head wears the logotype, same as the header and the thinking
+     indicator — one mark everywhere, and here the motion is doing work: turning
+     rotors mean the runtime is alive and reasoning, still ones mean it is
+     waiting on you. The <small> beside it reads "CLI AGENT" rather than "CROWE
+     LOGIC CLI AGENT" because the drawing already says the name and setting it
+     twice, once drawn and once in caps, just looks like nobody checked.
+
+     This replaced a CroweMark whorl. Nothing is lost: the whorl's states were
+     idle / reasoning / failed, and only "reasoning" ever animated, which is
+     exactly the distinction is-thinking carries. */
+  const logotype = { svg: null, state: "idle" };
+  mountMotionLogotype(body.querySelector(".agent-logotype"), "").then((svg) => {
+    logotype.svg = svg;
+    if (svg) svg.classList.toggle("is-thinking", logotype.state === "reasoning");
+  });
+  const mark = {
+    setState(s) {
+      logotype.state = s;
+      if (logotype.svg) logotype.svg.classList.toggle("is-thinking", s === "reasoning");
+    },
+    // A tool landed. One quick beat of the whole mark, distinct from the rotors
+    // so it reads as an event rather than as more of the same turning.
+    ping() {
+      const el = body.querySelector(".agent-logotype");
+      if (!el) return;
+      el.classList.remove("pinged");
+      void el.offsetWidth;   // restart the beat even if one is already running
+      el.classList.add("pinged");
+    },
+  };
   const pingMark=()=>mark.ping();
   /* One call moves the chip, its label and the mark together. They were
      separate before, which let the chip keep reading ACTIVE in red after the
@@ -1033,10 +1100,21 @@ document.querySelectorAll(".dock-tab[data-pane]").forEach((b) => b.addEventListe
 
 // ── New chat + sessions drawer ──
 const drawer = $("sessions-drawer");
+/* WELCOME_HTML is a string taken at load, which is before liveLockups() has
+   swapped the static mask for the inlined svg. So restoring it puts back a dead
+   lockup: the logotype is on screen, correctly drawn, and completely still. A
+   still copy of a mark whose whole job is to look awake reads worse than no mark
+   at all - it reads as the app having stopped, on the one screen a new chat
+   starts from.
+
+   liveLockups is safe to call again by construction: it skips lockups that
+   already carry their svg, and it indexes ids over every lockup rather than over
+   the pending ones, so the header's are never renumbered out from under it. */
+function resetWelcome() { transcript.innerHTML = WELCOME_HTML; bindChips(); liveLockups(); }
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips();
+  resetWelcome();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
@@ -1072,7 +1150,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+  if (!any) resetWelcome();
 }
 
 // ── Git / version control pane ──
@@ -2052,10 +2130,11 @@ $("cult-chips")?.addEventListener("click", (e) => {
 });
 
 // ── Official plugins (Settings picker; manifest lives in main) ──
-let pluginGlyphs = {};
-async function loadPluginGlyphs() {
-  try { for (const p of await window.crowe.plugins.list()) if (p.glyph) pluginGlyphs[p.id] = p.glyph; } catch {}
-}
+/* A plugin's `glyph` used to pick which of the eight hexagons appeared while
+   that plugin's tool ran. Nothing picks a glyph any more - the indicator is
+   always the logotype - so the map that cached them is gone rather than left
+   populated and unread. main.js still passes the field through from the
+   manifest; it is simply nobody's input at the moment. */
 async function renderPlugins() {
   const box = $("cfg-plugins"); if (!box) return;
   const list = await window.crowe.plugins.list();
@@ -2368,13 +2447,8 @@ async function liveLockups() {
   // not renumber — and therefore re-break — the ones already on screen.
   const todo = els.filter((el) => !el.classList.contains("live"));
   if (!todo.length) return;
-  let markup;
-  try {
-    const res = await fetch("../assets/wordmark-motion.svg");
-    if (!res.ok) return;
-    markup = await res.text();
-  } catch { return; }
-  markup = markup.replace(/<\?xml[^>]*\?>/, "").trim();
+  const markup = await wordmarkMotionMarkup();
+  if (!markup) return;
   els.forEach((el, i) => {
     if (!todo.includes(el)) return;
     const scoped = i === 0 ? markup
@@ -2394,20 +2468,26 @@ async function liveLockups() {
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
-  // The header and the welcome screen both wear the logotype, which carries the
-  // spore as the i's tittle. That spore turns: it is the one piece of the brand
-  // on screen in every space, in every state, and a still picture of a living
-  // mark is worse than no mark at all. `idle` is the slow cut — a breath and a
-  // drift, not a spinner — so it reads as the app being awake rather than as
-  // something loading. The o's hold the same whorl but are drawn into the
-  // asset and never move; three turning marks in one word would be a carousel.
-  // Elsewhere CroweMark still only appears where movement reports something:
-  // the agent panel (idle, so you can see the runtime is alive) and transcript
-  // avatars (rest, because a hundred of them turning at once would spend the
-  // reasoning state's signal).
+  // The logotype is now the whole visual language: header, welcome screen,
+  // agent panel head, and the thinking indicator in the transcript. One mark,
+  // four places, and what changes between them is only how it moves.
+  //
+  // At rest the spore turns and nothing else does — a breath and a drift, not
+  // a spinner, so it reads as the app being awake rather than as something
+  // loading. It is the one piece of the brand on screen in every space and
+  // every state, and a still picture of a living mark is worse than none.
+  //
+  // Under `is-thinking` the o's join in: two rotors counter-turning on
+  // durations that do not divide into each other, and the spore quickens to
+  // match. That is the only cue that separates working from waiting, so it is
+  // spent nowhere else — the rings stay still, and the letterforms never move
+  // after their entrance.
+  //
+  // CroweMark survives only on transcript avatars, at `rest`: a hundred of
+  // them turning at once would spend the signal the indicator depends on.
   liveLockups();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
-  const c = await refreshStatus(); loadTree(); loadPluginGlyphs();
+  const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
   await refreshAuth();
   await maybeShowOnboarding(c);
