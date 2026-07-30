@@ -762,6 +762,51 @@ test("a retry after a partial stream takes the fragment back first", async () =>
     "the reset precedes the retry's deltas, or the fragment stays on screen ahead of the whole");
 });
 
+// ─── Authoring workflows from chat ───────────────────────────────────────────
+test("compose_workflow authors into the runbook and reports what it built", async () => {
+  const ctx = makeCtx();
+  let authored = null;
+  ctx.authorWorkflow = (wf) => { authored = wf; };
+  let offered = false;
+  const deps = makeDeps(async (_s, n, _m, tools) => {
+    if (n === 0) {
+      offered = (tools || []).some((t) => t.function && t.function.name === "compose_workflow");
+      return reply([call("compose_workflow", { name: "Invoice Chase", nodes: [
+        { name: "Ledger Sweep", prompt: "Find every unpaid invoice and list amounts owed." },
+        { name: "Reminder Draft", prompt: "Write firm, polite payment reminders for each debtor." },
+      ] })]);
+    }
+    return reply([], "built it");
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "set up an invoice chase workflow" }], deps);
+  assert.strictEqual(out.text, "built it");
+  assert.ok(offered, "the tool must be offered when a runbook is attached");
+  assert.strictEqual(authored.name, "Invoice Chase");
+  assert.strictEqual(authored.nodes.length, 2);
+  assert.match(deps.toolResults()[0].result, /authored "Invoice Chase" in the Runbook with 2 agents/);
+});
+test("compose_workflow is not offered to a build without a runbook", async () => {
+  const ctx = makeCtx();                      // no ctx.authorWorkflow
+  let offered = null;
+  const deps = makeDeps(async (_s, _n, _m, tools) => {
+    offered = (tools || []).some((t) => t.function && t.function.name === "compose_workflow");
+    return reply([], "done");
+  });
+  await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
+  assert.strictEqual(offered, false);
+});
+test("a compose_workflow with nothing usable authors nothing", async () => {
+  const ctx = makeCtx();
+  let authored = null;
+  ctx.authorWorkflow = (wf) => { authored = wf; };
+  const deps = makeDeps(async (_s, n) => n === 0
+    ? reply([call("compose_workflow", { name: "Empty", nodes: [{ name: "", prompt: "" }] })])
+    : reply([], "done"));
+  await H.runAgent(ctx, [{ role: "user", content: "make a workflow" }], deps);
+  assert.strictEqual(authored, null);
+  assert.match(deps.toolResults()[0].result, /^rejected:/);
+});
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 (async () => {
   let passed = 0;

@@ -223,6 +223,8 @@ const DELIVERY = {
   read_file: "read_only", search: "read_only", list_dir: "read_only", open_url: "read_only",
   submit_verdict: "read_only",
   edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
+  compose_workflow: "compensatable",   // a draft row in the Runbook; one click to delete
+
   run_shell: "varies",       // resolved per command, below
 };
 function deliveryOf(ctx, name, args) {
@@ -399,6 +401,23 @@ const GROW_TOOL = { type: "function", function: {
     record: { type: "object", description: "Field names to values, using only the fields listed for that type. Include `id` to correct an existing record." },
   }, required: ["type", "record"] } } };
 
+/* The operator's Runbook, writable from chat. The canvas already composes
+   workflows from a sentence; this is the same authorship offered to the agent
+   mid-conversation, so "set this up as a workflow" produces the artifact
+   instead of a paragraph describing one. Authoring is a draft - nothing runs
+   until the operator presses Run on the canvas - which is why it carries no
+   approval gate of its own. */
+const WORKFLOW_TOOL = { type: "function", function: {
+  name: "compose_workflow",
+  description: "Author a workflow in the operator's Runbook: a named set of agent nodes that run in parallel when the operator presses Run on the Workflows canvas. Use this when the user asks to set up, save, or build a repeatable operation as a workflow - produce the artifact, do not paste JSON into chat. Nodes run in parallel and cannot see each other, so every prompt must stand alone, carry its own context, and name its expected output.",
+  parameters: { type: "object", properties: {
+    name: { type: "string", description: "Short workflow name." },
+    nodes: { type: "array", items: { type: "object", properties: {
+      name: { type: "string", description: "Agent name." },
+      prompt: { type: "string", description: "Complete standalone instructions for this agent." },
+    }, required: ["name", "prompt"] }, description: "2 to 8 independent parallel agents." },
+  }, required: ["name", "nodes"] } } };
+
 /* The verifier's only way to speak. A verdict returned as prose has to be parsed
    out of a paragraph, and a parser that guesses at "looks fine to me" will one
    day read a failure as a pass. This is the Verdict and the RejectionReport as a
@@ -426,7 +445,8 @@ const VERDICT_TOOL = { type: "function", function: {
 
 function allTools(ctx, route) {
   const grow = route && route.expert === "cultivation" ? [GROW_TOOL] : [];
-  return [...BUILTIN_TOOLS, ...grow, ...ctx.mcpTools()];
+  const author = ctx.authorWorkflow ? [WORKFLOW_TOOL] : [];
+  return [...BUILTIN_TOOLS, ...grow, ...author, ...ctx.mcpTools()];
 }
 /* The verifier gets its own tool list, not a filtered view of the operator's: no
    MCP servers (unknown side effects), no writes, and a shell only where the tier
@@ -658,6 +678,20 @@ async function execTool(ctx, name, args, route, state) {
     if (name === "search") return await toolSearch(ctx, args);
     if (name === "list_dir") return toolListDir(ctx, args);
     if (name === "open_url") { let u = args.url; if (!/^https?:\/\//.test(u)) u = "https://" + u; ctx.openUrl(u); return `opened ${u}`; }
+    /* No tier gate: authoring writes a draft into the Runbook and nothing runs
+       until the operator presses Run, so even Plan mode may hand its plan back
+       shaped as a runnable artifact. Validated like the canvas's own compose -
+       a call with no usable nodes authors nothing and says so. */
+    if (name === "compose_workflow") {
+      if (!ctx.authorWorkflow) return "blocked: this build has no workflow runbook attached.";
+      const nodes = (Array.isArray(args.nodes) ? args.nodes : [])
+        .filter((n) => n && typeof n.name === "string" && typeof n.prompt === "string" && n.name.trim() && n.prompt.trim())
+        .slice(0, 8).map((n) => ({ name: n.name.trim(), prompt: n.prompt.trim() }));
+      if (!nodes.length) return "rejected: nodes must be a list of {name, prompt} agents - nothing usable was given";
+      const wfName = (typeof args.name === "string" && args.name.trim()) || "Composed workflow";
+      ctx.authorWorkflow({ name: wfName, nodes });
+      return `authored "${wfName}" in the Runbook with ${nodes.length} agents: ${nodes.map((n) => n.name).join(", ")}. It is on the Workflows canvas, ready to review and run.`;
+    }
     return `unknown tool: ${name}`;
   } catch (e) { return `error: ${String(e).slice(0, 300)}`; }
 }
