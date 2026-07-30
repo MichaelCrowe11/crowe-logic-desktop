@@ -5,7 +5,15 @@
   "use strict";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let agentListeners = [];
-  const emit = (ev) => agentListeners.forEach((f) => f(ev));
+  /* Every event carries the agent it came from, because the real IPC does:
+     main.js stamps `agentId` on the way out and every surface filters on it. A
+     shim that emits bare events lets a panel look correct here and receive
+     nothing in the product - which is how the Workflows surface shipped.
+     Bound per run rather than held in a variable, because a workflow runs its
+     nodes concurrently and a shared "current agent" would mislabel every event
+     that lands after another node's await. */
+  const emitAs = (id) => (ev) => { const e = { agentId: id, ...ev }; agentListeners.forEach((f) => f(e)); };
+  const emit = emitAs("main");
 
   const DEMO_FILES = [
     { name: "assets", dir: true }, { name: "renderer", dir: true }, { name: "deploy", dir: true },
@@ -66,7 +74,8 @@
     installSpaces: null,
     agent: {
       onEvent(fn) { agentListeners.push(fn); return () => { agentListeners = agentListeners.filter((f) => f !== fn); }; },
-      async run(messages) {
+      async run(messages, id) {
+        const emit = emitAs(id || "main");
         const last = (messages || []).filter((m) => m.role === "user").pop();
         const grow = /substrate|spawn|mold|fruiting|mycelium|oyster|lion's mane|martha/i.test((last && last.content) || "");
         emit(grow ? { type: "route", expert: "cultivation", model: "crowelm-grower" }

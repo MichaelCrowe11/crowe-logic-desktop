@@ -650,15 +650,23 @@ function denyPendingApprovals(agentId) {
   for (const [id, done] of [...pendingApprovals]) {
     if (agentId && done.agentId && done.agentId !== agentId) continue;
     pendingApprovals.delete(id);
-    if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id });
+    if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId: done.agentId || "main" });
     done({ approved: false });
   }
 }
 function requestApproval(req) {
   if (!mainWindow) return Promise.resolve({ approved: false });
   const id = ++approvalSeq;
+  /* The agent id has to ride along. Without it the request cannot be routed to
+     the surface that asked for it: the only listener that drew a card was the
+     chat transcript's, registered per turn, so an approval raised by a workflow
+     node or an agent panel had no consumer at all and sat unanswered until it
+     expired - five minutes of "Running" and then a denial nobody chose. Worse
+     when a chat turn happened to be open, since that transcript would draw
+     another agent's card and grant an action the user was not looking at. */
+  const agentId = req.agentId || "main";
   mainWindow.webContents.send("crowe:agent:event", {
-    type: "approval_request", id, kind: req.kind, title: req.title,
+    type: "approval_request", id, agentId, kind: req.kind, title: req.title,
     detail: req.detail, why: req.why, risk: req.risk, hash: req.hash,
     expiresInMs: APPROVAL_TIMEOUT_MS,
   });
@@ -666,10 +674,10 @@ function requestApproval(req) {
   return new Promise((resolve) => {
     const done = (v) => { pendingApprovals.delete(id); clearTimeout(timer); resolve(v); };
     const timer = setTimeout(() => {
-      if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id });
+      if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId });
       done({ approved: false, expired: true });
     }, APPROVAL_TIMEOUT_MS);
-    done.agentId = req.agentId || "main";
+    done.agentId = agentId;
     pendingApprovals.set(id, done);
   });
 }

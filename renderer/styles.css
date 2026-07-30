@@ -1226,6 +1226,18 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .wf-node-foot { display:flex; align-items:center; gap:6px; margin-top:8px; color:var(--muted); }
 .wf-node-dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
 .wf-node-dot.running { background:var(--gold); box-shadow:0 0 10px var(--gold); animation:pulse 1s infinite; }.wf-node-dot.done { background:var(--ok); }.wf-node-dot.failed { background:var(--err-fg); }
+/* A node stopped at the gate is not a node still working. It reads as waiting on
+   the operator, because that is the only state on this surface the operator can
+   clear themselves. */
+.wf-node-dot.waiting { background:var(--gold-text); box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 22%,transparent); animation:none; }
+.wf-node-state { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:10px var(--mono); }
+/* What the auto router picked for this node. Shown per node because each one is
+   an independent turn: three nodes in a workflow can land on three experts, and
+   before this the surface never said which. */
+.wf-node-route:not(:empty) { flex:0 0 auto; padding:1px 6px; border:1px solid color-mix(in srgb,var(--gold) 40%,var(--line));
+  border-radius:999px; color:var(--gold-text); font:9px var(--mono); }
+.wf-node-gate:not(:empty) { margin-top:8px; }
+.wf-node-gate .gatecard { margin:0; }
 .wf-connector { display:grid; place-items:center; width:24px; height:24px; border-radius:50%; border:1px solid var(--gold); color:var(--gold-text); }
 .wf-empty { display:flex; flex-direction:column; align-items:center; gap:5px; padding:35px; border:1px dashed var(--line-strong); border-radius:14px; color:var(--muted); background:color-mix(in srgb,var(--panel) 75%,transparent); }.wf-empty b { color:var(--ink); font-family:var(--display); font-size: var(--fs-head); }
 .wf-output { border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:var(--z2); }.wf-output>div { display:flex; justify-content:space-between; padding:8px 11px; border-bottom:1px solid var(--line); }.wf-output pre { max-height:150px; overflow:auto; margin:0; padding:11px; white-space:pre-wrap; color:var(--muted); font:11px var(--mono); }
