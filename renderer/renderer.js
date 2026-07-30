@@ -367,7 +367,13 @@ input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey)
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
 function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
 bindChips();
+// Snapshotted before liveLockups() runs, so the welcome logotype in here is the
+// static mask, not the inlined motion SVG. Anything that puts this markup back
+// on screen owes the mark a re-inline — hence showWelcome(), which is the only
+// supported way to restore it. Assigning WELCOME_HTML directly leaves the
+// logotype dead on arrival: present, correctly drawn, and never moving again.
 const WELCOME_HTML = transcript.innerHTML;
+function showWelcome() { transcript.innerHTML = WELCOME_HTML; bindChips(); liveLockups(); }
 
 // Crowe Logic agent dock. Agents always open in the stackable workspace.
 // Legacy floating-agent state is intentionally retired to prevent duplicate runtimes.
@@ -888,7 +894,7 @@ const drawer = $("sessions-drawer");
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips();
+  showWelcome();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
@@ -924,7 +930,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+  if (!any) showWelcome();
 }
 
 // ── Git / version control pane ──

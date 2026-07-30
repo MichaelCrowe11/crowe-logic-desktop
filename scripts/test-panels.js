@@ -662,6 +662,43 @@ const tests = [
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
   },
   {
+    // WELCOME_HTML is snapshotted at load, before liveLockups() has swapped the
+    // static mask for the motion SVG. So every path that restores it — New chat,
+    // and loading a session with nothing in it — was putting a dead logotype
+    // back on screen: correctly drawn, permanently still. It looks fine in a
+    // screenshot, which is exactly why it survived. Drives the real newChat()
+    // rather than showWelcome(), because the defect was the caller, not the
+    // restore, and a test that calls the helper would pass over the bug.
+    name: "New chat restores a logotype that still moves",
+    body: `const deadline = Date.now() + 3000;
+      while (!document.querySelector(".lockup.live") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await newChat();
+      // the restore is synchronous, the re-inline behind it is a fetch
+      const until = Date.now() + 3000;
+      let hero = null;
+      while (Date.now() < until) {
+        hero = document.querySelector("#transcript .lockup");
+        if (hero && hero.classList.contains("live")) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const svg = hero && hero.querySelector("svg");
+      const word = svg && svg.querySelector('[id^="wordmark-letterforms"]');
+      // the header is still on screen alongside it, so this also covers the
+      // restored copy scoping its ids away from the one that never left
+      const ids = [...document.querySelectorAll(".lockup svg [id]")].map((e) => e.id);
+      const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+      return {
+        live: !!hero && hero.classList.contains("live"),
+        inlined: !!svg,
+        wordAnim: word ? getComputedStyle(word).animationName : "none",
+        dupes: dupes.join(",") || "none",
+        doubled: !!hero && hero.querySelectorAll("svg").length > 1,
+      };`,
+    expect: { live: true, inlined: true, wordAnim: "wordmark-arrive", dupes: "none", doubled: false },
+  },
+  {
     // The console is collapsed because the objective runs on the gateway agent,
     // not in this PTY - the shell was a second window onto something nobody was
     // driving. Two ways that regresses silently: the display rule gets dropped
