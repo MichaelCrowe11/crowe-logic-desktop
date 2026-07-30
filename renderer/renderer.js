@@ -665,22 +665,80 @@ const WORKFLOW_TEMPLATES=[
 ];
 function workflowStore(){try{return JSON.parse(localStorage.getItem("crowe-agent-workflows")||"[]")}catch{return []}}
 function saveWorkflowStore(items){localStorage.setItem("crowe-agent-workflows",JSON.stringify(items))}
+/* The canvas is authored by the agents, not assembled by hand. The operator says
+   what the operation is; a full harness turn designs the nodes. This brief is
+   that turn's instructions, and it is explicit about the one constraint the
+   canvas imposes: nodes run in parallel and blind to each other, so a prompt
+   that says "using the previous agent's output" designs a workflow that cannot
+   exist here. */
+const COMPOSE_ASK=(want)=>`Design an agent workflow for this operation: ${want}\n\nReturn ONLY a JSON object, no prose before or after, shaped exactly like:\n{"name":"short workflow name","nodes":[{"name":"agent name","prompt":"complete standalone instructions for this agent"}]}\nUse 2 to 5 nodes. Each node is an independent agent that runs in parallel and cannot see the others, so every prompt must stand alone, carry its own context, and name its expected output.`;
+/* Lenient on the outside, strict on the inside. Models wrap JSON in prose and
+   code fences no matter how firmly the brief says not to, so the object is cut
+   from first "{" to last "}" - but a node without both a name and a prompt is
+   dropped, and a result with no usable nodes is a failure the surface reports,
+   never a half-drawn canvas. */
+function parseComposedWorkflow(text){
+  const s=String(text||""),a=s.indexOf("{"),b=s.lastIndexOf("}");
+  if(a<0||b<=a)return null;
+  try{
+    const d=JSON.parse(s.slice(a,b+1));
+    const nodes=(Array.isArray(d.nodes)?d.nodes:[])
+      .filter(n=>n&&typeof n.name==="string"&&typeof n.prompt==="string"&&n.name.trim()&&n.prompt.trim())
+      .slice(0,8).map(n=>({name:n.name.trim(),prompt:n.prompt.trim()}));
+    if(!nodes.length)return null;
+    return {name:(typeof d.name==="string"&&d.name.trim())||"Composed workflow",nodes};
+  }catch{return null}
+}
 function mountWorkflow(p, body) {
   body.classList.add("workflow-surface");
   let workflows=workflowStore(), active=workflows[0]||{id:`wf-${Date.now().toString(36)}`,name:"New agent workflow",nodes:[],runs:[]};
   if(!workflows.length){workflows=[active];saveWorkflowStore(workflows)}
-  body.innerHTML='<aside class="workflow-sidebar"><div class="workflow-brand"><span class="workflow-icon">WF</span><div><small>ORCHESTRATION</small><b>Agent Runbook</b></div></div><button class="wf-new ghost sm">New workflow</button><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div><button class="wf-add ghost sm">+ Add agent node</button><button class="wf-run primary">Run workflow</button><button class="wf-abort danger hidden">Abort run</button></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Workflow name"><span class="wf-status">Draft</span></div><p>Compose Crowe Agents into a reusable customer operation. Nodes run in parallel and combine into a final result.</p></header><div class="wf-canvas"></div><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
+  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Workflow name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run workflow</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation — the Crowe agents design the workflow" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
   let aborted=false;
   const persist=()=>{const i=workflows.findIndex(x=>x.id===active.id);if(i<0)workflows.unshift(active);else workflows[i]=active;saveWorkflowStore(workflows)};
   const renderList=()=>{body.querySelector(".wf-list").innerHTML=workflows.map(w=>`<button data-id="${esc(w.id)}" class="${w.id===active.id?"active":""}"><b>${esc(w.name)}</b><small>${w.nodes.length} agents · ${(w.runs||[]).length} runs</small></button>`).join("");body.querySelectorAll(".wf-list button").forEach(b=>b.onclick=()=>{active=workflows.find(w=>w.id===b.dataset.id);render()})};
-  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><button class="wf-node-remove ghost sm">Remove</button></div><label>Agent instructions<textarea class="wf-node-prompt" rows="4">${esc(n.prompt)}</textarea></label><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready · independent parallel agent</small><span class="wf-node-route"></span></div><div class="wf-node-gate"></div></article>`).join('<div class="wf-connector">+</div>'):'<div class="wf-empty"><b>Build an agent workflow</b><span>Add parallel agent nodes or start from a customer operations template.</span></div>';
-    canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};card.querySelector(".wf-node-prompt").onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};card.querySelector(".wf-node-remove").onclick=()=>{active.nodes.splice(i,1);persist();renderNodes()}});
+  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the workflow — or add nodes by hand.</span></div>';
+    canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};const t=card.querySelector(".wf-node-prompt");t.onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};
+      // The instructions are prose on a page, not a box in a form: the field
+      // grows to hold what the agents wrote, because clipped instructions read
+      // as a broken surface and hide exactly what the operator is approving.
+      const fit=()=>{t.style.height="auto";t.style.height=t.scrollHeight+"px"};t.oninput=fit;fit();
+      card.querySelector(".wf-node-remove").onclick=()=>{active.nodes.splice(i,1);persist();renderNodes()}});
   };
   const render=()=>{body.querySelector(".wf-name").value=active.name;renderList();renderNodes()};
   body.querySelector(".wf-name").onchange=e=>{active.name=e.target.value||"Untitled workflow";persist();renderList()};
   body.querySelector(".wf-new").onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:"New agent workflow",nodes:[],runs:[]};workflows.unshift(active);persist();render()};
-  WORKFLOW_TEMPLATES.forEach(t=>{const b=document.createElement("button");b.className="wf-template";b.innerHTML=`<b>${esc(t.name)}</b><small>${t.nodes.length} parallel agents</small>`;b.onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:t.name,nodes:t.nodes.map(n=>({...n})),runs:[]};workflows.unshift(active);persist();render()};body.querySelector(".wf-templates").appendChild(b)});
+  WORKFLOW_TEMPLATES.forEach(t=>{const b=document.createElement("button");b.className="wf-template";b.innerHTML=`<b>${esc(t.name)}</b><small>${t.nodes.length} agents</small>`;b.onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:t.name,nodes:t.nodes.map(n=>({...n})),runs:[]};workflows.unshift(active);persist();render()};body.querySelector(".wf-templates").appendChild(b)});
   body.querySelector(".wf-add").onclick=()=>{active.nodes.push({name:`Crowe Agent ${active.nodes.length+1}`,prompt:"Describe this agent's responsibility and expected output."});persist();renderNodes();renderList()};
+  /* Composing is itself a harness turn - it routes, it can fail, and it answers
+     on its own agent id so the chat transcript never draws its events. What it
+     never does is guess: a reply that does not parse into nodes leaves the
+     canvas exactly as it was, with the failure named where the operator typed. */
+  const composeSay=body.querySelector(".wf-compose-say"),composeGo=body.querySelector(".wf-compose-go"),composeState=body.querySelector(".wf-compose-state");
+  const compose=async()=>{
+    const want=composeSay.value.trim();if(!want||composeGo.disabled)return;
+    const id=`${p.id}-compose`;
+    composeGo.disabled=true;composeState.textContent="Designing";
+    let text="",failure="";
+    const off=window.crowe.agent.onEvent(ev=>{
+      if(ev.agentId!==id)return;
+      if(ev.type==="route")composeState.textContent=`Designing · ${ev.expert||"operator"} · ${ev.model||""}`.trim();
+      else if(ev.type==="assistant"||ev.type==="assistant_delta")text+=(ev.text||"");
+      else if(ev.type==="error")failure=ev.text||"the gateway call failed";
+    });
+    try{
+      const r=await window.crowe.agent.run([{role:"user",content:COMPOSE_ASK(want)}],id,{licensed:p.licensed,workspaceId:p.workspaceId});
+      if(r&&r.error)failure=failure||r.error;
+      text=text||(r&&r.text)||"";
+    }catch(e){failure=failure||(e&&e.message)||String(e)}
+    finally{off()}
+    const drafted=!failure&&parseComposedWorkflow(text);
+    if(!drafted){composeState.textContent=`Failed · ${(failure||"the agent did not return a workflow").slice(0,90)}`;composeGo.disabled=false;return}
+    active={id:`wf-${Date.now().toString(36)}`,name:drafted.name,nodes:drafted.nodes,runs:[]};
+    workflows.unshift(active);persist();render();
+    composeState.textContent=`Composed ${drafted.nodes.length} agents`;composeSay.value="";composeGo.disabled=false;
+  };
+  composeGo.onclick=compose;composeSay.onkeydown=e=>{if(e.key==="Enter")compose()};
   const abort=body.querySelector(".wf-abort"),run=body.querySelector(".wf-run"),status=body.querySelector(".wf-status"),out=body.querySelector(".wf-output pre");
   abort.onclick=()=>{aborted=true;active.nodes.forEach((_,i)=>window.crowe.agent.stop(`${p.id}-${i}`));status.textContent="Aborted"};
   /* One node's run. Every node is a full harness turn, which means it routes to

@@ -557,6 +557,55 @@ const tests = [
       status: "1 of 2 failed", reported: true },
   },
   {
+    // The canvas is authored by the agents: the operator describes the
+    // operation and a harness turn returns the nodes. The reply arrives
+    // fenced in prose because models do that no matter what the brief says,
+    // so this also pins the lenient cut from first "{" to last "}".
+    name: "a sentence composes a workflow the agents author",
+    body: `await __reset();
+      const el = await __workflowPanel([], (id) => id.endsWith("-compose")
+        ? [{ type: "route", expert: "planning", model: "crowelm" },
+           { type: "assistant", text: 'Here is the design:\\n\\u0060\\u0060\\u0060json\\n{"name":"Invoice Chase","nodes":[{"name":"Ledger Sweep","prompt":"Find every unpaid invoice and list amounts owed."},{"name":"Reminder Draft","prompt":"Write firm, polite payment reminders for each debtor."}]}\\n\\u0060\\u0060\\u0060 done.' }]
+        : []);
+      el.querySelector(".wf-compose-say").value = "chase unpaid invoices";
+      el.querySelector(".wf-compose-go").click();
+      await __settle();
+      const nodes = [...el.querySelectorAll(".wf-node")];
+      const result = {
+        name: el.querySelector(".wf-name").value,
+        agents: nodes.map((n) => n.querySelector(".wf-node-name").value).join(" | "),
+        prompted: nodes.every((n) => n.querySelector(".wf-node-prompt").value.length > 20),
+        state: el.querySelector(".wf-compose-state").textContent,
+        // composing must land in the store, or the workflow dies with the panel
+        stored: JSON.parse(localStorage.getItem("crowe-agent-workflows"))[0].name,
+      };
+      el.__restore();
+      return result;`,
+    expect: { name: "Invoice Chase", agents: "Ledger Sweep | Reminder Draft", prompted: true,
+      state: "Composed 2 agents", stored: "Invoice Chase" },
+  },
+  {
+    // A reply that does not parse must not half-draw the canvas. The failure
+    // lands where the operator typed, and the empty workflow stays empty.
+    name: "a compose that returns no workflow fails without touching the canvas",
+    body: `await __reset();
+      const el = await __workflowPanel([], (id) => id.endsWith("-compose")
+        ? [{ type: "assistant", text: "I would suggest three agents for this operation." }]
+        : []);
+      el.querySelector(".wf-compose-say").value = "chase unpaid invoices";
+      el.querySelector(".wf-compose-go").click();
+      await __settle();
+      const result = {
+        failed: /^Failed · the agent did not return a workflow/.test(el.querySelector(".wf-compose-state").textContent),
+        nodes: el.querySelectorAll(".wf-node").length,
+        empty: !!el.querySelector(".wf-empty"),
+        enabled: !el.querySelector(".wf-compose-go").disabled,
+      };
+      el.__restore();
+      return result;`,
+    expect: { failed: true, nodes: 0, empty: true, enabled: true },
+  },
+  {
     // The chat transcript's listener is registered per turn and used to take
     // every event on the channel. With a panel or a workflow node running
     // alongside a chat turn, that meant the transcript drew another agent's

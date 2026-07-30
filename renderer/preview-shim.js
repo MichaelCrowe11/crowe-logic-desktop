@@ -77,7 +77,27 @@
       async run(messages, id) {
         const emit = emitAs(id || "main");
         const last = (messages || []).filter((m) => m.role === "user").pop();
-        const grow = /substrate|spawn|mold|fruiting|mycelium|oyster|lion's mane|martha/i.test((last && last.content) || "");
+        const asked = (last && last.content) || "";
+        // The compose brief gets a compose answer. Without this branch the shim
+        // replies to "design a workflow" with the canned coding demo, the parse
+        // fails, and the one feature this surface leads with looks broken in
+        // the browser - the exact gap that let Workflows ship dead.
+        if (/^Design an agent workflow for this operation:/.test(asked)) {
+          const want = (asked.match(/operation: ([^\n]*)/) || [, "the operation"])[1].trim();
+          emit({ type: "route", expert: "planning", model: "crowelm" });
+          await sleep(600);
+          emit({ type: "assistant", text: JSON.stringify({
+            name: want.split(/\s+/).slice(0, 4).join(" ") || "Composed workflow",
+            nodes: [
+              { name: "Scope", prompt: `Break "${want}" into the concrete facts, constraints, and inputs an operator would need. Output a short brief.` },
+              { name: "Execution Plan", prompt: `Design the fastest complete way to carry out "${want}", with owners and order of operations. Output a numbered plan.` },
+              { name: "Risk Check", prompt: `Audit "${want}" for what could go wrong, what cannot be undone, and what to verify afterward. Output a checklist.` },
+            ],
+          }) });
+          emit({ type: "telemetry", promptTokens: 640, completionTokens: 210, cost: 0.0011 });
+          return {};
+        }
+        const grow = /substrate|spawn|mold|fruiting|mycelium|oyster|lion's mane|martha/i.test(asked);
         emit(grow ? { type: "route", expert: "cultivation", model: "crowelm-grower" }
                   : { type: "route", expert: "coding", model: "crowelm" });
         emit({ type: "telemetry", promptTokens: 1204, completionTokens: 0, cost: 0.0015 });

@@ -1197,33 +1197,47 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .glass-agent.collapsed .glass-transcript,.glass-agent.collapsed .glass-composer,.glass-agent.collapsed .glass-resize { display:none; }
 @media (max-width:700px) { .glass-agent { width:calc(100vw - 24px) !important; left:12px !important; } }
 
-/* Customer agent fleet and workflow cockpit */
-.workflow-surface { display:grid !important; grid-template-columns:230px minmax(620px,1fr); overflow:auto; background:var(--cream); }
+/* Customer agent fleet and workflow runbook. The runbook reads like the rest
+   of the product - ink on panel, gold spent sparingly - not like a diagram
+   tool. Nodes are entries on a page rather than boxes on dotted wallpaper:
+   they run in parallel, so nothing in the layout is allowed to imply wiring
+   or sequence, and a horizontal card rail that clips its own text implied
+   both while hiding the instructions the operator is trusting. */
+.workflow-surface { display:grid !important; grid-template-columns:220px minmax(0,1fr); overflow:auto; background:var(--cream); }
 .workflow-sidebar { display:flex; flex-direction:column; gap:9px; padding:14px; border-right:1px solid var(--line); background:var(--panel); }
-.workflow-brand { display:flex; align-items:center; gap:10px; margin-bottom:5px; }
-.workflow-icon { display:grid; place-items:center; width:34px; height:34px; border:1px solid var(--gold); border-radius:10px; color:var(--gold-deep); font:700 11px var(--mono); background:var(--raised); box-shadow:var(--z2); }
-.workflow-brand small,.wf-templates>small,.fleet-hero small { display:block; color:var(--gold-deep); font:700 9px var(--mono); letter-spacing:.12em; }
-.workflow-brand b { font-family:var(--display); font-size: var(--fs-head); }
-.wf-list { display:flex; flex-direction:column; gap:5px; max-height:180px; overflow:auto; }
-.wf-list button,.wf-template { display:flex; flex-direction:column; text-align:left; gap:2px; padding:8px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); cursor:pointer; }
-.wf-list button.active { border-color:var(--gold); background:color-mix(in srgb,var(--gold) 9%,var(--raised)); }
+.wf-side-head { display:flex; align-items:center; justify-content:space-between; }
+.wf-side-head small,.wf-templates>small,.fleet-hero small { display:block; color:var(--gold-deep); font:700 9px var(--mono); letter-spacing:.12em; }
+.wf-list { display:flex; flex-direction:column; gap:4px; overflow:auto; }
+.wf-list button,.wf-template { display:flex; flex-direction:column; text-align:left; gap:2px; padding:7px 9px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ink); cursor:pointer; }
+.wf-list button:hover,.wf-template:hover { border-color:var(--line); }
+.wf-list button.active { border-color:var(--line-strong); background:var(--raised); }
 .wf-list small,.wf-template small { color:var(--muted); font:10px var(--mono); }
-.wf-templates { display:flex; flex-direction:column; gap:5px; padding-top:8px; border-top:1px solid var(--line); }
-.wf-run { margin-top:auto; }
-.workflow-main { min-width:0; display:flex; flex-direction:column; padding:18px; overflow:auto; background-image:radial-gradient(color-mix(in srgb,var(--gold) 20%,transparent) 1px,transparent 1px); background-size:20px 20px; }
-.workflow-main>header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; padding:13px 15px; border:1px solid var(--line); border-radius:12px; background:color-mix(in srgb,var(--panel) 92%,transparent); box-shadow:var(--z2); }
-.workflow-main>header>div { display:flex; align-items:center; gap:9px; }
-.wf-name { min-width:260px; border:0; background:transparent; color:var(--ink); font:600 22px var(--display); }
-.workflow-main>header p { max-width:430px; margin:0; color:var(--muted); font-size: var(--fs-sm); }
-.wf-status { border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:var(--gold-deep); font:10px var(--mono); }
-.wf-canvas { flex:1; min-height:270px; display:flex; align-items:center; justify-content:center; gap:10px; padding:22px 8px; }
-.wf-node { width:230px; min-height:190px; padding:12px; border:1px solid color-mix(in srgb,var(--gold) 35%,var(--line)); border-radius:12px; background:color-mix(in srgb,var(--raised) 95%,transparent); box-shadow:var(--z3); }
-.wf-node-top { display:flex; align-items:center; gap:6px; }
-.wf-node-top>span { color:var(--gold-text); font:10px var(--mono); }
-.wf-node-name { flex:1; min-width:0; border:0; background:transparent; color:var(--ink); font-weight:700; }
-.wf-node label { display:block; margin-top:10px; color:var(--muted); font:10px var(--mono); }
-.wf-node textarea { width:100%; margin-top:4px; resize:none; border:1px solid var(--line); border-radius:7px; padding:7px; background:var(--panel); color:var(--ink); font:11px var(--body); }
-.wf-node-foot { display:flex; align-items:center; gap:6px; margin-top:8px; color:var(--muted); }
+.wf-templates { display:flex; flex-direction:column; gap:4px; margin-top:auto; padding-top:10px; border-top:1px solid var(--line); }
+.workflow-main { min-width:0; display:flex; flex-direction:column; gap:12px; padding:20px 22px; overflow:auto; }
+.workflow-main>header { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.workflow-main>header>div:first-child { display:flex; align-items:baseline; gap:10px; flex:1; min-width:0; }
+.wf-name { flex:1; min-width:0; border:0; background:transparent; color:var(--ink); font:600 21px var(--display); }
+.wf-status { flex:0 0 auto; color:var(--gold-deep); font:700 9px var(--mono); letter-spacing:.12em; text-transform:uppercase; }
+.wf-actions { display:flex; gap:8px; }
+/* The compose bar is this surface's composer: the operator writes the
+   operation, the agents write the workflow. It sits where a mission statement
+   about composing agents used to - the sentence became the field. */
+.wf-compose { display:flex; align-items:center; gap:8px; }
+.wf-compose-say { flex:1; min-width:0; border:1px solid var(--line); border-radius:10px; padding:9px 12px; background:var(--panel); color:var(--ink); font-size:var(--fs-sm); }
+.wf-compose-say:focus { border-color:color-mix(in srgb,var(--gold) 55%,var(--line)); outline:none; }
+.wf-compose-state:not(:empty) { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--gold-text); font:10px var(--mono); }
+.wf-canvas { display:flex; flex-direction:column; gap:10px; }
+.wf-node { padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.wf-node-top { display:flex; align-items:center; gap:9px; }
+.wf-node-top>span { color:var(--gold-deep); font:10px var(--mono); }
+.wf-node-name { flex:1; min-width:0; border:0; background:transparent; color:var(--ink); font-weight:650; }
+/* Deleting is offered where the cursor already is, not advertised on every
+   card at once - six Remove buttons on screen is a threat, not an affordance. */
+.wf-node-remove { visibility:hidden; }
+.wf-node:hover .wf-node-remove,.wf-node:focus-within .wf-node-remove { visibility:visible; }
+.wf-node textarea { width:100%; margin-top:5px; resize:none; overflow:hidden; border:0; padding:0; background:transparent; color:var(--muted); font:12px/1.55 var(--body); }
+.wf-node textarea:focus { outline:none; color:var(--ink); }
+.wf-node-foot { display:flex; align-items:center; gap:6px; margin-top:7px; color:var(--muted); }
 .wf-node-dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
 .wf-node-dot.running { background:var(--gold); box-shadow:0 0 10px var(--gold); animation:pulse 1s infinite; }.wf-node-dot.done { background:var(--ok); }.wf-node-dot.failed { background:var(--err-fg); }
 /* A node stopped at the gate is not a node still working. It reads as waiting on
@@ -1234,13 +1248,15 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 /* What the auto router picked for this node. Shown per node because each one is
    an independent turn: three nodes in a workflow can land on three experts, and
    before this the surface never said which. */
-.wf-node-route:not(:empty) { flex:0 0 auto; padding:1px 6px; border:1px solid color-mix(in srgb,var(--gold) 40%,var(--line));
-  border-radius:999px; color:var(--gold-text); font:9px var(--mono); }
+.wf-node-route:not(:empty) { flex:0 0 auto; color:var(--gold-text); font:10px var(--mono); }
 .wf-node-gate:not(:empty) { margin-top:8px; }
 .wf-node-gate .gatecard { margin:0; }
-.wf-connector { display:grid; place-items:center; width:24px; height:24px; border-radius:50%; border:1px solid var(--gold); color:var(--gold-text); }
-.wf-empty { display:flex; flex-direction:column; align-items:center; gap:5px; padding:35px; border:1px dashed var(--line-strong); border-radius:14px; color:var(--muted); background:color-mix(in srgb,var(--panel) 75%,transparent); }.wf-empty b { color:var(--ink); font-family:var(--display); font-size: var(--fs-head); }
-.wf-output { border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:var(--z2); }.wf-output>div { display:flex; justify-content:space-between; padding:8px 11px; border-bottom:1px solid var(--line); }.wf-output pre { max-height:150px; overflow:auto; margin:0; padding:11px; white-space:pre-wrap; color:var(--muted); font:11px var(--mono); }
+.wf-empty { padding:30px 2px; color:var(--muted); }
+.wf-empty b { display:block; margin-bottom:3px; color:var(--ink); font:600 var(--fs-head) var(--display); }
+.wf-add { align-self:flex-start; }
+.wf-output { margin-top:auto; padding-top:10px; border-top:1px solid var(--line); }
+.wf-output>div { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+.wf-output pre { max-height:180px; overflow:auto; margin:0; white-space:pre-wrap; color:var(--muted); font:11px/1.6 var(--mono); }
 .agent-fleet { display:block !important; overflow:auto; padding:18px; background:linear-gradient(145deg,var(--panel),var(--cream)); }
 .fleet-hero { display:flex; justify-content:space-between; gap:25px; align-items:center; padding:22px; border:1px solid var(--line); border-radius:16px; background:linear-gradient(135deg,color-mix(in srgb,var(--raised) 94%,transparent),color-mix(in srgb,var(--gold) 9%,var(--panel))); box-shadow:var(--z3); }
 .fleet-hero h2 { margin:4px 0; font:600 27px var(--display); }.fleet-hero p { max-width:650px; margin:0; color:var(--muted); }
@@ -1249,7 +1265,7 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .fleet-card { position:relative; padding:17px; border:1px solid var(--line); border-radius:14px; background:var(--raised); box-shadow:var(--z2); transition:transform 150ms var(--ease),border-color 150ms var(--ease); }.fleet-card:hover { transform:translateY(-2px); border-color:var(--gold); }
 .fleet-avatar { display:grid; place-items:center; width:42px; height:42px; border-radius:12px; border:1px solid var(--gold); color:var(--gold-text); background:var(--panel); font:700 12px var(--mono); }.fleet-state { position:absolute; right:15px; top:16px; color:var(--muted); font:10px var(--mono); }.fleet-state span { display:inline-block; width:6px; height:6px; margin-right:4px; border-radius:50%; background:var(--ok); }
 .fleet-card h3 { margin:12px 0 3px; font-family:var(--display); }.fleet-card p { min-height:42px; margin:0 0 13px; color:var(--muted); }.fleet-card>div:last-child { display:flex; gap:7px; }
-@media(max-width:1050px){.workflow-surface{grid-template-columns:190px minmax(580px,1fr)}.fleet-grid{grid-template-columns:1fr}}
+@media(max-width:1050px){.workflow-surface{grid-template-columns:190px minmax(0,1fr)}.fleet-grid{grid-template-columns:1fr}}
 
 /* Native brand launcher, secure keys, and customer workbench */
 .key-manager { margin-top:14px; padding:12px; border:1px solid var(--line); border-radius:10px; background:color-mix(in srgb,var(--raised) 86%,transparent); }
