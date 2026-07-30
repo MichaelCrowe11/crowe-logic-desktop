@@ -1,0 +1,29 @@
+{
+  "appId": "com.crowelogic.mobile",
+  "appName": "Crowe Logic",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": false,
+      "backgroundColor": "#f7f3ea",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP"
+    },
+    "Keyboard": {
+      "resize": "none",
+      "resizeOnFullScreen": true
+    },
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "LIGHT",
+      "backgroundColor": "#f7f3ea"
+    }
+  }
+}

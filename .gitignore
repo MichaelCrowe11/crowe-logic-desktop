@@ -14,3 +14,12 @@ __pycache__/
 
 # macOS Finder droppings — never part of a build
 .DS_Store
+
+# The mobile app's generated inputs. www/ is assembled from renderer/ + assets/
+# by mobile/scripts/build-www.js, and resources/ is drawn from the brand SVGs by
+# mobile/scripts/gen-mobile-assets.js. Both are derived, so neither is history —
+# rebuild them with `npm run www` / `node scripts/gen-mobile-assets.js`. The iOS
+# and Android projects themselves are committed: they carry the URL scheme and
+# the entitlements, which are source.
+mobile/www/
+mobile/resources/

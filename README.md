@@ -64,6 +64,24 @@ a profile without building, set the same list in the environment:
 CROWE_SPACES=chat,projects npm start
 ```
 
+## iOS and Android
+
+The same UI, in a Capacitor shell, over the same gateway:
+
+```bash
+cd mobile
+npm install
+npm run ios       # or: npm run android
+```
+
+`renderer/` is copied into the mobile build rather than forked — a change to the
+desktop UI reaches the phone by rebuilding. What differs is underneath it: a
+bridge that talks to the gateway over HTTPS instead of to a Node main process,
+Capacitor Preferences instead of `userData`, and honest refusals for the shell,
+the file tree and git, which iOS and Android do not allow. See
+[`mobile/README.md`](mobile/README.md) — in particular the Crowe ID redirect URI,
+which has to be registered before sign-in works on a device.
+
 ## Architecture
 
 - `main.js` — window + the gateway bridge. Holds the token; POSTs to
