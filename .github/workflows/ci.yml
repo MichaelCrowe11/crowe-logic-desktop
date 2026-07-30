@@ -34,6 +34,15 @@ jobs:
       - name: Run harness tests
         run: node scripts/test-harness.js
 
+      # Second, and for the same reason: pure Node, seconds to run, and it is
+      # the only thing holding the mobile port to the desktop it copies. The
+      # renderer ships to the phone verbatim, so a bridge method dropped here or
+      # a routing rule added to the harness and not to mobile/src is a phone
+      # that behaves differently with nothing in this suite noticing. Rebuilds
+      # mobile/www on the way through, which also covers the www transforms.
+      - name: Run mobile bridge tests
+        run: node scripts/test-mobile-bridge.js
+
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
