@@ -813,6 +813,10 @@ const harnessCtx = {
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  // The Runbook lives in the renderer's store, so authoring is an event, not a
+  // write from here: the renderer saves it and surfaces the canvas. Stamped
+  // "main" because chat is the only surface that offers the tool.
+  authorWorkflow: (wf) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "workflow_authored", workflow: wf, agentId: "main" }); },
   getCatalog: () => catalogCache.models,
   // Only plugin-managed servers are tier-gated; hand-configured MCP servers
   // keep their historic ungated behavior even if named like a manifest id.

@@ -606,6 +606,41 @@ const tests = [
     expect: { failed: true, nodes: 0, empty: true, enabled: true },
   },
   {
+    // The harness's compose_workflow tool ends here: the agent authored a
+    // workflow in chat, and it must land somewhere the user can see without
+    // hunting - the store first, then a Runbook panel opening on it.
+    name: "a workflow the chat agent authors lands in the runbook and opens it",
+    body: `await __reset();
+      const priorStore = localStorage.getItem("crowe-agent-workflows");
+      localStorage.removeItem("crowe-agent-workflows");
+      workflowAuthored({ type: "workflow_authored", workflow: { name: "Invoice Chase", nodes: [
+        { name: "Ledger Sweep", prompt: "Find every unpaid invoice and list amounts owed." },
+        { name: "Reminder Draft", prompt: "Write firm, polite payment reminders for each debtor." },
+      ] } });
+      await __settle();
+      const bodyEl = panelDeck.querySelector(".workflow-surface");
+      const result = {
+        stored: JSON.parse(localStorage.getItem("crowe-agent-workflows"))[0].name,
+        opened: !!bodyEl,
+        shown: bodyEl ? bodyEl.querySelector(".wf-name").value : "",
+        agents: bodyEl ? [...bodyEl.querySelectorAll(".wf-node-name")].map((n) => n.value).join(" | ") : "",
+      };
+      // a second authoring while the panel is open must land in place
+      workflowAuthored({ type: "workflow_authored", workflow: { name: "Refund Sweep", nodes: [
+        { name: "Case Finder", prompt: "List refund cases open past their promise date." },
+        { name: "Make-good Draft", prompt: "Draft the make-good for each late case." },
+      ] } });
+      await __settle();
+      result.updated = bodyEl ? bodyEl.querySelector(".wf-name").value : "";
+      const panel = bodyEl && bodyEl.closest(".workspace-panel");
+      if (panel) closePanel(panel.dataset.id);
+      if (priorStore === null) localStorage.removeItem("crowe-agent-workflows");
+      else localStorage.setItem("crowe-agent-workflows", priorStore);
+      return result;`,
+    expect: { stored: "Invoice Chase", opened: true, shown: "Invoice Chase",
+      agents: "Ledger Sweep | Reminder Draft", updated: "Refund Sweep" },
+  },
+  {
     // Real streaming's two hazards, in one turn: the closing assistant event
     // repeats text the deltas already delivered (streamed:true means "receipt,
     // not more text"), and a retried call repeats its answer from the top after

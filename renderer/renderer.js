@@ -824,8 +824,30 @@ function mountWorkflow(p, body) {
     const outcome=aborted?"Aborted":failed===results.length?"Failed":failed?`${failed} of ${results.length} failed`:"Completed";
     active.runs.unshift({at:Date.now(),status:outcome.toLowerCase(),output:report});active.runs=active.runs.slice(0,20);persist();
     status.textContent=outcome;run.classList.remove("hidden");abort.classList.add("hidden");renderList()};
-  body.querySelector(".wf-copy").onclick=e=>copyText(out.textContent,e.currentTarget);render();
+  body.querySelector(".wf-copy").onclick=e=>copyText(out.textContent,e.currentTarget);
+  /* Chat authors into the Runbook mid-conversation (workflow_authored below).
+     The store is the truth, so the panel re-reads it on that signal - fully
+     when idle, sidebar-only mid-run, because redrawing the canvas under a
+     running run would orphan the cards its events are landing on. */
+  body.addEventListener("crowe:workflows-changed",()=>{workflows=workflowStore();if(!abort.classList.contains("hidden")){renderList();return}active=workflows[0]||active;render()});
+  render();
 }
+/* The other half of the harness's compose_workflow tool: the agent authored a
+   workflow in chat, and this is where it lands. Saved first - the store is the
+   artifact - then shown: an open Runbook panel re-reads the store in place, and
+   if none is open the canvas opens itself, because an artifact the user has to
+   go hunting for reads as a tool call that did nothing. */
+function workflowAuthored(ev){
+  if(ev.type!=="workflow_authored"||!ev.workflow)return;
+  const wfs=workflowStore();
+  wfs.unshift({id:`wf-${Date.now().toString(36)}`,name:String(ev.workflow.name||"Composed workflow"),nodes:(ev.workflow.nodes||[]).map(n=>({name:String(n.name||""),prompt:String(n.prompt||"")})),runs:[]});
+  saveWorkflowStore(wfs);
+  const p=panels.find(x=>x.type==="workflow");
+  if(!p){addPanel("workflow");return}
+  const bodyEl=panelDeck.querySelector(`[data-id="${p.id}"] .panel-body`);
+  if(bodyEl)bodyEl.dispatchEvent(new Event("crowe:workflows-changed"));
+}
+window.crowe.agent.onEvent(workflowAuthored);
 function mountAgentFleet(p, body) {
   const agents=[
     {name:"Call Intake",role:"Answers, qualifies, and captures every service request",prompt:"Act as a call-intake agent. Qualify this service request and identify the next action."},
