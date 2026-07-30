@@ -952,10 +952,21 @@ document.querySelectorAll(".dock-tab[data-pane]").forEach((b) => b.addEventListe
 
 // ── New chat + sessions drawer ──
 const drawer = $("sessions-drawer");
+/* WELCOME_HTML is a string taken at load, which is before liveLockups() has
+   swapped the static mask for the inlined svg. So restoring it puts back a dead
+   lockup: the logotype is on screen, correctly drawn, and completely still. A
+   still copy of a mark whose whole job is to look awake reads worse than no mark
+   at all - it reads as the app having stopped, on the one screen a new chat
+   starts from.
+
+   liveLockups is safe to call again by construction: it skips lockups that
+   already carry their svg, and it indexes ids over every lockup rather than over
+   the pending ones, so the header's are never renumbered out from under it. */
+function resetWelcome() { transcript.innerHTML = WELCOME_HTML; bindChips(); liveLockups(); }
 async function newChat() {
   await window.crowe.sessions.new();
   messages.length = 0;
-  transcript.innerHTML = WELCOME_HTML; bindChips();
+  resetWelcome();
   input.value = ""; input.style.height = "auto"; input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
@@ -991,7 +1002,7 @@ function rebuildTranscript() {
     if (m.role === "user") { addUser(m.content); any = true; }
     else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
-  if (!any) { transcript.innerHTML = WELCOME_HTML; bindChips(); }
+  if (!any) resetWelcome();
 }
 
 // ── Git / version control pane ──

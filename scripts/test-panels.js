@@ -667,6 +667,40 @@ const tests = [
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
   },
   {
+    name: "a new chat brings the welcome logotype back alive",
+    // Goes through resetWelcome rather than asserting on newChat, which also
+    // talks to the sessions bridge and the composer; the regression is entirely
+    // in what restoring WELCOME_HTML leaves behind. Polls because the swap is a
+    // fetch, and does not call liveLockups itself - that would repair the very
+    // thing under test.
+    body: `transcript.innerHTML = "";
+      resetWelcome();
+      const deadline = Date.now() + 3000;
+      const hero = () => transcript.querySelector(".welcome-logotype");
+      while (hero() && !hero().querySelector("svg") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const el = hero();
+      const svg = el && el.querySelector("svg");
+      const anim = (sel) => {
+        const t = svg && svg.querySelector(sel);
+        return t ? getComputedStyle(t).animationName : "none";
+      };
+      return {
+        present: !!el, live: !!el && el.classList.contains("live"), inlined: !!svg,
+        // The claim is not "an svg is there" but "it moves": a restored mask is
+        // an svg-shaped picture, and that is what looked stale.
+        bladeAnim: anim('[id^="rotor-crowe-blades"]'),
+        sporeDrifts: anim('[id^="gold-thinking-mark"]').includes("spore-drift"),
+        // the fallback mask must be hidden again, or the two overlap
+        maskHidden: !!el && getComputedStyle(el.querySelector(".lockup-ink")).display === "none",
+        // and the chips the welcome screen offers must still fire
+        chipsBound: !!transcript.querySelector(".chip, .welcome-chip"),
+      };`,
+    expect: { present: true, live: true, inlined: true, bladeAnim: "blades-arrive",
+      sporeDrifts: true, maskHidden: true, chipsBound: true },
+  },
+  {
     // The thinking indicator is the logotype with its rotors turning. Two ways
     // that dies without anything looking broken. First, the indicator gets
     // rebuilt per stage — it used to — and every tool call resets the rotors to
