@@ -65,10 +65,10 @@ function makeDeps(script) {
     events,
     toolResults: () => events.filter((e) => e.type === "tool_result"),
     ofType: (t) => events.filter((e) => e.type === t),
-    gatewayChat: async (msgs, tools, _signal, model) => {
+    gatewayChat: async (msgs, tools, _signal, model, onDelta) => {
       const stage = isVerifyTurn(tools) ? "verify" : "execute";
       const n = counts[stage]++;
-      const r = await script(stage, n, msgs, tools, model);
+      const r = await script(stage, n, msgs, tools, model, onDelta);
       return r || reply([], "done");
     },
     send: (ev) => events.push(ev),
@@ -722,6 +722,44 @@ test("a routed expert that errors falls back once and the turn survives", async 
   const out = await H.runAgent(ctx, [{ role: "user", content: "refactor this module" }], deps);
   assert.strictEqual(out.text, "handled by the fallback");
   assert.deepStrictEqual(seen, ["specialist", "test-model"]);
+});
+
+// ─── Streaming ───────────────────────────────────────────────────────────────
+test("a streamed burst arrives as deltas with a receipt marked streamed", async () => {
+  const ctx = makeCtx();
+  const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
+    onDelta("Hello ");
+    onDelta("world.");
+    return { content: "Hello world.", tool_calls: [], usage: { prompt_tokens: 3, completion_tokens: 2 }, elapsedMs: 4, streamed: 12 };
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
+  assert.strictEqual(out.text, "Hello world.");
+  assert.strictEqual(deps.ofType("assistant_delta").map((e) => e.text).join(""), "Hello world.");
+  const bursts = deps.ofType("assistant");
+  assert.strictEqual(bursts.length, 1);
+  // The receipt carries the full text for the record, and the flag that says
+  // the deltas already delivered it - a surface that appends both shows the
+  // reply twice, which is the bug this protocol exists to make impossible.
+  assert.strictEqual(bursts[0].streamed, true);
+  assert.strictEqual(bursts[0].text, "Hello world.");
+});
+test("a retry after a partial stream takes the fragment back first", async () => {
+  const ctx = makeCtx();
+  let calls = 0;
+  const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
+    calls += 1;
+    if (calls === 1) { onDelta("half a sen"); return { error: "HTTP 502: bad gateway" }; }
+    onDelta("the whole answer.");
+    return { content: "the whole answer.", tool_calls: [], usage: {}, elapsedMs: 4, streamed: 17 };
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
+  assert.strictEqual(out.text, "the whole answer.");
+  const reset = deps.ofType("stream_reset")[0];
+  assert.ok(reset, "a stream_reset must be sent for the partial");
+  assert.strictEqual(reset.chars, 10);
+  const seq = deps.events.filter((e) => e.type === "assistant_delta" || e.type === "stream_reset").map((e) => e.type);
+  assert.ok(seq.indexOf("stream_reset") < seq.lastIndexOf("assistant_delta"),
+    "the reset precedes the retry's deltas, or the fragment stays on screen ahead of the whole");
 });
 
 // ─── Runner ──────────────────────────────────────────────────────────────────
