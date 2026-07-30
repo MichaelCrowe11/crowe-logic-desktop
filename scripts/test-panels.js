@@ -615,7 +615,12 @@ const tests = [
         // a background-image cannot produce these; only the inlined <style> can
         wordAnim: anim("#wordmark-letterforms"),
         bladeAnim: anim("#rotor-crowe-blades"),
-        sporeAnim: anim("#gold-thinking-mark"),
+        // The spore carries two: the entrance, then a perpetual drift delayed
+        // past it. Split so the arrival stays pinned by name and the drift is
+        // checked as its own fact — a comma-joined string would let either one
+        // silently disappear behind a rewrite of the other.
+        sporeAnim: anim("#gold-thinking-mark").split(",")[0].trim(),
+        sporeDrifts: anim("#gold-thinking-mark").includes("spore-drift"),
         // ink is currentColor, so the logotype tracks the palette
         inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
         // the static mask is the fallback and must be hidden once live, but
@@ -626,7 +631,7 @@ const tests = [
     expect: {
       anyLockup: true, allLive: true, allInlined: true,
       wordAnim: "wordmark-arrive", bladeAnim: "blades-arrive",
-      sporeAnim: "thinking-mark-arrive",
+      sporeAnim: "thinking-mark-arrive", sporeDrifts: true,
       inherits: "currentColor", maskPresent: true, maskHidden: true,
     },
   },
@@ -660,6 +665,134 @@ const tests = [
       extra.remove();
       return { multiple: svgs.length > 1, dupes: dupes.join(",") || "none", bound, doubled };`,
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
+  },
+  {
+    name: "a new chat brings the welcome logotype back alive",
+    // Goes through resetWelcome rather than asserting on newChat, which also
+    // talks to the sessions bridge and the composer; the regression is entirely
+    // in what restoring WELCOME_HTML leaves behind. Polls because the swap is a
+    // fetch, and does not call liveLockups itself - that would repair the very
+    // thing under test.
+    body: `transcript.innerHTML = "";
+      resetWelcome();
+      const deadline = Date.now() + 3000;
+      const hero = () => transcript.querySelector(".welcome-logotype");
+      while (hero() && !hero().querySelector("svg") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const el = hero();
+      const svg = el && el.querySelector("svg");
+      const anim = (sel) => {
+        const t = svg && svg.querySelector(sel);
+        return t ? getComputedStyle(t).animationName : "none";
+      };
+      return {
+        present: !!el, live: !!el && el.classList.contains("live"), inlined: !!svg,
+        // The claim is not "an svg is there" but "it moves": a restored mask is
+        // an svg-shaped picture, and that is what looked stale.
+        bladeAnim: anim('[id^="rotor-crowe-blades"]'),
+        sporeDrifts: anim('[id^="gold-thinking-mark"]').includes("spore-drift"),
+        // the fallback mask must be hidden again, or the two overlap
+        maskHidden: !!el && getComputedStyle(el.querySelector(".lockup-ink")).display === "none",
+        // and the chips the welcome screen offers must still fire
+        chipsBound: !!transcript.querySelector(".chip, .welcome-chip"),
+      };`,
+    expect: { present: true, live: true, inlined: true, bladeAnim: "blades-arrive",
+      sporeDrifts: true, maskHidden: true, chipsBound: true },
+  },
+  {
+    // The thinking indicator is the logotype with its rotors turning. Two ways
+    // that dies without anything looking broken. First, the indicator gets
+    // rebuilt per stage — it used to — and every tool call resets the rotors to
+    // zero, so the mark twitches instead of turning and nobody can say why.
+    // Second, a tool card lands under the indicator and the move to the bottom
+    // re-inserts the node, which restarts the animations just the same. Both
+    // leave a logotype on screen that never completes a revolution, which reads
+    // as a stutter, not a bug. Assert the clock, not the appearance.
+    name: "the thinking mark keeps turning across a stage change",
+    body: `const body = document.createElement("div");
+      body.className = "body";
+      document.body.appendChild(body);
+      showThinking(body, "reasoning");
+      const deadline = Date.now() + 3000;
+      while (!body.querySelector(".wm-blades-crowe") && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      const rotor = () => body.querySelector(".wm-blades-crowe");
+      const animOf = (el) => (el && el.getAnimations()[0]) || null;
+      const el0 = rotor(), anim0 = animOf(el0);
+      const turning = !!anim0 && getComputedStyle(el0).animationName === "blade-turn";
+      await new Promise((r) => setTimeout(r, 250));
+      const before = anim0 ? anim0.currentTime : -1;
+      // a tool card landing under the indicator is what forces the move
+      body.insertAdjacentHTML("beforeend", '<div class="tool">run_shell</div>');
+      showThinking(body, "executing");
+      const el1 = rotor(), anim1 = animOf(el1);
+      const after = anim1 ? anim1.currentTime : -1;
+      const atBottom = body.lastElementChild.classList.contains("thinking");
+      const label = body.querySelector(".th-label").textContent;
+      const svgs = body.querySelectorAll(".th-logotype svg").length;
+      // the retired hexagons must not come back with it
+      const noGlyph = !body.querySelector(".tg");
+      body.remove();
+      /* Two readings, because neither one is sufficient alone.
+
+         sameRotor holds everywhere: keepAtBottom has to MOVE the node, and a
+         version that re-rendered the indicator would hand back a different
+         element. That is the regression in structural form.
+
+         kept is the clock, and the clock is what anyone actually sees - a
+         restart resets currentTime to 0, so after < before is the failure. It
+         is only decisive where the compositor is producing frames: under xvfb
+         currentTime sits at 0 all run, which makes the comparison true for the
+         wrong reason. So it is written as "did not go backwards" rather than as
+         "advanced", which would fail in CI on a machine, not on a bug.
+
+         Not asserted on Animation object identity: Chromium hands back a fresh
+         CSSAnimation wrapper after the move even when the clock is preserved
+         (measured 15.8ms -> 266.7ms across it, no reset), and startTime goes
+         null while the animation re-associates. Both would fail here on a
+         correct implementation. */
+      return { turning, sameRotor: el1 === el0, kept: after >= before,
+        atBottom, label, svgs, noGlyph };`,
+    expect: { turning: true, sameRotor: true, kept: true,
+      atBottom: true, label: "executing", svgs: 1, noGlyph: true },
+  },
+  {
+    // The caret has to sit on the last line of the reply. As ::after on the
+    // .said container it landed in its own line box below the final block and
+    // at the left margin, so it read as a stray glyph instead of a cursor.
+    name: "the streaming caret stays on the last line of text",
+    body: `const host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:0;top:0;width:420px";
+      document.body.appendChild(host);
+      const CARET = String.fromCharCode(0x258d);
+      const cases = {
+        para: "<p>the pattern anchors at end-of-string</p>",
+        list: "<p>two fixes</p><ul><li>widen it</li><li>tests green</li></ul>",
+        table: "<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>last</td></tr></tbody></table>",
+      };
+      const out = {};
+      for (const [k, html] of Object.entries(cases)) {
+        const d = document.createElement("div");
+        d.className = "said streaming"; d.innerHTML = html;
+        host.appendChild(d);
+        const carriers = [...d.querySelectorAll("*")]
+          .filter((e) => getComputedStyle(e, "::after").content === '"' + CARET + '"');
+        // one caret, never on the container, and flush with the bottom of the block
+        out[k] = carriers.length === 1
+          && getComputedStyle(d, "::after").content !== '"' + CARET + '"'
+          && Math.abs(carriers[0].getBoundingClientRect().bottom - d.getBoundingClientRect().bottom) <= 2;
+        d.remove();
+      }
+      // and it goes away when the reply is done
+      const done = document.createElement("div");
+      done.className = "said"; done.innerHTML = cases.para;
+      host.appendChild(done);
+      out.settled = getComputedStyle(done.firstElementChild, "::after").content !== '"' + CARET + '"';
+      host.remove();
+      return out;`,
+    expect: { para: true, list: true, table: true, settled: true },
   },
   {
     // The console is collapsed because the objective runs on the gateway agent,
