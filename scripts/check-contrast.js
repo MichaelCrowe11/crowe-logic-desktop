@@ -91,6 +91,9 @@ const TEXT = [
   ["--diff-del-fg", "--diff-del-bg", "diff deletion on its tint"],
   ["--on-gold", "--gold", "text on a gold fill"],
   ["--on-danger", "--danger", "text on a destructive fill"],
+  // The approval gate's own buttons. Gated here because the one before it was
+  // picked by eye, rendered wrong in dark, and no check would have caught it.
+  ["--cream", "--gold-deep", "text on the review-risk approve button"],
   ["--ink", "--glass", "text on the command palette"],
 ];
 

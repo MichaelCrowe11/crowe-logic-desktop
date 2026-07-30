@@ -16,7 +16,8 @@ const INSTALL_SPACES = (() => {
 
 contextBridge.exposeInMainWorld("crowe", {
   installSpaces: INSTALL_SPACES,
-  // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|final|error}.
+  // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|
+  // approval_request|approval_expired|verdict|budget|retry|route|final|error}.
   agent: {
     run: (messages, id = "main", options = {}) => ipcRenderer.invoke("crowe:agent:run", { messages, id, ...options }),
     stop: (id = "main") => ipcRenderer.invoke("crowe:agent:stop", { id }),
@@ -37,6 +38,10 @@ contextBridge.exposeInMainWorld("crowe", {
   },
   // Approve/reject a proposed file edit.
   edit: { decide: (id, approved) => ipcRenderer.invoke("crowe:edit:decide", { id, approved }) },
+  // Allow or deny an action that cannot be taken back (force-push, recursive
+  // delete, publish, deploy). Separate from `edit`: that one reviews a diff,
+  // this one decides whether the thing happens at all.
+  approval: { decide: (id, approved) => ipcRenderer.invoke("crowe:approval:decide", { id, approved }) },
   // Real PTY terminal.
   pty: {
     start: (size) => ipcRenderer.invoke("crowe:pty:start", size),

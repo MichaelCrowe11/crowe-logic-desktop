@@ -27,6 +27,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # First, because it is the cheapest gate in the suite and the only one that
+      # covers the agent loop itself: the tiers, the approval gate, the delivery
+      # table, the cache, the ceilings, the verifier, the secret scanner. Pure
+      # Node, so it needs neither Electron nor xvfb and fails in seconds.
+      - name: Run harness tests
+        run: node scripts/test-harness.js
+
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
