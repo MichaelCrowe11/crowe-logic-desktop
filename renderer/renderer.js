@@ -381,6 +381,11 @@ async function send(text, opts = {}) {
   };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
+    /* The transcript is the "main" agent's and only its. Panels and workflow
+       nodes run under their own ids on the same channel, so without this the
+       chat would draw a workflow node's approval card and the user would be
+       answering for an action they are not looking at. */
+    if (ev.agentId && ev.agentId !== "main") return;
     if (ev.type === "assistant") { runText += (runText ? "\n\n" : "") + ev.text; pushText(ev.text, true); }
     else if (ev.type === "assistant_delta") { runText += ev.text || ""; pushText(ev.text || "", false); }
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }
@@ -601,7 +606,7 @@ function mountWorkflow(p, body) {
   let aborted=false;
   const persist=()=>{const i=workflows.findIndex(x=>x.id===active.id);if(i<0)workflows.unshift(active);else workflows[i]=active;saveWorkflowStore(workflows)};
   const renderList=()=>{body.querySelector(".wf-list").innerHTML=workflows.map(w=>`<button data-id="${esc(w.id)}" class="${w.id===active.id?"active":""}"><b>${esc(w.name)}</b><small>${w.nodes.length} agents · ${(w.runs||[]).length} runs</small></button>`).join("");body.querySelectorAll(".wf-list button").forEach(b=>b.onclick=()=>{active=workflows.find(w=>w.id===b.dataset.id);render()})};
-  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><button class="wf-node-remove ghost sm">Remove</button></div><label>Agent instructions<textarea class="wf-node-prompt" rows="4">${esc(n.prompt)}</textarea></label><div class="wf-node-foot"><span class="wf-node-dot"></span><small>Ready · independent parallel agent</small></div></article>`).join('<div class="wf-connector">+</div>'):'<div class="wf-empty"><b>Build an agent workflow</b><span>Add parallel agent nodes or start from a customer operations template.</span></div>';
+  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><button class="wf-node-remove ghost sm">Remove</button></div><label>Agent instructions<textarea class="wf-node-prompt" rows="4">${esc(n.prompt)}</textarea></label><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready · independent parallel agent</small><span class="wf-node-route"></span></div><div class="wf-node-gate"></div></article>`).join('<div class="wf-connector">+</div>'):'<div class="wf-empty"><b>Build an agent workflow</b><span>Add parallel agent nodes or start from a customer operations template.</span></div>';
     canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};card.querySelector(".wf-node-prompt").onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};card.querySelector(".wf-node-remove").onclick=()=>{active.nodes.splice(i,1);persist();renderNodes()}});
   };
   const render=()=>{body.querySelector(".wf-name").value=active.name;renderList();renderNodes()};
@@ -611,9 +616,73 @@ function mountWorkflow(p, body) {
   body.querySelector(".wf-add").onclick=()=>{active.nodes.push({name:`Crowe Agent ${active.nodes.length+1}`,prompt:"Describe this agent's responsibility and expected output."});persist();renderNodes();renderList()};
   const abort=body.querySelector(".wf-abort"),run=body.querySelector(".wf-run"),status=body.querySelector(".wf-status"),out=body.querySelector(".wf-output pre");
   abort.onclick=()=>{aborted=true;active.nodes.forEach((_,i)=>window.crowe.agent.stop(`${p.id}-${i}`));status.textContent="Aborted"};
-  run.onclick=async()=>{if(!active.nodes.length)return;aborted=false;run.classList.add("hidden");abort.classList.remove("hidden");status.textContent="Running";out.textContent="Launching parallel agents...";body.querySelectorAll(".wf-node-dot").forEach(x=>x.classList.add("running"));
-    const results=await Promise.all(active.nodes.map(async(n,i)=>{let text="";const id=`${p.id}-${i}`;const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId===id&&(ev.type==="assistant"||ev.type==="assistant_delta"))text+=(ev.text||"")});try{const r=await window.crowe.agent.run([{role:"user",content:n.prompt}],id);return {name:n.name,text:text||(r&&r.text)||"Completed."}}catch(e){return {name:n.name,text:`Failed: ${e.message||e}`}}finally{off()}}));
-    body.querySelectorAll(".wf-node-dot").forEach(x=>{x.classList.remove("running");x.classList.add(aborted?"failed":"done")});const report=results.map(r=>`## ${r.name}\n\n${r.text}`).join("\n\n");out.textContent=report;active.runs.unshift({at:Date.now(),status:aborted?"aborted":"completed",output:report});active.runs=active.runs.slice(0,20);persist();status.textContent=aborted?"Aborted":"Completed";run.classList.remove("hidden");abort.classList.add("hidden");renderList()};
+  /* One node's run. Every node is a full harness turn, which means it routes to
+     an expert, calls tools, can be stopped at the approval gate, and can fail -
+     and the surface used to listen for exactly one of those things. Two
+     consequences, both of which read as "workflows do not work":
+
+     A node that touched the workspace raised an approval request nobody drew.
+     The only listener that rendered a gate card was the chat transcript's,
+     registered per chat turn, so the request went to no one and the node sat on
+     "Running" for the five-minute timeout before being denied by default.
+
+     And a node that failed reported "Completed.", because the fallback chain
+     ended in that string and `error` events were dropped on the floor. The dot
+     went green on a turn that had gone nowhere.
+
+     So the node now shows what the router chose, what the agent is doing, hosts
+     its own gate card, and says plainly when it failed. */
+  const runNode=async(n,i)=>{
+    const id=`${p.id}-${i}`;
+    const card=body.querySelector(`.wf-node[data-index="${i}"]`);
+    const dot=card&&card.querySelector(".wf-node-dot"),stateEl=card&&card.querySelector(".wf-node-state");
+    const routeEl=card&&card.querySelector(".wf-node-route"),gate=card&&card.querySelector(".wf-node-gate");
+    const say=t=>{if(stateEl)stateEl.textContent=t};
+    let text="",failure="",routed="",verdict=null,tools=0;
+    const off=window.crowe.agent.onEvent(ev=>{
+      if(ev.agentId!==id)return;
+      if(ev.type==="route"){routed=`${ev.expert||"operator"} · ${ev.model||""}`.trim();if(routeEl)routeEl.textContent=routed;say("Reasoning")}
+      else if(ev.type==="assistant"||ev.type==="assistant_delta")text+=(ev.text||"");
+      else if(ev.type==="tool_call"){tools++;say(`Running ${ev.name||"tool"}`)}
+      else if(ev.type==="approval_request"){say("Waiting on your approval");if(dot)dot.classList.add("waiting");if(gate)addApproval(gate,ev)}
+      else if(ev.type==="approval_expired"){expireApproval(ev.id);if(dot)dot.classList.remove("waiting")}
+      else if(ev.type==="retry")say(`Retrying (${ev.attempt}/${ev.of})`);
+      else if(ev.type==="verdict")verdict=ev;
+      else if(ev.type==="error")failure=ev.text||"the gateway call failed";
+      else if(ev.type==="stopped")failure="stopped";
+    });
+    try{
+      const r=await window.crowe.agent.run([{role:"user",content:n.prompt}],id,{licensed:p.licensed,workspaceId:p.workspaceId});
+      // The handler resolves with an error rather than throwing when a license
+      // or entitlement check refuses the run, so that shape counts as a failure.
+      if(r&&r.error)failure=failure||r.error;
+      text=text||(r&&r.text)||"";
+      if(!failure&&!text)failure="the agent returned nothing";
+    }catch(e){failure=failure||(e&&e.message)||String(e)}
+    finally{off()}
+    if(dot){dot.classList.remove("running","waiting");dot.classList.add(failure?"failed":"done")}
+    say(failure?`Failed · ${failure}`.slice(0,120):`Done · ${tools} tool call${tools===1?"":"s"}`);
+    return {name:n.name,routed,text,failure,verdict};
+  };
+  run.onclick=async()=>{if(!active.nodes.length)return;aborted=false;run.classList.add("hidden");abort.classList.remove("hidden");status.textContent="Running";out.textContent="Launching parallel agents...";
+    body.querySelectorAll(".wf-node-gate").forEach(g=>{g.innerHTML=""});
+    body.querySelectorAll(".wf-node-route").forEach(r=>{r.textContent=""});
+    body.querySelectorAll(".wf-node-dot").forEach(x=>{x.classList.remove("done","failed","waiting");x.classList.add("running")});
+    body.querySelectorAll(".wf-node-state").forEach(s=>{s.textContent="Queued"});
+    const results=await Promise.all(active.nodes.map(runNode));
+    const failed=results.filter(r=>r.failure).length;
+    const report=results.map(r=>{
+      const head=`## ${r.name}${r.routed?`\n\n_${r.routed}_`:""}`;
+      if(r.failure)return `${head}\n\n**Failed:** ${r.failure}`;
+      const receipt=r.verdict?`\n\n_Verification ${r.verdict.status}: ${r.verdict.summary||""}_`:"";
+      return `${head}\n\n${r.text}${receipt}`;
+    }).join("\n\n");
+    out.textContent=report;
+    // The run's own status has to say it, not just the dots: a run where two of
+    // three nodes failed is not a completed run.
+    const outcome=aborted?"Aborted":failed===results.length?"Failed":failed?`${failed} of ${results.length} failed`:"Completed";
+    active.runs.unshift({at:Date.now(),status:outcome.toLowerCase(),output:report});active.runs=active.runs.slice(0,20);persist();
+    status.textContent=outcome;run.classList.remove("hidden");abort.classList.add("hidden");renderList()};
   body.querySelector(".wf-copy").onclick=e=>copyText(out.textContent,e.currentTarget);render();
 }
 function mountAgentFleet(p, body) {

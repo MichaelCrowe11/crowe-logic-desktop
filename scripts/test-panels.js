@@ -100,6 +100,47 @@ const PRELUDE = `
   };
   window.__settle = () => new Promise((r) => setTimeout(r, 400));
 
+  /* Workflow helpers. A workflow node is a full harness turn - it routes, calls
+     tools, can stop at an approval gate, and can fail - so a run is only worth
+     asserting on if the events are scripted. __stubAgentScript replaces onEvent
+     as well as run, because the shim owns the listener list and what these tests
+     are about is which surface's listener receives which event. An event may
+     carry its own agentId to stand in for another agent on the same channel.
+
+     Both helpers hand back a restore. Leaving either behind is the same hazard
+     as a leftover space profile: every later test would run against a recorder
+     instead of the shim, or would mount this fixture as workflow zero. */
+  window.__stubAgentScript = (script) => {
+    const priorRun = window.crowe.agent.run, priorOn = window.crowe.agent.onEvent;
+    let listeners = [];
+    window.crowe.agent.onEvent = (fn) => {
+      listeners.push(fn);
+      return () => { listeners = listeners.filter((f) => f !== fn); };
+    };
+    window.crowe.agent.run = async (messages, id) => {
+      for (const ev of script(id || "main")) {
+        listeners.slice().forEach((f) => f({ agentId: id || "main", ...ev }));
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      return {};
+    };
+    return () => { window.crowe.agent.run = priorRun; window.crowe.agent.onEvent = priorOn; };
+  };
+  window.__workflowPanel = async (nodes, script) => {
+    const priorStore = localStorage.getItem("crowe-agent-workflows");
+    const unstub = window.__stubAgentScript(script);
+    localStorage.setItem("crowe-agent-workflows",
+      JSON.stringify([{ id: "wf-fixture", name: "Fixture", nodes, runs: [] }]));
+    const p = await addPanel("workflow");
+    const el = panelDeck.querySelector('[data-id="' + p.id + '"]');
+    el.__restore = () => {
+      unstub();
+      if (priorStore === null) localStorage.removeItem("crowe-agent-workflows");
+      else localStorage.setItem("crowe-agent-workflows", priorStore);
+    };
+    return el;
+  };
+
   // The space profile lives in localStorage, which survives the process. A run
   // that sets a profile and removes it again can still leave it on disk, because
   // Chromium flushes localStorage lazily and the harness calls app.exit as soon
@@ -448,6 +489,95 @@ const tests = [
         branchFieldHidden: el.querySelector(".awb-branch-field").classList.contains("hidden") };`,
     expect: { singleAgents: 1, singleCards: 1, compareAgents: 2, compareCards: 2,
       merges: 0, branchFieldHidden: true },
+  },
+
+  /* Workflows. The surface listened for `assistant` and `assistant_delta` and
+     nothing else, which made two failures indistinguishable from success. A node
+     that asked for approval raised a request no listener drew, so it sat on
+     "Running" for the five-minute timeout and was then denied by default; a node
+     whose gateway call errored still reported "Completed." with a green dot.
+     These assert the whole event surface of a node, because that is the part the
+     one-line listener silently dropped. */
+  {
+    name: "a workflow node shows its route, hosts its own gate, and carries its receipt",
+    body: `await __reset();
+      const el = await __workflowPanel(
+        [{ name: "Intake", prompt: "qualify this request" }, { name: "Plan", prompt: "build the plan" }],
+        (id) => id.endsWith("-0")
+          ? [{ type: "route", expert: "coding", model: "crowelm" },
+             { type: "approval_request", id: 91, kind: "run_shell", risk: "strict",
+               why: "rewrites a remote branch's history", detail: "git push --force origin main" },
+             { type: "assistant", text: "intake settled" },
+             { type: "verdict", status: "pass", summary: "the plan matches the request" }]
+          : [{ type: "route", expert: "cultivation", model: "crowelm-grower" },
+             { type: "assistant", text: "plan drafted" }]);
+      el.querySelector(".wf-run").click();
+      await __settle();
+      const nodes = [...el.querySelectorAll(".wf-node")];
+      const out = el.querySelector(".wf-output pre").textContent;
+      const result = {
+        routes: nodes.map((n) => n.querySelector(".wf-node-route").textContent).join(" | "),
+        gates: nodes.map((n) => n.querySelectorAll(".wf-node-gate .gatecard").length).join(","),
+        // A gate card anywhere but inside the node that asked for it means the
+        // user is being asked to authorise an action they are not looking at.
+        loose: [...document.querySelectorAll(".gatecard")].filter((c) => !c.closest(".wf-node-gate")).length,
+        done: nodes.every((n) => n.querySelector(".wf-node-dot").classList.contains("done")),
+        status: el.querySelector(".wf-status").textContent,
+        receipt: /Verification pass: the plan matches the request/.test(out),
+        both: /intake settled/.test(out) && /plan drafted/.test(out),
+      };
+      el.__restore();
+      return result;`,
+    expect: { routes: "coding · crowelm | cultivation · crowelm-grower", gates: "1,0", loose: 0,
+      done: true, status: "Completed", receipt: true, both: true },
+  },
+  {
+    name: "a workflow node that fails says so instead of reporting Completed",
+    body: `await __reset();
+      const el = await __workflowPanel(
+        [{ name: "Intake", prompt: "qualify this request" }, { name: "Plan", prompt: "build the plan" }],
+        (id) => id.endsWith("-1")
+          ? [{ type: "route", expert: "coding", model: "crowelm" },
+             { type: "error", text: "the gateway refused the call" }]
+          : [{ type: "route", expert: "coding", model: "crowelm" },
+             { type: "assistant", text: "intake settled" }]);
+      el.querySelector(".wf-run").click();
+      await __settle();
+      const nodes = [...el.querySelectorAll(".wf-node")];
+      const out = el.querySelector(".wf-output pre").textContent;
+      const result = {
+        dots: nodes.map((n) => n.querySelector(".wf-node-dot").classList.contains("failed")).join(","),
+        state: nodes[1].querySelector(".wf-node-state").textContent,
+        status: el.querySelector(".wf-status").textContent,
+        reported: /\\*\\*Failed:\\*\\* the gateway refused the call/.test(out),
+      };
+      el.__restore();
+      return result;`,
+    expect: { dots: "false,true", state: "Failed · the gateway refused the call",
+      status: "1 of 2 failed", reported: true },
+  },
+  {
+    // The chat transcript's listener is registered per turn and used to take
+    // every event on the channel. With a panel or a workflow node running
+    // alongside a chat turn, that meant the transcript drew another agent's
+    // approval card - the user pressing "Allow once" on an action they had no
+    // way to see.
+    name: "the chat transcript ignores another agent's approval request",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "approval_request", agentId: "wf-fixture-0", id: 92, kind: "run_shell",
+          risk: "strict", why: "reaches past the workspace", detail: "curl https://example.com" },
+        { type: "assistant", text: "chat answered" },
+      ]);
+      await send("what is running?");
+      await __settle();
+      const result = {
+        gates: document.querySelectorAll(".gatecard").length,
+        answered: /chat answered/.test(transcript.textContent),
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { gates: 0, answered: true },
   },
 
   // Spaces. The registry replaced an if/else whose branches could disagree —
