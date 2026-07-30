@@ -472,7 +472,17 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .msg { animation: rise 180ms var(--ease); }
-.said.streaming::after { content: "\258D"; color: var(--gold-soft); animation: pulse 1s steps(2) infinite; }
+/* The caret rides the last character. It used to be ::after on the .said
+   container, which makes an inline box that sits after the last block child -
+   measured 32px below the final line of text and pinned at the left margin,
+   and it jumped down there again every time a new paragraph or list opened.
+   A caret parked where the writing is not reads as a stray glyph rather than
+   as "still writing", so containers hand it to their own last line. */
+.said.streaming > :last-child:not(:is(ul, ol, table, hr))::after,
+.said.streaming > :is(ul, ol):last-child > li:last-child::after,
+.said.streaming > table:last-child tr:last-child > :last-child::after {
+  content: "\258D"; color: var(--gold-soft); animation: pulse 1s steps(2) infinite;
+}
 
 /* ── Composer ── */
 #composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel);

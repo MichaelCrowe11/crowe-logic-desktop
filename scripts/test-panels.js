@@ -707,6 +707,42 @@ const tests = [
     expect: { turning: true, kept: true, atBottom: true, label: "executing", svgs: 1, noGlyph: true },
   },
   {
+    // The caret has to sit on the last line of the reply. As ::after on the
+    // .said container it landed in its own line box below the final block and
+    // at the left margin, so it read as a stray glyph instead of a cursor.
+    name: "the streaming caret stays on the last line of text",
+    body: `const host = document.createElement("div");
+      host.style.cssText = "position:fixed;left:0;top:0;width:420px";
+      document.body.appendChild(host);
+      const CARET = String.fromCharCode(0x258d);
+      const cases = {
+        para: "<p>the pattern anchors at end-of-string</p>",
+        list: "<p>two fixes</p><ul><li>widen it</li><li>tests green</li></ul>",
+        table: "<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>last</td></tr></tbody></table>",
+      };
+      const out = {};
+      for (const [k, html] of Object.entries(cases)) {
+        const d = document.createElement("div");
+        d.className = "said streaming"; d.innerHTML = html;
+        host.appendChild(d);
+        const carriers = [...d.querySelectorAll("*")]
+          .filter((e) => getComputedStyle(e, "::after").content === '"' + CARET + '"');
+        // one caret, never on the container, and flush with the bottom of the block
+        out[k] = carriers.length === 1
+          && getComputedStyle(d, "::after").content !== '"' + CARET + '"'
+          && Math.abs(carriers[0].getBoundingClientRect().bottom - d.getBoundingClientRect().bottom) <= 2;
+        d.remove();
+      }
+      // and it goes away when the reply is done
+      const done = document.createElement("div");
+      done.className = "said"; done.innerHTML = cases.para;
+      host.appendChild(done);
+      out.settled = getComputedStyle(done.firstElementChild, "::after").content !== '"' + CARET + '"';
+      host.remove();
+      return out;`,
+    expect: { para: true, list: true, table: true, settled: true },
+  },
+  {
     // The console is collapsed because the objective runs on the gateway agent,
     // not in this PTY - the shell was a second window onto something nobody was
     // driving. Two ways that regresses silently: the display rule gets dropped
