@@ -1,6 +1,17 @@
 Design a production-grade agentic harness for heavy-duty computer engineering and software programming.
 
-It must support large C, C++, Rust, Python, and TypeScript codebases; HDL and FPGA work; embedded firmware; kernel and driver development; distributed systems; build systems and CI; debugging and simulation; formal verification; hardware-in-the-loop testing; and long-running multi-agent tasks.
+It must support:
+
+- Large C, C++, Rust, Python, and TypeScript codebases
+- HDL and FPGA work
+- Embedded firmware
+- Kernel and driver development
+- Distributed systems
+- Build systems and CI
+- Debugging and simulation
+- Formal verification
+- Hardware-in-the-loop testing
+- Long-running multi-agent tasks
 
 Provide:
 
