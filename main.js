@@ -1090,6 +1090,10 @@ function companionInstance() {
   if (!companion) {
     companion = new Companion({
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
+      // Electron's own blocker: "prevent-app-suspension" keeps the system from
+      // idling out while still letting the display sleep, which is what a
+      // machine being driven from a phone wants.
+      keepAwake: require("electron").powerSaveBlocker,
       // Every command the phone runs is announced to the window, so a shell
       // being driven remotely is never a silent one.
       onEvent: (e) => { try { mainWindow && mainWindow.webContents.send("crowe:companion:event", e); } catch { /* window gone */ } },

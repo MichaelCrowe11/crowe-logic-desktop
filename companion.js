@@ -121,8 +121,19 @@ class Companion {
      safe to bind unconditionally — it is not reachable from another machine at
      all — and port 0 lets the OS pick a free one so a test never collides with
      a companion the user has actually started. */
-  constructor({ tokenFile, onEvent, loopback = false, port = PORT } = {}) {
+  constructor({ tokenFile, onEvent, loopback = false, port = PORT, keepAwake = null } = {}) {
     this.tokenFile = tokenFile;
+    /* A phone can only reach a machine that is awake. A closed laptop answers
+       nothing, and the phone's only clue is a timeout — which is the feature's
+       most ordinary failure and looked, all night, exactly like a bug.
+
+       So while the companion is listening, the machine is held awake. Injected
+       rather than imported because this file is plain node and testable that
+       way; main.js passes Electron's powerSaveBlocker. It stops the moment the
+       companion does, and it is worth saying in the UI, because a laptop that
+       will not sleep is a battery complaint waiting to happen. */
+    this.keepAwake = keepAwake;
+    this.awakeId = null;
     this.onEvent = typeof onEvent === "function" ? onEvent : () => {};
     this.loopback = Boolean(loopback);
     this.port = port;
@@ -162,6 +173,7 @@ class Companion {
       host: this.host, port: this.port,
       tailscale: tailscaleAddress(),
       name: this.name || magicDnsName(),
+      keepingAwake: this.awakeId !== null,
       paired: Boolean(this.token),
     };
   }
@@ -196,7 +208,11 @@ class Companion {
     this.host = host;
     this.port = this.server.address().port;   // port 0 means the OS chose one
     this.name = this.loopback ? null : magicDnsName();
-    this.onEvent({ type: "started", host, name: this.name, port: this.port });
+    if (this.keepAwake) {
+      try { this.awakeId = this.keepAwake.start("prevent-app-suspension"); }
+      catch { this.awakeId = null; }      // not fatal: the phone still reaches it while awake
+    }
+    this.onEvent({ type: "started", host, name: this.name, port: this.port, keepingAwake: this.awakeId !== null });
     return this.status();
   }
 
@@ -205,6 +221,10 @@ class Companion {
     await new Promise((r) => this.server.close(r));
     this.server = null;
     this.host = null;
+    if (this.keepAwake && this.awakeId !== null) {
+      try { this.keepAwake.stop(this.awakeId); } catch { /* already released */ }
+      this.awakeId = null;
+    }
     this.onEvent({ type: "stopped" });
     return this.status();
   }

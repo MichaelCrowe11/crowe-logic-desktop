@@ -195,6 +195,42 @@
   const remoteBase = () => String(config.remoteUrl || "").replace(/\/$/, "");
   const remoteConfigured = () => Boolean(remoteBase());
 
+  /* Things that outlive the command that made them.
+
+     Found by watching this app in real use: from a phone, at Edit tier, the
+     agent wrote a shell script, chmod'd it, and installed a LaunchAgent — a
+     daemon that now starts on every login. Nothing asked, and nothing was
+     wrong: write_file plus run_command is persistence, and that is the design
+     reaching its logical end rather than a bug in it.
+
+     What makes a phone different from a laptop here is not the power, it is the
+     evidence. On a laptop you watch it happen in a terminal you are already
+     looking at. On a phone you approve a sentence in a chat bubble and the
+     result is a background process on a machine in another building.
+
+     So the tier still decides what class of thing is allowed, and this decides
+     what deserves a second look regardless of tier. Deliberately small: a list
+     that flags everything is a list people tap through without reading. */
+  const PERSISTENCE = [
+    [/\bLaunch(Agents|Daemons)\b/i, "installs something that runs at every login"],
+    [/\blaunchctl\s+(load|bootstrap|enable|submit)\b/i, "registers a background service with launchd"],
+    [/\bcrontab\b|\/etc\/cron/i, "schedules a job that keeps running"],
+    [/\bsystemctl\s+enable\b/i, "enables a service at boot"],
+    [/(^|\s|\/)\.(zshrc|bashrc|bash_profile|profile|zprofile|zshenv)\b/, "changes what runs in every new shell"],
+    [/\bdefaults\s+write\b.*\b(LoginItems|AutoLaunch)/i, "adds a login item"],
+    [/^\s*sudo\b|\s\|\s*sudo\b|&&\s*sudo\b/, "runs as root"],
+    [/\bssh-keygen\b|authorized_keys/i, "changes who can log in to this machine"],
+  ];
+  function persistenceRisk(text) {
+    const s = String(text || "");
+    for (const [re, why] of PERSISTENCE) if (re.test(s)) return why;
+    return null;
+  }
+  /* A seam for scripts/test-mobile-shell.js, which drives the built bridge in a
+     page and cannot reach a closure. Not on window.crowe deliberately: that
+     surface is held to the desktop's shape, and this is not part of it. */
+  window.__crowePersistenceRisk = persistenceRisk;
+
   async function remoteCall(path, payload, timeoutNote) {
     const base = remoteBase();
     if (!base) return { error: "No machine is paired with this phone. Settings → Remote machine." };
@@ -204,7 +240,11 @@
     try {
       r = await nativePost(`${base}${path}`, headers, JSON.stringify(payload));
     } catch (e) {
-      return { error: `could not reach ${base}: ${String(e).slice(0, 120)}` };
+      /* Almost always a sleeping desktop rather than anything broken, and that
+         is worth saying: the machine is only reachable while it is awake and on
+         the tailnet, which is the honest limit of the whole feature. Naming it
+         beats a stack trace the user cannot act on. */
+      return { error: `${base} did not answer. The machine may be asleep, quit, or off the tailnet.`, offline: true };
     }
     if (!r) return { error: "the remote call needs the installed app" };
     let data = null;
@@ -827,6 +867,10 @@
       if (name === "run_command") {
         const command = String(args.command || "").trim();
         if (!command) return { text: "refused: no command given", status: "error" };
+        const why = persistenceRisk(command);
+        if (why && !window.confirm(`This ${why}.\n\n${command.slice(0, 300)}\n\nRun it on ${remoteBase()}?`)) {
+          return { text: `refused: the user declined a command that ${why}`, status: "error" };
+        }
         const timeout = Math.max(1, Math.min(600, Number(args.timeout) || 60));
         const r = await remoteCall("/run", { command, cwd: args.cwd || undefined, timeout }, "the command");
         if (r.error) return { text: `refused: ${r.error}`, status: "error" };
@@ -850,6 +894,10 @@
       }
       const path = String(args.path || "");
       if (!path) return { text: "refused: no path given", status: "error" };
+      const risk = persistenceRisk(path);
+      if (risk && !window.confirm(`Writing this file ${risk}.\n\n${path}\n\nWrite it on ${remoteBase()}?`)) {
+        return { text: `refused: the user declined a write that ${risk}`, status: "error" };
+      }
       const r = await remoteCall("/write_file", { path, content: String(args.content ?? "") }, "the write");
       if (r.error) return { text: `refused: ${r.error}`, status: "error" };
       const d = r.data || {};
@@ -1120,6 +1168,10 @@
       if (config.autonomy !== "execute") {
         write("Execute tier required. Change it in the composer — the tier gates the machine, not just the agent.", "term-console-err");
         return;
+      }
+      const risky = persistenceRisk(command);
+      if (risky && !window.confirm(`This ${risky}.\n\n${command.slice(0, 300)}\n\nRun it?`)) {
+        return write("cancelled", "term-console-note");
       }
       const head = command.trim().split(/\s+/)[0].replace(/^.*\//, "");
       const bare = command.trim().split(/\s+/).length === 1;

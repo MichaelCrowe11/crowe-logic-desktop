@@ -1063,6 +1063,10 @@ async function renderCompanion(){
   } else {
     rows.push('<div id="companion-qr" style="display:flex;justify-content:center;padding:10px 0"></div>');
     rows.push(`<p class="said">Open Crowe Logic on your phone and scan this. The code carries the address and a one-machine token; it stops working the moment you press Stop or Rotate.</p>`);
+    // Said out loud, because it is a real trade and the user is entitled to
+    // know why the battery went down: a phone can only reach a machine that is
+    // awake, so the companion holds this one awake while it is listening.
+    if (s.keepingAwake) rows.push('<p class="said">This Mac is being kept awake while the companion runs, so the phone can reach it. The display still sleeps.</p>');
     rows.push('<div style="display:flex;gap:8px"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-rotate" class="ghost sm">Rotate token</button></div>');
   }
   body.innerHTML = rows.join("");

@@ -251,6 +251,38 @@ const tests = [
     expect: { unpaired: false, paired: true, restored: false },
   },
   {
+    /* Found in real use rather than by reading: the agent, driven from a phone
+       at Edit tier, wrote a script and installed a LaunchAgent. Nothing asked.
+       write_file plus run_command is persistence, and the tier gates the class
+       of action, not whether the result survives a reboot.
+
+       The list is short on purpose. One that flags everything is one people tap
+       through without reading, which is worse than not asking. */
+    name: "things that outlive the command are flagged, ordinary work is not",
+    body: `const risk = window.__crowePersistenceRisk;
+      const flagged = [
+        "launchctl load ~/Library/LaunchAgents/com.example.plist",
+        "cp x.plist ~/Library/LaunchAgents/",
+        "crontab -e",
+        "sudo rm -rf /tmp/x",
+        "echo 'export PATH=x' >> ~/.zshrc",
+        "systemctl enable nginx",
+        "cat id_rsa.pub >> ~/.ssh/authorized_keys",
+      ].map((c) => Boolean(risk(c)));
+      const ordinary = [
+        "git status",
+        "npm test",
+        "ls -la ~/Projects",
+        "grep -rn TODO src",
+        "node scripts/test-qr.js",
+        "tail -50 /tmp/build.log",
+      ].map((c) => Boolean(risk(c)));
+      return { everyRiskCaught: flagged.every(Boolean), noFalsePositives: ordinary.every((v) => v === false),
+               reason: risk("launchctl load ~/Library/LaunchAgents/x.plist") };`,
+    expect: { everyRiskCaught: true, noFalsePositives: true,
+              reason: "installs something that runs at every login" },
+  },
+  {
     name: "the terminal pane explains itself instead of loading xterm",
     body: `return { stub: typeof window.Terminal, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
                     ptyAvailable: (await window.crowe.getConfig()).ptyAvailable };`,
