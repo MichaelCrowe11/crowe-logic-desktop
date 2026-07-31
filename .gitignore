@@ -23,3 +23,10 @@ __pycache__/
 # the entitlements, which are source.
 mobile/www/
 mobile/resources/
+# @capacitor/assets writes a PWA set beside the native ones. Nothing serves it:
+# the web build is www/, assembled separately. Generated and unused is not
+# history either.
+mobile/icons/
+# Resolved by whichever Xcode opens the project first, and rewritten by the
+# next one. The Package.swift that pins the plugins IS committed.
+mobile/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
