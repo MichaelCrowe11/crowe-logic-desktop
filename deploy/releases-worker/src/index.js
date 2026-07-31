@@ -77,10 +77,15 @@ async function catalog(env) {
   const at = (m) => (m && m.version === version ? m.files : []);
   const pick = (m, re) => at(m).find((f) => re.test(f)) || null;
 
+  // Match the architecture explicitly rather than taking the first dmg in the
+  // feed. electron-builder writes x64 ahead of arm64, so "first dmg" handed
+  // every Apple Silicon visitor the Intel build under a card that said Apple
+  // Silicon - and the download works, so nobody would have reported it.
   return {
     version,
     windows: pick(win, /\.exe$/),
-    macos: pick(mac, /\.dmg$/),
+    macos: pick(mac, /arm64\.dmg$/) || pick(mac, /\.dmg$/),
+    macosIntel: pick(mac, /x64\.dmg$/),
     appimage: pick(lin, /\.AppImage$/),
     deb: pick(lin, /\.deb$/),
   };
@@ -175,7 +180,7 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
     <span class="ver">v${rel.version}</span>
     <div class="grid">
       ${card("Windows", "64-bit installer", "Run the installer and follow the setup prompts. Windows may show a SmartScreen warning while code-signing validation is completed.", rel, rel.windows)}
-      ${card("macOS", "Apple Silicon dmg", "Open the dmg and drag Crowe Logic to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.", rel, rel.macos)}
+      ${card("macOS", "Apple Silicon dmg", "Open the dmg and drag Crowe Logic to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.", rel, rel.macos, rel.macosIntel, "Download for Intel")}
       ${card("Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
     </div>
     <section class="checks">
