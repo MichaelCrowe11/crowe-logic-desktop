@@ -284,11 +284,31 @@ emit("mark-tray-light.svg", markSvg({
 // made the gold look dirty; the tile is now the same warm charcoal the app's
 // dark theme uses, so icon and window agree.
 const TILE = 1024, GRID = 824, RAD = 186, INSET = (TILE - GRID) / 2;
-// The whorl's ink box is ~81x81 of the 120 canvas — narrower than the cube it
-// replaced, which spanned nearly edge to edge. Scale is set from the ink width,
-// not the canvas, so the glyph keeps the ~47% presence scripts/test-icons.js
-// requires. The mark is symmetric about (60,60), so no centring fudge.
-const MS = 5.95, MW = VIEW * MS; // mark scale in the tile
+
+// What sits on the tile is the logotype's "C", not the bare whorl — the same
+// letter the phone wears, so the two apps are one icon at two sizes. The
+// outline is committed by scripts/gen-wordmark-icon.py rather than cut here,
+// because that needs fontTools and this file runs under plain node.
+//
+// The whorl does not leave: it becomes the spore in the letter's aperture,
+// drawn by the same markSvg() as everything else on this page. Gold still
+// appears exactly once.
+const LETTER = require("./letter-data.js");
+// Local space where the cap height is 100, matching the generator, so the two
+// compositions cannot drift apart by arithmetic.
+const LS = 100 / LETTER.box.h;
+const LW = LETTER.box.w * LS;
+const LX = -LETTER.box.x * LS, LY = -LETTER.box.y * LS;
+const SPO = LETTER.spore.size * 100;
+const SPX = LW / 2 + LETTER.spore.x * 100 - SPO / 2;
+const SPY = 50 + LETTER.spore.y * 100 - SPO / 2;
+const BX0 = Math.min(0, SPX), BY0 = Math.min(0, SPY);
+const BW = Math.max(LW, SPX + SPO) - BX0, BH = Math.max(100, SPY + SPO) - BY0;
+// The letter and spore span this much of the canvas on their long axis. The
+// old whorl sat near 47%; scripts/test-icons.js wants the bright artwork over
+// 40% at 256px and over 35% once it is rasterised down to 32. A nested <svg>
+// does the fitting, so this is the only number to turn.
+const ART = 0.58, ASIDE = TILE * ART, AOFF = (TILE - ASIDE) / 2;
 const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -300,17 +320,20 @@ const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${
   </defs>
   <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="url(#bg)"/>
   <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="url(#rim)" stroke-width="4"/>
-  <g transform="translate(${(TILE - MW) / 2} ${(TILE - MW) / 2}) scale(${MS})">${
+  <svg x="${AOFF}" y="${AOFF}" width="${ASIDE}" height="${ASIDE}" viewBox="${BX0.toFixed(2)} ${BY0.toFixed(2)} ${BW.toFixed(2)} ${BH.toFixed(2)}">
+    <path transform="translate(${LX.toFixed(4)} ${LY.toFixed(4)}) scale(${LS.toFixed(6)})" fill="#f7f3ea" d="${LETTER.d}"/>
+    <svg x="${SPX.toFixed(2)}" y="${SPY.toFixed(2)}" width="${SPO.toFixed(2)}" height="${SPO.toFixed(2)}" viewBox="0 0 ${VIEW} ${VIEW}">${
   // Eased taper, not the full one. This single SVG is rasterised down to the
   // 32px and 16px rungs of the .icns and .ico, and a tip that tapers to 0.8 of
   // a 120 canvas is a fifth of a pixel there - the outer third of every
   // filament washes into the tile and the mark measurably shrinks (see the
   // "still reads at 32px" check in scripts/test-icons.js, which caught exactly
-  // this). The icon is a small variant at its bottom rungs and takes the same
-  // treatment the tray does; mark.svg and the lockups keep the fine tips.
+  // this). The spore is smaller here than the old centred mark was, so it takes
+  // the same treatment the tray does; mark.svg and the lockups keep fine tips.
   markSvg({ taper: 0.62, scale: SCALE.dark, id: "ic" })
     .replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
-}</g>
+}</svg>
+  </svg>
 </svg>
 `;
 emit("icon.svg", iconSvg);
