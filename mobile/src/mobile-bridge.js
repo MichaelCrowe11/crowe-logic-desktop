@@ -195,6 +195,52 @@
   const remoteBase = () => String(config.remoteUrl || "").replace(/\/$/, "");
   const remoteConfigured = () => Boolean(remoteBase());
 
+  // ─── Files the user hands the phone ────────────────────────────────────────
+  /* iOS and Android do not give an app the filesystem; they give it a document
+     picker and whatever the user chose in it. This store is that grant, held
+     in memory for the session: mobile-ui.js registers what the picker
+     returned, and the file tools answer `phone:` paths from it — paired or
+     not, because these files are already in the app's hands. Per-file, by the
+     user's own tap, which is the platforms' consent model and honest here too.
+
+     Nothing writes back into the phone's storage. A webview cannot save into
+     an arbitrary picked location (iOS wants a document-scoped bookmark, which
+     a picker <input> does not carry), so an edited copy leaves through the
+     share sheet — the exit the platform actually offers. The chips row in
+     mobile-ui.js is where that handoff lives.
+
+     Session-scoped on purpose: holding a user's document contents in
+     localStorage would outlive the conversation the grant was made for. */
+  const phoneFiles = new Map();               // name -> { content, at }
+  const PHONE_FILE_MAX = 512 * 1024;
+  const phoneListeners = new Set();
+  const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
+  window.crowePhone = {
+    max: PHONE_FILE_MAX,
+    add(name, content) {
+      name = String(name || "").replace(/[/\\]/g, "_").trim();
+      if (!name) return { error: "a file needs a name" };
+      content = String(content ?? "");
+      if (content.length > PHONE_FILE_MAX) return { error: `over the ${Math.round(PHONE_FILE_MAX / 1024)} KB cap` };
+      phoneFiles.set(name, { content, at: Date.now() });
+      phoneNotify();
+      return { ok: true, name };
+    },
+    remove(name) { phoneFiles.delete(String(name || "")); phoneNotify(); },
+    list() { return [...phoneFiles.entries()].map(([name, f]) => ({ name, size: f.content.length, at: f.at })); },
+    get(name) { const f = phoneFiles.get(String(name || "")); return f ? f.content : null; },
+    onChange(fn) { phoneListeners.add(fn); return () => phoneListeners.delete(fn); },
+    async share(name) {
+      const f = phoneFiles.get(String(name || ""));
+      if (!f) return { error: "no such file" };
+      const Share = plugin("Share");
+      if (Share) { await Share.share({ title: name, text: f.content }).catch(() => {}); return { ok: true }; }
+      // Browser preview: the share sheet does not exist, but the copy does.
+      await navigator.clipboard?.writeText(f.content).catch(() => {});
+      return { ok: true, copied: true };
+    },
+  };
+
   /* Things that outlive the command that made them.
 
      Found by watching this app in real use: from a phone, at Edit tier, the
@@ -791,11 +837,11 @@
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a text file from the paired desktop machine.",
+      description: "Read a text file from the paired desktop machine, or a file the user attached from this phone (path phone:<name>).",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Absolute or ~-relative path on that machine." },
+          path: { type: "string", description: "Absolute or ~-relative path on that machine, or phone:<name> for an attached file." },
           max_bytes: { type: "integer", description: "Cap on bytes returned. Default 100000." },
         },
         required: ["path"],
@@ -806,11 +852,11 @@
     type: "function",
     function: {
       name: "write_file",
-      description: "Write a text file on the paired desktop machine, replacing it entirely. Read it first unless you are creating it.",
+      description: "Write a text file, replacing it entirely: on the paired desktop machine, or the app's copy of a phone attachment (path phone:<name>). Read it first unless you are creating it.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Absolute or ~-relative path on that machine." },
+          path: { type: "string", description: "Absolute or ~-relative path on that machine, or phone:<name> for an attached file." },
           content: { type: "string", description: "The full contents to write." },
         },
         required: ["path", "content"],
@@ -833,10 +879,16 @@
        Running a command is last on purpose. `write_file` can ruin a file;
        `run_command` can ruin a machine, and neither this app nor the server
        can tell a build from an `rm -rf` by reading the string. */
-    if (remoteConfigured()) {
+    /* The file tools are offered when there is anywhere for them to land: a
+       paired machine, or files the user attached from this phone. An unpaired
+       phone holding an attachment still gets read_file — withholding it would
+       recreate the bug the system prompt already documents, a model refusing
+       work its own tool list could do. run_command stays pairing-only: there
+       is no phone: anything for a shell. */
+    if (remoteConfigured() || phoneFiles.size) {
       if (config.autonomy !== "plan") tools.push(REMOTE_READ);
       if (mayWrite()) tools.push(REMOTE_WRITE);
-      if (config.autonomy === "execute") tools.push(REMOTE_RUN);
+      if (remoteConfigured() && config.autonomy === "execute") tools.push(REMOTE_RUN);
     }
     return tools;
   }
@@ -890,7 +942,28 @@
        can span a tier change, and a transcript can be replayed. The list is
        what the model sees; this is what actually decides. */
     if (name === "run_command" || name === "read_file" || name === "write_file") {
+      /* `phone:` paths are the files the user handed this phone through the
+         picker — answered locally, before the pairing gate, because pairing is
+         about reaching another machine and these never left this one. The tier
+         still decides: a grant to hold a file is not a grant to rewrite it. */
+      const pf = String(args.path || "").match(/^phone:(.+)$/);
+      if (pf && name !== "run_command") {
+        const key = pf[1];
+        const tierOk = name === "read_file" ? config.autonomy !== "plan" : mayWrite();
+        if (!tierOk) return { text: `refused: ${name} needs a higher tier than ${config.autonomy}`, status: "error" };
+        if (name === "read_file") {
+          const f = phoneFiles.get(key);
+          if (!f) return { text: `refused: no attached file named ${key} — the user attaches phone files with the paperclip in the composer`, status: "error" };
+          return { text: `phone:${key}:\n${clip(f.content, TOOL_RESULT_MAX - 200)}`, status: "ok" };
+        }
+        const content = String(args.content ?? "");
+        if (content.length > PHONE_FILE_MAX) return { text: `refused: over the ${Math.round(PHONE_FILE_MAX / 1024)} KB cap for phone files`, status: "error" };
+        phoneFiles.set(key, { content, at: Date.now() });
+        phoneNotify();
+        return { text: `updated phone:${key} (${content.length} bytes). The user can send it anywhere from the paperclip row — tapping the file opens the share sheet.`, status: "ok" };
+      }
       if (!remoteConfigured()) {
+        if (phoneFiles.size) return { text: `refused: no machine is paired with this phone (Settings → Remote machine). The files the user attached are readable as ${[...phoneFiles.keys()].map((n) => `phone:${n}`).join(", ")}`, status: "error" };
         return { text: "refused: no machine is paired with this phone (Settings → Remote machine)", status: "error" };
       }
       const allowed = name === "read_file" ? config.autonomy !== "plan"
@@ -964,12 +1037,26 @@
       "writing, say what you are about to run before you run it, and quote the exit code when it is not 0.",
     ].join("\n") : [
       "No machine is paired with this phone, and a phone cannot run a shell of its own. You genuinely cannot",
-      "run commands, read files or edit code right now — say so plainly, and add that pairing a machine in",
+      "run commands or touch files on a computer right now — say so plainly, and add that pairing a machine in",
       "Settings under Remote machine gives you all three against their desktop.",
     ].join("\n");
+    /* Same contract as `machine` above: this paragraph must track what the
+       tools will actually answer. Files the user picked exist at phone: paths
+       whether or not a machine is paired — an unpaired phone holding an
+       attachment must not claim it cannot read files. */
+    const attached = phoneFiles.size
+      ? [
+        "",
+        `The user attached ${phoneFiles.size === 1 ? "a file" : phoneFiles.size + " files"} from this phone: ${[...phoneFiles.keys()].map((n) => `phone:${n}`).join(", ")}.`,
+        "Read them with read_file on the phone: path (any tier above Plan). write_file to a phone: path updates",
+        "the app's copy (Edit tier and above) — the phone cannot overwrite the original where it lives, so tell",
+        "the user the updated copy is in the paperclip row, and tapping it opens the share sheet to send or save it.",
+      ].join("\n")
+      : "";
     return [
       "You are Crowe Logic, running on the user's phone.",
       machine,
+      attached,
       "",
       "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
       "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",

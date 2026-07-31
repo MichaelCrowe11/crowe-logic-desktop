@@ -72,6 +72,15 @@ validated against the same `grow-schema.js` the desktop store uses. A lot trace
 exports to the share sheet rather than to a file dialog. The agent's tools here
 are `read_grow`, `log_grow` (gated on the Edit tier) and `open_url`.
 
+**Handed over, per file.** iOS and Android do not give an app the filesystem;
+they give it a document picker. The paperclip in the composer is that picker,
+and whatever the user chooses becomes readable to the agent at a `phone:<name>`
+path — paired or not, at any tier above Plan. `write_file` to a `phone:` path
+updates the app's copy (Edit and above); the platforms offer a webview no way
+to overwrite the original where it lives, so a changed copy leaves through the
+share sheet, from the chips row above the composer. Text files, 512 KB cap,
+held in memory for the session only.
+
 **Refused, with a reason.** The shell, the file tree, git, and MCP plugins.
 There is no PTY on iOS or Android, no workspace folder to point at, and no way
 to spawn a plugin server. Those panes state that rather than showing an empty

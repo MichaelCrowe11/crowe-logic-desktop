@@ -266,6 +266,62 @@
     new MutationObserver(hint).observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   }
 
+  // ─── Files from this phone ─────────────────────────────────────────────────
+  /* The phone-side half of the picker grant (the store and the phone: tool
+     paths live in mobile-bridge.js). An <input type="file"> IS the platform
+     document picker — the Files app sheet on iOS, the system picker on
+     Android — so no native plugin stands between the tap and the grant.
+
+     The chips row shows every file the app currently holds, picked or written
+     by the agent, and a tap on a chip opens the share sheet: that is the only
+     way a changed copy leaves the app, so the row is where "saving" visibly
+     lives. Text files only, and small ones — this hands documents to a
+     conversation, it is not a file manager. */
+  const composerForm = $("composer");
+  if (composerForm && window.crowePhone) {
+    const foot = composerForm.querySelector(".composer-foot");
+    const row = document.createElement("div");
+    row.id = "m-attach-row";
+    composerForm.insertBefore(row, composerForm.firstChild);
+    const picker = document.createElement("input");
+    picker.type = "file"; picker.multiple = true; picker.hidden = true;
+    picker.accept = "text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
+    const clipBtn = document.createElement("button");
+    clipBtn.type = "button"; clipBtn.id = "m-attach"; clipBtn.className = "bar-icon";
+    clipBtn.title = "Attach a file from this phone";
+    clipBtn.setAttribute("aria-label", "Attach a file from this phone");
+    clipBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.5 12 20a5.2 5.2 0 0 1-7.4-7.4l8.6-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg>';
+    clipBtn.addEventListener("click", () => picker.click());
+    if (foot) foot.insertBefore(clipBtn, foot.firstChild);
+    composerForm.appendChild(picker);
+    picker.addEventListener("change", async () => {
+      for (const file of picker.files || []) {
+        if (file.size > window.crowePhone.max) { alert(`${file.name} is over the ${Math.round(window.crowePhone.max / 1024)} KB cap for attached files.`); continue; }
+        const text = await file.text();
+        // A null byte means this is not text; the tools would hand the model gibberish.
+        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file — the operator can only read text for now.`); continue; }
+        const r = window.crowePhone.add(file.name, text);
+        if (r.error) alert(`${file.name}: ${r.error}`);
+      }
+      picker.value = "";
+    });
+    const renderRow = () => {
+      const files = window.crowePhone.list();
+      row.innerHTML = "";
+      for (const f of files) {
+        const chip = document.createElement("span");
+        chip.className = "m-attach-chip";
+        chip.innerHTML = `<button type="button" class="m-attach-share" title="Share or save ${esc(f.name)}">${esc(f.name)}</button><button type="button" class="m-attach-x" aria-label="Remove ${esc(f.name)}">&times;</button>`;
+        chip.querySelector(".m-attach-share").addEventListener("click", () => window.crowePhone.share(f.name));
+        chip.querySelector(".m-attach-x").addEventListener("click", () => window.crowePhone.remove(f.name));
+        row.appendChild(chip);
+      }
+      row.classList.toggle("has-files", files.length > 0);
+    };
+    renderRow();
+    window.crowePhone.onChange(renderRow);
+  }
+
   /* The surface composers' placeholders were written for a desktop-width
      input. At 390px, minus the send button, they clip mid-word — Projects
      opened on "routed to the right expert" cut at "routec", which reads as a
