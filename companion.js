@@ -309,6 +309,15 @@ class Companion {
     });
     this.host = host;
     this.port = this.server.address().port;   // port 0 means the OS chose one
+    /* The once("error") above only guarded the listen. A later error on the
+       socket (EMFILE, the tailscale interface going away) had no listener, and
+       an 'error' event with no listener throws — taking the whole desktop app
+       down with a feature that is supposed to be a passenger. Announced and
+       logged instead: the phone sees timeouts, and the audit says why. */
+    this.server.on("error", (e) => {
+      this.audit({ kind: "server-error", detail: String(e.message || e).slice(0, 200) });
+      this.onEvent({ type: "error", detail: String(e.message || e) });
+    });
     this.name = this.loopback ? null : magicDnsName();
     if (this.keepAwake) {
       try { this.awakeId = this.keepAwake.start("prevent-app-suspension"); }
@@ -413,10 +422,26 @@ class Companion {
                                               stdio: ["ignore", "pipe", "pipe"] },
         (err, stdout, stderr) => {
           const killed = err && (err.killed || err.signal);
+          /* A spawn failure - the shell itself could not start (ENOENT on a
+             machine where $SHELL points nowhere, EACCES) - puts a string in
+             err.code where the numeric check expected a number, and used to
+             fall through to exit 0 with no output: a command that never ran,
+             reported as the one shape a model reads as a clean success. 127 is
+             the shell's own "not found", and the stderr names the shell so the
+             remedy is in the message.
+
+             A string code alone is not proof: exceeding maxBuffer is also a
+             string (ERR_CHILD_PROCESS_STDIO_MAXBUFFER) on a command that
+             plainly ran. Only a spawn failure carries err.syscall ("spawn
+             /bin/zsh"), so that is the discriminator - anything else with a
+             string code keeps its captured output and the old exit-0 shape. */
+          const unspawnable = !killed && err && typeof err.code === "string" && String(err.syscall || "").startsWith("spawn");
           resolve({
-            exit_code: killed ? 124 : (err && typeof err.code === "number" ? err.code : 0),
+            exit_code: killed ? 124 : unspawnable ? 127 : (err && typeof err.code === "number" ? err.code : 0),
             stdout: String(stdout || "").slice(-MAX_STDOUT),
-            stderr: killed ? `command exceeded ${timeout / 1000}s` : String(stderr || "").slice(-MAX_STDERR),
+            stderr: killed ? `command exceeded ${timeout / 1000}s`
+              : unspawnable ? `could not start ${shellPath} (${err.code}) — is this the machine's login shell?`
+              : String(stderr || "").slice(-MAX_STDERR),
           });
         });
     });

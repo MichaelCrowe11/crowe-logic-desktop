@@ -94,6 +94,35 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     return "ab";
   });
 
+  await check("a shell that cannot start reports failure, not success", async () => {
+    const saved = process.env.SHELL;
+    process.env.SHELL = path.join(dir, "no-such-shell");
+    try {
+      const r = await post("/run", { command: "echo x" }, phone.token);
+      assert(r.status === 200, `status ${r.status}`);
+      // ENOENT used to fall through the numeric-code check to exit 0 with no
+      // output — the one shape a model reads as "worked, nothing to say".
+      assert(r.body.exit_code === 127, `spawn failure exited ${r.body.exit_code}`);
+      assert(/could not start/.test(r.body.stderr), `stderr says: ${JSON.stringify(r.body.stderr)}`);
+    } finally {
+      if (saved === undefined) delete process.env.SHELL; else process.env.SHELL = saved;
+    }
+    return "exit 127, stderr names the shell";
+  });
+
+  await check("output past the cap does not masquerade as a spawn failure", async () => {
+    // ERR_CHILD_PROCESS_STDIO_MAXBUFFER is also a string err.code on a command
+    // that plainly ran. The first version of the spawn-failure fix read any
+    // string code as "shell could not start" and turned a long build log into
+    // exit 127 with a false diagnosis.
+    const r = await post("/run", { command: "head -c 300000 /dev/zero | tr '\\0' a" }, phone.token);
+    assert(r.status === 200, `status ${r.status}`);
+    assert(r.body.exit_code !== 127, `maxBuffer overflow reported exit ${r.body.exit_code}`);
+    assert((r.body.stdout || "").length > 100000, `the output that did arrive was discarded (${(r.body.stdout || "").length} bytes)`);
+    assert(!/could not start/.test(r.body.stderr || ""), `stderr claims a spawn failure: ${r.body.stderr}`);
+    return `exit ${r.body.exit_code}, ${r.body.stdout.length} bytes kept`;
+  });
+
   await check("revoking one device leaves the others alone", async () => {
     const gone = c.revokeDevice(phone.id);
     assert(gone.ok, `revoke failed: ${gone.error}`);
@@ -121,6 +150,18 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     const missing = await post("/read_file", { path: path.join(dir, "nope.txt") }, ipad.token);
     assert(missing.status === 404, `a missing file returned ${missing.status}`);
     return "write, read, 404";
+  });
+
+  await check("a socket error after startup is announced, not fatal", async () => {
+    const events = [];
+    c.onEvent = (e) => events.push(e);
+    // With no listener this emit throws out of the suite — which is the bug:
+    // one network hiccup and the desktop app is gone.
+    c.server.emit("error", new Error("synthetic ENETDOWN"));
+    assert(events.some((e) => e.type === "error"), "no error event announced to the window");
+    assert(c.recentAudit(5).some((e) => e.kind === "server-error"), "the audit has no server-error line");
+    assert(c.status().running, "the listener stopped over a non-fatal error");
+    return "logged, announced, still listening";
   });
 
   await check("devices survive a restart, and their tokens keep working", async () => {
