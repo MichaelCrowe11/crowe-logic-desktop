@@ -25,6 +25,17 @@ echo "publish-r2: publishing $version from $root"
 # the same connection, same day: 90 MB --file failed five times running, 90 MB
 # --pipe passed first try. Streaming costs nothing on good networks, so it is
 # not worth keying on size.
+#
+# Streaming raises that ceiling but does not remove it. If an object still will
+# not go up - the tell is "fetch failed" a few hundred ms in, the same every
+# time, which is a connection refusing the transfer rather than losing it - stop
+# retrying and reverse the direction:
+#
+#   INGEST_TOKEN=... scripts/ingest-release.sh v0.21.0
+#
+# That has the releases worker pull the artifacts from the GitHub release over
+# Cloudflare's own network. v0.21.0's three largest macOS artifacts failed
+# sixteen times from here and published first try that way.
 put() {
   local key="$1" file="$2" attempt=1
   until npx wrangler r2 object put "crowe-releases/$key" --pipe --remote --config deploy/releases-worker/wrangler.jsonc < "$file"; do

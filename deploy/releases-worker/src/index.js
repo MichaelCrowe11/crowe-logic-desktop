@@ -239,10 +239,104 @@ function versionedKeysFor(key) {
   return keys;
 }
 
+// Publishing a release means moving ~500 MB into the bucket, and the release
+// machine is whatever laptop notarized the macOS build. Cloudflare's object API
+// refuses bodies that size on some networks: v0.21.0's macOS artifacts failed
+// fifteen times running from a residential uplink, while GitHub had accepted the
+// very same files without complaint. Sized PUTs died in under 200ms, before a
+// byte was sent, and streaming only raised the ceiling rather than removing it.
+//
+// Nothing about the files is the problem. The direction is. So pull instead of
+// push: hand this endpoint an asset id on this repo's GitHub release and it
+// copies the object in over Cloudflare's own network, GitHub to R2, with only a
+// small JSON request crossing the release machine's uplink.
+//
+// The endpoint does not exist unless INGEST_TOKEN is set (wrangler secret put
+// INGEST_TOKEN), it holds no GitHub credential of its own - the caller supplies
+// one per request - and it cannot be aimed anywhere but this repo's own release
+// assets, because the source url is built here from an integer id rather than
+// accepted from the caller.
+const INGEST_REPO = "MichaelCrowe11/crowe-logic-desktop";
+
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Only the two shapes publish-r2.sh writes: desktop/<version>/<file> and
+// desktop/channel/<os>/<file>. Segments are matched against a literal set of
+// characters, so "..", a leading slash and an empty segment are all unmatchable
+// rather than filtered out afterwards.
+function validIngestKey(key) {
+  const seg = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/;
+  const parts = key.split("/");
+  if (parts.length < 3 || parts.length > 4) return false;
+  if (parts[0] !== "desktop") return false;
+  if (parts.length === 4 && parts[1] !== "channel") return false;
+  return parts.slice(1).every((p) => seg.test(p) && !p.includes(".."));
+}
+
+async function ingest(request, env) {
+  if (!env.INGEST_TOKEN) return new Response("Not found", { status: 404 });
+  if (!safeEqual(request.headers.get("x-ingest-token") || "", env.INGEST_TOKEN)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const githubToken = request.headers.get("x-github-token") || "";
+  if (!githubToken) return new Response("Missing x-github-token", { status: 400 });
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("Expected a JSON body", { status: 400 });
+  }
+  const key = String(body.key || "");
+  const assetId = body.assetId;
+  const expected = body.size;
+  if (!validIngestKey(key)) return new Response(`Refusing key: ${key}`, { status: 400 });
+  if (!Number.isInteger(assetId) || assetId <= 0) return new Response("assetId must be a positive integer", { status: 400 });
+
+  // GitHub answers the asset api with a redirect to a signed storage url, and
+  // forwarding the Authorization header on to that host is both unnecessary and
+  // rejected by it. Follow the hop by hand so the credential stops here.
+  const head = await fetch(`https://api.github.com/repos/${INGEST_REPO}/releases/assets/${assetId}`, {
+    headers: {
+      authorization: `Bearer ${githubToken}`,
+      accept: "application/octet-stream",
+      "user-agent": "crowe-releases-ingest",
+    },
+    redirect: "manual",
+  });
+  const location = head.headers.get("location");
+  const source = location ? await fetch(location) : head;
+  if (!source.ok || !source.body) {
+    return new Response(`GitHub returned ${source.status} for asset ${assetId}`, { status: 502 });
+  }
+
+  const written = await env.RELEASES.put(key, source.body, {
+    httpMetadata: { contentType: contentTypeFor(key, null) },
+  });
+
+  // A truncated copy is worse than a missing one: the feed would name it, the
+  // updater would download it, and the signature check would fail on a user's
+  // machine with nothing to point at. Refuse to leave a short object behind.
+  if (Number.isInteger(expected) && written.size !== expected) {
+    await env.RELEASES.delete(key);
+    return new Response(`Wrote ${written.size} bytes, expected ${expected} - deleted`, { status: 502 });
+  }
+
+  return Response.json({ key, size: written.size, etag: written.httpEtag });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = decodeURIComponent(url.pathname);
+
+    if (path === "/_ingest" && request.method === "POST") return ingest(request, env);
 
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
