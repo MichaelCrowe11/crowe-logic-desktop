@@ -1,0 +1,57 @@
+name: Publish update feed
+
+# Publishes a tagged release's artifacts from the GitHub release to the R2
+# update feed - the job release.yml deliberately does not do, because macOS
+# artifacts must be signed and notarized on a release machine first.
+#
+# The flow this exists for: the release machine builds and notarizes macOS,
+# attaches those artifacts to the GitHub release next to CI's Windows and
+# Linux ones, and then dispatches this workflow instead of uploading ~500 MB
+# to R2 over whatever network it happens to be on. Publishing v0.21.0 from a
+# residential uplink found Cloudflare's API refusing bodies over ~125 MB that
+# GitHub accepted without complaint - the release got out by routing the big
+# objects through here.
+#
+# Requires CLOUDFLARE_API_TOKEN to carry R2 write for the crowe-releases
+# bucket. If this job fails with 403 Authentication error, that scope is
+# missing - grant it in the Cloudflare dashboard; nothing here can.
+#
+# publish-r2.sh decides what to upload by reading the latest*.yml feeds, so a
+# release whose macOS artifacts were never attached simply publishes without a
+# mac channel rather than half-publishing one, and it ends by running
+# scripts/verify-release.js against the live feed - the failure surfaces here,
+# not in silence on a user's machine.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to publish, e.g. v0.21.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-feed
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download the release's artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.version }}" -D release -p '*'
+      - name: Publish to R2 and verify the live feed
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_REF_NAME: ${{ inputs.version }}
+        run: bash scripts/publish-r2.sh release
