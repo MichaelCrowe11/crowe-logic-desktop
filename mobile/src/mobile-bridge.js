@@ -1045,12 +1045,156 @@
   const updateState = () => ({ status: "idle", version: BUILD.version,
     notes: "Updates for the mobile app come from the App Store and Google Play." });
 
+  /* The terminal pane.
+
+     Unpaired it stays a stub that says why, because iOS will not fork a shell
+     and pretending otherwise is what this whole file exists to avoid.
+
+     Paired, it is a real console against the machine at the other end. Not a
+     pty — the companion answers one request with one finished result, so there
+     is no interactive vim here and nothing that waits on input. What it is
+     good for is what a phone is good for: checking a build, reading a log,
+     restarting something, from wherever you happen to be standing.
+
+     `cd` is handled here rather than sent, because each command runs in its own
+     shell on the far side and a plain `cd` would be forgotten the instant it
+     returned. Tracking the directory locally is what makes it feel like a
+     session instead of a series of unrelated commands. */
+  function buildConsole(el) {
+    const wrap = document.createElement("div");
+    wrap.className = "term-console";
+    const out = document.createElement("pre");
+    out.className = "term-console-out";
+    const row = document.createElement("div");
+    row.className = "term-console-row";
+    const prompt = document.createElement("span");
+    prompt.className = "term-console-prompt";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "term-console-input";
+    input.setAttribute("autocapitalize", "off");
+    input.setAttribute("autocorrect", "off");
+    input.setAttribute("spellcheck", "false");
+    input.placeholder = "command";
+    row.appendChild(prompt); row.appendChild(input);
+    wrap.appendChild(out); wrap.appendChild(row);
+    el.appendChild(wrap);
+
+    let cwd = "~";
+    const history = [];
+    let at = history.length;
+    const paint = () => { prompt.textContent = `${cwd} $`; };
+    const write = (text, cls) => {
+      const line = document.createElement("span");
+      if (cls) line.className = cls;
+      line.textContent = text.endsWith("\n") ? text : `${text}\n`;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    };
+    paint();
+    write(`Connected to ${remoteBase()}.`, "term-console-note");
+    write("One command, one result — no interactive programs.", "term-console-note");
+
+    /* Programs that wait for a keyboard.
+
+       The companion runs one command and answers when it exits, so anything
+       that sits at a prompt runs until the timeout kills it — two minutes of a
+       dead input and no output, which reads as a crash rather than as a limit.
+       The first thing typed into this console in the real world was `claude`,
+       which is exactly that. Saying so in half a second is worth more than
+       being right slowly.
+
+       Matched on the program name only, so `git log` is fine while `git` alone
+       — which opens a pager on some setups — is not the concern; the list is
+       the interactive-by-default ones, and anything missed still times out
+       safely rather than hanging forever. */
+    const INTERACTIVE = new Set([
+      "claude", "codex", "vim", "vi", "nvim", "nano", "emacs", "pico",
+      "top", "htop", "btop", "less", "more", "man", "ssh", "tmux", "screen",
+      "irb", "psql", "mysql", "sqlite3", "ftp", "telnet", "watch", "tail-f",
+    ]);
+    const REPL_ALONE = new Set(["python", "python3", "node", "ruby", "php", "R", "julia", "bash", "zsh", "sh", "fish"]);
+
+    async function run(command) {
+      write(`${cwd} $ ${command}`, "term-console-echo");
+      if (config.autonomy !== "execute") {
+        write("Execute tier required. Change it in the composer — the tier gates the machine, not just the agent.", "term-console-err");
+        return;
+      }
+      const head = command.trim().split(/\s+/)[0].replace(/^.*\//, "");
+      const bare = command.trim().split(/\s+/).length === 1;
+      if (INTERACTIVE.has(head) || (bare && REPL_ALONE.has(head))) {
+        write(`${head} waits for a keyboard, and this console cannot give it one.`, "term-console-err");
+        write("Each command runs on its own and this shows you the result. Try a one-shot form instead — for example `claude -p \"...\"` rather than `claude`.", "term-console-note");
+        return;
+      }
+      // `cd` alone means home, and `cd -` is not tracked: without a session on
+      // the far side there is no previous directory to go back to.
+      const cdTarget = /^cd(\s+(.*))?$/.exec(command.trim());
+      if (cdTarget) {
+        const target = (cdTarget[2] || "~").trim();
+        const r = await remoteCall("/run", { command: `cd ${target} && pwd`, cwd, timeout: 15 }, "the directory change");
+        if (r.error) return write(r.error, "term-console-err");
+        if (r.data.exit_code !== 0) return write(r.data.stderr.trim() || `cannot cd to ${target}`, "term-console-err");
+        cwd = r.data.stdout.trim();
+        paint();
+        return;
+      }
+      /* A live "running" line, replaced by the result.
+
+         Without it the console is silent for however long the command takes and
+         there is no way to tell work from a hang — which is the same complaint
+         as the interactive case, just slower to notice. 45 seconds rather than
+         the tool path's 120: a person watching a phone gives up long before a
+         model does, and a command that needs longer than this wants `nohup` and
+         a log to read afterwards. */
+      const ticker = document.createElement("span");
+      ticker.className = "term-console-note";
+      out.appendChild(ticker);
+      const began = performance.now();
+      const tick = setInterval(() => {
+        ticker.textContent = `running… ${((performance.now() - began) / 1000).toFixed(0)}s (45s limit)\n`;
+        out.scrollTop = out.scrollHeight;
+      }, 250);
+      let r;
+      try { r = await remoteCall("/run", { command, cwd, timeout: 45 }, "the command"); }
+      finally { clearInterval(tick); ticker.remove(); }
+      if (r.error) return write(r.error, "term-console-err");
+      const d = r.data || {};
+      if (d.exit_code === 124) {
+        write(`no result after 45s — the machine killed it.`, "term-console-err");
+        write("If it was meant to keep running, start it detached and read its log: `nohup <command> > /tmp/out.log 2>&1 &` then `tail -50 /tmp/out.log`.", "term-console-note");
+        return;
+      }
+      if (d.stdout) write(d.stdout.replace(/\n$/, ""));
+      if (d.stderr) write(d.stderr.replace(/\n$/, ""), "term-console-err");
+      // Silence from a command that failed is the case worth narrating: with no
+      // output and no exit line, a failure and a success look identical.
+      if (d.exit_code !== 0) write(`exit ${d.exit_code}`, "term-console-err");
+      else if (!d.stdout && !d.stderr) write("(no output)", "term-console-note");
+    }
+
+    input.addEventListener("keydown", async (e) => {
+      if (e.key === "ArrowUp") { if (at > 0) { at -= 1; input.value = history[at] || ""; } e.preventDefault(); return; }
+      if (e.key === "ArrowDown") { at = Math.min(history.length, at + 1); input.value = history[at] || ""; e.preventDefault(); return; }
+      if (e.key !== "Enter") return;
+      const command = input.value.trim();
+      if (!command) return;
+      input.value = "";
+      history.push(command); at = history.length;
+      if (command === "clear") { out.textContent = ""; return; }
+      input.disabled = true;
+      try { await run(command); } finally { input.disabled = false; input.focus(); }
+    });
+  }
+
   const terminalStub = () => {
     if (window.Terminal) return;
     window.Terminal = class {
       constructor() { this.cols = 80; this.rows = 24; }
       loadAddon() {}
       open(el) {
+        if (remoteConfigured()) return buildConsole(el);
         const pre = document.createElement("pre");
         pre.className = "term-stub";
         pre.textContent = NO_SHELL();

@@ -115,9 +115,17 @@ function readJson(req, limit = 2_000_000) {
 }
 
 class Companion {
-  constructor({ tokenFile, onEvent } = {}) {
+  /* `loopback` and `port` exist for scripts/test-companion.js, which drives the
+     real bridge against a real instance of this and cannot depend on the
+     machine running it being on a tailnet. Loopback is the one address that is
+     safe to bind unconditionally — it is not reachable from another machine at
+     all — and port 0 lets the OS pick a free one so a test never collides with
+     a companion the user has actually started. */
+  constructor({ tokenFile, onEvent, loopback = false, port = PORT } = {}) {
     this.tokenFile = tokenFile;
     this.onEvent = typeof onEvent === "function" ? onEvent : () => {};
+    this.loopback = Boolean(loopback);
+    this.port = port;
     this.server = null;
     this.host = null;
     this.token = "";
@@ -151,7 +159,7 @@ class Companion {
   status() {
     return {
       running: Boolean(this.server && this.server.listening),
-      host: this.host, port: PORT,
+      host: this.host, port: this.port,
       tailscale: tailscaleAddress(),
       name: this.name || magicDnsName(),
       paired: Boolean(this.token),
@@ -164,13 +172,13 @@ class Companion {
   pairUrl() {
     if (!this.host) return null;
     const reachable = this.name || this.host;
-    const q = new URLSearchParams({ url: `http://${reachable}:${PORT}`, token: this.loadOrMintToken() });
+    const q = new URLSearchParams({ url: `http://${reachable}:${this.port}`, token: this.loadOrMintToken() });
     return `com.crowelogic.mobile://pair?${q.toString()}`;
   }
 
   async start() {
     if (this.server && this.server.listening) return this.status();
-    const host = tailscaleAddress();
+    const host = this.loopback ? "127.0.0.1" : tailscaleAddress();
     if (!host) {
       return { error: "No Tailscale address on this machine. Install Tailscale and sign in, then try again — the phone reaches this app over the tailnet, not the open internet." };
     }
@@ -180,14 +188,15 @@ class Companion {
     this.server = http.createServer((req, res) => this.handle(req, res));
     await new Promise((resolve, reject) => {
       this.server.once("error", reject);
-      this.server.listen(PORT, host, resolve);
+      this.server.listen(this.port, host, resolve);
     }).catch((e) => {
       this.server = null;
-      throw new Error(`could not listen on ${host}:${PORT} — ${String(e.message || e)}`);
+      throw new Error(`could not listen on ${host}:${this.port} — ${String(e.message || e)}`);
     });
     this.host = host;
-    this.name = magicDnsName();     // resolved once, while Tailscale is known up
-    this.onEvent({ type: "started", host, name: this.name, port: PORT });
+    this.port = this.server.address().port;   // port 0 means the OS chose one
+    this.name = this.loopback ? null : magicDnsName();
+    this.onEvent({ type: "started", host, name: this.name, port: this.port });
     return this.status();
   }
 

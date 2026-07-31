@@ -56,6 +56,34 @@ body.mobile .m-desktop-only { display: none !important; }
    phone still cannot offer it, because there would be nowhere for it to go. */
 body.mobile:not(.m-paired) #autonomy .seg-btn[data-tier="execute"] { display: none !important; }
 
+/* The console the terminal pane becomes once a machine is paired. Drawn where
+   xterm would have been, and deliberately plain: this is one command and one
+   result, not a screen a curses program can address. */
+.term-console { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.term-console-out {
+  flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px 14px;
+  font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
+.term-console-out span { display: block; }
+.term-console-echo { color: var(--muted); }
+.term-console-note { color: var(--muted); font-style: italic; }
+.term-console-err { color: var(--danger, #d2665a); }
+.term-console-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-top: 1px solid var(--hair); background: var(--surface);
+  /* Clears the home indicator, and the tab bar the phone chrome adds. */
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+.term-console-prompt { font-family: var(--mono); font-size: var(--fs-sm); color: var(--gold, #c9a227); flex: none; }
+.term-console-input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  font-family: var(--mono); color: var(--text);
+  /* 16px exactly: anything smaller and iOS zooms the page on focus. */
+  font-size: 16px; min-height: 44px;
+}
+.term-console-input:disabled { opacity: 0.6; }
+
 /* A stand-in for the terminal, drawn where xterm would have been. */
 .term-stub {
   margin: 0; padding: 18px 16px; white-space: pre-wrap;
