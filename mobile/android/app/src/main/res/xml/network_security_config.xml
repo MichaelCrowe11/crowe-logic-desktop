@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The paired desktop, and nothing else.
+
+  Android has blocked cleartext HTTP by default since API 28, which is right:
+  every other thing this app talks to is https. The companion is the exception.
+  It is reached at a Tailscale MagicDNS name, which only resolves inside the
+  user's own tailnet, where WireGuard has already authenticated and encrypted
+  the traffic — so this permits cleartext to machines they own over a private
+  network, and to nothing on the public internet.
+
+  The alternative was android:usesCleartextTraffic="true" on the application
+  tag: one attribute, and the wrong one, because it allows cleartext to every
+  host forever. This is the same shape as the NSExceptionDomains entry in the
+  iOS Info.plist, and for the same reason — which is also why the pairing URL
+  carries the MagicDNS name rather than the 100.x address. A domain rule
+  matches names, never IP literals, so an address-based pair URL is refused
+  here no matter what this file says.
+
+  cleartextTrafficPermitted stays false everywhere else by inheriting the
+  platform default in base-config.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>

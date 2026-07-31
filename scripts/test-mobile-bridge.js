@@ -454,6 +454,41 @@ function methodPaths(surface) {
     return fetched === -1 ? "native only" : "native before fetch";
   });
 
+  await check("cleartext is permitted to the tailnet and nowhere else", () => {
+    /* Both platforms block plain HTTP by default, and the companion is the one
+       exception: it is reached at a *.ts.net MagicDNS name, which resolves only
+       inside the user's own tailnet, where WireGuard has already authenticated
+       and encrypted the traffic.
+
+       Each platform offers a one-line version of this fix that is the wrong
+       one — NSAllowsArbitraryLoads on iOS, usesCleartextTraffic on Android —
+       and both turn the protection off for every host, forever. They are easy
+       to reach for, because the narrow fix looks like more work and the broad
+       one makes the error go away just as fast. This fails on either.
+
+       Learned on a device: an iOS pairing URL built from the 100.x address is
+       refused whatever the plist says, because an exception domain matches
+       names and never IP literals. */
+    const plist = read("mobile/ios/App/App/Info.plist");
+    assert(!/<key>NSAllowsArbitraryLoads<\/key>\s*<true\s*\/>/.test(plist),
+      "Info.plist sets NSAllowsArbitraryLoads — that allows cleartext to every host. Scope it to ts.net instead.");
+    assert(/<key>ts\.net<\/key>/.test(plist), "Info.plist has no ts.net exception; the companion cannot be reached over http");
+    assert(/<key>NSIncludesSubdomains<\/key>\s*<true\s*\/>/.test(plist),
+      "the ts.net exception does not include subdomains, so a MagicDNS name will not match");
+
+    const manifest = read("mobile/android/app/src/main/AndroidManifest.xml");
+    assert(!/android:usesCleartextTraffic="true"/.test(manifest),
+      "AndroidManifest allows cleartext to every host. Use the network security config instead.");
+    assert(/android:networkSecurityConfig="@xml\/network_security_config"/.test(manifest),
+      "AndroidManifest does not reference the network security config, so its rules never apply");
+
+    const netcfg = read("mobile/android/app/src/main/res/xml/network_security_config.xml");
+    assert(/<base-config cleartextTrafficPermitted="false"/.test(netcfg),
+      "the Android base config does not forbid cleartext, so the domain rule is not a narrowing");
+    assert(/<domain includeSubdomains="true">ts\.net<\/domain>/.test(netcfg), "ts.net is not the permitted domain");
+    return "ts.net only, on both platforms";
+  });
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();
