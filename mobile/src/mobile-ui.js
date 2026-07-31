@@ -266,6 +266,16 @@
     new MutationObserver(hint).observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   }
 
+  /* The surface composers' placeholders were written for a desktop-width
+     input. At 390px, minus the send button, they clip mid-word — Projects
+     opened on "routed to the right expert" cut at "routec", which reads as a
+     rendering fault rather than as elision. Static text, so set once. */
+  const SURFACE_HINTS = { "home-input": "Start a task — it opens in Chat.", "cult-input": "Ask the grower anything." };
+  for (const [id, text] of Object.entries(SURFACE_HINTS)) {
+    const field = $(id);
+    if (field) field.placeholder = text;
+  }
+
   // ─── Settings ──────────────────────────────────────────────────────────────
   /* Three rows in Settings describe machinery this app does not have: a
      workspace folder, MCP servers started as local processes, and a diff review
@@ -295,10 +305,19 @@
   remoteSection.className = "key-manager";
   remoteSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Remote machine</b>',
-    "<span>A machine this phone may drive. Crowe Terminal on your desktop, reached over Tailscale, so the shell is never on the public internet. ",
-    "The tier in the composer still decides: Read reads files, Edit writes them, Execute runs commands.</span></div>",
+    "<span>A machine this phone may drive. On your desktop, open Crowe Logic → Settings → Phone companion and scan the code — or enter its tailnet address by hand. ",
+    "Traffic stays inside your own Tailscale network, and the tier in the composer still decides: Read reads files, Edit writes them, Execute runs commands.</span></div>",
     '<span id="m-remote-state" class="badge">Not paired</span></div>',
-    '<label>Address <input id="m-remote-url" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://100.x.y.z:8765" /></label>',
+    // The example is a MagicDNS name on the companion's port, deliberately:
+    // both mobile network policies match cleartext exceptions by NAME, so a
+    // 100.x address is refused no matter what the config files say — a
+    // placeholder teaching the IP form would be a tutorial in the one failure
+    // that cost a device session to diagnose. And 8787 is the companion;
+    // 8765 is the desktop's OAuth loopback, which answers to nobody.
+    // Short enough that the port survives a 390px input: the name teaches
+    // "MagicDNS, not the 100.x address" and the port teaches "the companion,
+    // not the OAuth loopback" — clipping either loses half the lesson.
+    '<label>Address <input id="m-remote-url" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://mac.tail1234.ts.net:8787" /></label>',
     '<label>Token <input id="m-remote-token" type="password" placeholder="paste to update; blank keeps current" /></label>',
     '<button id="m-remote-pair" class="ghost sm" type="button">Pair and test</button>',
   ].join("");

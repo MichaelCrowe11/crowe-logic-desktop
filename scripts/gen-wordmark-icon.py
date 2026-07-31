@@ -52,6 +52,16 @@ SPORE_X = 0.36
 SPORE_Y = 0.00
 SPORE_SIZE = 0.57
 
+# The corona hexagon, enlarged for the icon only. In the wordmark the spore is
+# print-scale artwork; on an app tile the same geometry has to survive 40px
+# (Spotlight) and 29pt (Settings), where the twelve hyphae are sub-pixel and
+# the stock hexagon shrinks to under 4px — a gold speck, not a mark. Scaling
+# the hex about the spore's centre gives the smallest sizes one decisive gold
+# shape to hold onto, and at 1024 it reads as the mark's own strands-from-hex
+# composition rather than a change of drawing. The hyphae are left alone: they
+# are the detail that rewards the large sizes.
+CORONA_ICON_SCALE = 1.45
+
 # How much of the tile the letter and spore together cover, on their long axis.
 #
 # iOS masks the tile to a rounded rect and nothing else, so the artwork can run
@@ -109,7 +119,34 @@ def spore(prefix, source):
     for old in set(re.findall(r'id="(w[md]-[\w-]+)"', body)):
         body = body.replace(f'id="{old}"', f'id="{prefix}-{old}"')
         body = body.replace(f"url(#{old})", f"url(#{prefix}-{old})")
-    return body.strip()
+    return scale_corona(body.strip())
+
+
+def scale_corona(body, k=None, cx=60.0, cy=60.0):
+    """Enlarge the corona hexagon (and its gradient) about the spore's centre.
+
+    See CORONA_ICON_SCALE for why. Applied to the lifted markup rather than to
+    the wordmark source, so the tittle over the "i" keeps its print-scale hex
+    and only the icon takes the tile-scale one.
+    """
+    k = CORONA_ICON_SCALE if k is None else k
+    pt = lambda x, y: (cx + (x - cx) * k, cy + (y - cy) * k)
+
+    m = re.search(r'<polygon points="([0-9., ]+)" fill="url\(#([\w-]*-co)\)"/>', body)
+    if not m:
+        sys.exit("no corona polygon in the lifted spore - the wordmark changed shape")
+    pts = " ".join("{:.2f},{:.2f}".format(*pt(*map(float, p.split(","))))
+                   for p in m.group(1).split())
+    body = body.replace(m.group(0), f'<polygon points="{pts}" fill="url(#{m.group(2)})"/>')
+
+    g = re.search(r'(<radialGradient id="[\w-]*-co" gradientUnits="userSpaceOnUse" cx=")'
+                  r'([\d.]+)(" cy=")([\d.]+)(" r=")([\d.]+)(")', body)
+    if not g:
+        sys.exit("no corona gradient in the lifted spore - the wordmark changed shape")
+    gx, gy = pt(float(g.group(2)), float(g.group(4)))
+    return body.replace(
+        g.group(0),
+        f"{g.group(1)}{gx:.2f}{g.group(3)}{gy:.2f}{g.group(5)}{float(g.group(6)) * k:.2f}{g.group(7)}")
 
 
 def letter_path():

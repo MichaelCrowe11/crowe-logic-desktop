@@ -1564,12 +1564,23 @@
     },
 
     operator: {
-      status: () => ({
-        app: "running", agents: runs.size, agentIds: [...runs.keys()],
-        terminals: 0, terminalIds: [], mcpServers: 0, mcpTools: 0,
-        cwd: "", autonomy: config.autonomy || "edit", version: BUILD.version,
-        uptime: Math.round(performance.now() / 1000), platform: PLATFORM,
-      }),
+      /* Every non-array key here is printed verbatim as a tile label in the
+         Operator Control panel — mountOperator() iterates the object rather
+         than owning a schema. On the desktop those keys are the machine's own
+         vocabulary (cwd, mcpServers) about a machine the user configured. On a
+         phone they were noise: three counters pinned to zero and an empty tile
+         labelled "cwd". So the phone reports in its own words, and only what
+         has a value here: the run state, the paired machine, and the tier.
+         agentIds/terminalIds stay for the "Active" lists the panel also reads. */
+      status: () => {
+        const host = remoteBase().replace(/^https?:\/\//, "").replace(/:\d+$/, "");
+        return {
+          app: "running", agents: runs.size, agentIds: [...runs.keys()], terminalIds: [],
+          "paired machine": remoteConfigured() ? host : "none — pair in Settings",
+          autonomy: config.autonomy || "edit", version: BUILD.version,
+          platform: PLATFORM === "ios" ? "iOS" : PLATFORM === "android" ? "Android" : "browser",
+        };
+      },
       stopAll: () => { for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
     },
 

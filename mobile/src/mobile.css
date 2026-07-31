@@ -56,6 +56,12 @@ body.mobile .m-desktop-only { display: none !important; }
    phone still cannot offer it, because there would be nowhere for it to go. */
 body.mobile:not(.m-paired) #autonomy .seg-btn[data-tier="execute"] { display: none !important; }
 
+/* Same rule, same reason, in Studio: "Copy psynth · open Terminal" copies a
+   CLI command and opens the terminal pane. Paired, that console runs it on the
+   desktop; unpaired, the button ends at a pane explaining there is no shell —
+   an offer the app already knows it cannot keep. */
+body.mobile:not(.m-paired) #studio-film { display: none !important; }
+
 /* The console the terminal pane becomes once a machine is paired. Drawn where
    xterm would have been, and deliberately plain: this is one command and one
    result, not a screen a curses program can address. */
