@@ -18,9 +18,16 @@ echo "publish-r2: publishing $version from $root"
 # Uploads to the R2 API fail intermittently regardless of file size, so a single
 # attempt is not enough to get a release out. Observed on a run where a 20 MB
 # object failed and a 110 MB object immediately after it succeeded.
+#
+# Large bodies are also streamed rather than sent with --file: a sized single
+# PUT above ~60-90 MB can die instantly ("fetch failed" in under 200ms, before
+# anything is sent) on networks that a streamed body crosses fine. Measured on
+# the same connection, same day: 90 MB --file failed five times running, 90 MB
+# --pipe passed first try. Streaming costs nothing on good networks, so it is
+# not worth keying on size.
 put() {
   local key="$1" file="$2" attempt=1
-  until npx wrangler r2 object put "crowe-releases/$key" --file "$file" --remote --config deploy/releases-worker/wrangler.jsonc; do
+  until npx wrangler r2 object put "crowe-releases/$key" --pipe --remote --config deploy/releases-worker/wrangler.jsonc < "$file"; do
     if [ "$attempt" -ge 5 ]; then
       echo "publish-r2: giving up on $key after $attempt attempts" >&2
       return 1
