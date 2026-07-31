@@ -1642,7 +1642,7 @@ async function refreshHome() {
      router's own labels leaked here for a release: role keys on the left
      ("long-context") and provenance on the right ("bridge" = static fallback
      table, "catalog" = role-tagged gateway entry, "default" = neither), which
-     rendered rows like "reasoning  Kimi-K2.5 bridge" — three words from three
+     rendered rows like "reasoning · <deployment id> · bridge" — words from three
      different internal registers. Provenance is an engineering answer and the
      Deployments lane still gives it; here the only distinction worth ink is
      whether a specialist takes the question. Specialist rows are tagged

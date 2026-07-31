@@ -26,13 +26,13 @@
   const DEMO_CATALOG = [
     ["crowelm", "CroweLM", true, "", true, true],
     ["crowelm-grower", "CroweLM Grower", true, "cultivation", true, true],
-    ["Kimi-K2.5", "Kimi K2.5", true, "reasoning", true, true],
+    ["crowelm-reasoner", "CroweLM Reasoner", true, "reasoning", true, true],
     ["GLM-4.7", "GLM 4.7", true, "", true, true],
     ["crowelm-talon", "Crowe Talon", false, "", true, true],
     ["crowelm-mini", "CroweLM Mini", false, "", true, true],
     ["GLM-4.7-Flash", "GLM 4.7 Flash", false, "", true, true],
     ["GLM-4.6V", "GLM 4.6V", false, "", true, false],
-    ["Kimi-K2", "Kimi K2", false, "", true, true],
+    ["crowelm-scout", "CroweLM Scout", false, "", true, true],
     ["Qwen3-Coder-480B", "Qwen3 Coder 480B", false, "", true, true],
     ["Qwen3-235B-A22B", "Qwen3 235B A22B", false, "", true, true],
     ["Qwen3-VL-72B", "Qwen3 VL 72B", false, "", true, false],
@@ -229,7 +229,10 @@
         resolved: {
           cultivation: { model: "crowelm-grower", source: "bridge" },
           coding: { model: "crowelm", source: "default" },
-          reasoning: { model: "Kimi-K2.5", source: "bridge" },
+          // The demo's reasoning specialist resolves from the catalog, the way
+          // a real one joins: role-tagged on the gateway under the gateway's
+          // own name. No third-party model id ships baked into this app.
+          reasoning: { model: "crowelm-reasoner", source: "catalog" },
           "long-context": { model: "crowelm", source: "default" },
         },
         defaultModel: "crowelm",
