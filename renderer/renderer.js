@@ -1067,7 +1067,26 @@ async function renderCompanion(){
     // know why the battery went down: a phone can only reach a machine that is
     // awake, so the companion holds this one awake while it is listening.
     if (s.keepingAwake) rows.push('<p class="said">This Mac is being kept awake while the companion runs, so the phone can reach it. The display still sleeps.</p>');
-    rows.push('<div style="display:flex;gap:8px"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-rotate" class="ghost sm">Rotate token</button></div>');
+    rows.push('<div style="display:flex;gap:8px;flex-wrap:wrap"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-add" class="ghost sm">Add a device</button><button id="companion-rotate" class="ghost sm">Revoke all</button></div>');
+
+    /* Which devices can drive this machine, and what they have done.
+
+       One shared token made "I lost my phone" and "unpair everything I own" the
+       same action, and made the log able to say only that something ran. A
+       device each fixes both: revoke the one that is gone, and every line says
+       who. */
+    const devices = s.devices || [];
+    if (devices.length) {
+      rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Paired devices</b></div></div>');
+      rows.push(devices.map((d) => {
+        const seen = d.lastSeen ? new Date(d.lastSeen).toLocaleString() : "never used";
+        return `<div class="key-provider" style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1"><b>${esc(d.name)}</b><br><span class="said" style="opacity:.7">last used ${esc(seen)}</span></div>
+          <button class="ghost sm companion-revoke" data-id="${d.id}">Revoke</button></div>`;
+      }).join(""));
+    }
+    rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Recent activity</b><span>What the paired devices have run on this machine.</span></div></div>');
+    rows.push('<div id="companion-audit" class="said" style="max-height:180px;overflow:auto;font-family:var(--mono);font-size:12px"></div>');
   }
   body.innerHTML = rows.join("");
   const start = $("companion-start");
@@ -1081,10 +1100,44 @@ async function renderCompanion(){
   if (stop) stop.onclick = async () => { await window.crowe.companion.stop(); renderCompanion(); };
   const rotate = $("companion-rotate");
   if (rotate) rotate.onclick = async () => {
-    if (!confirm("Rotate the pairing token?\n\nEvery phone paired with this machine stops working until it scans the new code. This is what to press if a phone is lost.")) return;
+    if (!confirm("Revoke every paired device?\n\nAll of them stop working until they scan a new code. To remove just one, use Revoke beside its name.")) return;
     await window.crowe.companion.rotate();
     renderCompanion();
   };
+  const add = $("companion-add");
+  if (add) add.onclick = async () => {
+    const name = prompt("Name this device, so the log and the revoke button mean something later.", "iPhone");
+    if (name === null) return;
+    const r = await window.crowe.companion.addDevice(name);
+    if (r && r.error) { alert(r.error); return; }
+    await renderCompanion();
+    // Show the new device's code rather than the most recent one generally,
+    // since the point of adding a device is to pair that device.
+    const host = $("companion-qr");
+    if (host && r && r.svg) host.innerHTML = r.svg;
+  };
+  body.querySelectorAll(".companion-revoke").forEach((b) => {
+    b.onclick = async () => {
+      const row = b.closest(".key-provider");
+      const label = row ? (row.querySelector("b") || {}).textContent : "this device";
+      if (!confirm(`Revoke ${label}?\n\nIt stops working immediately. Other paired devices are unaffected.`)) return;
+      await window.crowe.companion.revokeDevice(b.dataset.id);
+      renderCompanion();
+    };
+  });
+  const auditHost = $("companion-audit");
+  if (auditHost) {
+    const entries = await window.crowe.companion.audit(40);
+    auditHost.innerHTML = entries.length
+      ? entries.map((e) => {
+        const when = new Date(e.at).toLocaleTimeString();
+        const what = e.kind === "run" ? `${e.command || ""}${e.exit ? ` (exit ${e.exit})` : ""}`
+          : e.kind === "denied" ? `refused: ${e.reason || ""}`
+          : `${e.kind} ${e.path || ""}`;
+        return `<div>${esc(when)} · ${esc(e.device || "unknown")} · ${esc(String(what).slice(0, 160))}</div>`;
+      }).join("")
+      : '<div style="opacity:.7">Nothing yet.</div>';
+  }
   if (running) {
     const r = await window.crowe.companion.pairSvg();
     const host = $("companion-qr");

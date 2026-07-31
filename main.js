@@ -1107,6 +1107,15 @@ ipcMain.handle("crowe:companion:start", async () => {
   catch (e) { return { error: String(e.message || e) }; }
 });
 ipcMain.handle("crowe:companion:stop", () => companionInstance().stop());
+ipcMain.handle("crowe:companion:devices", () => companionInstance().deviceList());
+ipcMain.handle("crowe:companion:addDevice", (_e, { name } = {}) => {
+  const c = companionInstance();
+  const d = c.addDevice(name);
+  // The token goes out as a drawn code, never as a string the renderer holds.
+  return { id: d.id, name: d.name, svg: c.pairUrl() ? qr.toSvg(c.pairUrlFor(d), { scale: 6 }) : null };
+});
+ipcMain.handle("crowe:companion:revokeDevice", (_e, { id } = {}) => companionInstance().revokeDevice(id));
+ipcMain.handle("crowe:companion:audit", (_e, { limit } = {}) => companionInstance().recentAudit(limit || 40));
 ipcMain.handle("crowe:companion:rotate", () => {
   const c = companionInstance();
   c.rotateToken();

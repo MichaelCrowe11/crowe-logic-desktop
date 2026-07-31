@@ -142,29 +142,123 @@ class Companion {
     this.token = "";
   }
 
-  /* The token outlives a restart, because a phone paired last week should not
-     be silently unpaired by quitting the app. 0600 so it is not readable by
-     other accounts on a shared machine. */
-  loadOrMintToken() {
-    if (this.token) return this.token;
+  /* One token per device, not one token.
+
+     A single shared secret made "I lost my phone" and "unpair everything I own"
+     the same action. With a device each, revoking the lost one leaves the iPad
+     and the second Mac working, and the log can say which device ran what
+     rather than only that something did.
+
+     The tokens are stored as written rather than hashed, which is the weaker of
+     the two options and chosen deliberately: hashing would mean a pairing code
+     could never be shown twice, and a QR you cannot redisplay is a QR people
+     photograph. The file is 0600 in userData — the same exposure the single
+     token already had, and the same as every other credential this app keeps.
+
+     Devices outlive a restart, because a phone paired last week should not be
+     silently unpaired by quitting the app. */
+  devicesPath() { return this.tokenFile.replace(/\.token$/, "") + ".devices.json"; }
+
+  loadDevices() {
+    if (this.devices) return this.devices;
     try {
-      const saved = fs.readFileSync(this.tokenFile, "utf8").trim();
-      if (saved.length >= 32) { this.token = saved; return this.token; }
-    } catch { /* no token yet, or unreadable — mint a new one below */ }
-    this.token = crypto.randomBytes(32).toString("hex");
+      const raw = JSON.parse(fs.readFileSync(this.devicesPath(), "utf8"));
+      if (Array.isArray(raw)) { this.devices = raw; return this.devices; }
+    } catch { /* none yet, or unreadable */ }
+    // A single token from before this existed becomes the first device, so an
+    // upgrade does not silently unpair the phone already in someone's pocket.
+    this.devices = [];
     try {
-      fs.mkdirSync(path.dirname(this.tokenFile), { recursive: true });
-      fs.writeFileSync(this.tokenFile, this.token, { mode: 0o600 });
-    } catch { /* in-memory only; pairing still works until the app quits */ }
-    return this.token;
+      const legacy = fs.readFileSync(this.tokenFile, "utf8").trim();
+      if (legacy.length >= 32) {
+        this.devices.push({ id: crypto.randomUUID(), name: "Paired device", token: legacy, created: Date.now(), lastSeen: null });
+        this.saveDevices();
+      }
+    } catch { /* nothing to carry over */ }
+    return this.devices;
   }
 
-  // Rotating invalidates every paired phone, which is the point: it is what you
-  // press when one is lost.
+  saveDevices() {
+    try {
+      fs.mkdirSync(path.dirname(this.devicesPath()), { recursive: true });
+      fs.writeFileSync(this.devicesPath(), JSON.stringify(this.devices, null, 1), { mode: 0o600 });
+    } catch { /* in memory only; pairing still works until the app quits */ }
+  }
+
+  addDevice(name) {
+    const devices = this.loadDevices();
+    const device = {
+      id: crypto.randomUUID(),
+      name: String(name || "").trim() || `Device ${devices.length + 1}`,
+      token: crypto.randomBytes(32).toString("hex"),
+      created: Date.now(),
+      lastSeen: null,
+    };
+    devices.push(device);
+    this.saveDevices();
+    this.onEvent({ type: "device-added", id: device.id, name: device.name });
+    return device;
+  }
+
+  revokeDevice(id) {
+    const devices = this.loadDevices();
+    const at = devices.findIndex((d) => d.id === id);
+    if (at < 0) return { error: "no such device" };
+    const [gone] = devices.splice(at, 1);
+    this.saveDevices();
+    this.onEvent({ type: "device-revoked", id: gone.id, name: gone.name });
+    return { ok: true, name: gone.name };
+  }
+
+  // Never the tokens. This is what the Settings pane lists.
+  deviceList() {
+    return this.loadDevices().map(({ id, name, created, lastSeen }) => ({ id, name, created, lastSeen }));
+  }
+
+  // Constant-time against every device, and the loop does not stop early: a
+  // wrong token should cost the same whether it nearly matched the first
+  // device or none of them.
+  deviceFor(bearer) {
+    let found = null;
+    for (const d of this.loadDevices()) if (tokenMatches(bearer, d.token)) found = d;
+    return found;
+  }
+
+  loadOrMintToken() {
+    const devices = this.loadDevices();
+    const device = devices[devices.length - 1] || this.addDevice("First device");
+    return device.token;
+  }
+
+  // Kept for the case the device list cannot answer: revoke everything at once.
   rotateToken() {
-    this.token = "";
+    this.devices = [];
+    this.saveDevices();
     try { fs.unlinkSync(this.tokenFile); } catch { /* already gone */ }
     return this.loadOrMintToken();
+  }
+
+  /* What ran, when, and which device asked.
+
+     A shell drivable from a pocket needs a record its owner can read. Events
+     already went to the window, where they scrolled past and were gone; this
+     survives a restart and can be read the morning after. JSONL so it can be
+     grepped with the same shell it is recording. */
+  auditPath() { return this.tokenFile.replace(/\.token$/, "") + ".audit.jsonl"; }
+
+  audit(entry) {
+    const line = JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n";
+    try {
+      fs.mkdirSync(path.dirname(this.auditPath()), { recursive: true });
+      fs.appendFileSync(this.auditPath(), line, { mode: 0o600 });
+    } catch { /* the log is not worth failing a command over */ }
+  }
+
+  recentAudit(limit = 50) {
+    try {
+      const lines = fs.readFileSync(this.auditPath(), "utf8").trim().split("\n");
+      return lines.slice(-limit).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse();
+    } catch { return []; }
   }
 
   status() {
@@ -174,7 +268,8 @@ class Companion {
       tailscale: tailscaleAddress(),
       name: this.name || magicDnsName(),
       keepingAwake: this.awakeId !== null,
-      paired: Boolean(this.token),
+      devices: this.deviceList(),
+      paired: this.loadDevices().length > 0,
     };
   }
 
@@ -182,9 +277,15 @@ class Companion {
   // the user's own screen for a few seconds — the same trust model as a printed
   // pairing code, and far better than typing 64 hex characters on a phone.
   pairUrl() {
-    if (!this.host) return null;
+    const devices = this.loadDevices();
+    return this.pairUrlFor(devices[devices.length - 1] || this.addDevice("First device"));
+  }
+
+  // The code for one named device, so two phones never share a credential.
+  pairUrlFor(device) {
+    if (!this.host || !device) return null;
     const reachable = this.name || this.host;
-    const q = new URLSearchParams({ url: `http://${reachable}:${this.port}`, token: this.loadOrMintToken() });
+    const q = new URLSearchParams({ url: `http://${reachable}:${this.port}`, token: device.token });
     return `com.crowelogic.mobile://pair?${q.toString()}`;
   }
 
@@ -194,8 +295,9 @@ class Companion {
     if (!host) {
       return { error: "No Tailscale address on this machine. Install Tailscale and sign in, then try again — the phone reaches this app over the tailnet, not the open internet." };
     }
-    this.loadOrMintToken();
-    if (!this.token) return { error: "could not mint a pairing token" };
+    // Asks the device registry, not the old single-token field: nothing writes
+    // this.token any more, so guarding on it refused to start every time.
+    if (!this.loadOrMintToken()) return { error: "could not mint a pairing token" };
 
     this.server = http.createServer((req, res) => this.handle(req, res));
     await new Promise((resolve, reject) => {
@@ -243,9 +345,16 @@ class Companion {
     if (url.pathname === "/health") return this.send(res, 200, { status: "ok", service: "crowe-logic-companion" });
 
     const auth = String(req.headers.authorization || "");
-    if (!tokenMatches(auth.replace(/^Bearer\s+/i, ""), this.token)) {
+    const device = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+    if (!device) {
+      // Logged, because repeated failures from inside a tailnet are worth
+      // seeing: it means a revoked device is still trying, or one that never
+      // should have had a token.
+      this.audit({ kind: "denied", path: url.pathname, reason: "bad or missing token" });
       return this.send(res, 401, { detail: "invalid or missing bearer token" });
     }
+    device.lastSeen = Date.now();
+    this.saveDevices();
     if (req.method !== "POST") return this.send(res, 405, { detail: "POST only" });
 
     let body;
@@ -253,10 +362,25 @@ class Companion {
     catch (e) { return this.send(res, 400, { detail: String(e.message || e) }); }
 
     try {
-      if (url.pathname === "/run") return this.send(res, 200, await this.run(body));
-      if (url.pathname === "/read_file") return this.send(res, 200, this.readFile(body));
-      if (url.pathname === "/write_file") return this.send(res, 200, this.writeFile(body));
+      if (url.pathname === "/run") {
+        const result = await this.run(body);
+        this.audit({ kind: "run", device: device.name, deviceId: device.id,
+                     command: String(body.command || "").slice(0, 500), exit: result.exit_code });
+        return this.send(res, 200, result);
+      }
+      if (url.pathname === "/read_file") {
+        const result = this.readFile(body);
+        this.audit({ kind: "read", device: device.name, deviceId: device.id, path: result.path });
+        return this.send(res, 200, result);
+      }
+      if (url.pathname === "/write_file") {
+        const result = this.writeFile(body);
+        this.audit({ kind: "write", device: device.name, deviceId: device.id,
+                     path: result.path, bytes: result.bytes_written });
+        return this.send(res, 200, result);
+      }
     } catch (e) {
+      this.audit({ kind: "error", device: device.name, path: url.pathname, detail: String(e.message || e).slice(0, 200) });
       return this.send(res, e.status || 400, { detail: String(e.message || e) });
     }
     return this.send(res, 404, { detail: `no such route: ${url.pathname}` });
