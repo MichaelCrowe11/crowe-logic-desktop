@@ -1042,6 +1042,52 @@ async function refreshStatus() {
 
 // ── Settings ──
 const modal = $("settings");
+/* The phone companion pane.
+
+   The QR is drawn in the main process and arrives as finished markup, so the
+   pairing token — which is a shell credential — is never a string this side
+   holds, and cannot end up in a log line or a crash report. It is only
+   requested while the companion is actually running. */
+async function renderCompanion(){
+  const body = $("companion-body"), badge = $("companion-state");
+  if (!body) return;
+  const s = await window.crowe.companion.status();
+  const running = Boolean(s && s.running);
+  badge.textContent = running ? `Listening on ${s.host}` : (s && s.tailscale ? "Off" : "Tailscale not found");
+  const rows = [];
+  if (!running) {
+    rows.push(s && s.tailscale
+      ? `<p class="said">This machine is <b>${s.tailscale}</b> on your tailnet. Start the companion and scan the code with the Crowe Logic app on your phone.</p>`
+      : `<p class="said">No Tailscale address on this machine. The phone reaches this app over the tailnet rather than the open internet, so install Tailscale and sign in, then reopen Settings.</p>`);
+    rows.push(`<button id="companion-start" class="primary sm"${s && s.tailscale ? "" : " disabled"}>Start companion</button>`);
+  } else {
+    rows.push('<div id="companion-qr" style="display:flex;justify-content:center;padding:10px 0"></div>');
+    rows.push(`<p class="said">Open Crowe Logic on your phone and scan this. The code carries the address and a one-machine token; it stops working the moment you press Stop or Rotate.</p>`);
+    rows.push('<div style="display:flex;gap:8px"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-rotate" class="ghost sm">Rotate token</button></div>');
+  }
+  body.innerHTML = rows.join("");
+  const start = $("companion-start");
+  if (start) start.onclick = async () => {
+    start.disabled = true; start.textContent = "Starting";
+    const r = await window.crowe.companion.start();
+    if (r && r.error) { body.innerHTML = `<p class="said">${r.error}</p>`; return; }
+    renderCompanion();
+  };
+  const stop = $("companion-stop");
+  if (stop) stop.onclick = async () => { await window.crowe.companion.stop(); renderCompanion(); };
+  const rotate = $("companion-rotate");
+  if (rotate) rotate.onclick = async () => {
+    if (!confirm("Rotate the pairing token?\n\nEvery phone paired with this machine stops working until it scans the new code. This is what to press if a phone is lost.")) return;
+    await window.crowe.companion.rotate();
+    renderCompanion();
+  };
+  if (running) {
+    const r = await window.crowe.companion.pairSvg();
+    const host = $("companion-qr");
+    if (host) host.innerHTML = r && r.svg ? r.svg : `<p class="said">${(r && r.error) || "could not draw the code"}</p>`;
+  }
+}
+
 async function renderKeyManager(){
   const result=await window.crowe.keys.list(),host=$("key-provider-list"),vault=$("key-vault-state");
   vault.textContent=result.encrypted?"Native vault ready":"Vault unavailable";
@@ -1086,7 +1132,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-verifier").checked = c.verifier !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderSpacePicker(); renderPlugins(); renderKeyManager();
+  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));

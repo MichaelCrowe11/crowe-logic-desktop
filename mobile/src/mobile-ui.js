@@ -232,6 +232,63 @@
     if (row) row.classList.add("m-desktop-only");
   }
 
+  /* Remote machine.
+     "Workspace folder" is hidden just above because a phone has no folder. What
+     it has instead is a machine it can reach: Crowe Terminal, over Tailscale.
+     So the row that described a workspace this app cannot have is replaced,
+     in place, by the one that gives it back.
+
+     Built here rather than in renderer/index.html because it is phone-only —
+     the desktop already stands where these calls are trying to reach. The
+     token field follows the same rule as the Crowe ID one directly above it:
+     blank keeps whatever is stored, and nothing ever reads it back out. */
+  const remoteSection = document.createElement("section");
+  remoteSection.className = "key-manager";
+  remoteSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Remote machine</b>',
+    "<span>A machine this phone may drive. Crowe Terminal on your desktop, reached over Tailscale, so the shell is never on the public internet. ",
+    "The tier in the composer still decides: Read reads files, Edit writes them, Execute runs commands.</span></div>",
+    '<span id="m-remote-state" class="badge">Not paired</span></div>',
+    '<label>Address <input id="m-remote-url" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://100.x.y.z:8765" /></label>',
+    '<label>Token <input id="m-remote-token" type="password" placeholder="paste to update; blank keeps current" /></label>',
+    '<button id="m-remote-pair" class="ghost sm" type="button">Pair and test</button>',
+  ].join("");
+  const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
+  if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
+
+  const remoteBadge = () => document.getElementById("m-remote-state");
+  function paintRemote(s) {
+    const badge = remoteBadge();
+    if (!badge) return;
+    if (!s || !s.configured) { badge.textContent = "Not paired"; return; }
+    badge.textContent = s.reachable ? "Reachable" : (s.error ? "No answer" : `HTTP ${s.status}`);
+  }
+  // The address is safe to show; the token is not, and is never read back.
+  (async () => {
+    try {
+      const cfg = await window.crowe.getConfig();
+      const url = document.getElementById("m-remote-url");
+      if (url && cfg && cfg.remote && cfg.remote.host) url.value = cfg.remote.host;
+      if (cfg && cfg.remote && cfg.remote.configured) paintRemote(await window.crowe.remote.status());
+    } catch { /* settings can open before the bridge has read its config */ }
+  })();
+  const pairBtn = document.getElementById("m-remote-pair");
+  if (pairBtn) {
+    pairBtn.addEventListener("click", async () => {
+      const urlEl = document.getElementById("m-remote-url");
+      const tokEl = document.getElementById("m-remote-token");
+      const badge = remoteBadge();
+      if (badge) badge.textContent = "Checking";
+      pairBtn.disabled = true;
+      try {
+        const r = await window.crowe.remote.pair({ url: (urlEl && urlEl.value) || "", token: (tokEl && tokEl.value) || "" });
+        if (tokEl) tokEl.value = "";              // never leave a credential sitting in the field
+        if (r && r.error) { if (badge) badge.textContent = r.error; return; }
+        paintRemote(r);
+      } finally { pairBtn.disabled = false; }
+    });
+  }
+
   /* The Key Manager's own copy promises the operating system's vault. On a
      phone the keys are in this app's private storage — real isolation from
      other apps, no hardware encryption, and included in a device backup. The

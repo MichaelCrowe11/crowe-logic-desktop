@@ -40,6 +40,18 @@
   const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;   // same display rates as main.js
   const MAX_ROUNDS = 12;        // half the desktop's: no shell means far shorter loops
   const TOOL_RESULT_MAX = 4000;
+  // Long command output matters at both ends: what ran is at the top, why it
+  // failed is at the bottom. The turn loop slices tool text to TOOL_RESULT_MAX
+  // before it reaches the model, which would keep the top and throw away the
+  // reason — so machine output is clipped from the middle first, and the
+  // per-stream budgets below add up to less than that cap.
+  const REMOTE_OUT_MAX = 2200, REMOTE_ERR_MAX = 1200;
+  function clip(text, max) {
+    const s = String(text);
+    if (s.length <= max) return s;
+    const head = Math.floor(max * 0.35), tail = max - head - 40;
+    return `${s.slice(0, head)}\n... ${s.length - head - tail} bytes cut ...\n${s.slice(-tail)}`;
+  }
   const CONTEXT_BUDGET_CHARS = 120000;
 
   // ─── Storage ───────────────────────────────────────────────────────────────
@@ -90,6 +102,11 @@
     turnBudgetUsd: 2,
     telemetry: true,
     onboarded: false,
+    // The machine this phone may drive, and the token that proves it may.
+    // Empty means the remote tools do not exist at all — they are not offered
+    // to the model, so it cannot claim a shell it has no way to reach.
+    remoteUrl: "",
+    remoteToken: "",
     licenseWorkspaceId: "",
     keys: {},
   };
@@ -126,6 +143,9 @@
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
       version: BUILD.version, platform: PLATFORM, mobile: true,
+      // The paired machine, never its token. publicConfig is what the renderer
+      // reads and what a panel could print; the credential stays in the bridge.
+      remote: { configured: remoteConfigured(), host: remoteBase() },
     };
   }
 
@@ -155,6 +175,112 @@
     const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text" });
     const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
     return { ok: res.status >= 200 && res.status < 300, status: res.status, text };
+  }
+
+  // ─── The machine at the other end ──────────────────────────────────────────
+  /* A phone cannot run a shell — iOS will not fork a process for you, and the
+     bridge says so everywhere else in this file. What it can do is drive a
+     machine that can. Crowe Terminal is already that server: /run, /read_file
+     and /write_file over bearer auth, running under launchd on the desktop.
+
+     Reached over Tailscale, so the shell is never on the public internet: both
+     devices are already on the tailnet, the address is a 100.x one that only
+     resolves inside it, and the token is checked on every call.
+
+     Native HTTP, not fetch. The tailnet address is plain http on a private
+     network — a webview would refuse it as mixed content from an https origin
+     and, on Android, `allowMixedContent: false` in capacitor.config.json says
+     so explicitly. CapacitorHttp is also how these calls avoid the CORS wall
+     the token endpoint taught us about. */
+  const remoteBase = () => String(config.remoteUrl || "").replace(/\/$/, "");
+  const remoteConfigured = () => Boolean(remoteBase());
+
+  async function remoteCall(path, payload, timeoutNote) {
+    const base = remoteBase();
+    if (!base) return { error: "No machine is paired with this phone. Settings → Remote machine." };
+    const headers = { "Content-Type": "application/json" };
+    if (config.remoteToken) headers.Authorization = `Bearer ${config.remoteToken}`;
+    let r;
+    try {
+      r = await nativePost(`${base}${path}`, headers, JSON.stringify(payload));
+    } catch (e) {
+      return { error: `could not reach ${base}: ${String(e).slice(0, 120)}` };
+    }
+    if (!r) return { error: "the remote call needs the installed app" };
+    let data = null;
+    try { data = JSON.parse(r.text || "null"); } catch { /* not json — reported below */ }
+    if (r.status === 401) return { error: "the machine rejected this phone's token" };
+    if (r.status === 404 && path !== "/health") return { error: `the machine has no ${path} endpoint` };
+    if (!r.ok) return { error: (data && data.detail) || `${timeoutNote || "remote call"} failed (HTTP ${r.status})` };
+    return { ok: true, data };
+  }
+
+  /* Pairing by link, which is how a person who is not the author of this app
+     will ever do it. Typing a tailnet address and a 48-character token on a
+     phone keyboard is not a setup flow; scanning a code the desktop shows is.
+     The desktop puts com.crowelogic.mobile://pair?url=…&token=… into a QR, the
+     camera opens it, and this handler receives it.
+
+     It asks first, every time. A custom scheme is not a private channel — any
+     web page the user visits can navigate to one, so a link alone must never
+     be enough to repoint a phone at someone else's machine. An attacker who
+     could do that silently would not gain a shell, but they would receive
+     every command the user asked for and get to answer with whatever they
+     liked. One confirmation, naming the host, closes that. */
+  function pairFromUrl(rawUrl) {
+    const url = String(rawUrl || "");
+    if (!/^com\.crowelogic\.mobile:\/\/pair\b/i.test(url)) return false;
+    let host = "", token = "";
+    try {
+      const q = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+      host = String(q.get("url") || "").trim().replace(/\/$/, "");
+      token = String(q.get("token") || "");
+    } catch { return false; }
+    if (!/^https?:\/\//i.test(host)) return false;
+    (async () => {
+      await ready;
+      const ok = window.confirm(
+        `Pair this phone with ${host}?\n\n` +
+        "It will be able to read files, write files and run shell commands there, " +
+        "as the tier you choose allows.\n\nOnly continue if you started this."
+      );
+      if (!ok) return;
+      await saveConfig({ remoteUrl: host, remoteToken: token });
+      const s = await remoteStatus();
+      window.alert(s.reachable ? `Paired with ${host}.` : `Saved ${host}, but it did not answer${s.error ? `: ${s.error}` : "."}`);
+    })();
+    return true;
+  }
+
+  /* Registered once for the life of the app, not inside signIn — that listener
+     exists only while a sign-in is in flight. Both run on every appUrlOpen and
+     each ignores what is not addressed to it.
+
+     getLaunchUrl covers the cold start: a phone that was not already running
+     when the link was opened never sees an appUrlOpen event, it just launches
+     with the URL attached. Handling only the warm case is why deep links work
+     when you test them and fail for the person who installed the app. */
+  (() => {
+    const App = plugin("App");
+    if (!App) return;
+    Promise.resolve(App.addListener("appUrlOpen", (e) => { pairFromUrl(e && e.url); }));
+    if (App.getLaunchUrl) {
+      Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
+    }
+  })();
+
+  async function remoteStatus() {
+    const base = remoteBase();
+    if (!base) return { configured: false };
+    const headers = {};
+    if (config.remoteToken) headers.Authorization = `Bearer ${config.remoteToken}`;
+    try {
+      const res = await CapHttp.request({ url: `${base}/health`, method: "GET", headers, responseType: "text", connectTimeout: 6000, readTimeout: 6000 });
+      const alive = res.status >= 200 && res.status < 300;
+      return { configured: true, host: base, reachable: alive, status: res.status };
+    } catch (e) {
+      return { configured: true, host: base, reachable: false, error: String(e).slice(0, 140) };
+    }
   }
 
   // ─── Crowe ID ──────────────────────────────────────────────────────────────
@@ -556,12 +682,77 @@
     },
   };
 
+  /* The machine tools. Same three the desktop has, except the process runs on
+     the desktop instead of here, which is the only honest way a phone gets a
+     shell. They appear only when a machine is paired: an unpaired phone is not
+     offered a shell it cannot reach, so the model cannot promise one. */
+  const REMOTE_RUN = {
+    type: "function",
+    function: {
+      name: "run_command",
+      description: "Run a shell command on the paired desktop machine and return its exit code, stdout and stderr. This is a real shell on a real machine — prefer reading over writing, and say what you are about to run.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command to run, e.g. 'git -C ~/Projects/foo status'." },
+          cwd: { type: "string", description: "Working directory. Defaults to the machine's home directory." },
+          timeout: { type: "integer", description: "Seconds to wait before the machine kills it. Default 60." },
+        },
+        required: ["command"],
+      },
+    },
+  };
+  const REMOTE_READ = {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read a text file from the paired desktop machine.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute or ~-relative path on that machine." },
+          max_bytes: { type: "integer", description: "Cap on bytes returned. Default 100000." },
+        },
+        required: ["path"],
+      },
+    },
+  };
+  const REMOTE_WRITE = {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "Write a text file on the paired desktop machine, replacing it entirely. Read it first unless you are creating it.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute or ~-relative path on that machine." },
+          content: { type: "string", description: "The full contents to write." },
+        },
+        required: ["path", "content"],
+      },
+    },
+  };
+
   // The tier the user picked in the composer decides whether the model may
   // write. Plan and Read look at the log; Edit and Execute may add to it.
   const mayWrite = () => config.autonomy === "edit" || config.autonomy === "execute";
   function toolsForTurn() {
     const tools = [READ_GROW, OPEN_URL];
     if (mayWrite() && Object.keys(GROW.GROW_SCHEMA).length) tools.push(growToolSpec());
+    /* The tier ladder means the same thing here as it does on the desktop, and
+       it is the whole safety story for a shell you are carrying in a pocket:
+         plan     — nothing on the machine, not even a read
+         readonly — read files
+         edit     — read and write files
+         execute  — and run commands
+       Running a command is last on purpose. `write_file` can ruin a file;
+       `run_command` can ruin a machine, and neither this app nor the server
+       can tell a build from an `rm -rf` by reading the string. */
+    if (remoteConfigured()) {
+      if (config.autonomy !== "plan") tools.push(REMOTE_READ);
+      if (mayWrite()) tools.push(REMOTE_WRITE);
+      if (config.autonomy === "execute") tools.push(REMOTE_RUN);
+    }
     return tools;
   }
 
@@ -590,18 +781,87 @@
       else window.open(url, "_blank", "noopener");
       return { text: `opened ${url}`, status: "ok" };
     }
+
+    /* The machine tools. Each re-checks the tier rather than trusting that it
+       was never offered: the model is handed a tool list per turn, but a turn
+       can span a tier change, and a transcript can be replayed. The list is
+       what the model sees; this is what actually decides. */
+    if (name === "run_command" || name === "read_file" || name === "write_file") {
+      if (!remoteConfigured()) {
+        return { text: "refused: no machine is paired with this phone (Settings → Remote machine)", status: "error" };
+      }
+      const allowed = name === "read_file" ? config.autonomy !== "plan"
+        : name === "write_file" ? mayWrite()
+        : config.autonomy === "execute";
+      if (!allowed) {
+        return { text: `refused: ${name} needs a higher tier than ${config.autonomy}`, status: "error" };
+      }
+      if (name === "run_command") {
+        const command = String(args.command || "").trim();
+        if (!command) return { text: "refused: no command given", status: "error" };
+        const timeout = Math.max(1, Math.min(600, Number(args.timeout) || 60));
+        const r = await remoteCall("/run", { command, cwd: args.cwd || undefined, timeout }, "the command");
+        if (r.error) return { text: `refused: ${r.error}`, status: "error" };
+        const d = r.data || {};
+        // Both streams, and the exit code, always. A model shown only stdout
+        // reads a failed command as an empty success and carries on.
+        const parts = [`exit ${d.exit_code}`];
+        if (d.stdout) parts.push(`stdout:\n${clip(d.stdout, REMOTE_OUT_MAX)}`);
+        if (d.stderr) parts.push(`stderr:\n${clip(d.stderr, REMOTE_ERR_MAX)}`);
+        if (!d.stdout && !d.stderr) parts.push("(no output)");
+        return { text: parts.join("\n"), status: d.exit_code === 0 ? "ok" : "error" };
+      }
+      if (name === "read_file") {
+        const path = String(args.path || "");
+        if (!path) return { text: "refused: no path given", status: "error" };
+        const max = Math.max(1, Math.min(200000, Number(args.max_bytes) || 100000));
+        const r = await remoteCall("/read_file", { path, max_bytes: max }, "the read");
+        if (r.error) return { text: `refused: ${r.error}`, status: "error" };
+        const d = r.data || {};
+        return { text: `${d.path}${d.truncated ? " (truncated)" : ""}:\n${clip(d.content || "", TOOL_RESULT_MAX - 200)}`, status: "ok" };
+      }
+      const path = String(args.path || "");
+      if (!path) return { text: "refused: no path given", status: "error" };
+      const r = await remoteCall("/write_file", { path, content: String(args.content ?? "") }, "the write");
+      if (r.error) return { text: `refused: ${r.error}`, status: "error" };
+      const d = r.data || {};
+      return { text: `wrote ${d.bytes_written} bytes to ${d.path}`, status: "ok" };
+    }
     return { text: `unknown tool ${name}`, status: "error" };
   }
 
   function systemPrompt(route) {
     const user = currentUser();
+    /* What the model is told about its own reach has to track what
+       toolsForTurn() actually handed it. This paragraph used to say flatly that
+       there was no shell and none was coming, which was true until the phone
+       could drive a machine — and then it was the reason a paired app still
+       answered "I cannot run anything on your computer" while holding a working
+       run_command. A prompt that contradicts the tool list wins, every time. */
+    const machine = remoteConfigured() ? [
+      `This phone is paired with a machine at ${remoteBase()}, reached privately over Tailscale. It is the`,
+      "user's own desktop, and it is a real one — the same files and the same shell they would sit down to.",
+      config.autonomy === "plan"
+        ? "The tier is Plan, so you may not touch that machine at all this turn. Say so if asked, and plan instead."
+        : [
+          "You reach it with these tools, and the tier decides which you were given:",
+          "  read_file  — read a file there (Read tier and above)",
+          config.autonomy === "readonly" ? "" : "  write_file — replace a file there (Edit and above)",
+          config.autonomy === "execute" ? "  run_command — run a shell command there" : "  run_command is NOT available at this tier; say the user can switch to Execute",
+        ].filter(Boolean).join("\n"),
+      "Never claim you cannot reach the user's computer while you hold these tools. Prefer reading before",
+      "writing, say what you are about to run before you run it, and quote the exit code when it is not 0.",
+    ].join("\n") : [
+      "No machine is paired with this phone, and a phone cannot run a shell of its own. You genuinely cannot",
+      "run commands, read files or edit code right now — say so plainly, and add that pairing a machine in",
+      "Settings under Remote machine gives you all three against their desktop.",
+    ].join("\n");
     return [
-      "You are Crowe Logic, running on the user's phone. This is the mobile app, not the desktop one:",
-      "there is no shell, no file tree, no git checkout and no MCP server here. Do not offer to run commands,",
-      "read files, or edit code — say plainly that those live in the desktop app, and answer what you can.",
+      "You are Crowe Logic, running on the user's phone.",
+      machine,
       "",
-      "Your tools on this device are the grower's own log (read_grow, and log_grow when the tier allows it)",
-      "and open_url. Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
+      "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
+      "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
       "journal must come from read_grow, not from memory.",
       "",
       "Write for a small screen held in one hand, often in a grow room: short paragraphs, the answer first,",
@@ -741,8 +1001,17 @@
   // ─── Refused capabilities ──────────────────────────────────────────────────
   // One sentence each, naming the platform rather than the symptom, so the pane
   // that renders it can be read as an explanation instead of a bug.
-  const NO_WORKSPACE = "There is no workspace on mobile — files, git and the terminal live in the desktop app.";
-  const NO_SHELL = "iOS and Android do not let an app run a shell. Use Crowe Logic on the desktop for terminal work.";
+  /* These are answers, not apologies, and they have to stay true as the app
+     gains reach. iOS still will not let this process fork a shell — that part
+     is permanent. What changed is that the phone can now drive a machine that
+     will, so the unpaired copy names the way out instead of ending the
+     conversation at "use the desktop". */
+  const NO_WORKSPACE = () => (remoteConfigured()
+    ? `No workspace runs on the phone itself. Ask the agent instead — it reaches ${remoteBase()} and can read, write and run there.`
+    : "There is no workspace on the phone. Pair a machine in Settings → Remote machine and the agent can work on it from here.");
+  const NO_SHELL = () => (remoteConfigured()
+    ? `iOS will not let an app run its own shell. This phone drives ${remoteBase()} instead — set the tier to Execute and ask the agent to run the command.`
+    : "iOS will not let an app run its own shell. Pair a machine in Settings → Remote machine to run commands on it from here.");
   // Built per call, not once: BUILD is filled in by the async boot, and a
   // literal captured at load would report 0.0.0 forever.
   const updateState = () => ({ status: "idle", version: BUILD.version,
@@ -756,7 +1025,7 @@
       open(el) {
         const pre = document.createElement("pre");
         pre.className = "term-stub";
-        pre.textContent = NO_SHELL;
+        pre.textContent = NO_SHELL();
         el.appendChild(pre);
       }
       write() {} writeln() {} focus() {} dispose() {} onData() { return { dispose() {} }; }
@@ -847,32 +1116,75 @@
       },
     },
 
+    /* The paired machine. `pair` takes the token but nothing ever hands it
+       back: status reports whether the machine answers, not what it was told.
+       A phone is lost more often than a laptop, and a token that can be read
+       out of a settings pane is a token that leaves with it. */
+    remote: {
+      status: async () => { await ready; return remoteStatus(); },
+      pair: async ({ url, token } = {}) => {
+        await ready;
+        const clean = String(url || "").trim().replace(/\/$/, "");
+        if (clean && !/^https?:\/\//i.test(clean)) return { error: "the address needs http:// or https://" };
+        const patch = { remoteUrl: clean };
+        // Same rule Settings uses for the Crowe ID token: blank means keep the
+        // current one, so re-saving the address does not silently unpair.
+        if (typeof token === "string" && token !== "") patch.remoteToken = token;
+        if (!clean) patch.remoteToken = "";           // clearing the host clears the credential
+        await saveConfig(patch);
+        return { ok: true, ...(await remoteStatus()) };
+      },
+      run: async (command, cwd) => {
+        await ready;
+        if (config.autonomy !== "execute") {
+          return { error: `running commands needs the Execute tier; this turn is ${config.autonomy}` };
+        }
+        const r = await remoteCall("/run", { command: String(command || ""), cwd: cwd || undefined, timeout: 60 }, "the command");
+        return r.error ? { error: r.error } : { ok: true, ...r.data };
+      },
+    },
+
+    /* The desktop hosts a companion for a phone to drive. A phone is the other
+       end of that wire and cannot be both — iOS will not let this process fork
+       a shell to lend, and a phone has no stable address to be found at. So
+       these refuse rather than pretend, and point at the half that does exist:
+       remote.pair, above, is how this device joins someone else's companion. */
+    companion: {
+      status: async () => ({ running: false, host: null, port: 0, tailscale: null, paired: remoteConfigured(),
+                             error: "A phone cannot host the companion. It joins one — Settings → Remote machine." }),
+      start: async () => ({ error: "A phone cannot host a shell for another device. Run the companion on the desktop app and scan its code from here." }),
+      stop: async () => ({ running: false }),
+      rotate: async () => ({ error: "There is no companion token on this device; the machine you paired with owns it." }),
+      pairSvg: async () => ({ error: "The desktop app draws the pairing code. This is the device that scans it." }),
+      onEvent: () => noop(),
+    },
+
     // No edit or approval gate can fire on this device: the tools that would
     // raise one do not exist here. The methods stay so the renderer's handlers
     // resolve, and answer the only truthful thing.
-    edit: { decide: () => ({ ok: false, error: NO_WORKSPACE }) },
-    approval: { decide: () => ({ ok: false, error: NO_WORKSPACE }) },
+    edit: { decide: () => ({ ok: false, error: NO_WORKSPACE() }) },
+    approval: { decide: () => ({ ok: false, error: NO_WORKSPACE() }) },
 
     pty: {
-      start: () => ({ error: NO_SHELL }),
+      start: () => ({ error: NO_SHELL() }),
       input: () => {}, resize: () => {},
       close: () => ({ ok: true }),
       onData: noop,
     },
     fs: {
-      list: () => ({ cwd: "", entries: [], error: NO_WORKSPACE }),
-      read: () => ({ error: NO_WORKSPACE }),
+      list: () => ({ cwd: "", entries: [], error: NO_WORKSPACE() }),
+      read: () => ({ error: NO_WORKSPACE() }),
       walk: () => [],
       pick: () => [],
       readContext: () => [],
     },
     git: {
-      status: () => ({ repo: false, cwd: "", error: NO_WORKSPACE }),
-      diff: () => NO_WORKSPACE,
-      stage: () => ({ error: NO_WORKSPACE }), unstage: () => ({ error: NO_WORKSPACE }),
-      commit: () => ({ error: NO_WORKSPACE }), log: () => [], branches: () => [],
-      checkout: () => ({ error: NO_WORKSPACE }), pull: () => ({ error: NO_WORKSPACE }),
-      push: () => ({ error: NO_WORKSPACE }),
+      status: () => ({ repo: false, cwd: "", error: NO_WORKSPACE() }),
+      diff: () => NO_WORKSPACE(),
+      stage: () => ({ error: NO_WORKSPACE() }), unstage: () => ({ error: NO_WORKSPACE() }),
+      commit: () => ({ error: NO_WORKSPACE() }), log: () => [], branches: () => [],
+      checkout: () => ({ error: NO_WORKSPACE() }), pull: () => ({ error: NO_WORKSPACE() }),
+      push: () => ({ error: NO_WORKSPACE() }),
     },
 
     sessions: {

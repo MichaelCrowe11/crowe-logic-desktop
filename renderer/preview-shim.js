@@ -177,6 +177,18 @@
       ]; },
       async load() { return { messages: [] }; }, async new() { return { id: "x" }; }, async delete() { return { ok: true }; },
     },
+    /* The phone companion. Reported as off and refusing to start: the preview
+       runs in a plain browser with no main process to open a socket, and a
+       preview that drew a pairing code would be drawing one for a machine that
+       is not listening — a QR that fails to pair, with no way to tell why. */
+    companion: {
+      async status() { return { running: false, host: null, port: 8787, tailscale: null, paired: false }; },
+      async start() { return { error: "The companion needs the desktop app; this is the browser preview." }; },
+      async stop() { return { running: false }; },
+      async rotate() { return { running: false, paired: false }; },
+      async pairSvg() { return { error: "The companion is not running." }; },
+      onEvent() { return () => {}; },
+    },
     // Cultivation records. In-memory rather than canned returns, so the preview
     // exercises add and delete for real — the list is only half the surface.
     grow: {

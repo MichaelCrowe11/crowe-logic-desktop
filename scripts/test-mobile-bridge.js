@@ -134,7 +134,13 @@ function methodPaths(surface) {
   await check("mobile adds nothing the renderer cannot already call", () => {
     // Extra methods are not a failure in themselves, but an accidental one is a
     // method the desktop will never grow — so they are declared here by name.
-    const ALLOWED_EXTRA = [];
+    //
+    // remote.* is deliberate and phone-only. The desktop owns its workspace
+    // directly: main.js forks a pty, walks a real file tree, shells out to git.
+    // A phone cannot, so it drives a machine that can, over Tailscale. There is
+    // nothing for the desktop to grow here — it is already standing where these
+    // calls are trying to reach.
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });

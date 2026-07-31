@@ -17,7 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-mobile-bridge.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "test": "node scripts/test-harness.js && node scripts/test-mobile-bridge.js && node scripts/test-qr.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
     "preview:gen": "node scripts/gen-preview.js",
     "preview:check": "node scripts/gen-preview.js --check",
