@@ -379,6 +379,23 @@ const tests = [
     expect: { bold: 4, boldClosed: 12, code: 4, link: 4, plain: 20, stale: true, inFence: true },
   },
   {
+    name: "a lockup added after the launch veil lifts reuses no live lockup's ids",
+    body: `// The veil is a lockup that is removed once it has played. Suffixing by
+      // position meant every lockup added afterwards shifted down one and was
+      // handed a suffix a lockup still on screen was already using, so the
+      // entrance animation drove the wrong copy.
+      const veil = document.getElementById("launch"); if (veil) veil.remove();
+      const extra = document.createElement("span"); extra.className = "lockup";
+      document.body.appendChild(extra);
+      await liveLockups();
+      const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+      const dupes = [...new Set(ids.filter((v, i) => ids.indexOf(v) !== i))];
+      const out = { filled: extra.classList.contains("live"), dupes: dupes.length, veilGone: !document.getElementById("launch") };
+      extra.remove();
+      return out;`,
+    expect: { filled: true, dupes: 0, veilGone: true },
+  },
+  {
     name: "panel state persists to localStorage",
     body: `await __reset("columns");
       await addPanel("browser", { url: "https://example.com/p" });

@@ -2750,20 +2750,28 @@ async function maybeShowOnboarding(cfg) {
 
    Failure is quiet on purpose. If the fetch fails the mask is already on screen
    and correct, so the header keeps its logo and the app has nothing to report. */
+/* A counter, not a position. This used to suffix ids by the lockup's index
+   among all lockups, which held only while the set never shrank: the launch
+   veil is a lockup that is removed once it lifts, and every lockup added after
+   that would shift down one and be handed a suffix a live lockup was already
+   using. A number that only ever goes up cannot collide with anything already
+   on screen, whatever happens to the DOM in between.
+
+   Zero stays unsuffixed because the entrance choreography in the motion cut is
+   written against bare ids, so exactly one copy per document can play it. The
+   veil is first in the markup and therefore claims it — which is where the
+   entrance was always meant to be seen. */
+let lockupSeq = 0;
 async function liveLockups() {
-  const els = [...document.querySelectorAll(".lockup")];
-  // Indexed over ALL lockups, not just the pending ones, so the id suffix a
-  // lockup gets never changes: calling this again after a new one appears must
-  // not renumber — and therefore re-break — the ones already on screen.
-  const todo = els.filter((el) => !el.classList.contains("live"));
+  const todo = [...document.querySelectorAll(".lockup")].filter((el) => !el.classList.contains("live"));
   if (!todo.length) return;
   const markup = await wordmarkMotionMarkup();
   if (!markup) return;
-  els.forEach((el, i) => {
-    if (!todo.includes(el)) return;
-    const scoped = i === 0 ? markup
+  todo.forEach((el) => {
+    const n = lockupSeq++;
+    const scoped = n === 0 ? markup
       : markup.replace(/(\bid="|url\(#|#)(crowe-logic-motion|rotor-[a-z-]+|wordmark-letterforms|gold-thinking-mark)\b/g,
-        (_, lead, id) => `${lead}${id}-${i}`);
+        (_, lead, id) => `${lead}${id}-${n}`);
     el.insertAdjacentHTML("beforeend", scoped);
     // The inlined <svg> carries role="img" and its own <title>; the wrapper
     // already announces "Crowe Logic", so let the wrapper speak and hide the
@@ -2773,6 +2781,19 @@ async function liveLockups() {
     svg.removeAttribute("role");
     el.classList.add("live");
   });
+}
+
+/* The veil lifts in CSS; this only clears the node it leaves behind, so a
+   fixed, full-bleed element is not left sitting over the app for the rest of
+   the session. The timeout is the belt to animationend's braces: a window that
+   is hidden or occluded at launch may never fire the event at all, and a veil
+   that outlives its animation is invisible but still in the layer tree. */
+function dismissLaunch() {
+  const veil = document.getElementById("launch");
+  if (!veil) return;
+  const done = () => { if (veil.isConnected) veil.remove(); };
+  veil.addEventListener("animationend", done, { once: true });
+  setTimeout(done, 3000);
 }
 
 // ── Init ──
@@ -2796,6 +2817,7 @@ async function liveLockups() {
   // CroweMark survives only on transcript avatars, at `rest`: a hundred of
   // them turning at once would spend the signal the indicator depends on.
   liveLockups();
+  dismissLaunch();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
