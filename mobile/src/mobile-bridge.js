@@ -221,6 +221,41 @@
     [/^\s*sudo\b|\s\|\s*sudo\b|&&\s*sudo\b/, "runs as root"],
     [/\bssh-keygen\b|authorized_keys/i, "changes who can log in to this machine"],
   ];
+  /* Programs that want a keyboard.
+
+     Lifted out of the console so scripts/test-mobile-shell.js can exercise it:
+     the first version matched on the program name alone and refused
+     `claude -p "..."` — the very form its own error message recommends.
+     Being wrong about that is worse than not checking, because it teaches the
+     user the feature is broken. */
+  // Nothing here has a useful one-shot form, so the name alone is enough.
+  const INTERACTIVE = new Set([
+    "vim", "vi", "nvim", "nano", "emacs", "pico",
+    "top", "htop", "btop", "less", "more", "man", "tmux", "screen",
+    "irb", "psql", "mysql", "sqlite3", "ftp", "telnet", "watch",
+  ]);
+  /* These are interactive when invoked bare and perfectly usable with the
+     right flag — which matters, because the refusal message recommends
+     exactly those flags. Matching on the program name alone blocked
+     `claude -p "..."`, the alternative it had just suggested. */
+  const ONE_SHOT = {
+    claude: /(^|\s)(-p\b|--print\b)/,
+    codex: /(^|\s)(exec\b|-p\b|--print\b)/,
+    ssh: /^\S+\s+\S+\s+\S/,
+  };
+  const REPL_ALONE = new Set(["python", "python3", "node", "ruby", "php", "R", "julia", "bash", "zsh", "sh", "fish"]);
+
+  function needsKeyboard(command) {
+    const text = String(command || "").trim();
+    const head = text.split(/\s+/)[0].replace(/^.*\//, "");
+    const bare = text.split(/\s+/).length === 1;
+    if (INTERACTIVE.has(head)) return head;
+    if (ONE_SHOT[head]) return ONE_SHOT[head].test(text) ? null : head;
+    if (bare && REPL_ALONE.has(head)) return head;
+    return null;
+  }
+  window.__croweNeedsKeyboard = needsKeyboard;
+
   function persistenceRisk(text) {
     const s = String(text || "");
     for (const [re, why] of PERSISTENCE) if (re.test(s)) return why;
@@ -1156,12 +1191,6 @@
        — which opens a pager on some setups — is not the concern; the list is
        the interactive-by-default ones, and anything missed still times out
        safely rather than hanging forever. */
-    const INTERACTIVE = new Set([
-      "claude", "codex", "vim", "vi", "nvim", "nano", "emacs", "pico",
-      "top", "htop", "btop", "less", "more", "man", "ssh", "tmux", "screen",
-      "irb", "psql", "mysql", "sqlite3", "ftp", "telnet", "watch", "tail-f",
-    ]);
-    const REPL_ALONE = new Set(["python", "python3", "node", "ruby", "php", "R", "julia", "bash", "zsh", "sh", "fish"]);
 
     async function run(command) {
       write(`${cwd} $ ${command}`, "term-console-echo");
@@ -1173,9 +1202,8 @@
       if (risky && !window.confirm(`This ${risky}.\n\n${command.slice(0, 300)}\n\nRun it?`)) {
         return write("cancelled", "term-console-note");
       }
-      const head = command.trim().split(/\s+/)[0].replace(/^.*\//, "");
-      const bare = command.trim().split(/\s+/).length === 1;
-      if (INTERACTIVE.has(head) || (bare && REPL_ALONE.has(head))) {
+      const head = needsKeyboard(command);
+      if (head) {
         write(`${head} waits for a keyboard, and this console cannot give it one.`, "term-console-err");
         write("Each command runs on its own and this shows you the result. Try a one-shot form instead — for example `claude -p \"...\"` rather than `claude`.", "term-console-note");
         return;

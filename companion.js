@@ -272,7 +272,21 @@ class Companion {
       // The user's login shell, so their PATH, aliases and version managers are
       // the ones in play — a command that works in their terminal works here.
       const shellPath = process.env.SHELL || "/bin/zsh";
-      execFile(shellPath, ["-lc", command], { cwd, timeout, maxBuffer: MAX_STDOUT + MAX_STDERR },
+      /* stdin is /dev/null, not an open pipe.
+
+         With a pipe nobody writes to, a program that reads stdin waits forever
+         and only the timeout ends it — which is how `claude` on a phone became
+         two minutes of a frozen console. Closed, it gets EOF immediately and
+         exits like any other command run without a terminal. The guard on the
+         phone is then a courtesy that explains the failure early rather than
+         the only thing between the user and a hang. */
+      // `exec < /dev/null` first, so stdin is already at EOF when the command
+      // starts rather than a descriptor it has to probe. Closing the pipe alone
+      // still cost three seconds per command on anything that waits politely
+      // for input before giving up. Pipes inside the command are unaffected —
+      // this sets the shell's own stdin, not theirs.
+      execFile(shellPath, ["-lc", `exec < /dev/null; ${command}`], { cwd, timeout, maxBuffer: MAX_STDOUT + MAX_STDERR,
+                                              stdio: ["ignore", "pipe", "pipe"] },
         (err, stdout, stderr) => {
           const killed = err && (err.killed || err.signal);
           resolve({

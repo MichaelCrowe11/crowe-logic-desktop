@@ -283,6 +283,30 @@ const tests = [
               reason: "installs something that runs at every login" },
   },
   {
+    /* The first version of this matched on the program name and nothing else,
+       so it refused `claude -p "..."` — the exact form its own error message
+       tells you to use. A guard that blocks the alternative it recommends
+       teaches the user the feature is broken, which is worse than not guarding
+       at all. Both directions are checked here for that reason. */
+    name: "one-shot forms are allowed, bare interactive ones are not",
+    body: `const k = window.__croweNeedsKeyboard;
+      return {
+        bareClaude: k("claude"),
+        claudePrint: k('claude -p "summarize this repo"'),
+        claudeLongPrint: k("claude --print hello"),
+        vim: k("vim notes.txt"),
+        bareNode: k("node"),
+        nodeScript: k("node scripts/test-qr.js"),
+        sshBare: k("ssh crowelm-chat"),
+        sshCommand: k("ssh crowelm-chat uptime"),
+        ordinary: k("git -C ~/clm-mobile status"),
+        pathed: k("/usr/bin/vim x"),
+      };`,
+    expect: { bareClaude: "claude", claudePrint: null, claudeLongPrint: null,
+              vim: "vim", bareNode: "node", nodeScript: null,
+              sshBare: "ssh", sshCommand: null, ordinary: null, pathed: "vim" },
+  },
+  {
     name: "the terminal pane explains itself instead of loading xterm",
     body: `return { stub: typeof window.Terminal, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
                     ptyAvailable: (await window.crowe.getConfig()).ptyAvailable };`,
