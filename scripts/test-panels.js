@@ -319,6 +319,19 @@ const tests = [
               keptHttp: "http://example.com/x", keptHttps: "https://localhost:8443/", pad: "http://localhost:8123" },
   },
   {
+    name: "browser webview presents a clean Chrome UA, not an Electron one",
+    body: `const packaged = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) CroweLogic/0.21.0 Chrome/150.0.7871.129 Electron/43.2.0 Safari/537.36";
+      const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) CroweLogic/0.21.0 Chrome/150.0.7871.129 Electron/43.2.0 Safari/537.36";
+      const clean = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.129 Safari/537.36";
+      const live = browserUserAgent();
+      return { stripped: browserUserAgent(packaged), macStripped: browserUserAgent(mac),
+               idempotent: browserUserAgent(clean) === clean,
+               liveClean: !/Electron\\//.test(live) && !/CroweLogic|crowe-logic/i.test(live) };`,
+    expect: { stripped: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.129 Safari/537.36",
+              macStripped: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.129 Safari/537.36",
+              idempotent: true, liveClean: true },
+  },
+  {
     name: "panel state persists to localStorage",
     body: `await __reset("columns");
       await addPanel("browser", { url: "https://example.com/p" });

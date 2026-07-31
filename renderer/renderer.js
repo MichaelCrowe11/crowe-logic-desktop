@@ -674,12 +674,23 @@ function normalizeBrowserUrl(u){
   const loopback=/^(localhost|[\w-]+(\.[\w-]+)*\.localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(u);
   return (loopback?"http://":"https://")+u;
 }
+/* The webview announces itself as "CroweLogic/x Chrome/y Electron/z", and
+   bot walls (Akamai on microsoft.com, Google sign-in, Cloudflare challenges)
+   reject UAs carrying tokens no real browser sends - pages 403 or challenge
+   forever. The guest page gets the Chrome UA the engine actually is: strip
+   everything between the engine suffix and the Chrome token, then the
+   Electron token. Scoped to the browser panel; gateway and telemetry traffic
+   keep the honest app UA. */
+function browserUserAgent(ua) {
+  ua = ua || navigator.userAgent;
+  return ua.replace(/(\(KHTML, like Gecko\) ).*?(Chrome\/)/, "$1$2").replace(/ Electron\/[\d.]+/, "");
+}
 function mountBrowser(p, body) {
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
   bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false" aria-label="Address"><button class="go ghost sm">Go</button>';
   const hist=document.createElement("div");hist.className="browser-history hidden";
-  const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");host.appendChild(w);body.append(bar,hist,host);
+  const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");w.setAttribute("useragent",browserUserAgent());host.appendChild(w);body.append(bar,hist,host);
   const input=bar.querySelector("input");
   const go=(u)=>{u=normalizeBrowserUrl(u);w.src=u;input.value=u};
   const showList=(items,kind)=>{hist.innerHTML="";const head=document.createElement("div");head.className="browser-list-head";head.innerHTML=`<b>${kind}</b><button class="ghost sm">Clear</button>`;head.querySelector("button").onclick=()=>{if(kind==="History")p.history=[];else p.bookmarks=[];savePanelState();hist.classList.add("hidden")};hist.appendChild(head);[...items].reverse().forEach((u)=>{const row=document.createElement("div");row.className="history-row";const b=document.createElement("button");b.textContent=u;b.onclick=()=>{go(u);hist.classList.add("hidden")};row.appendChild(b);if(kind==="Bookmarks"){const del=document.createElement("button");del.textContent="Remove";del.className="ghost sm";del.onclick=()=>{p.bookmarks=p.bookmarks.filter((x)=>x!==u);savePanelState();showList(p.bookmarks,kind)};row.appendChild(del)}hist.appendChild(row)});hist.classList.remove("hidden")};
