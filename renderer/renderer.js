@@ -1632,10 +1632,22 @@ async function refreshHome() {
     row.addEventListener("click", async () => { await loadSession(s.id); setSpace("chat"); });
     hs.appendChild(row);
   }
+  /* This card answers the one routing question a person actually has — "which
+     model answers which kind of question?" — in the asker's vocabulary. The
+     router's own labels leaked here for a release: role keys on the left
+     ("long-context") and provenance on the right ("bridge" = static fallback
+     table, "catalog" = role-tagged gateway entry, "default" = neither), which
+     rendered rows like "reasoning  Kimi-K2.5 bridge" — three words from three
+     different internal registers. Provenance is an engineering answer and the
+     Deployments lane still gives it; here the only distinction worth ink is
+     whether a specialist takes the question. Specialist rows are tagged
+     "expert", default rows are bare — visibly the same model the
+     "everything else" row already names. */
+  const ROLE_ASKS = { cultivation: "growing", coding: "code", reasoning: "hard problems", "long-context": "long documents" };
   const hr = $("home-routing"); hr.innerHTML = "";
   for (const [role, r] of Object.entries(cat.resolved || {}))
-    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(role)}</span><span class="v">${esc(r.model)}<em class="src">${esc(r.source)}</em></span></div>`);
-  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}<em class="src">operator</em></span></div>`);
+    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(ROLE_ASKS[role] || role)}</span><span class="v">${esc(r.model)}${r.source === "default" ? "" : '<em class="src">expert</em>'}</span></div>`);
+  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}</span></div>`);
   let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
   $("home-gateway").innerHTML = `
     <div class="kv"><span class="k">endpoint</span><span class="v">${esc(host)}</span></div>
