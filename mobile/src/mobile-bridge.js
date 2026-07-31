@@ -227,7 +227,13 @@
         try { await Browser.close(); } catch { /* the user may have closed it themselves */ }
         resolve(value);
       };
-      App.addListener("appUrlOpen", async ({ url }) => {
+      // Promise.resolve, not .then() on the return value. The JS packages
+      // resolve a handle from addListener, but window.Capacitor.Plugins is the
+      // bridge the native side injects, and its proxy returns the handle
+      // synchronously. Calling .then() on it throws a TypeError inside this
+      // executor, which rejects sign-in before Browser.open is ever reached —
+      // the browser simply never appears. Promise.resolve takes both shapes.
+      Promise.resolve(App.addListener("appUrlOpen", async ({ url }) => {
         if (!url || url.indexOf(redirect) !== 0) return;    // some other deep link
         let params;
         try { params = new URL(url).searchParams; } catch { return finish({ error: "sign-in returned an unreadable URL" }); }
@@ -242,7 +248,7 @@
           return finish({ ok: true, user: currentUser() });
         }
         return finish({ error: (d && (d.error_description || d.error)) || "token exchange failed" });
-      }).then((h) => { handle = h; if (settled) try { h.remove(); } catch { /* raced with finish */ } });
+      })).then((h) => { handle = h; if (settled) try { h.remove(); } catch { /* raced with finish */ } });
 
       const authUrl = `${CROWE_ID}/protocol/openid-connect/auth?` + new URLSearchParams({
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",

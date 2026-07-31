@@ -372,6 +372,47 @@ function methodPaths(surface) {
     return redirect;
   });
 
+  await check("no plugin listener is treated as a promise", () => {
+    // window.Capacitor.Plugins is the bridge the native side injects, not the
+    // @capacitor/* JS packages. Those packages resolve a handle from
+    // addListener; the injected proxy returns the handle synchronously. So
+    // `App.addListener(...).then(h => ...)` is a TypeError on a device and
+    // nowhere else — not in a browser with the packages loaded, not in any
+    // test that stubs the plugins.
+    //
+    // It cost a real bug: the sign-in listener chained .then, the TypeError
+    // threw inside a `new Promise` executor two lines above Browser.open, and
+    // the rejection had no handler. Tapping "Sign in with Crowe ID" did
+    // nothing at all — no browser, no error, no log. Promise.resolve() around
+    // the call takes both shapes; this keeps it that way.
+    const end = (src, open) => {          // index just past the matching ")"
+      let depth = 0, quote = null;
+      for (let i = open; i < src.length; i++) {
+        const c = src[i], prev = src[i - 1];
+        if (quote) { if (c === quote && prev !== "\\") quote = null; continue; }
+        if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+        if (c === "(") depth += 1;
+        else if (c === ")") { depth -= 1; if (depth === 0) return i + 1; }
+      }
+      throw new Error("unbalanced parentheses after addListener");
+    };
+    const found = [];
+    for (const file of ["mobile/src/mobile-bridge.js", "mobile/src/mobile-ui.js"]) {
+      const src = read(file);
+      for (const m of src.matchAll(/\b(\w+)\.addListener\s*\(/g)) {
+        const open = m.index + m[0].length - 1;
+        const after = src.slice(end(src, open)).trimStart();
+        assert(!/^\.(then|catch|finally)\b/.test(after),
+          `${file}: ${m[1]}.addListener(...) is chained with ${after.slice(0, 6)} — ` +
+          "the injected bridge returns the handle synchronously, so this throws on a device. " +
+          "Wrap it: Promise.resolve(" + m[1] + ".addListener(...)).then(...)");
+        found.push(`${m[1]} in ${path.basename(file)}`);
+      }
+    }
+    assert(found.length, "no addListener calls found — did the bridge stop listening?");
+    return `${found.length} listener(s) checked`;
+  });
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();
