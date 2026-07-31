@@ -31,7 +31,7 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { execFile } = require("child_process");
+const { execFile, execFileSync } = require("child_process");
 
 const PORT = 8787;              // not 8765: that is the OAuth loopback's, and Crowe Terminal's
 const MAX_STDOUT = 200_000;
@@ -49,6 +49,41 @@ function tailscaleAddress() {
       const [x, y] = a.address.split(".").map(Number);
       if (x === 100 && y >= 64 && y <= 127) return a.address;
     }
+  }
+  return null;
+}
+
+/* The tailnet's own DNS name for this machine, e.g.
+   michaels-macbook-pro.tailae09af.ts.net.
+
+   Preferred over the bare 100.x address for one hard reason: iOS App Transport
+   Security refuses cleartext HTTP, and the way to allow it for exactly this
+   traffic is an NSExceptionDomains entry — which matches on domain names, not
+   IP literals. A pairing URL built from the IP saves fine on the phone and then
+   cannot be loaded at all ("the App Transport Security policy requires the use
+   of a secure connection"), which is a failure that only appears on a device.
+
+   The name is also the better identifier anyway: it survives a tailnet address
+   changing, and it tells the user which machine they are pairing with.
+
+   This one does need the CLI, since a DNS name is not readable off an
+   interface. Absent it — Tailscale installed from the App Store puts the binary
+   somewhere else, or MagicDNS is off — the address is the fallback, and the
+   phone will say what ATS did rather than failing silently. */
+function magicDnsName() {
+  const candidates = [
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  ];
+  for (const bin of candidates) {
+    try {
+      if (!fs.existsSync(bin)) continue;
+      const out = execFileSync(bin, ["status", "--json"], { encoding: "utf8", timeout: 4000 });
+      const self = JSON.parse(out).Self || {};
+      const name = String(self.DNSName || "").replace(/\.$/, "");
+      if (name && name.includes(".")) return name;
+    } catch { /* not this path, or Tailscale is not up */ }
   }
   return null;
 }
@@ -118,6 +153,7 @@ class Companion {
       running: Boolean(this.server && this.server.listening),
       host: this.host, port: PORT,
       tailscale: tailscaleAddress(),
+      name: this.name || magicDnsName(),
       paired: Boolean(this.token),
     };
   }
@@ -127,7 +163,8 @@ class Companion {
   // pairing code, and far better than typing 64 hex characters on a phone.
   pairUrl() {
     if (!this.host) return null;
-    const q = new URLSearchParams({ url: `http://${this.host}:${PORT}`, token: this.loadOrMintToken() });
+    const reachable = this.name || this.host;
+    const q = new URLSearchParams({ url: `http://${reachable}:${PORT}`, token: this.loadOrMintToken() });
     return `com.crowelogic.mobile://pair?${q.toString()}`;
   }
 
@@ -149,7 +186,8 @@ class Companion {
       throw new Error(`could not listen on ${host}:${PORT} — ${String(e.message || e)}`);
     });
     this.host = host;
-    this.onEvent({ type: "started", host, port: PORT });
+    this.name = magicDnsName();     // resolved once, while Tailscale is known up
+    this.onEvent({ type: "started", host, name: this.name, port: PORT });
     return this.status();
   }
 
@@ -243,4 +281,4 @@ class Companion {
   }
 }
 
-module.exports = { Companion, tailscaleAddress, tokenMatches, PORT };
+module.exports = { Companion, tailscaleAddress, magicDnsName, tokenMatches, PORT };

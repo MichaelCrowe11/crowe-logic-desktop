@@ -246,6 +246,7 @@
       );
       if (!ok) return;
       await saveConfig({ remoteUrl: host, remoteToken: token });
+      announceRemote();
       const s = await remoteStatus();
       window.alert(s.reachable ? `Paired with ${host}.` : `Saved ${host}, but it did not answer${s.error ? `: ${s.error}` : "."}`);
     })();
@@ -268,6 +269,15 @@
       Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
     }
   })();
+
+
+  // Told to the page, not just stored: the tier strip and the placeholders are
+  // drawn from whether a machine is paired, and a pairing can land at any
+  // moment from a deep link the user scanned seconds ago.
+  function announceRemote() {
+    try { window.dispatchEvent(new CustomEvent("crowe:remote", { detail: { configured: remoteConfigured(), host: remoteBase() } })); }
+    catch { /* no CustomEvent in some webviews; the next launch picks it up */ }
+  }
 
   async function remoteStatus() {
     const base = remoteBase();
@@ -776,6 +786,24 @@
     if (name === "open_url") {
       const url = String(args.url || "");
       if (!/^https?:\/\//i.test(url)) return { text: "refused: only http(s) URLs can be opened", status: "error" };
+      /* Asked for, every time, showing the host.
+
+         This used to open silently, which was defensible when the only thing
+         this app could read was the grower's own log. It stopped being
+         defensible the moment the phone could read files off a paired machine:
+         read_file plus a silent open_url is an exfiltration channel. At the
+         Read tier — which tells the user it "writes nothing" — the agent could
+         read a secrets file and then open https://somewhere/?d=<contents>, and
+         the only trace would be a browser sheet appearing for a moment.
+
+         It does not take a hostile user. A file the agent reads can carry the
+         instruction, and a model that has just read it is the one deciding.
+         The confirmation is the whole mitigation: the destination cannot be
+         reached without a person seeing where it goes. */
+      let host = url;
+      try { host = new URL(url).host; } catch { /* shown in full below instead */ }
+      const ok = window.confirm(`Open ${host}?\n\n${url.slice(0, 300)}\n\nThe agent asked for this. Check the address if you did not expect it.`);
+      if (!ok) return { text: `refused: the user declined to open ${host}`, status: "error" };
       const Browser = plugin("Browser");
       if (Browser) await Browser.open({ url }).catch(() => {});
       else window.open(url, "_blank", "noopener");
@@ -1132,6 +1160,7 @@
         if (typeof token === "string" && token !== "") patch.remoteToken = token;
         if (!clean) patch.remoteToken = "";           // clearing the host clears the credential
         await saveConfig(patch);
+        announceRemote();
         return { ok: true, ...(await remoteStatus()) };
       },
       run: async (command, cwd) => {

@@ -206,13 +206,24 @@
     edit: "Ask anything. It can add to your grow log.",
     execute: "Ask anything. It can add to your grow log.",
   };
+  // What each tier means changes once a machine is paired, because the tier is
+  // then gating a real shell and not only the grow log. Saying "your grow log"
+  // while Execute can delete a directory would be the friendliest lie here.
+  const TIER_HINT_PAIRED = {
+    plan: "Describe a task. It plans it out first, and touches nothing.",
+    readonly: "Ask anything. It reads your log and files on the paired machine.",
+    edit: "Ask anything. It can write files on the paired machine.",
+    execute: "Ask anything. It can run commands on the paired machine.",
+  };
   const composerInput = $("input");
   if (composerInput) {
     const hint = () => {
-      const want = TIER_HINT[body.dataset.tier] || TIER_HINT.edit;
+      const table = body.classList.contains("m-paired") ? TIER_HINT_PAIRED : TIER_HINT;
+      const want = table[body.dataset.tier] || table.edit;
       if (composerInput.placeholder !== want) composerInput.placeholder = want;
     };
     hint();
+    window.__croweHint = hint;
     new MutationObserver(hint).observe(composerInput, { attributes: true, attributeFilter: ["placeholder"] });
     new MutationObserver(hint).observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   }
@@ -255,6 +266,23 @@
   ].join("");
   const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
   if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
+
+  /* One class on <body> is what the rest of the phone UI reads to know a
+     machine is paired: the CSS uses it to reveal the Execute tier, the
+     placeholder table uses it to stop describing a grow log when the tier now
+     gates a shell. Set at boot, and again whenever the bridge says the pairing
+     changed — including from the deep link, which can arrive at any moment. */
+  async function syncPaired() {
+    try {
+      const cfg = await window.crowe.getConfig();
+      body.classList.toggle("m-paired", Boolean(cfg && cfg.remote && cfg.remote.configured));
+      // The placeholder is drawn from the same fact and is not watching this
+      // class, so it would go on naming the grow log until the next tier tap.
+      if (typeof window.__croweHint === "function") window.__croweHint();
+    } catch { /* the bridge has not read its config yet; the event will retry */ }
+  }
+  syncPaired();
+  window.addEventListener("crowe:remote", syncPaired);
 
   const remoteBadge = () => document.getElementById("m-remote-state");
   function paintRemote(s) {

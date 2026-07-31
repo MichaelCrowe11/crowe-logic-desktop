@@ -48,8 +48,13 @@ body.mobile .ws-sep, body.mobile #ws-path, body.mobile .cwd,
 body.mobile #hud-branch, body.mobile #glass-launcher,
 body.mobile .dock-tab[data-pane="git"], body.mobile .dock-tab[data-pane="files"],
 body.mobile #panel-add-term, body.mobile #panel-add-system, body.mobile #panel-add-agent,
-body.mobile #autonomy .seg-btn[data-tier="execute"],
 body.mobile .m-desktop-only { display: none !important; }
+
+/* Execute is the tier that runs commands, and it was hidden here outright
+   because a phone had nothing to run them on. It does now, when a machine is
+   paired — so the rule is conditional on that rather than absolute. An unpaired
+   phone still cannot offer it, because there would be nowhere for it to go. */
+body.mobile:not(.m-paired) #autonomy .seg-btn[data-tier="execute"] { display: none !important; }
 
 /* A stand-in for the terminal, drawn where xterm would have been. */
 .term-stub {

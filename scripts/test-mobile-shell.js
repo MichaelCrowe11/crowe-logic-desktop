@@ -229,6 +229,28 @@ const tests = [
               cliAgent: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: true },
   },
   {
+    /* The case above proves Execute is hidden with nothing paired. This proves
+       it comes back, which is the half that was missing and the half that bit.
+
+       Execute was hidden outright when the phone layer was written, because iOS
+       cannot run a shell and the tier was decoration. The companion made that
+       false — the phone drives a real shell on a paired machine — and the CSS
+       did not move, so the tier that runs commands could not be selected. A
+       test asserting only `execTier: false` is happy either way: it cannot tell
+       "correctly hidden while unpaired" from "hidden forever". */
+    name: "pairing a machine brings the Execute tier back",
+    body: `const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      document.body.classList.add("m-paired");
+      await __settle();
+      const paired = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      // Left as it was found, so the order these cases run in cannot matter.
+      document.body.classList.remove("m-paired");
+      await __settle();
+      const restored = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      return { unpaired, paired, restored };`,
+    expect: { unpaired: false, paired: true, restored: false },
+  },
+  {
     name: "the terminal pane explains itself instead of loading xterm",
     body: `return { stub: typeof window.Terminal, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
                     ptyAvailable: (await window.crowe.getConfig()).ptyAvailable };`,
