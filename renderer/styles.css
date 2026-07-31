@@ -160,9 +160,18 @@ button { font-family: var(--body); }
    off. 96 x 22 was a 0.3% lie. */
 .lockup { width: 96px; aspect-ratio: 508.3 / 116.82; display: block; position: relative;
   color: var(--ink); }
+/* The -sm cut, not the full one: at 22px the full cut's o-blades average a
+   quarter-pixel and the tittle's gold hex is a 3px speck, so the header wore a
+   ring around fog. The small cut redraws only what lives inside the o's and
+   over the i — same letterforms, same rings, same viewBox — which is what
+   makes this a one-line swap. The welcome hero re-overrides to the full cut
+   below, because at 200px the fine taper is the point. */
 .lockup-ink { position: absolute; inset: 0; background: currentColor;
-  -webkit-mask: url("../assets/wordmark-ink.svg") no-repeat center / 100% 100%;
-  mask: url("../assets/wordmark-ink.svg") no-repeat center / 100% 100%; }
+  -webkit-mask: url("../assets/wordmark-ink-sm.svg") no-repeat center / 100% 100%;
+  mask: url("../assets/wordmark-ink-sm.svg") no-repeat center / 100% 100%; }
+.welcome-logotype > .lockup-ink {
+  -webkit-mask-image: url("../assets/wordmark-ink.svg");
+  mask-image: url("../assets/wordmark-ink.svg"); }
 .lockup.live .lockup-ink { display: none; }
 /* The motion cut is drawn in a viewBox padded by 20 units left and 13.68 up, so
    the entrance (blades scaling from 0.45, the spore overshooting to 1.08) has

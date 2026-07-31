@@ -214,7 +214,15 @@ const INK_VIEWBOX = inkBox();
 // larger document - two marks on one page sharing an id would silently paint
 // the second one with the first one's stops.
 function markSvg(opts) {
-  const { taper = 1, pal = C, ring = false, fork = true, scale = null, id = "cl" } = opts || {};
+  // `heart` scales the gold core alone, the same move the app icon makes with
+  // CORONA_ICON_SCALE in gen-wordmark-icon.py and for the same reason: below
+  // about 10px of rendered mark the hyphae are sub-pixel whatever their taper,
+  // and the core is the only shape left that can carry the identity — so the
+  // small cuts hand it more of the box. Scaled about the centre, so the arms
+  // still emerge from behind it; the core gradient's offset and radius ride
+  // the same factor, keeping the "lit, not printed" highlight in proportion.
+  const { taper = 1, pal = C, ring = false, fork = true, scale = null, id = "cl", heart = 1 } = opts || {};
+  const HR = HEART * heart;
   const A = arms(taper, fork);
   const hy = scale ? `url(#${id}-hy)` : pal.blue;
   const co = scale ? `url(#${id}-co)` : pal.gold;
@@ -228,7 +236,7 @@ function markSvg(opts) {
       <stop offset="0.42" stop-color="${scale.mid}"/>
       <stop offset="1" stop-color="${scale.tip}"/>
     </radialGradient>
-    <radialGradient id="${id}-co" gradientUnits="userSpaceOnUse" cx="${CX - HEART * 0.34}" cy="${CY - HEART * 0.38}" r="${HEART * 1.55}">
+    <radialGradient id="${id}-co" gradientUnits="userSpaceOnUse" cx="${CX - HR * 0.34}" cy="${CY - HR * 0.38}" r="${HR * 1.55}">
       <stop offset="0" stop-color="${scale.core}"/>
       <stop offset="1" stop-color="${scale.coreEdge}"/>
     </radialGradient>
@@ -237,7 +245,7 @@ function markSvg(opts) {
     ring ? `<polygon points="${hex(RING)}" fill="none" stroke="${pal.blue}" stroke-width="1.6" opacity="0.35"/>` : "",
     ...A.blue.map((a) => `<polygon points="${a.pts}" fill="${hy}"/>`),
     ...A.gold.map((a) => `<polygon points="${a.pts}" fill="${co}"/>`),
-    `<polygon points="${hex(HEART)}" fill="${co}"/>`,
+    `<polygon points="${hex(HR)}" fill="${co}"/>`,
   ].filter(Boolean).join("\n  ");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${INK_VIEWBOX}">\n  ${defs}${rows}\n</svg>\n`;
 }
@@ -409,29 +417,48 @@ const O_OUTER = 45.72;   // matches the glyph it stands in for
 // under the animation.
 const O_STROKE = 8.0;
 const O_MARK = (O_OUTER - 2 * O_STROKE) * 0.99;
-const oCut = (ink, id) => ({ pal: { blue: ink, gold: ink }, taper: 0.45, fork: false, id });
+/* The blades' taper is a size decision, so the callers below pass it: 0.45 for
+   the full cut (the armsSmall number — visibly tapered at 200px, present at
+   96px), 0 for the -sm cut. Parallel-sided is the most mass this geometry
+   offers, and it is the same answer mark-simple-dark.svg already gives to the
+   same question: where antialiasing eats a half-pixel you cannot spare, stop
+   spending width on elegance. At the 22px header the whole rotor is 5.5px
+   across; six blades at taper 0.45 average a quarter-pixel each and the o
+   reads as a ring around fog. At taper 0 each blade holds ~0.6px root to tip —
+   still fine, but drawn. */
+const oCut = (ink, id, taper) => ({ pal: { blue: ink, gold: ink }, taper, fork: false, id });
 const ring = (cx, cy, r) =>
   `M${(cx - r).toFixed(2)} ${cy.toFixed(2)}a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(2 * r).toFixed(2)} 0` +
   `a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(-2 * r).toFixed(2)} 0`;
 // Ring and blades come back separately: the static cuts glue them together, and
 // the motion cut needs them in two groups so the blades can spin inside a ring
 // that holds still. One source for both, so they cannot drift apart.
-const oParts = (ink, g, id) => ({
+const oParts = (ink, g, id, taper = 0.45) => ({
   ring: `<path fill="${ink}" fill-rule="evenodd" d="${ring(g.cx, g.cy, O_OUTER / 2)}${ring(g.cx, g.cy, O_OUTER / 2 - O_STROKE)}"/>`,
-  blades: placeMark(g.cx, g.cy, O_MARK, oCut(ink, id)),
+  blades: placeMark(g.cx, g.cy, O_MARK, oCut(ink, id, taper)),
 });
-const oGlyph = (ink, g, id) => {
-  const p = oParts(ink, g, id);
+const oGlyph = (ink, g, id, taper) => {
+  const p = oParts(ink, g, id, taper);
   return `${p.ring}\n  ${p.blades}`;
 };
 
+// The -sm cuts below change nothing the small sizes cannot see: the ring — the
+// part that degrades into a legible letter — and the letterforms are identical
+// to the full cut, so the two cuts sit on the same pixels and a renderer can
+// swap one for the other without the word moving. What changes is inside the
+// counters and over the i: blades at taper 0, and the spore taking
+// mark-simple's own treatment (eased taper, no fork) plus the icon's corona
+// move — the gold hex scaled 1.45 about its centre — because a tittle 8.7px
+// wide has exactly the icon-at-Spotlight problem the 1.45 was measured for.
+const SM = { blades: 0, spore: { taper: 0.2, fork: false, heart: 1.45 } };
+
 function wordmarkSvg(ink, markOpts, opts) {
-  const { spore = true, id = "wm" } = opts || {};
+  const { spore = true, id = "wm", small = false } = opts || {};
   const t = WM.tittle;
   const top = Math.min(t.cy - SPORE / 2, -WM.capHeight) - 5;
   const bottom = -WM.descent + 5;
   const os = WM.glyphs.filter((g) => g.ch === "o")
-    .map((g, i) => oGlyph(ink, g, `${id}o${i}`))
+    .map((g, i) => oGlyph(ink, g, `${id}o${i}`, small ? SM.blades : undefined))
     .join("\n  ");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-5} ${top.toFixed(2)} ${(WM.width + 10).toFixed(2)} ${(bottom - top).toFixed(2)}">
   <path d="${WM.dNoOs}" fill="${ink}"/>
@@ -464,7 +491,7 @@ emit("wordmark-ink.svg", wordmarkSvg("#000", null, { spore: false, id: "wi" }));
 // The viewBox carries 25 units of padding the static cuts do not need, because
 // the blades scale up from 0.45 and the spore overshoots to 1.08 on the way in;
 // without the margin the entrance clips against its own edges.
-function wordmarkMotionSvg() {
+function wordmarkMotionSvg(small = false) {
   const css = fs.readFileSync(path.join(__dirname, "wordmark-motion.css"), "utf8");
   const t = WM.tittle;
   const [c, l] = WM.glyphs.filter((g) => g.ch === "o");
@@ -475,14 +502,23 @@ function wordmarkMotionSvg() {
      of them and `#rotor-crowe-blades` animates whichever copy the document
      happened to hold first, which is the collision liveLockups() already scopes
      around. Classes make a copy self-contained, so no scoping is needed and
-     nothing renumbers when an indicator is removed. */
+     nothing renumbers when an indicator is removed.
+
+     Both cuts carry the SAME ids and classes over different geometry, so the
+     choreography CSS drives either without knowing which it was dealt. That is
+     safe for the same reason two copies of one cut already are: liveLockups()
+     suffixes every inlined copy after the first, whichever file it came from,
+     and the id-free copies strip ids entirely. */
   const rotor = (name, g) => {
-    const p = oParts("currentColor", g, `mo-${name}`);
+    const p = oParts("currentColor", g, `mo-${name}`, small ? SM.blades : undefined);
     return `<g id="rotor-${name}" class="wm-rotor wm-rotor-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine">
   ${p.ring.replace("<path ", `<path id="rotor-${name}-ring" class="wm-ring" `)}
   <g id="rotor-${name}-blades" class="wm-blades wm-blades-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine blades">${p.blades}</g>
 </g>`;
   };
+  const sporeOpts = small
+    ? { pal: { blue: "currentColor", gold: C.gold }, ...SM.spore, id: "mo-spore" }
+    : { pal: { blue: "currentColor", gold: C.gold }, id: "mo-spore" };
   return `<svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
   <title id="crowe-logic-motion-title">Crowe Logic</title>
   <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae; the tittle of the i is the gold spore.</desc>
@@ -492,11 +528,23 @@ ${css.replace(/^/gm, "  ").trimEnd()}
   <g id="wordmark-letterforms" class="wm-letterforms"><path d="${WM.dNoOs}" fill="currentColor"/></g>
   ${rotor("crowe", c)}
   ${rotor("logic", l)}
-  <g id="gold-thinking-mark" class="wm-spore" aria-label="Gold thinking mark">${placeMark(t.cx, t.cy, SPORE, { pal: { blue: "currentColor", gold: C.gold }, id: "mo-spore" })}</g>
+  <g id="gold-thinking-mark" class="wm-spore" aria-label="Gold thinking mark">${placeMark(t.cx, t.cy, SPORE, sporeOpts)}</g>
 </svg>
 `;
 }
 emit("wordmark-motion.svg", wordmarkMotionSvg());
+
+// The small-size cuts. The header renders the logotype 22px tall, the thinking
+// indicator ~22px, the agent panel head ~31px — and at those sizes the o is
+// 8.6px across, its blades average a quarter-pixel, and the spore's gold hex is
+// a 3px speck under sub-pixel hyphae. The full cut is print-scale artwork; this
+// pair is the same drawing at optical size: identical letterforms and rings on
+// an identical viewBox (so masks, overlay percentages and mounts are shared),
+// with only the counters and the tittle redrawn for the sizes that actually
+// display them. The welcome hero (~46px letters) is the one mount that resolves
+// the full cut, and it keeps it. See SM above for exactly what changes.
+emit("wordmark-ink-sm.svg", wordmarkSvg("#000", null, { spore: false, id: "wis", small: true }));
+emit("wordmark-motion-sm.svg", wordmarkMotionSvg(true));
 
 // Geometry module for the living mark (renderer/mark.js). Arms carry their
 // angle so the animator can stagger them around the ring instead of pulsing

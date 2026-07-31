@@ -162,18 +162,23 @@ function stageLabel(name) {
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
   return "retrieving";
 }
-/* The motion logotype, fetched once and held. Both the header lockups and every
-   thinking indicator draw from this, so a session pays for the file once. */
-let wordmarkMotion = null, wordmarkMotionPending = null;
-function wordmarkMotionMarkup() {
-  if (wordmarkMotion) return Promise.resolve(wordmarkMotion);
-  if (!wordmarkMotionPending) {
-    wordmarkMotionPending = fetch("../assets/wordmark-motion.svg")
+/* The motion logotype, fetched once per cut and held. There are two cuts of
+   the same drawing on the same viewBox: "sm" redraws the o-blades and the
+   spore for the sizes most mounts actually render (22px header, ~22px
+   thinking line, ~31px agent head — see gen-mark.js on why fine taper is
+   invisible there), and "full" keeps the print-scale detail for the welcome
+   hero, the one mount large enough to resolve it. A session that never shows
+   the hero never pays for the second file. */
+const wordmarkMotionHeld = {}, wordmarkMotionPending = {};
+function wordmarkMotionMarkup(cut = "sm") {
+  if (wordmarkMotionHeld[cut]) return Promise.resolve(wordmarkMotionHeld[cut]);
+  if (!wordmarkMotionPending[cut]) {
+    wordmarkMotionPending[cut] = fetch(cut === "full" ? "../assets/wordmark-motion.svg" : "../assets/wordmark-motion-sm.svg")
       .then((r) => (r.ok ? r.text() : null))
-      .then((t) => (wordmarkMotion = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
+      .then((t) => (wordmarkMotionHeld[cut] = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
       .catch(() => null);
   }
-  return wordmarkMotionPending;
+  return wordmarkMotionPending[cut];
 }
 
 /* A thinking copy keeps the drawing and drops everything that only made sense
@@ -2681,10 +2686,18 @@ async function liveLockups() {
   // not renumber — and therefore re-break — the ones already on screen.
   const todo = els.filter((el) => !el.classList.contains("live"));
   if (!todo.length) return;
-  const markup = await wordmarkMotionMarkup();
-  if (!markup) return;
+  // The hero is the one lockup big enough to resolve the full cut; the header
+  // takes the small one, matching the -sm mask it is replacing. Same ids in
+  // both files, which the suffixing below already scopes per copy — and it
+  // rewrites the ids inside each copy's own <style> too, so a suffixed copy's
+  // entrance drives itself rather than whichever copy loaded first.
+  const cutOf = (el) => (el.classList.contains("welcome-logotype") ? "full" : "sm");
+  const markups = {};
+  for (const cut of new Set(todo.map(cutOf))) markups[cut] = await wordmarkMotionMarkup(cut);
   els.forEach((el, i) => {
     if (!todo.includes(el)) return;
+    const markup = markups[cutOf(el)];
+    if (!markup) return;
     const scoped = i === 0 ? markup
       : markup.replace(/(\bid="|url\(#|#)(crowe-logic-motion|rotor-[a-z-]+|wordmark-letterforms|gold-thinking-mark)\b/g,
         (_, lead, id) => `${lead}${id}-${i}`);
