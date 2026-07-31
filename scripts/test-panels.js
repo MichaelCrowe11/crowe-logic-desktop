@@ -307,6 +307,18 @@ const tests = [
     expect: { count: 2, url: "https://example.com/a", history: 1, distinct: true, sharedRef: false },
   },
   {
+    name: "address bar defaults loopback to http, everything else to https",
+    body: `const n = normalizeBrowserUrl;
+      return { bare: n("localhost:8123/"), ip: n("127.0.0.1:8000"), v6: n("[::1]:8080"),
+               sub: n("app.localhost:3000"), zero: n("0.0.0.0:5173"), path: n("localhost/health"),
+               web: n("example.com"), spoof: n("localhost.evil.com"),
+               keptHttp: n("http://example.com/x"), keptHttps: n("https://localhost:8443/"), pad: n("  localhost:8123  ") };`,
+    expect: { bare: "http://localhost:8123/", ip: "http://127.0.0.1:8000", v6: "http://[::1]:8080",
+              sub: "http://app.localhost:3000", zero: "http://0.0.0.0:5173", path: "http://localhost/health",
+              web: "https://example.com", spoof: "https://localhost.evil.com",
+              keptHttp: "http://example.com/x", keptHttps: "https://localhost:8443/", pad: "http://localhost:8123" },
+  },
+  {
     name: "panel state persists to localStorage",
     body: `await __reset("columns");
       await addPanel("browser", { url: "https://example.com/p" });

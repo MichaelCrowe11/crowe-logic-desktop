@@ -662,6 +662,18 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
 }
 
+/* A bare host typed into the address bar gets https by default - except loopback,
+   where that default is fatal: the TLS handshake against a plain-HTTP dev server
+   fails before anything renders, so "localhost:8123" would never load. Real
+   browsers default loopback to http; this bar does the same. The host must end at
+   a boundary ("localhost.evil.com" is not loopback), and *.localhost counts
+   because resolvers pin that whole TLD to the loopback interface. */
+function normalizeBrowserUrl(u){
+  u=String(u||"").trim();
+  if(/^https?:\/\//i.test(u))return u;
+  const loopback=/^(localhost|[\w-]+(\.[\w-]+)*\.localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(u);
+  return (loopback?"http://":"https://")+u;
+}
 function mountBrowser(p, body) {
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
@@ -669,7 +681,7 @@ function mountBrowser(p, body) {
   const hist=document.createElement("div");hist.className="browser-history hidden";
   const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");host.appendChild(w);body.append(bar,hist,host);
   const input=bar.querySelector("input");
-  const go=(u)=>{u=String(u||"").trim();if(!/^https?:\/\//i.test(u))u="https://"+u;w.src=u;input.value=u};
+  const go=(u)=>{u=normalizeBrowserUrl(u);w.src=u;input.value=u};
   const showList=(items,kind)=>{hist.innerHTML="";const head=document.createElement("div");head.className="browser-list-head";head.innerHTML=`<b>${kind}</b><button class="ghost sm">Clear</button>`;head.querySelector("button").onclick=()=>{if(kind==="History")p.history=[];else p.bookmarks=[];savePanelState();hist.classList.add("hidden")};hist.appendChild(head);[...items].reverse().forEach((u)=>{const row=document.createElement("div");row.className="history-row";const b=document.createElement("button");b.textContent=u;b.onclick=()=>{go(u);hist.classList.add("hidden")};row.appendChild(b);if(kind==="Bookmarks"){const del=document.createElement("button");del.textContent="Remove";del.className="ghost sm";del.onclick=()=>{p.bookmarks=p.bookmarks.filter((x)=>x!==u);savePanelState();showList(p.bookmarks,kind)};row.appendChild(del)}hist.appendChild(row)});hist.classList.remove("hidden")};
   bar.querySelector(".back").onclick=()=>w.canGoBack()&&w.goBack();bar.querySelector(".forward").onclick=()=>w.canGoForward()&&w.goForward();bar.querySelector(".reload").onclick=()=>w.reload();bar.querySelector(".hist").onclick=()=>showList(p.history,"History");bar.querySelector(".bookmark").onclick=()=>{const u=w.getURL()||p.url;if(u&&!p.bookmarks.includes(u))p.bookmarks.push(u);savePanelState()};bar.querySelector(".bookmarks").onclick=()=>showList(p.bookmarks,"Bookmarks");bar.querySelector(".go").onclick=()=>go(input.value);input.onkeydown=(e)=>{if(e.key==="Enter")go(input.value)};
   const navigated=()=>{const u=w.getURL();if(!u)return;input.value=u;p.url=u;if(p.history[p.history.length-1]!==u)p.history.push(u);p.history=p.history.slice(-100);savePanelState()};
