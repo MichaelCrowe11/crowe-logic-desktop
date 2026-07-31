@@ -70,6 +70,15 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-panels.js
 
+      # The phone shell, in a phone-sized window. Electron rather than a browser
+      # driver so the mobile app costs the suite no dependency the desktop one
+      # was not already paying for, and because the layout only switches on
+      # width: at test-panels' 1280 this would assert the desktop shell and pass.
+      - name: Run mobile shell tests (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-mobile-shell.js
+
       - name: Upload smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4

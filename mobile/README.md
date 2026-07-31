@@ -34,8 +34,16 @@ npm run serve              # www on :8732, for a browser's device emulator
 ```
 
 `npm run www` is not optional after a change to `renderer/` — the phone runs the
-copy in `www/`, not the original. `npm test` in the repo root includes
-`scripts/test-mobile-bridge.js`, which rebuilds `www/` and checks it.
+copy in `www/`, not the original. Two suites in the repo root's `npm test` cover
+this directory, and both rebuild `www/` first, so neither depends on you having
+remembered:
+
+- `scripts/test-mobile-bridge.js` — plain Node. The bridge surface against
+  `preload.js`, the routing table against `harness.js`, the rewritten copy
+  against `renderer.js`, and the agent loop against a mocked SSE gateway.
+- `scripts/test-mobile-shell.js` — Electron, in a 390×844 window. The part only
+  a browser can answer: the tab bar, the drawer, the pane swap, sheet geometry,
+  what is hidden, and no console errors at load.
 
 Icons and launch art are generated, not committed:
 

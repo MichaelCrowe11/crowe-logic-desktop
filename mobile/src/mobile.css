@@ -127,11 +127,14 @@ body.mobile #pal-input, body.mobile #qo-input, body.mobile #git-msg { font-size:
   body.mobile .composer-foot { flex-wrap: wrap; gap: 6px; }
   body.mobile #autonomy { flex: 1 1 100%; }
   body.mobile #autonomy .seg-btn { flex: 1; }
-  /* Two lines tall before anything is typed. The textarea grows with its
-     content, but a placeholder does not trigger that — so at 390px the tier
-     hint wrapped onto a second line and was clipped by a one-row box, and the
-     app opened with a sentence cut in half across it. */
-  body.mobile #input { min-height: 52px; max-height: 40dvh; }
+  /* Two lines of hint, plus the padding. The textarea grows with its content,
+     but a placeholder does not trigger that — so at 390px the tier hint wrapped
+     onto a second line and a one-row box clipped it, and the app opened with a
+     sentence cut in half across it. 52px was the first guess and still cut it:
+     two 19px lines and 20px of padding want 58px of content box, 60 with the
+     border. scripts/test-mobile-shell.js measures the overflow rather than
+     trusting an eyeball, which is how the missing 8px was found. */
+  body.mobile #input { min-height: 60px; max-height: 40dvh; }
 
   body.mobile #hud { padding: 4px 12px; gap: 8px; overflow-x: auto; scrollbar-width: none; }
   body.mobile #hud::-webkit-scrollbar { display: none; }
