@@ -257,11 +257,26 @@ const tests = [
     expect: { stub: "function", xterm: false, ptyAvailable: false },
   },
   {
+    /* This used to require the opening copy to talk about the farm, which was
+       right when the phone's only real capability was the grow log. Cultivation
+       is a package the app can carry now, not the shape of the app, so leading
+       with it introduces a general operator as a grow log.
+
+       What has to stay true is narrower and does not expire: never promise a
+       workspace running on the phone, and when no machine is paired, point at
+       the way to get one instead of describing a machine that is not there. */
     name: "the first thing the app says is something it can do",
     body: `const text = document.getElementById("transcript").textContent;
-      return { desktopPromise: /summarize this repo|run the tests|project folder|a real terminal/.test(text),
-               grower: /grow log|contamination|flush/i.test(text) };`,
-    expect: { desktopPromise: false, grower: true },
+      const firstChip = (document.querySelector(".welcome .chip") || {}).textContent || "";
+      return {
+        // A folder to open and a terminal on the device: neither exists here,
+        // paired or not. "on my Mac" is a different claim and a true one.
+        localWorkspace: /project folder|a real terminal/i.test(text),
+        // Unpaired, the honest opener names the way to get a machine.
+        offersPairing: /pair a desktop|remote machine/i.test(text),
+        leadsWithCultivation: /grow log|contamination|flush|fruiting/i.test(firstChip),
+      };`,
+    expect: { localWorkspace: false, offersPairing: true, leadsWithCultivation: false },
   },
   {
     name: "the Key Manager renders its providers and says where the keys live",

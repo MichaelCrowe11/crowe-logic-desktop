@@ -137,20 +137,54 @@
      a phone: the first thing the app said to a new user was three things it
      could not do. These are the same shape — one tap, a real turn — against
      what this device actually has. */
-  const WELCOME_TEXT = "Your operator, in your pocket. Ask it to reason, look things up, and keep the farm's records. The workspace — shell, files, git — stays on the desktop app.";
-  const WELCOME_CHIPS = [
-    "Log today's flush: 4.2 lb of blue oyster off lot 260722-01, grade A",
-    "What did I log about contamination this month, and what should I change?",
-    "Set fruiting conditions for lion's mane in a Martha tent this week",
+  /* Two things this copy got wrong, and they are the same mistake.
+
+     It said the workspace stays on the desktop, which the companion made false
+     — a paired phone reads, writes and runs there. And all three openers were
+     cultivation, so an app meant for broad use introduced itself as a grow log
+     and nothing else. Cultivation is a package this app can carry, not the
+     shape of the app.
+
+     So both are derived now rather than fixed: what it says it can do comes
+     from whether a machine is paired, and the cultivation opener appears only
+     where the Cultivation space is switched on. */
+  const cultivationOn = () =>
+    Boolean(document.querySelector('#spaces .seg-btn[data-space="cultivation"]:not(.hidden)'));
+  const isPaired = () => body.classList.contains("m-paired");
+
+  const welcomeText = () => (isPaired()
+    ? "Your operator, in your pocket — and it reaches your desktop. Ask it to reason, look things up, read and change files on the paired machine, or run a command there."
+    : "Your operator, in your pocket. Ask it to reason, look things up, and keep track of what you are working on. Pair a desktop in Settings and it can work on that machine from here.");
+
+  const GENERAL_CHIPS = [
+    "Explain what this error means and what to try first",
+    "Talk me through two ways to approach this, and which you would pick",
+    "Summarize where this project stands and what is next",
   ];
+  const MACHINE_CHIPS = [
+    "What is running on my Mac right now?",
+    "Show me the last 30 lines of the log and tell me what went wrong",
+  ];
+  const CULTIVATION_CHIP = "What did I log about contamination this month, and what should I change?";
+
+  // Three, in the order they earn their place: the machine when there is one,
+  // the farm when that space is on, then general reasoning to fill the rest.
+  const welcomeChips = () => {
+    const chips = [];
+    if (isPaired()) chips.push(...MACHINE_CHIPS);
+    if (cultivationOn()) chips.push(CULTIVATION_CHIP);
+    chips.push(...GENERAL_CHIPS);
+    return chips.slice(0, 3);
+  };
   function mobiliseWelcome(root) {
     const welcome = root.querySelector ? root.querySelector(".welcome") : null;
     if (!welcome || welcome.dataset.mobile === "1") return;
     welcome.dataset.mobile = "1";
     const p = welcome.querySelector("p");
-    if (p) p.textContent = WELCOME_TEXT;
+    if (p) p.textContent = welcomeText();
+    const text = welcomeChips();
     const chips = welcome.querySelectorAll(".chip");
-    chips.forEach((chip, i) => { if (WELCOME_CHIPS[i]) chip.textContent = WELCOME_CHIPS[i]; });
+    chips.forEach((chip, i) => { if (text[i]) chip.textContent = text[i]; });
   }
   /* The first-run card is built in renderer.js and shown to anyone not signed
      in, which on a phone is everyone on launch day. Two of its three steps are
@@ -163,13 +197,13 @@
      fails, rather than the phone quietly going back to promising a terminal. */
   const COPY = [
     ["This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
-     "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and the farm's own records in your pocket."],
+     "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and — once you pair a desktop — its shell, files and git."],
     ["Point the workspace at a project folder (Settings or ask the agent).",
-     "Log what you see as you see it — a flush, a contamination, a room reading."],
+     "Pair a desktop in Settings under Remote machine, and it can work on that machine from here."],
     ["Give the agent a task - try",
      "Ask it something — try"],
-    ["summarize this repo", "what did I log about contamination this month"],
-    ["run the tests and fix what fails", "plan next week's fruiting schedule"],
+    ["summarize this repo", "what changed on my Mac today"],
+    ["run the tests and fix what fails", "run the tests on my Mac and tell me what failed"],
   ];
   function mobiliseCopy(root) {
     if (!root.innerHTML) return;
@@ -200,11 +234,14 @@
   /* The composer's placeholder names what the tier lets the agent do, and every
      desktop line names files or commands. The renderer rewrites it on each tier
      change, so this watches the attribute rather than setting it once. */
+  // Unpaired, the only thing the agent can change is the grow log — so saying so
+  // is accurate where that space is on and misleading where it is off, which is
+  // most installs once cultivation is a package rather than the whole app.
   const TIER_HINT = {
     plan: "Describe a task. It plans it out first.",
-    readonly: "Ask anything. It reads your log, writes nothing.",
-    edit: "Ask anything. It can add to your grow log.",
-    execute: "Ask anything. It can add to your grow log.",
+    readonly: "Ask anything. It reads, changes nothing.",
+    edit: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
+    execute: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
   };
   // What each tier means changes once a machine is paired, because the tier is
   // then gating a real shell and not only the grow log. Saying "your grow log"
@@ -219,7 +256,8 @@
   if (composerInput) {
     const hint = () => {
       const table = body.classList.contains("m-paired") ? TIER_HINT_PAIRED : TIER_HINT;
-      const want = table[body.dataset.tier] || table.edit;
+      const entry = table[body.dataset.tier] || table.edit;
+      const want = typeof entry === "function" ? entry() : entry;
       if (composerInput.placeholder !== want) composerInput.placeholder = want;
     };
     hint();
