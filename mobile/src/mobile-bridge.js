@@ -172,18 +172,38 @@
     return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "",
              tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
   }
+  // Native first on a device, and deliberately WITHOUT the try-fetch-then-fall-
+  // back-to-native pattern the gateway calls use. Everything redeemed here is
+  // single use: an authorization code, or a refresh token Keycloak rotates.
+  //
+  // A form-encoded POST is a CORS "simple request", so there is no preflight to
+  // stop it. Cross-origin from capacitor://localhost the request IS delivered,
+  // Keycloak spends the code, and only then does the browser withhold the
+  // response for want of an Access-Control-Allow-Origin header. fetch rejects,
+  // the fallback replays a code that no longer exists, and Crowe ID answers
+  // "Code not valid" — a sign-in that fails at the last step having already
+  // succeeded at the server. The same trap the refresh lock below describes.
+  //
+  // So: if the native stack is there, use it and only it. fetch is for `npm run
+  // serve` in a desktop browser, where there is no CapacitorHttp to call.
   async function tokenRequest(params) {
     const body = new URLSearchParams(params).toString();
     const url = `${CROWE_ID}/protocol/openid-connect/token`;
     const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    if (CapHttp) {
+      try {
+        const r = await nativePost(url, headers, body);
+        if (!r) return { error: "sign-in could not reach Crowe ID" };
+        try { return JSON.parse(r.text || "{}"); } catch { return { error: `HTTP ${r.status}` }; }
+      } catch (e) {
+        return { error: String(e).slice(0, 200) };
+      }
+    }
     try {
       const r = await fetch(url, { method: "POST", headers, body });
       return JSON.parse(await r.text() || "{}");
     } catch (e) {
-      if (!corsBlocked(e)) return { error: String(e).slice(0, 200) };
-      const r = await nativePost(url, headers, body);
-      if (!r) return { error: "sign-in could not reach Crowe ID" };
-      try { return JSON.parse(r.text || "{}"); } catch { return { error: `HTTP ${r.status}` }; }
+      return { error: String(e).slice(0, 200) };
     }
   }
   let refreshing = null;

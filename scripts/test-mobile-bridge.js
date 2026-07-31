@@ -413,6 +413,41 @@ function methodPaths(surface) {
     return `${found.length} listener(s) checked`;
   });
 
+  await check("single-use grants are redeemed natively, not fetch-first", () => {
+    // The gateway calls try fetch and fall back to CapacitorHttp when CORS
+    // blocks them. That pattern is wrong for the token endpoint and it cost a
+    // whole evening: a form-encoded POST is a CORS "simple request", so there
+    // is no preflight to stop it leaving. Cross-origin from capacitor://
+    // localhost the POST IS delivered and Keycloak spends the authorization
+    // code; only the response is withheld for want of an
+    // Access-Control-Allow-Origin header. fetch rejects, the fallback replays a
+    // code that no longer exists, and sign-in dies on "Code not valid" having
+    // already succeeded at the server. Refresh tokens rotate, so they burn the
+    // same way.
+    const src = read("mobile/src/mobile-bridge.js");
+    const start = src.indexOf("async function tokenRequest");
+    assert(start > -1, "tokenRequest is gone from the bridge");
+    let depth = 0, quote = null, end = -1;
+    for (let i = src.indexOf("{", start); i < src.length; i++) {
+      const c = src[i], prev = src[i - 1];
+      if (quote) { if (c === quote && prev !== "\\") quote = null; continue; }
+      if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+      if (c === "{") depth += 1;
+      else if (c === "}") { depth -= 1; if (depth === 0) { end = i; break; } }
+    }
+    assert(end > -1, "could not find the end of tokenRequest");
+    const body = src.slice(start, end);
+    const native = body.indexOf("nativePost");
+    const fetched = body.indexOf("fetch(");
+    assert(native > -1, "tokenRequest no longer has a native path");
+    assert(fetched === -1 || native < fetched,
+      "tokenRequest reaches for fetch before the native stack. A cross-origin " +
+      "POST still leaves the device and spends the code, so the native retry " +
+      "then replays a code Crowe ID has already consumed. Redeem natively " +
+      "whenever CapacitorHttp exists; keep fetch for `npm run serve` only.");
+    return fetched === -1 ? "native only" : "native before fetch";
+  });
+
   console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();
