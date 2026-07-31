@@ -1,0 +1,241 @@
+/* Crowe Logic mobile — the phone layer.
+ *
+ * Loaded after styles.css, and it never edits it. The desktop sheet is copied
+ * into www verbatim by the build, so anything here is an override that has to
+ * survive the next change over there: selectors stay shallow, and nothing
+ * depends on a rule's position in the desktop file.
+ *
+ * Two gates, doing different jobs:
+ *
+ *   body.mobile          the app is running in the Capacitor shell. Safe-area
+ *                        insets, touch sizing, no hover-only affordances.
+ *   @media (width<=820)  one column. A phone, or an iPad with the app in a
+ *                        narrow split — the layout follows the width it has,
+ *                        not the device it guessed.
+ *
+ * The desktop shell is a three-pane workstation: rail, conversation, workspace.
+ * A phone gets one pane at a time and a tab bar to move between them, because
+ * the alternative is three panes at a third of their usable width.
+ */
+
+/* ── The viewport ──
+   100dvh, not 100vh: iOS Safari's vh includes the browser chrome that slides
+   away, so a vh-sized column puts the composer under the home indicator on
+   first paint and moves it after the first scroll. --kb is the keyboard's
+   height, published by mobile-ui.js — the whole column shrinks above the
+   keyboard rather than the composer being translated over content. */
+body.mobile {
+  height: 100dvh;
+  height: calc(100dvh - var(--kb, 0px));
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none; user-select: none;
+  transition: height 180ms var(--ease, ease);
+}
+/* Selection stays available where text is the point: an answer you cannot copy
+   out of is an answer you have to retype. */
+body.mobile #transcript, body.mobile .surface, body.mobile pre, body.mobile code,
+body.mobile input, body.mobile textarea { -webkit-user-select: text; user-select: text; }
+
+body.mobile #bar {
+  padding-top: calc(9px + env(safe-area-inset-top));
+  padding-left: calc(14px + env(safe-area-inset-left));
+  padding-right: calc(14px + env(safe-area-inset-right));
+}
+
+/* Anything that describes a workspace this device does not have. */
+body.mobile .ws-sep, body.mobile #ws-path, body.mobile .cwd,
+body.mobile #hud-branch, body.mobile #glass-launcher,
+body.mobile .dock-tab[data-pane="git"], body.mobile .dock-tab[data-pane="files"],
+body.mobile #panel-add-term, body.mobile #panel-add-system, body.mobile #panel-add-agent,
+body.mobile .m-desktop-only { display: none !important; }
+
+/* Execute is the tier that runs commands, and it was hidden here outright
+   because a phone had nothing to run them on. It does now, when a machine is
+   paired — so the rule is conditional on that rather than absolute. An unpaired
+   phone still cannot offer it, because there would be nowhere for it to go. */
+body.mobile:not(.m-paired) #autonomy .seg-btn[data-tier="execute"] { display: none !important; }
+
+/* Same rule, same reason, in Studio: "Copy psynth · open Terminal" copies a
+   CLI command and opens the terminal pane. Paired, that console runs it on the
+   desktop; unpaired, the button ends at a pane explaining there is no shell —
+   an offer the app already knows it cannot keep. */
+body.mobile:not(.m-paired) #studio-film { display: none !important; }
+
+/* The console the terminal pane becomes once a machine is paired. Drawn where
+   xterm would have been, and deliberately plain: this is one command and one
+   result, not a screen a curses program can address. */
+.term-console { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.term-console-out {
+  flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 12px 14px;
+  font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
+.term-console-out span { display: block; }
+.term-console-echo { color: var(--muted); }
+.term-console-note { color: var(--muted); font-style: italic; }
+.term-console-err { color: var(--danger, #d2665a); }
+.term-console-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  border-top: 1px solid var(--hair); background: var(--surface);
+  /* Clears the home indicator, and the tab bar the phone chrome adds. */
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+.term-console-prompt { font-family: var(--mono); font-size: var(--fs-sm); color: var(--gold, #c9a227); flex: none; }
+.term-console-input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  font-family: var(--mono); color: var(--text);
+  /* 16px exactly: anything smaller and iOS zooms the page on focus. */
+  font-size: 16px; min-height: 44px;
+}
+.term-console-input:disabled { opacity: 0.6; }
+
+/* A stand-in for the terminal, drawn where xterm would have been. */
+.term-stub {
+  margin: 0; padding: 18px 16px; white-space: pre-wrap;
+  font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted);
+}
+
+/* ── Touch sizing ──
+   44px is the smallest target Apple's HIG and Android's Material both accept.
+   Applied to the controls a thumb actually goes for, not to every button:
+   inflating a chip row to 44px each turns three suggestions into a wall. */
+body.mobile .side-group .seg-btn,
+body.mobile .side-foot-btn,
+body.mobile .sn-item,
+body.mobile .dock-tab,
+body.mobile .pal-row,
+body.mobile #send, body.mobile #stop,
+body.mobile .voice-btn,
+body.mobile #autonomy .seg-btn { min-height: 44px; }
+body.mobile .dock-icon, body.mobile .bar-icon, body.mobile .side-icon { min-width: 40px; min-height: 40px; }
+
+/* iOS zooms the page when a focused field is under 16px. The app cannot zoom
+   back out on its own, so the user is left in a magnified layout with no way
+   home. Every field the phone can focus is 16px for that reason alone. */
+body.mobile #input, body.mobile .modal-card input, body.mobile .modal-card textarea,
+body.mobile .modal-card select, body.mobile .surface-composer input,
+body.mobile #pal-input, body.mobile #qo-input, body.mobile #git-msg { font-size: 16px; }
+
+/* Hover states on a touch screen stick after the tap that triggered them. */
+@media (hover: none) {
+  body.mobile .side-new:hover, body.mobile .card:hover { box-shadow: var(--z1); border-color: var(--line); }
+}
+
+/* ── One column ── */
+@media (max-width: 820px) {
+  /* The rail becomes a drawer over the content. It keeps its own markup and
+     its own toggle — the header button the desktop already has — so nothing
+     in renderer.js needs to know the difference. */
+  body.mobile #sidebar {
+    position: fixed; z-index: 60; top: 0; bottom: 0; left: 0;
+    width: min(82vw, 320px); flex-basis: min(82vw, 320px);
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    border-right: 1px solid var(--line-strong); box-shadow: var(--z3);
+    transform: translateX(-100%); transition: transform 220ms var(--ease, ease);
+    overflow-y: auto;
+  }
+  body.mobile:not(.sidebar-collapsed) #sidebar { transform: none; }
+  body.mobile #m-scrim {
+    position: fixed; inset: 0; z-index: 55; background: rgba(20,17,14,0.44);
+    opacity: 0; pointer-events: none; transition: opacity 220ms var(--ease, ease);
+  }
+  body.mobile:not(.sidebar-collapsed) #m-scrim { opacity: 1; pointer-events: auto; }
+  @media (prefers-reduced-motion: reduce) {
+    body.mobile #sidebar, body.mobile #m-scrim { transition: none; }
+  }
+
+  /* The workbench stops being a split. One of its two panes is on screen at a
+     time, chosen by the tab bar; the divider has nothing left to drag. */
+  body.mobile #workbench { grid-template-columns: 1fr; }
+  body.mobile #divider { display: none; }
+  body.mobile #agent { border-right: none; }
+  body.mobile[data-pane="agent"] #workspace,
+  body.mobile[data-pane="workspace"] #agent { display: none; }
+
+  body.mobile #transcript { padding: 16px 14px; overscroll-behavior: contain; }
+  body.mobile .surface-inner { padding: 22px 16px 26px; }
+  body.mobile .surface { overscroll-behavior: contain; }
+  body.mobile .sh h1 { font-size: 1.45rem; }
+
+  /* The composer is the one control that must always be reachable. Its foot
+     wraps rather than scrolls sideways, so the tier picker never ends up half
+     off the edge of a 375px screen. */
+  body.mobile #composer { padding: 10px 12px; padding-bottom: 10px; }
+  body.mobile .composer-foot { flex-wrap: wrap; gap: 6px; }
+  body.mobile #autonomy { flex: 1 1 100%; }
+  body.mobile #autonomy .seg-btn { flex: 1; }
+  /* Two lines of hint, plus the padding. The textarea grows with its content,
+     but a placeholder does not trigger that — so at 390px the tier hint wrapped
+     onto a second line and a one-row box clipped it, and the app opened with a
+     sentence cut in half across it. 52px was the first guess and still cut it:
+     two 19px lines and 20px of padding want 58px of content box, 60 with the
+     border. scripts/test-mobile-shell.js measures the overflow rather than
+     trusting an eyeball, which is how the missing 8px was found. */
+  body.mobile #input { min-height: 60px; max-height: 40dvh; }
+
+  body.mobile #hud { padding: 4px 12px; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+  body.mobile #hud::-webkit-scrollbar { display: none; }
+
+  /* Modals become sheets: full width, hinged at the bottom, capped so the
+     handle and the top of the card stay on screen next to a keyboard. */
+  body.mobile .modal { place-items: end stretch; }
+  body.mobile .modal-card, body.mobile .palette-card {
+    width: 100%; max-width: none; margin-top: 0;
+    max-height: 86dvh; overflow-y: auto; overscroll-behavior: contain;
+    border-radius: var(--r-xl, 16px) var(--r-xl, 16px) 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+  body.mobile .modal-card .row { position: sticky; bottom: 0; background: var(--panel);
+    padding-top: 12px; margin-top: 14px; }
+  body.mobile .modal-card .row button { flex: 1; min-height: 44px; }
+
+  body.mobile .cards { grid-template-columns: 1fr; }
+  body.mobile .chips { flex-direction: column; align-items: stretch; }
+  body.mobile .chip { max-width: none; text-align: left; }
+
+  /* Tables of grow records scroll inside their own box. The page itself must
+     never move sideways — a horizontal body scroll on a phone reads as a
+     broken layout, not as more content. */
+  body.mobile table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+
+/* ── The tab bar ──
+   Built at runtime by mobile-ui.js from the space buttons the rail is already
+   showing, so a build shipping two spaces gets two tabs without anything here
+   knowing which. */
+.m-tabs {
+  display: none;
+  flex: 0 0 auto; align-items: stretch;
+  background: var(--panel); border-top: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--hair-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);
+}
+body.mobile .m-tabs { display: flex; }
+body.mobile.kb-open .m-tabs { display: none; }   /* the keyboard is the toolbar now */
+
+.m-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; min-height: 52px; padding: 6px 2px 4px;
+  border: none; background: transparent; color: var(--muted);
+  font-family: var(--body); font-size: 10.5px; letter-spacing: .01em; cursor: pointer;
+  transition: color 120ms var(--ease, ease);
+}
+.m-tab .ic { width: 21px; height: 21px; }
+.m-tab[aria-current="true"] { color: var(--ink); font-weight: 600; }
+.m-tab[aria-current="true"] .ic { color: var(--blue); }
+.m-tab:active { background: var(--cream); }
+
+/* Above 820px the phone chrome would just be a second, worse nav next to the
+   rail, which is still on screen at that width. */
+@media (min-width: 821px) {
+  body.mobile .m-tabs, body.mobile #m-scrim { display: none; }
+}
+
+/* The dark theme's tab bar and drawer scrim, kept with their light twins
+   rather than at the bottom of the file, so a change to one is made looking
+   at the other. */
+body.dark .m-tab[aria-current="true"] .ic { color: var(--gold); }
+body.dark.mobile #m-scrim { background: rgba(0,0,0,0.6); }

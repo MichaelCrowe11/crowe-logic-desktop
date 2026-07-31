@@ -14,3 +14,19 @@ __pycache__/
 
 # macOS Finder droppings — never part of a build
 .DS_Store
+
+# The mobile app's generated inputs. www/ is assembled from renderer/ + assets/
+# by mobile/scripts/build-www.js, and resources/ is drawn from the brand SVGs by
+# mobile/scripts/gen-mobile-assets.js. Both are derived, so neither is history —
+# rebuild them with `npm run www` / `node scripts/gen-mobile-assets.js`. The iOS
+# and Android projects themselves are committed: they carry the URL scheme and
+# the entitlements, which are source.
+mobile/www/
+mobile/resources/
+# @capacitor/assets writes a PWA set beside the native ones. Nothing serves it:
+# the web build is www/, assembled separately. Generated and unused is not
+# history either.
+mobile/icons/
+# Resolved by whichever Xcode opens the project first, and rewritten by the
+# next one. The Package.swift that pins the plugins IS committed.
+mobile/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/

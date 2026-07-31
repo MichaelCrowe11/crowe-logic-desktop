@@ -1065,6 +1065,109 @@ async function refreshStatus() {
 
 // ── Settings ──
 const modal = $("settings");
+/* The phone companion pane.
+
+   The QR is drawn in the main process and arrives as finished markup, so the
+   pairing token — which is a shell credential — is never a string this side
+   holds, and cannot end up in a log line or a crash report. It is only
+   requested while the companion is actually running. */
+async function renderCompanion(){
+  const body = $("companion-body"), badge = $("companion-state");
+  if (!body) return;
+  const s = await window.crowe.companion.status();
+  const running = Boolean(s && s.running);
+  badge.textContent = running ? `Listening on ${s.host}` : (s && s.tailscale ? "Off" : "Tailscale not found");
+  const rows = [];
+  if (!running) {
+    rows.push(s && s.tailscale
+      ? `<p class="said">This machine is <b>${s.tailscale}</b> on your tailnet. Start the companion and scan the code with the Crowe Logic app on your phone.</p>`
+      : `<p class="said">No Tailscale address on this machine. The phone reaches this app over the tailnet rather than the open internet, so install Tailscale and sign in, then reopen Settings.</p>`);
+    rows.push(`<button id="companion-start" class="primary sm"${s && s.tailscale ? "" : " disabled"}>Start companion</button>`);
+  } else {
+    rows.push('<div id="companion-qr" style="display:flex;justify-content:center;padding:10px 0"></div>');
+    rows.push(`<p class="said">Open Crowe Logic on your phone and scan this. The code carries the address and a one-machine token; it stops working the moment you press Stop or Rotate.</p>`);
+    // Said out loud, because it is a real trade and the user is entitled to
+    // know why the battery went down: a phone can only reach a machine that is
+    // awake, so the companion holds this one awake while it is listening.
+    if (s.keepingAwake) rows.push('<p class="said">This Mac is being kept awake while the companion runs, so the phone can reach it. The display still sleeps.</p>');
+    rows.push('<div style="display:flex;gap:8px;flex-wrap:wrap"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-add" class="ghost sm">Add a device</button><button id="companion-rotate" class="ghost sm">Revoke all</button></div>');
+
+    /* Which devices can drive this machine, and what they have done.
+
+       One shared token made "I lost my phone" and "unpair everything I own" the
+       same action, and made the log able to say only that something ran. A
+       device each fixes both: revoke the one that is gone, and every line says
+       who. */
+    const devices = s.devices || [];
+    if (devices.length) {
+      rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Paired devices</b></div></div>');
+      rows.push(devices.map((d) => {
+        const seen = d.lastSeen ? new Date(d.lastSeen).toLocaleString() : "never used";
+        return `<div class="key-provider" style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1"><b>${esc(d.name)}</b><br><span class="said" style="opacity:.7">last used ${esc(seen)}</span></div>
+          <button class="ghost sm companion-revoke" data-id="${d.id}">Revoke</button></div>`;
+      }).join(""));
+    }
+    rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Recent activity</b><span>What the paired devices have run on this machine.</span></div></div>');
+    rows.push('<div id="companion-audit" class="said" style="max-height:180px;overflow:auto;font-family:var(--mono);font-size:12px"></div>');
+  }
+  body.innerHTML = rows.join("");
+  const start = $("companion-start");
+  if (start) start.onclick = async () => {
+    start.disabled = true; start.textContent = "Starting";
+    const r = await window.crowe.companion.start();
+    if (r && r.error) { body.innerHTML = `<p class="said">${r.error}</p>`; return; }
+    renderCompanion();
+  };
+  const stop = $("companion-stop");
+  if (stop) stop.onclick = async () => { await window.crowe.companion.stop(); renderCompanion(); };
+  const rotate = $("companion-rotate");
+  if (rotate) rotate.onclick = async () => {
+    if (!confirm("Revoke every paired device?\n\nAll of them stop working until they scan a new code. To remove just one, use Revoke beside its name.")) return;
+    await window.crowe.companion.rotate();
+    renderCompanion();
+  };
+  const add = $("companion-add");
+  if (add) add.onclick = async () => {
+    const name = prompt("Name this device, so the log and the revoke button mean something later.", "iPhone");
+    if (name === null) return;
+    const r = await window.crowe.companion.addDevice(name);
+    if (r && r.error) { alert(r.error); return; }
+    await renderCompanion();
+    // Show the new device's code rather than the most recent one generally,
+    // since the point of adding a device is to pair that device.
+    const host = $("companion-qr");
+    if (host && r && r.svg) host.innerHTML = r.svg;
+  };
+  body.querySelectorAll(".companion-revoke").forEach((b) => {
+    b.onclick = async () => {
+      const row = b.closest(".key-provider");
+      const label = row ? (row.querySelector("b") || {}).textContent : "this device";
+      if (!confirm(`Revoke ${label}?\n\nIt stops working immediately. Other paired devices are unaffected.`)) return;
+      await window.crowe.companion.revokeDevice(b.dataset.id);
+      renderCompanion();
+    };
+  });
+  const auditHost = $("companion-audit");
+  if (auditHost) {
+    const entries = await window.crowe.companion.audit(40);
+    auditHost.innerHTML = entries.length
+      ? entries.map((e) => {
+        const when = new Date(e.at).toLocaleTimeString();
+        const what = e.kind === "run" ? `${e.command || ""}${e.exit ? ` (exit ${e.exit})` : ""}`
+          : e.kind === "denied" ? `refused: ${e.reason || ""}`
+          : `${e.kind} ${e.path || ""}`;
+        return `<div>${esc(when)} · ${esc(e.device || "unknown")} · ${esc(String(what).slice(0, 160))}</div>`;
+      }).join("")
+      : '<div style="opacity:.7">Nothing yet.</div>';
+  }
+  if (running) {
+    const r = await window.crowe.companion.pairSvg();
+    const host = $("companion-qr");
+    if (host) host.innerHTML = r && r.svg ? r.svg : `<p class="said">${(r && r.error) || "could not draw the code"}</p>`;
+  }
+}
+
 async function renderKeyManager(){
   const result=await window.crowe.keys.list(),host=$("key-provider-list"),vault=$("key-vault-state");
   vault.textContent=result.encrypted?"Native vault ready":"Vault unavailable";
@@ -1109,7 +1212,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-verifier").checked = c.verifier !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderSpacePicker(); renderPlugins(); renderKeyManager();
+  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion();
   modal.classList.remove("hidden");
 });
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));

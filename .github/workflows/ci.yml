@@ -34,6 +34,15 @@ jobs:
       - name: Run harness tests
         run: node scripts/test-harness.js
 
+      # Second, and for the same reason: pure Node, seconds to run, and it is
+      # the only thing holding the mobile port to the desktop it copies. The
+      # renderer ships to the phone verbatim, so a bridge method dropped here or
+      # a routing rule added to the harness and not to mobile/src is a phone
+      # that behaves differently with nothing in this suite noticing. Rebuilds
+      # mobile/www on the way through, which also covers the www transforms.
+      - name: Run mobile bridge tests
+        run: node scripts/test-mobile-bridge.js
+
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
@@ -60,6 +69,15 @@ jobs:
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-panels.js
+
+      # The phone shell, in a phone-sized window. Electron rather than a browser
+      # driver so the mobile app costs the suite no dependency the desktop one
+      # was not already paying for, and because the layout only switches on
+      # width: at test-panels' 1280 this would assert the desktop shell and pass.
+      - name: Run mobile shell tests (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-mobile-shell.js
 
       - name: Upload smoke screenshots
         if: always()

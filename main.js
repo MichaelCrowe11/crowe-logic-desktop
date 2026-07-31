@@ -1075,6 +1075,62 @@ function growWrite(type, record) {
   catch (e) { return { ok: false, error: String(e.message || e) }; }
   return { ok: true, id: rec.id, record: rows.find((r) => r.id === rec.id) };
 }
+/* ─── The phone companion ────────────────────────────────────────────────────
+   This app already owns a shell, a file tree and a git checkout. The phone app
+   owns none of them and cannot: iOS will not fork a process. So the desktop
+   lends them over the tailnet, and pairing is a QR code drawn from qr.js rather
+   than a token typed on a phone keyboard.
+
+   Off until asked, every time — nothing listens on install, and starting it is
+   a deliberate act with the address and the token shown. */
+const { Companion } = require("./companion");
+const qr = require("./qr");
+let companion = null;
+function companionInstance() {
+  if (!companion) {
+    companion = new Companion({
+      tokenFile: path.join(app.getPath("userData"), "companion.token"),
+      // Electron's own blocker: "prevent-app-suspension" keeps the system from
+      // idling out while still letting the display sleep, which is what a
+      // machine being driven from a phone wants.
+      keepAwake: require("electron").powerSaveBlocker,
+      // Every command the phone runs is announced to the window, so a shell
+      // being driven remotely is never a silent one.
+      onEvent: (e) => { try { mainWindow && mainWindow.webContents.send("crowe:companion:event", e); } catch { /* window gone */ } },
+    });
+  }
+  return companion;
+}
+ipcMain.handle("crowe:companion:status", () => companionInstance().status());
+ipcMain.handle("crowe:companion:start", async () => {
+  try { return await companionInstance().start(); }
+  catch (e) { return { error: String(e.message || e) }; }
+});
+ipcMain.handle("crowe:companion:stop", () => companionInstance().stop());
+ipcMain.handle("crowe:companion:devices", () => companionInstance().deviceList());
+ipcMain.handle("crowe:companion:addDevice", (_e, { name } = {}) => {
+  const c = companionInstance();
+  const d = c.addDevice(name);
+  // The token goes out as a drawn code, never as a string the renderer holds.
+  return { id: d.id, name: d.name, svg: c.pairUrl() ? qr.toSvg(c.pairUrlFor(d), { scale: 6 }) : null };
+});
+ipcMain.handle("crowe:companion:revokeDevice", (_e, { id } = {}) => companionInstance().revokeDevice(id));
+ipcMain.handle("crowe:companion:audit", (_e, { limit } = {}) => companionInstance().recentAudit(limit || 40));
+ipcMain.handle("crowe:companion:rotate", () => {
+  const c = companionInstance();
+  c.rotateToken();
+  return c.status();
+});
+/* The SVG is drawn here and handed over as markup, so the token reaches the
+   screen without ever being a string the renderer holds and could log, copy or
+   put in a crash report. */
+ipcMain.handle("crowe:companion:pairSvg", () => {
+  const c = companionInstance();
+  const url = c.pairUrl();
+  if (!url) return { error: "the companion is not running" };
+  return { svg: qr.toSvg(url, { scale: 6 }), host: c.status().host, port: c.status().port };
+});
+
 ipcMain.handle("crowe:grow:list", (_e, { type } = {}) => growRead(String(type || "")));
 ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => growWrite(type, record));
 /* A trace leaves the app through the OS save dialog, never to a path the

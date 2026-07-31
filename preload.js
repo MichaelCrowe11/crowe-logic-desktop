@@ -86,6 +86,22 @@ contextBridge.exposeInMainWorld("crowe", {
     // Writes a lot trace to a file the user picks in the OS save dialog.
     export: (name, text) => ipcRenderer.invoke("crowe:grow:export", { name, text }),
   },
+  // The phone companion: this app lending its shell, files and git to the
+  // Crowe Logic app on a phone, over Tailscale. `pairSvg` returns finished
+  // markup rather than the pairing URL, so the token is drawn on screen without
+  // the renderer ever holding it as a string.
+  companion: {
+    status: () => ipcRenderer.invoke("crowe:companion:status"),
+    start: () => ipcRenderer.invoke("crowe:companion:start"),
+    stop: () => ipcRenderer.invoke("crowe:companion:stop"),
+    rotate: () => ipcRenderer.invoke("crowe:companion:rotate"),
+    devices: () => ipcRenderer.invoke("crowe:companion:devices"),
+    addDevice: (name) => ipcRenderer.invoke("crowe:companion:addDevice", { name }),
+    revokeDevice: (id) => ipcRenderer.invoke("crowe:companion:revokeDevice", { id }),
+    audit: (limit) => ipcRenderer.invoke("crowe:companion:audit", { limit }),
+    pairSvg: () => ipcRenderer.invoke("crowe:companion:pairSvg"),
+    onEvent: (cb) => { const h = (_e, e) => cb(e); ipcRenderer.on("crowe:companion:event", h); return () => ipcRenderer.removeListener("crowe:companion:event", h); },
+  },
   onBrowserNavigate: (cb) => { const h = (_e, url) => cb(url); ipcRenderer.on("crowe:browser:navigate", h); return () => ipcRenderer.removeListener("crowe:browser:navigate", h); },
   // Native menu / tray / global-shortcut actions: new-chat, palette, focus-composer, toggle-theme, pane:term|browser|files.
   onMenuAction: (cb) => { const h = (_e, a) => cb(a); ipcRenderer.on("crowe:menu", h); return () => ipcRenderer.removeListener("crowe:menu", h); },
