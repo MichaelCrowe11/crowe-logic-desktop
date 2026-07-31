@@ -1,55 +1,52 @@
 /* GENERATED-ADJACENT: the entrance choreography for assets/wordmark-motion.svg.
    Kept as its own file so the timing can be edited without touching the
    generator, and inlined verbatim by scripts/gen-mark.js. */
-  #wordmark-letterforms,
-  #rotor-crowe,
-  #rotor-logic,
-  #rotor-crowe-blades,
-  #rotor-logic-blades,
-  #gold-thinking-mark {
+  /* Classes, not ids - for the entrance too, not only the continuous cuts
+     below. Ids are document-global once this file is inlined, so exactly one
+     copy per page could ever play the arrival: whichever the scoping happened
+     to leave unsuffixed. That made the entrance a property of insertion order
+     rather than of the logotype, and the launch veil proved how sharp that is
+     - being first in the markup, it took the bare ids, and the header lockup
+     silently stopped arriving. On classes every copy can play its own
+     entrance, and the id suffixes go back to meaning nothing but valid HTML.
+
+     The thinking indicator is untouched by this: mountMotionLogotype strips
+     every id and swaps `is-animated` for `is-thinking`, so a mark that is
+     already turning never restarts by arriving. */
+  .wm-letterforms,
+  .wm-rotor,
+  .wm-blades,
+  .wm-spore {
     transform-box: fill-box;
     will-change: opacity, transform;
   }
 
-  #wordmark-letterforms {
+  .wm-letterforms,
+  .wm-rotor {
     transform-origin: center;
   }
 
-  #rotor-crowe,
-  #rotor-logic {
-    transform-origin: center;
-  }
-
-  #rotor-crowe-blades,
-  #rotor-logic-blades {
-    transform-origin: center;
-  }
-
-  #gold-thinking-mark {
-    transform-origin: 50% 80%;
-  }
-
-  .is-animated #wordmark-letterforms {
+  .is-animated .wm-letterforms {
     animation: wordmark-arrive 1400ms cubic-bezier(.2, .75, .25, 1) 120ms both;
   }
 
-  .is-animated #rotor-crowe {
+  .is-animated .wm-rotor-crowe {
     animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) both;
   }
 
-  .is-animated #rotor-logic {
+  .is-animated .wm-rotor-logic {
     animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) 140ms both;
   }
 
-  .is-animated #rotor-crowe-blades {
+  .is-animated .wm-blades-crowe {
     animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) both;
   }
 
-  .is-animated #rotor-logic-blades {
+  .is-animated .wm-blades-logic {
     animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) 140ms both;
   }
 
-  .is-animated #gold-thinking-mark {
+  .is-animated .wm-spore {
     animation: thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both;
   }
 
@@ -111,13 +108,6 @@
      in it, and a dish that spins with its own culture is a loading spinner
      wearing a logo. Holding the ring still is what makes the turn read as an
      engine seen through a window rather than as a progress indicator. */
-  .wm-letterforms,
-  .wm-rotor,
-  .wm-blades,
-  .wm-spore {
-    transform-box: fill-box;
-  }
-
   .wm-blades { transform-origin: center; }
   .wm-spore  { transform-origin: 50% 80%; }
 
@@ -132,7 +122,7 @@
   /* After the entrance, not instead of it: two comma-separated animations on
      one element, the perpetual one delayed past the arrival it would otherwise
      fight for the same transform. */
-  .is-animated #gold-thinking-mark {
+  .is-animated .wm-spore {
     animation:
       thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both,
       spore-drift 9s ease-in-out 2000ms infinite;
@@ -185,12 +175,11 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .is-animated #wordmark-letterforms,
-    .is-animated #rotor-crowe,
-    .is-animated #rotor-logic,
-    .is-animated #rotor-crowe-blades,
-    .is-animated #rotor-logic-blades,
-    .is-animated #gold-thinking-mark,
+    .is-animated .wm-letterforms,
+    .is-animated .wm-rotor-crowe,
+    .is-animated .wm-rotor-logic,
+    .is-animated .wm-blades-crowe,
+    .is-animated .wm-blades-logic,
     .wm-spore,
     .is-thinking .wm-blades-crowe,
     .is-thinking .wm-blades-logic,

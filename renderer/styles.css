@@ -176,10 +176,17 @@ button { font-family: var(--body); }
 #launch { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
   background: var(--cream); animation: launch-lift 1340ms both; }
 #launch .launch-mark { width: min(42vw, 340px); color: var(--ink); }
+/* Ends at display:none, not merely transparent. A fixed, full-bleed element
+   that is only invisible is still in the layer tree and still over the deck -
+   an invariant the smoke suite checks by hand, and one that would otherwise
+   depend on a script running to stay true. Discrete animation of `display`
+   makes the veil genuinely gone at the end of its own keyframe; removing the
+   node afterwards is then tidying, not load-bearing. */
 @keyframes launch-lift {
   0%, 58%  { opacity: 1; pointer-events: auto; }
   59%      { pointer-events: none; }
-  100%     { opacity: 0; visibility: hidden; pointer-events: none; }
+  99%      { opacity: 0; display: grid; }
+  100%     { opacity: 0; display: none; visibility: hidden; pointer-events: none; }
 }
 /* The shell arrives underneath in the order the eye reads it: the frame first,
    then the navigation, then the work. Pure CSS and `both`, so there is no

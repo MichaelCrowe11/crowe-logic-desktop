@@ -946,16 +946,20 @@ const tests = [
         allLive: els.every((e) => e.classList.contains("live")),
         allInlined: svgs.every(Boolean),
         // a background-image cannot produce these; only the inlined <style> can
-        wordAnim: anim("#wordmark-letterforms"),
-        bladeAnim: anim("#rotor-crowe-blades"),
+        // By class, not id. The ids carry a uniqueness suffix that depends on
+        // how many logotypes the document has minted, so an id selector here
+        // asserted insertion order as much as choreography — and broke the day
+        // a second lockup was added ahead of the header.
+        wordAnim: anim(".wm-letterforms"),
+        bladeAnim: anim(".wm-blades-crowe"),
         // The spore carries two: the entrance, then a perpetual drift delayed
         // past it. Split so the arrival stays pinned by name and the drift is
         // checked as its own fact — a comma-joined string would let either one
         // silently disappear behind a rewrite of the other.
-        sporeAnim: anim("#gold-thinking-mark").split(",")[0].trim(),
-        sporeDrifts: anim("#gold-thinking-mark").includes("spore-drift"),
+        sporeAnim: anim(".wm-spore").split(",")[0].trim(),
+        sporeDrifts: anim(".wm-spore").includes("spore-drift"),
         // ink is currentColor, so the logotype tracks the palette
-        inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
+        inherits: svgs[0].querySelector(".wm-letterforms path").getAttribute("fill"),
         // the static mask is the fallback and must be hidden once live, but
         // must still exist so a failed fetch leaves a logo on screen
         maskPresent: els.every((e) => !!e.querySelector(".lockup-ink")),
