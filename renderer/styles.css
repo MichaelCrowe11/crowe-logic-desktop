@@ -477,11 +477,27 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
    measured 32px below the final line of text and pinned at the left margin,
    and it jumped down there again every time a new paragraph or list opened.
    A caret parked where the writing is not reads as a stray glyph rather than
-   as "still writing", so containers hand it to their own last line. */
-.said.streaming > :last-child:not(:is(ul, ol, table, hr))::after,
+   as "still writing", so containers hand it to their own last line.
+
+   While a reply streams, the unfinished block lives in .md-tail; the blocks
+   before it are settled and never redrawn, so the caret belongs to the tail.
+   display:contents keeps that wrapper out of the box tree entirely, so the
+   blocks inside it space against their settled neighbours exactly as if they
+   were siblings. The tail-less selectors below still apply to a .said that is
+   rendered whole (history rebuild), which carries .streaming for one frame. */
+.said > .md-tail { display: contents; }
+.said > .md-tail:first-child > :first-child { margin-top: 0; }
+.said.streaming > .md-tail > :last-child:not(:is(ul, ol, table, hr))::after,
+.said.streaming > .md-tail > :is(ul, ol):last-child > li:last-child::after,
+.said.streaming > .md-tail > table:last-child tr:last-child > :last-child::after,
+.said.streaming > :last-child:not(:is(ul, ol, table, hr, .md-tail))::after,
 .said.streaming > :is(ul, ol):last-child > li:last-child::after,
 .said.streaming > table:last-child tr:last-child > :last-child::after {
   content: "\258D"; color: var(--gold-soft); animation: pulse 1s steps(2) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .said.streaming > .md-tail > :last-child::after,
+  .said.streaming > :last-child::after { animation: none; }
 }
 
 /* ── Composer ── */

@@ -77,6 +77,72 @@ function md(s) {
     return mdBlocks(esc(chunk));
   }).join("");
 }
+/* ── Streaming reveal ────────────────────────────────────────────────────────
+   The old loop re-parsed the entire message and replaced the entire subtree on
+   every animation frame. Three things followed from that, and all three were
+   the complaint: a long reply meant kilobytes of markdown parsed sixty times a
+   second with hundreds of DOM nodes rebuilt under it; any text the user had
+   selected was destroyed on the next frame, so a streaming reply could not be
+   copied from until it finished; and at a hard cap of 300 chars/s the writing
+   fell steadily behind a model that streams faster than that, so the animation
+   was still typing long after the answer had arrived.
+
+   What replaces it: text that is structurally final is parsed once and left
+   alone, only the last unfinished block is re-rendered per frame, and the rate
+   tracks the stream instead of a fixed cadence. The three functions below are
+   the whole policy, kept at module scope so scripts/test-panels.js can hold
+   them to it. */
+
+/* Baseline cadence, and the ceiling on how far the reveal may trail the model.
+
+   Proportional catch-up - reveal a fixed fraction of the backlog each frame -
+   was the obvious approach and the wrong one: it decays exponentially, so a
+   4 KB burst still took a second to drain and the "never trails by more than
+   LAG_MS" claim above it was simply false. Instead the backlog itself is
+   capped. Anything beyond what reads in LAG_MS is not animation, it is delay,
+   so it is skipped outright and the last stretch is written at the base rate.
+   The trailing distance is then bounded by construction rather than by hope. */
+const STREAM_CPS = 420, STREAM_LAG_MS = 220;
+function streamRevealLen(shown, total, dtMs) {
+  if (shown >= total) return total;
+  if (!(dtMs > 0)) return shown;
+  const maxBacklog = (STREAM_CPS * STREAM_LAG_MS) / 1000;
+  const from = Math.max(shown, total - maxBacklog);
+  return Math.min(total, from + Math.max(1, Math.ceil((STREAM_CPS * dtMs) / 1000)));
+}
+/* The last blank line that can be committed to the DOM permanently. `from` is
+   the previous settled point, which is never inside a code fence, so parity of
+   the fences between there and the candidate is what decides whether a blank
+   line is a paragraph break or just a blank line inside code. */
+function streamSettleAt(text, from, shown) {
+  const tail = text.slice(from, shown);
+  let at = tail.lastIndexOf("\n\n");
+  while (at > 0) {
+    if ((tail.slice(0, at).match(/```/g) || []).length % 2 === 0) return from + at + 2;
+    at = tail.lastIndexOf("\n\n", at - 1);
+  }
+  return from;
+}
+/* How much of the revealed text can be drawn without showing punctuation that
+   is about to become formatting. Without this, `**bold` spends a few frames as
+   two literal asterisks and then snaps, which reads as a rendering fault. An
+   opener is only held briefly - past 160 characters it is likelier to be prose
+   than markup, and a reveal that stalls is worse than one that flickers. */
+function streamSafeLen(text, from, shown) {
+  const head = text.slice(from, shown);
+  // Inside an open fence everything is literal, so nothing needs holding back.
+  if ((head.match(/```/g) || []).length % 2) return shown;
+  const lastFence = head.lastIndexOf("```");
+  const base = lastFence < 0 ? 0 : lastFence + 3;
+  const region = head.slice(base);
+  let cut = region.length;
+  const hold = (i) => { if (i >= 0 && region.length - i <= 160) cut = Math.min(cut, i); };
+  if ((region.match(/`/g) || []).length % 2) hold(region.lastIndexOf("`"));
+  if ((region.match(/\*\*/g) || []).length % 2) hold(region.lastIndexOf("**"));
+  if (region.lastIndexOf("[") > region.lastIndexOf("]")) hold(region.lastIndexOf("["));
+  return from + base + cut;
+}
+const REDUCED_MOTION = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
 function clearWelcome() { const w = transcript.querySelector(".welcome"); if (w) w.remove(); }
 
 async function copyText(text, button) {
@@ -394,33 +460,48 @@ async function send(text, opts = {}) {
   const mark = body._mark; if (mark) mark.setState("reasoning");
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   // Chronological streaming: each burst of text gets its own block appended
-  // after the tool cards that produced it, revealed character by character.
-  let curSaid = null, curText = "", shownLen = 0, typerOn = false;
+  // after the tool cards that produced it, revealed as it arrives. Settled
+  // paragraphs are parsed once and never touched again; only `.md-tail`, the
+  // one unfinished block, is re-rendered per frame.
+  let curSaid = null, curText = "", shownLen = 0, settledLen = 0, tailEl = null, typerOn = false, lastFrame = 0;
+  const openSaid = () => {
+    curSaid = document.createElement("div"); curSaid.className = "said streaming";
+    tailEl = document.createElement("div"); tailEl.className = "md-tail";
+    curSaid.appendChild(tailEl); body.appendChild(curSaid);
+    curText = ""; shownLen = 0; settledLen = 0;
+  };
+  const paint = () => {
+    const safe = streamSafeLen(curText, settledLen, shownLen);
+    const at = streamSettleAt(curText, settledLen, safe);
+    // Only settle when something would still be left to write, so the caret -
+    // which rides the tail's last line - always has a line to ride.
+    if (at > settledLen && safe > at) {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = md(curText.slice(settledLen, at));
+      curSaid.insertBefore(tpl.content, tailEl);
+      settledLen = at;
+    }
+    tailEl.innerHTML = md(curText.slice(settledLen, safe));
+  };
   const finishSaid = () => {
     if (!curSaid) return;
     curSaid.innerHTML = md(curText); curSaid.classList.remove("streaming");
-    curSaid = null; curText = ""; shownLen = 0; scrollBottom();
+    curSaid = null; tailEl = null; curText = ""; shownLen = 0; settledLen = 0; scrollBottom();
   };
-  const typeTick = () => {
-    if (!curSaid || shownLen >= curText.length) { typerOn = false; return; }
-    const backlog = curText.length - shownLen;
-    // Readable cadence: ~120 chars/s base, ramping gently on a deep backlog,
-    // hard-capped low so a burst that arrived whole still reads as writing.
-    // With real deltas the backlog stays shallow and the base rate carries it.
-    shownLen += Math.min(5, 2 + Math.floor(backlog / 800));
-    curSaid.innerHTML = md(curText.slice(0, shownLen));
-    scrollBottom();
+  const typeTick = (now) => {
+    if (!curSaid) { typerOn = false; return; }
+    const dt = lastFrame ? now - lastFrame : 16; lastFrame = now;
+    shownLen = REDUCED_MOTION.matches ? curText.length : streamRevealLen(shownLen, curText.length, dt);
+    paint(); scrollBottom();
+    if (shownLen >= curText.length) { typerOn = false; lastFrame = 0; return; }
     requestAnimationFrame(typeTick);
   };
   const pushText = (txt, burst) => {
     if (!txt) return;
     hideThinking(body);
-    if (!curSaid) {
-      curSaid = document.createElement("div"); curSaid.className = "said streaming";
-      body.appendChild(curSaid); curText = ""; shownLen = 0;
-    }
+    if (!curSaid) openSaid();
     curText += (burst && curText ? "\n\n" : "") + txt;
-    if (!typerOn) { typerOn = true; requestAnimationFrame(typeTick); }
+    if (!typerOn) { typerOn = true; lastFrame = 0; requestAnimationFrame(typeTick); }
   };
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
@@ -441,9 +522,16 @@ async function send(text, opts = {}) {
       runText = runText.slice(0, Math.max(0, runText.length - n));
       if (curSaid) {
         curText = curText.slice(0, Math.max(0, curText.length - n));
-        shownLen = Math.min(shownLen, curText.length);
-        if (!curText) { curSaid.remove(); curSaid = null; }
-        else curSaid.innerHTML = md(curText.slice(0, shownLen));
+        if (!curText) { curSaid.remove(); curSaid = null; tailEl = null; shownLen = 0; settledLen = 0; }
+        else {
+          // Rebuilt rather than trimmed: a rollback can cut into text that was
+          // already settled into the DOM, and settled nodes carry no offsets to
+          // trim by.
+          shownLen = Math.min(shownLen, curText.length);
+          curSaid.innerHTML = ""; settledLen = 0;
+          tailEl = document.createElement("div"); tailEl.className = "md-tail";
+          curSaid.appendChild(tailEl); paint();
+        }
       }
     }
     else if (ev.type === "telemetry") { updateHud(ev); runTok = (ev.promptTokens || 0) + (ev.completionTokens || 0); }

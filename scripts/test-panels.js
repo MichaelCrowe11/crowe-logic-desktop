@@ -332,6 +332,53 @@ const tests = [
               idempotent: true, liveClean: true },
   },
   {
+    name: "the reveal keeps pace with the model instead of trailing it",
+    body: `const r = streamRevealLen;
+      // A 4 KB burst must clear within the lag ceiling, not crawl: the old loop
+      // capped at 300 chars/s and was still typing long after the answer landed.
+      let shown = 0, frames = 0;
+      while (shown < 4000 && frames < 600) { shown = r(shown, 4000, 16); frames++; }
+      const burstMs = frames * 16;
+      // A trickle arrives slower than the base rate, so it reveals as it comes.
+      const trickle = r(100, 108, 16);
+      return { withinLag: burstMs <= 300, cleared: shown, trickle,
+               done: r(500, 500, 16), noTime: r(0, 900, 0) };`,
+    expect: { withinLag: true, cleared: 4000, trickle: 107, done: 500, noTime: 0 },
+  },
+  {
+    name: "only whole paragraphs settle, and never inside a code fence",
+    body: `const s = streamSettleAt;
+      const plain = "one\\n\\ntwo\\n\\nthr";
+      const fenced = "intro\\n\\n\\u0060\\u0060\\u0060js\\na\\n\\nb\\n";
+      const closed = "intro\\n\\n\\u0060\\u0060\\u0060js\\na\\n\\nb\\n\\u0060\\u0060\\u0060\\n\\nafter";
+      return {
+        settles: s(plain, 0, plain.length),
+        resumes: s(plain, 5, plain.length),
+        none: s("no break yet", 0, 12),
+        // The blank line inside an open fence is content, not a boundary.
+        openFence: s(fenced, 0, fenced.length),   // after "intro\\n\\n", not inside the fence
+        // Once the fence closes, the break after it is a real boundary.
+        closedFence: s(closed, 0, closed.length) === closed.indexOf("after"),
+      };`,
+    expect: { settles: 10, resumes: 10, none: 0, openFence: 7, closedFence: true },
+  },
+  {
+    name: "half-typed markup is held back rather than flashed",
+    body: `const f = streamSafeLen, at = (t) => f(t, 0, t.length);
+      const long = "**" + "x".repeat(200);
+      return {
+        bold: at("say **loud"), boldClosed: at("say **loud**"),
+        code: at("run \\u0060npm te"), link: at("see [the doc"),
+        plain: at("nothing pending here"),
+        // Past the hold window an opener is likelier prose than markup, so it
+        // shows rather than stalling the reveal.
+        stale: at(long) === long.length,
+        // Inside a fence every character is literal and nothing waits.
+        inFence: at("\\u0060\\u0060\\u0060\\nrm **x") === 10,
+      };`,
+    expect: { bold: 4, boldClosed: 12, code: 4, link: 4, plain: 20, stale: true, inFence: true },
+  },
+  {
     name: "panel state persists to localStorage",
     body: `await __reset("columns");
       await addPanel("browser", { url: "https://example.com/p" });
