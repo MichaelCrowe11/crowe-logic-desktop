@@ -381,16 +381,19 @@ emit("lockup-dark.svg", lockupSvg("#f5f2ea", { scale: SCALE.dark, id: "ld" }));
 // drawing, so there is no separate mark to lose and no way to ship the words
 // without it.
 //
-// Why the o's are ink and only the tittle is gold: the palette runs on gold
-// appearing in exactly one place. Three gold radials inside a 96px word would
-// read as glitter. Drawn in the body ink, the whorl is a letterform — a round
-// counter built of hyphae — and the eye reads "Cr(o)we L(o)gic" before it
-// notices what the o is made of. That is the point: the mark is not applied to
-// the name, it is the name's own construction.
+// The whorls in the o's wear the mark's own palette — the same treatment as
+// the tittle spore of whichever cut they sit in (decided with Michael,
+// 2026-07-31; they were ink-only before, under a gold-appears-once rule that
+// now applies per mark, not per wordmark). The ring stays letterform ink: it
+// is the "o" the word needs at 8.6px, and it is what keeps three coloured
+// marks from reading as glitter — each sits inside its own ink frame. The
+// mask cut is the one place the whorls stay flat, because a mask is one
+// colour by definition and the renderer's fallback layer must recolour
+// entirely from --ink.
 //
 // The o's take the unforked, eased-taper cut for the same reason every small
 // slot does: at header size an "o" is 8.6px across and the primary's 0.8-wide
-// tips disappear, leaving a gold-less scratch ball where a letter should be.
+// tips disappear, leaving a scratch ball where a letter should be.
 const SPORE = 46;   // ink width of the spore, in wordmark em units
 
 // The o is drawn, not borrowed. Fraunces' own "o" at this cut is 45.72 wide
@@ -409,19 +412,23 @@ const O_OUTER = 45.72;   // matches the glyph it stands in for
 // under the animation.
 const O_STROKE = 8.0;
 const O_MARK = (O_OUTER - 2 * O_STROKE) * 0.99;
-const oCut = (ink, id) => ({ pal: { blue: ink, gold: ink }, taper: 0.45, fork: false, id });
+// `mark` carries the cut's spore treatment ({scale} or {pal}); absent, the
+// whorl is flat ink — the mask cut's case. The id is always the whorl's own,
+// never the spore's: two marks sharing gradient ids silently paint the second
+// with the first one's stops.
+const oCut = (ink, id, mark) => ({ ...(mark || { pal: { blue: ink, gold: ink } }), taper: 0.45, fork: false, id });
 const ring = (cx, cy, r) =>
   `M${(cx - r).toFixed(2)} ${cy.toFixed(2)}a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(2 * r).toFixed(2)} 0` +
   `a${r.toFixed(2)} ${r.toFixed(2)} 0 1 0 ${(-2 * r).toFixed(2)} 0`;
 // Ring and blades come back separately: the static cuts glue them together, and
 // the motion cut needs them in two groups so the blades can spin inside a ring
 // that holds still. One source for both, so they cannot drift apart.
-const oParts = (ink, g, id) => ({
+const oParts = (ink, g, id, mark) => ({
   ring: `<path fill="${ink}" fill-rule="evenodd" d="${ring(g.cx, g.cy, O_OUTER / 2)}${ring(g.cx, g.cy, O_OUTER / 2 - O_STROKE)}"/>`,
-  blades: placeMark(g.cx, g.cy, O_MARK, oCut(ink, id)),
+  blades: placeMark(g.cx, g.cy, O_MARK, oCut(ink, id, mark)),
 });
-const oGlyph = (ink, g, id) => {
-  const p = oParts(ink, g, id);
+const oGlyph = (ink, g, id, mark) => {
+  const p = oParts(ink, g, id, mark);
   return `${p.ring}\n  ${p.blades}`;
 };
 
@@ -430,8 +437,11 @@ function wordmarkSvg(ink, markOpts, opts) {
   const t = WM.tittle;
   const top = Math.min(t.cy - SPORE / 2, -WM.capHeight) - 5;
   const bottom = -WM.descent + 5;
+  // The whorls take the spore's own treatment, cut for cut; a cut with no
+  // spore treatment (the mask) leaves them ink.
+  const oMark = markOpts && markOpts.scale ? { scale: markOpts.scale } : null;
   const os = WM.glyphs.filter((g) => g.ch === "o")
-    .map((g, i) => oGlyph(ink, g, `${id}o${i}`))
+    .map((g, i) => oGlyph(ink, g, `${id}o${i}`, oMark))
     .join("\n  ");
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-5} ${top.toFixed(2)} ${(WM.width + 10).toFixed(2)} ${(bottom - top).toFixed(2)}">
   <path d="${WM.dNoOs}" fill="${ink}"/>
@@ -456,10 +466,10 @@ emit("wordmark-ink.svg", wordmarkSvg("#000", null, { spore: false, id: "wi" }));
 // and is inlined here verbatim — the timing was authored by hand and the
 // generator's job is only to keep the geometry under it current.
 //
-// Ink is `currentColor` and the spore is flat gold, so one file serves both
-// themes from whatever --ink the host sets. That is also the mark's canonical
-// form: mono, with gold in exactly one place. The gradient cuts above are for
-// paper and for the hero, where there is room for a tonal ramp to read.
+// Ink is `currentColor` and every mark's core is flat gold — the spore and
+// both whorls take the same palette, so one file serves both themes from
+// whatever --ink the host sets. The gradient cuts above are for paper and for
+// the hero, where there is room for a tonal ramp to read.
 //
 // The viewBox carries 25 units of padding the static cuts do not need, because
 // the blades scale up from 0.45 and the spore overshoots to 1.08 on the way in;
@@ -477,7 +487,7 @@ function wordmarkMotionSvg() {
      around. Classes make a copy self-contained, so no scoping is needed and
      nothing renumbers when an indicator is removed. */
   const rotor = (name, g) => {
-    const p = oParts("currentColor", g, `mo-${name}`);
+    const p = oParts("currentColor", g, `mo-${name}`, { pal: { blue: "currentColor", gold: C.gold } });
     return `<g id="rotor-${name}" class="wm-rotor wm-rotor-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine">
   ${p.ring.replace("<path ", `<path id="rotor-${name}-ring" class="wm-ring" `)}
   <g id="rotor-${name}-blades" class="wm-blades wm-blades-${name}" aria-label="${name[0].toUpperCase() + name.slice(1)} turbine blades">${p.blades}</g>
@@ -485,7 +495,7 @@ function wordmarkMotionSvg() {
   };
   return `<svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
   <title id="crowe-logic-motion-title">Crowe Logic</title>
-  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae; the tittle of the i is the gold spore.</desc>
+  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae around a gold spore; the tittle of the i is the gold spore.</desc>
   <style>
 ${css.replace(/^/gm, "  ").trimEnd()}
   </style>

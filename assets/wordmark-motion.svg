@@ -1,6 +1,6 @@
 <svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
   <title id="crowe-logic-motion-title">Crowe Logic</title>
-  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae; the tittle of the i is the gold spore.</desc>
+  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae around a gold spore; the tittle of the i is the gold spore.</desc>
   <style>
   /* GENERATED-ADJACENT: the entrance choreography for assets/wordmark-motion.svg.
      Kept as its own file so the timing can be edited without touching the
@@ -213,7 +213,7 @@
   <polygon points="55.30,67.95 55.43,70.63 55.49,73.21 55.42,75.74 55.21,78.21 54.81,80.64 54.18,83.02 53.29,85.34 52.11,87.61 50.58,89.80 48.66,91.88 46.32,93.80 43.33,95.58 45.95,100.45 49.43,98.75 52.63,96.61 55.38,94.18 57.70,91.52 59.60,88.69 61.12,85.76 62.30,82.77 63.17,79.76 63.80,76.75 64.22,73.79 64.51,70.87 64.70,68.05" fill="currentColor"/>
   <polygon points="50.76,59.91 48.51,61.36 46.30,62.70 44.08,63.91 41.83,64.96 39.53,65.82 37.16,66.47 34.70,66.87 32.14,66.97 29.48,66.74 26.72,66.12 23.89,65.05 20.85,63.35 17.95,68.06 21.15,70.22 24.61,71.92 28.10,73.09 31.56,73.77 34.95,74.00 38.25,73.85 41.43,73.37 44.48,72.62 47.39,71.66 50.17,70.55 52.84,69.34 55.38,68.09" fill="currentColor"/>
   <polygon points="55.46,51.95 53.08,50.73 50.81,49.49 48.66,48.17 46.63,46.75 44.73,45.18 42.98,43.45 41.40,41.52 40.03,39.36 38.90,36.94 38.06,34.24 37.57,31.25 37.52,27.77 31.99,27.61 31.72,31.47 31.98,35.31 32.71,38.91 33.86,42.25 35.35,45.31 37.13,48.09 39.13,50.60 41.31,52.87 43.59,54.91 45.95,56.76 48.33,58.47 50.68,60.05" fill="currentColor"/>
-  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="currentColor"/>
+  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="#EFA71B"/>
 </g></g>
 </g>
   <g id="rotor-logic" class="wm-rotor wm-rotor-logic" aria-label="Logic turbine">
@@ -225,7 +225,7 @@
   <polygon points="55.30,67.95 55.43,70.63 55.49,73.21 55.42,75.74 55.21,78.21 54.81,80.64 54.18,83.02 53.29,85.34 52.11,87.61 50.58,89.80 48.66,91.88 46.32,93.80 43.33,95.58 45.95,100.45 49.43,98.75 52.63,96.61 55.38,94.18 57.70,91.52 59.60,88.69 61.12,85.76 62.30,82.77 63.17,79.76 63.80,76.75 64.22,73.79 64.51,70.87 64.70,68.05" fill="currentColor"/>
   <polygon points="50.76,59.91 48.51,61.36 46.30,62.70 44.08,63.91 41.83,64.96 39.53,65.82 37.16,66.47 34.70,66.87 32.14,66.97 29.48,66.74 26.72,66.12 23.89,65.05 20.85,63.35 17.95,68.06 21.15,70.22 24.61,71.92 28.10,73.09 31.56,73.77 34.95,74.00 38.25,73.85 41.43,73.37 44.48,72.62 47.39,71.66 50.17,70.55 52.84,69.34 55.38,68.09" fill="currentColor"/>
   <polygon points="55.46,51.95 53.08,50.73 50.81,49.49 48.66,48.17 46.63,46.75 44.73,45.18 42.98,43.45 41.40,41.52 40.03,39.36 38.90,36.94 38.06,34.24 37.57,31.25 37.52,27.77 31.99,27.61 31.72,31.47 31.98,35.31 32.71,38.91 33.86,42.25 35.35,45.31 37.13,48.09 39.13,50.60 41.31,52.87 43.59,54.91 45.95,56.76 48.33,58.47 50.68,60.05" fill="currentColor"/>
-  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="currentColor"/>
+  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="#EFA71B"/>
 </g></g>
 </g>
   <g id="gold-thinking-mark" class="wm-spore" aria-label="Gold thinking mark"><g transform="translate(444.6 -58.32) scale(0.52190) translate(-60 -60)">
