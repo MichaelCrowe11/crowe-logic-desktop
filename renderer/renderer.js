@@ -406,15 +406,33 @@ async function send(text, opts = {}) {
     curSaid.innerHTML = md(curText); curSaid.classList.remove("streaming");
     curSaid = null; curText = ""; shownLen = 0; scrollBottom();
   };
-  const typeTick = () => {
-    if (!curSaid || shownLen >= curText.length) { typerOn = false; return; }
+  let lastTick = 0, lastPaint = 0;
+  const typeTick = (now) => {
+    if (!curSaid || shownLen >= curText.length) { typerOn = false; lastTick = 0; return; }
     const backlog = curText.length - shownLen;
-    // Readable cadence: ~120 chars/s base, ramping gently on a deep backlog,
-    // hard-capped low so a burst that arrived whole still reads as writing.
-    // With real deltas the backlog stays shallow and the base rate carries it.
-    shownLen += Math.min(5, 2 + Math.floor(backlog / 800));
-    curSaid.innerHTML = md(curText.slice(0, shownLen));
-    scrollBottom();
+    /* Time-based, not frame-based. The reveal used to advance 2-5 chars per
+       animation frame, which welded the cadence to the frame rate: a phone
+       dropping to 30fps read at half speed, and the hard cap meant a long
+       answer kept trickling for ten seconds after the model had finished.
+       Now the rate is chars per second with the backlog folded in — reading
+       pace when the backlog is shallow (the live-typing feel), and a drain
+       that clears any backlog in about half a second when the stream has
+       outrun the reveal. The text is never seconds behind what has arrived.
+
+       Painting is throttled separately: md() re-parses the whole block, and
+       doing that every frame was 60 full innerHTML replacements a second —
+       layout thrash on desktop, dropped frames and battery on the phone.
+       ~20 paints a second is indistinguishable when reading and a third of
+       the work; the final paint on drain-out is unconditional. */
+    const dt = lastTick ? Math.min(100, now - lastTick) : 16;
+    lastTick = now;
+    const rate = Math.max(150, backlog * 2.2);            // chars per second
+    shownLen = Math.min(curText.length, shownLen + Math.max(1, Math.round(rate * dt / 1000)));
+    if (now - lastPaint >= 48 || shownLen >= curText.length) {
+      lastPaint = now;
+      curSaid.innerHTML = md(curText.slice(0, shownLen));
+      scrollBottom();
+    }
     requestAnimationFrame(typeTick);
   };
   const pushText = (txt, burst) => {
