@@ -138,9 +138,35 @@ async function main() {
       version: '0.14.0',
       windows: 'Crowe Logic Setup 0.14.0.exe',
       macos: 'CroweLogic-0.14.0-arm64.dmg',
+      // A one-architecture release offers no Intel link rather than repeating
+      // the arm64 file behind a button that promises Intel.
+      macosIntel: null,
       appimage: 'Crowe Logic-0.14.0.AppImage',
       deb: 'crowe-logic-desktop_0.14.0_amd64.deb',
     });
+  });
+
+  /* The arch split, held at the ordering that caused the bug. electron-builder
+     writes x64 ahead of arm64, and the catalog used to take the first dmg in
+     the feed - so every Apple Silicon visitor got the Intel build from a card
+     headed "Apple Silicon". It downloads and it runs under Rosetta, which is
+     why it went unreported through two releases. Ordering x64 first here is the
+     point of the fixture: sorted the other way it would pass on the old code. */
+  await check('a universal release sends Apple Silicon the arm64 build, not the first dmg', async () => {
+    const both = { ...MANIFESTS };
+    both['desktop/channel/mac/latest-mac.yml'] = `version: 0.14.0
+files:
+  - url: CroweLogic-0.14.0-x64.dmg
+    sha512: aaa
+    size: 1
+  - url: CroweLogic-0.14.0-arm64.dmg
+    sha512: bbb
+    size: 2
+path: CroweLogic-0.14.0-x64.dmg
+`;
+    const rel = await catalog(envWith(both));
+    assert.strictEqual(rel.macos, 'CroweLogic-0.14.0-arm64.dmg');
+    assert.strictEqual(rel.macosIntel, 'CroweLogic-0.14.0-x64.dmg');
   });
 
   await check('a platform left behind on an older version is not offered', async () => {
