@@ -1564,6 +1564,26 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
    three times. */
 .room { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
+/* ── the head ──
+   The logotype, the room's name, and the tier it may run at. Same placement as
+   the agent panel, at the same size, because a room is a panel of this app and
+   should be recognisable as one before anything inside it is read.
+
+   The mark turns while any seat is working. That is the one state the per-seat
+   marks stop giving once the roster scrolls sideways, and a room either is
+   thinking or it is not. */
+.room-head { display: flex; align-items: center; gap: 12px; padding: 11px 13px 10px;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+.room-logotype { width: 118px; flex: 0 0 118px; aspect-ratio: 548.3 / 150; display: block; color: var(--ink); }
+.room-logotype svg { display: block; width: 100%; height: 100%; }
+.room-name { flex: 1; min-width: 0; font-family: var(--display); font-size: var(--fs-head);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The tier is a promise about what this room may touch, so it is stated as a
+   plain fact rather than a coloured badge competing with the seats. */
+.room-tier { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  letter-spacing: .04em; white-space: nowrap; }
+.room-tier[hidden] { display: none; }
+
 /* ── the table ── */
 .room-roster { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
   border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -1641,7 +1661,11 @@ body.dark .rmsg.is-critique .rmsg-who { color: var(--gold); }
 .room.composing > .room-composer { display: none; }
 
 .room-compose { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 28px; }
-.rc-head { margin-bottom: 20px; max-width: 62ch; }
+/* Opening a room is where the product introduces itself, the same way the
+   welcome screen does. The logotype leads, then the proposition. */
+.rc-head { margin-bottom: 22px; max-width: 62ch; }
+.rc-logotype { display: block; width: 168px; aspect-ratio: 548.3 / 150; margin-bottom: 14px; color: var(--ink); }
+.rc-logotype svg { display: block; width: 100%; height: 100%; }
 .rc-head b { display: block; font-family: var(--display); font-size: var(--fs-display);
   font-weight: 600; line-height: 1.1; text-wrap: balance; }
 .rc-head span { display: block; margin-top: 7px; color: var(--muted);

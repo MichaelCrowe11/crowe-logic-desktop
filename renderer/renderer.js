@@ -1055,6 +1055,11 @@ function mountWorkbench(p, body) {
 async function mountRoom(p, body, seed = {}) {
   const wrap = document.createElement("div"); wrap.className = "room";
   wrap.innerHTML = `
+    <div class="room-head">
+      <span class="room-logotype" role="img" aria-label="Crowe Logic"></span>
+      <span class="room-name"></span>
+      <span class="room-tier" title="The tier this room may run at: the lowest ceiling among its agents, clamped by your autonomy setting"></span>
+    </div>
     <div class="room-roster" role="list" aria-label="Room roster"></div>
     <div class="room-thread" aria-live="polite"></div>
     <div class="room-rounds">
@@ -1084,6 +1089,23 @@ async function mountRoom(p, body, seed = {}) {
   let state = null, busy = false;
 
   const money = (n) => "$" + Number(n || 0).toFixed(3);
+
+  /* The panel head wears the logotype, same as the header, the agent panel and
+     the thinking indicator. It is not decoration here: it turns while any seat
+     in the room is working, which is the one state the per-seat marks cannot
+     give at a glance once the roster scrolls sideways. A room either is
+     thinking or it is not, and the mark that carries the product's name is
+     what says so. */
+  const roomMark = { svg: null, on: false };
+  mountMotionLogotype(wrap.querySelector(".room-logotype"), "").then((svg) => {
+    roomMark.svg = svg;
+    if (svg) svg.classList.toggle("is-thinking", roomMark.on);
+  });
+  function setRoomWorking(on) {
+    if (roomMark.on === on) return;
+    roomMark.on = on;
+    if (roomMark.svg) roomMark.svg.classList.toggle("is-thinking", on);
+  }
 
   /* The roster is a row of living marks.
 
@@ -1180,7 +1202,17 @@ async function mountRoom(p, body, seed = {}) {
     meter.classList.toggle("over", halted);
   }
 
-  const paint = async () => { drawRoster(); drawThread(); await drawRounds(); };
+  function drawHead() {
+    wrap.querySelector(".room-name").textContent = state?.title || "Room";
+    const tier = state?.tier || "";
+    const tierEl = wrap.querySelector(".room-tier");
+    // Named plainly. "readonly" is the tier id; "reads only" is what it does.
+    tierEl.textContent = tier === "plan" ? "plans only" : tier === "readonly" ? "reads only" : tier;
+    tierEl.hidden = !tier;
+    setRoomWorking((state?.agents || []).some((a) => a.state === "working" || a.state === "queued"));
+  }
+
+  const paint = async () => { drawHead(); drawRoster(); drawThread(); await drawRounds(); };
 
   async function refresh() {
     const r = await window.crowe.rooms.load(p.roomId);
@@ -1190,9 +1222,38 @@ async function mountRoom(p, body, seed = {}) {
     await paint();
   }
 
+  /* Live state, from the events the room's turns already emit.
+
+     A round is one await that resolves when every addressed agent has finished,
+     so painting only from its result left the roster reading "idle" for the
+     whole time the room was working and then jumping to done. With a real
+     gateway that is ten seconds of a surface whose entire purpose is showing
+     who is thinking.
+
+     main.js stamps roomId and roomAgent on every event a seat produces, so the
+     states come from the same stream the transcript already uses rather than
+     from a second guess at who was addressed. */
+  const offEvents = window.crowe.agent.onEvent((ev) => {
+    if (!p.roomId || ev.roomId !== p.roomId || !ev.roomAgent || !state) return;
+    const seat = state.agents.find((a) => a.agentId === ev.roomAgent);
+    if (!seat) return;
+    if (ev.type === "route") seat.state = "working";
+    else if (ev.type === "error") seat.state = "failed";
+    else if (ev.type === "stopped") seat.state = "stopped";
+    else if (ev.type === "final") seat.state = seat.state === "failed" ? "failed" : "done";
+    drawHead(); drawRoster();
+  });
+  // The panel outlives no listener: a closed room panel that kept receiving
+  // events would repaint a roster that is no longer on screen.
+  p.onClose = () => { try { offEvents(); } catch {} };
+
   async function round(fn) {
     if (busy) return;
-    busy = true; await drawRounds();
+    busy = true;
+    // Queued before the first call goes out, so the roster changes the moment
+    // the operator presses send rather than when the round comes back.
+    for (const a of (state?.agents || [])) a.state = "queued";
+    drawHead(); drawRoster(); await drawRounds();
     try {
       const out = await fn();
       if (out?.room) state = { ...out.room, messages: state.messages };
@@ -1252,6 +1313,7 @@ async function mountRoom(p, body, seed = {}) {
   const byDomain = agents.reduce((m, a) => ((m[a.domain || "other"] = m[a.domain || "other"] || []).push(a), m), {});
   composer.innerHTML = `
     <div class="rc-head">
+      <span class="rc-logotype" role="img" aria-label="Crowe Logic"></span>
       <b>Open a room</b>
       <span>A room earns its cost when a decision has more than one binding constraint. Where there is only one, a single agent is the right answer.</span>
     </div>
@@ -1266,6 +1328,8 @@ async function mountRoom(p, body, seed = {}) {
         <button class="rc-open primary sm" disabled>Open</button>
       </div>
     </div>`;
+
+  mountMotionLogotype(composer.querySelector(".rc-logotype"), "");
 
   const tWrap = composer.querySelector(".rc-templates");
   for (const t of templates) {
@@ -1341,7 +1405,7 @@ function mountOperator(p, body) {
   const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
   body.querySelector(".refresh").onclick=refresh;body.querySelector(".stop-agent").onclick=async()=>{await window.crowe.agent.stop();refresh()};body.querySelector(".stop-voice").onclick=()=>speechSynthesis.cancel();body.querySelector(".emergency").onclick=async()=>{if(!confirm("Stop every agent and terminal process?"))return;await window.crowe.operator.stopAll();speechSynthesis.cancel();for(const x of terminalPanels.values())x.state.textContent="stopped";refresh()};refresh();p.operatorTimer=setInterval(()=>{if(document.body.contains(body))refresh();else clearInterval(p.operatorTimer)},5000);
 }
-function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
+function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
   if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
