@@ -325,6 +325,24 @@ function settleThinking(body, mood) {
   svg.classList.add(mood === "fail" ? "is-failed" : "is-settling");
   setTimeout(() => t.remove(), mood === "fail" ? 900 : 700);
 }
+/* Where the landing is actually seen. On the normal path the transcript's
+   indicator has already yielded to the answer by the time the run resolves —
+   text arriving hides it, and that is correct — so a beat played only there is
+   a beat played mostly never. The header's logotype is the one copy on every
+   screen, so the turn's end lands on it: the same single settle, once.
+
+   is-animated comes off first and stays off. Its entrance keyframes are
+   `both`-filled, so re-adding animation shorthands when is-settling lifts
+   would replay the arrival — a logo swooping through the header on every
+   completed turn. The entrance has played; the settle retires it. */
+function settleHeader() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const svg = document.querySelector("#bar .lockup.live > svg");
+  if (!svg || svg.classList.contains("is-settling")) return;
+  svg.classList.remove("is-animated");
+  svg.classList.add("is-settling");
+  setTimeout(() => svg.classList.remove("is-settling"), 700);
+}
 let lastCard = null;
 function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
@@ -600,6 +618,9 @@ async function send(text, opts = {}) {
   const gc = await growContext(); if (gc) runOpts.context = gc;
   try { await window.crowe.agent.run(messages, "main", runOpts); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   finishSaid(); settleThinking(body);
+  // The header takes the landing only when the turn actually landed — an
+  // errored or stopped turn has nothing to celebrate.
+  if (!body.querySelector(".err, .stopped")) settleHeader();
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
   addColophon(body, acts, runTok, spentCost);
