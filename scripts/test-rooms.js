@@ -109,6 +109,42 @@ const roomOf = (ids, extra = {}) =>
     return `${ts.length} templates across ${domains.size} domains`;
   });
 
+  await check("an agent retired from rooms cannot be seated by any path", async () => {
+    /* roomJoinable is how upstream retires an agent from rooms without deleting
+       it. Filtering only the displayed roster left every other door open: a
+       template could still name it, createRoom would still seat it, and IPC
+       join would still add it. The flag is asked at each of those points now. */
+    const reg = require("../rooms/registry");
+    const real = reg.getAgent("commerce-support");
+    const saved = real.roomJoinable;
+    try {
+      real.roomJoinable = false;                       // retire it upstream
+      assert(!reg.isJoinable("commerce-support"), "isJoinable ignored the flag");
+      assert(!reg.listAgents().some((a) => a.id === "commerce-support"), "a retired agent is still listed");
+      // A template that names it composes without it rather than with it.
+      const t = reg.getTemplate("product-review");
+      assert(!t.agents.some((a) => a.id === "commerce-support"), "a template still seats a retired agent");
+      // And direct composition - the raw IPC path - drops it too.
+      const room = rooms.createRoom({ agentIds: ["product-formulation", "commerce-support"] });
+      assert(room.agents.length === 1, `createRoom seated a retired agent: ${room.agents.map((a) => a.agentId)}`);
+      // getAgent still resolves it, so a room saved before the retirement can
+      // still show who was in it.
+      assert(reg.getAgent("commerce-support"), "a retired agent became unresolvable");
+      return "listed, templated, composed and joined: all closed";
+    } finally { real.roomJoinable = saved; }
+  });
+
+  await check("a display name with punctuation still resolves as a handle", () => {
+    // "Compliance & Audit" cannot be typed as a handle with its ampersand, so
+    // the name is reduced to alphanumerics on both sides of the match.
+    const room = roomOf(["compliance-audit", "product-formulation"]);
+    const a = rooms.parseAddress("@ComplianceAudit take this", room);
+    assert(a.to.length === 1 && a.to[0] === "compliance-audit", `resolved to ${a.to.join(",") || "nothing"}`);
+    const b = rooms.parseAddress("@ProductFormulation and you", room);
+    assert(b.to[0] === "product-formulation", "an ampersand-free name stopped resolving");
+    return "@ComplianceAudit resolves";
+  });
+
   await check("a room composes from any agents, with no template at all", async () => {
     // The composer's path. Three verticals no template names.
     const room = rooms.createRoom({ title: "Ad hoc", agentIds: ["revenue", "compliance-audit", "studio"] });

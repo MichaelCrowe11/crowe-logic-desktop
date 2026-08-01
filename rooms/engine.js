@@ -49,9 +49,10 @@ const isHuman = (author) => author === HUMAN;
    agent alone, never to everyone: a room where every stray message costs N
    calls is a room nobody can afford to think out loud in.
 
-   Matching is on registry ids and on the agent's display name with spaces
-   removed, because "@Regulatory Affairs" is what a person types and
-   "regulatory-affairs" is what the file calls it. Unknown handles are reported
+   Matching is on registry ids and on the agent's display name reduced to
+   alphanumerics, because a handle cannot contain a space or an ampersand: what
+   a person types for "Compliance & Audit" is "@ComplianceAudit", and the file
+   calls it "compliance-audit". Both resolve. Unknown handles are reported
    rather than silently dropped, so a typo is visible instead of expensive. */
 function parseAddress(text, room) {
   const raw = String(text || "");
@@ -60,7 +61,7 @@ function parseAddress(text, room) {
   for (const id of roster) {
     const agent = registry.getAgent(id);
     handles.set(id.toLowerCase(), id);
-    if (agent) handles.set(String(agent.name).replace(/\s+/g, "").toLowerCase(), id);
+    if (agent) handles.set(String(agent.name).replace(/[^a-z0-9]/gi, "").toLowerCase(), id);
   }
 
   const mentions = raw.match(/@[A-Za-z0-9][\w.-]*/g) || [];
@@ -136,7 +137,10 @@ function roomBrief(room, agentId) {
 // ─── Rooms ───────────────────────────────────────────────────────────────────
 
 function createRoom({ id, title, agentIds, defaultAgent, budgetUsd, template } = {}) {
-  const ids = (agentIds || []).filter((x) => registry.getAgent(x));
+  // Only joinable agents are seated. An id that exists but is retired from
+  // rooms is dropped here rather than at display time, so no caller - the
+  // composer, a template, or a raw IPC create - can compose around the flag.
+  const ids = (agentIds || []).filter((x) => registry.isJoinable(x));
   return {
     id: id || "r-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7),
     kind: "room",

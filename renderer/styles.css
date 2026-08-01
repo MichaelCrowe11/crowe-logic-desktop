@@ -1545,56 +1545,77 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 
 
 /* ── Rooms ───────────────────────────────────────────────────────────────────
-   Several named agents and the operator in one thread. Two things are held
-   deliberately visible: who said a thing, and what it cost. The roster strip
-   carries live state and live spend per seat, in the room rather than in a
-   settings pane, because a room is the one surface where the model bill grows
-   with the number of participants and the operator should watch it happen. */
+   Several named agents and the operator at one table.
+
+   The first cut of this surface used the body face for its headings, gray
+   monospace for its people, and identical cards for arguments that are not
+   equally worth having. It worked and it looked like a settings page from a
+   different product - which is the failure mode for the newest feature in an
+   app whose identity is otherwise everywhere.
+
+   So the room is built from what the app already owns. Fraunces carries the
+   headings, as it does the welcome hero. The mono face is reserved for data -
+   cost, deployment, tier - and never for a person's name. And the one bold
+   move, spent here and nowhere else on this surface: every seat wears the
+   whorl, and a seat that is thinking turns. The app already says "working" that
+   way in the thinking indicator and the transcript avatar; a room is where
+   several are working at once, so it is the surface that needs the grammar
+   most. Three marks with one turning is read at a glance; three words are read
+   three times. */
 .room { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
-.room-roster { display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto;
+/* ── the table ── */
+.room-roster { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
   border-bottom: 1px solid var(--line); background: var(--panel); }
-.seat { flex: 0 0 auto; display: grid; grid-template-columns: auto auto; gap: 1px 10px;
-  padding: 7px 11px; border: 1px solid var(--line); border-radius: var(--r-sm);
-  background: var(--raised); transition: border-color 140ms var(--ease); }
-.seat.live { border-color: var(--gold); }
-.seat.bad { border-color: var(--danger, #b4483c); }
-.seat-name { grid-column: 1 / -1; font-weight: 600; font-size: var(--fs-sm); }
-.seat-model { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
-.seat-state { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase;
-  letter-spacing: .06em; color: var(--muted); justify-self: end; }
-.seat-state[data-state="working"], .seat-state[data-state="queued"] { color: var(--gold); }
-.seat-state[data-state="done"] { color: var(--ok, #4f8a5b); }
-.seat-state[data-state="failed"] { color: var(--danger, #b4483c); }
-.seat-cost { grid-column: 1 / -1; font-family: var(--mono); font-size: var(--fs-cap);
-  color: var(--muted); font-variant-numeric: tabular-nums; }
-.seat-cost em { font-style: normal; margin-left: 8px; opacity: .7; }
+.seat { flex: 0 0 auto; display: grid; grid-template-columns: 20px auto;
+  grid-template-rows: auto auto; gap: 0 9px; align-items: center;
+  padding: 6px 11px 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--raised); transition: border-color 160ms var(--ease); }
+.seat[data-state="working"], .seat[data-state="queued"] { border-color: var(--gold); }
+.seat[data-state="failed"] { border-color: var(--danger); }
+.seat-mark { grid-row: 1 / -1; width: 20px; height: 20px; display: block; }
+.seat-name { font-size: var(--fs-sm); font-weight: 600; line-height: 1.25; white-space: nowrap; }
+/* Deployment and spend are data, so they take the mono face and line up. */
+/* One line each. A wrapped price reads as three fragments rather than a
+   number, and the roster scrolls sideways when a room is crowded. */
+.seat-state, .seat-cost { font-family: var(--mono); font-size: var(--fs-cap);
+  color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.3;
+  white-space: nowrap; }
+.seat[data-state="failed"] .seat-name { color: var(--danger); }
 
-.room-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 12px; }
-.rmsg { display: flex; flex-direction: column; gap: 3px; }
-.rmsg-who { font-size: var(--fs-cap); font-weight: 600; letter-spacing: .02em; color: var(--gold-deep); }
-body.dark .rmsg-who { color: var(--gold); }
+/* ── the thread ── */
+.room-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 20px;
+  display: flex; flex-direction: column; gap: 16px; }
+.rmsg { display: flex; flex-direction: column; gap: 5px; }
+.rmsg-head { display: flex; align-items: center; gap: 7px; }
+.rmsg-mark { width: 17px; height: 17px; flex: 0 0 auto; display: block; }
+.rmsg-who { font-size: var(--fs-cap); font-weight: 600; letter-spacing: .03em; }
 .rmsg.from-operator .rmsg-who { color: var(--muted); }
-.rmsg-tag { font-family: var(--mono); font-weight: 400; text-transform: uppercase;
-  letter-spacing: .07em; margin-left: 8px; opacity: .75; }
-.rmsg-body { font-size: var(--fs-body); line-height: 1.6; }
+.rmsg-tag { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  text-transform: lowercase; letter-spacing: .04em; }
+.rmsg-body { font-size: var(--fs-body); line-height: 1.62; padding-left: 24px; max-width: 68ch; }
+.rmsg.from-operator .rmsg-body { padding-left: 0; }
 .rmsg-body > :first-child { margin-top: 0; }
 .rmsg-body > :last-child { margin-bottom: 0; }
-/* A critique is set apart because it is about the message above it, not a new
-   position of its own. */
-.rmsg.is-critique { border-left: 2px solid var(--line-strong, var(--line));
-  padding-left: 11px; margin-left: 2px; }
-.rmsg.is-critique .rmsg-body { color: var(--muted); }
+/* A critique is not a lesser message - it is the sharper one. It gets a rule
+   and a label rather than gray text, because dimming the round that raises
+   quality is the wrong instruction to give the eye. */
+/* Only the first critique of a round carries the rule; the rest of the round
+   sits under it as one block. */
+.rmsg.is-critique.starts-round { padding-top: 15px; border-top: 1px solid var(--line); }
+.rmsg.is-critique .rmsg-who { color: var(--gold-deep); }
+body.dark .rmsg.is-critique .rmsg-who { color: var(--gold); }
 
+/* ── the round bar ── */
 .room-rounds { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
   border-top: 1px solid var(--line); background: var(--panel); }
 .room-rounds .spacer { flex: 1; }
 .room-cap { font-size: var(--fs-cap); color: var(--muted); }
 .room-meter { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
   font-variant-numeric: tabular-nums; }
-.room-meter.over { color: var(--danger, #b4483c); }
+.room-meter.over { color: var(--danger); }
 
+/* ── the composer bar ── */
 .room-composer { position: relative; display: flex; gap: 8px; padding: 10px 12px;
   border-top: 1px solid var(--line); background: var(--panel); }
 .room-input { flex: 1; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
@@ -1602,63 +1623,79 @@ body.dark .rmsg-who { color: var(--gold); }
 .room-input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
 .room-suggest { position: absolute; bottom: calc(100% + 6px); left: 12px; right: 12px;
   background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
-  box-shadow: var(--z2, 0 8px 24px rgba(0,0,0,.28)); overflow: hidden; z-index: 5; }
+  box-shadow: var(--z2); overflow: hidden; z-index: 5; }
 .room-suggest.hidden { display: none; }
 .sug { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
   padding: 7px 11px; background: none; border: none; color: var(--ink); cursor: pointer; }
-.sug:hover, .sug:focus-visible { background: var(--accent-wash, rgba(184,137,58,.14)); outline: none; }
+.sug:hover, .sug:focus-visible { background: var(--accent-wash); outline: none; }
 .sug b { font-family: var(--mono); font-size: var(--fs-cap); }
 .sug span { font-size: var(--fs-cap); color: var(--muted); }
 
-/* The composer. A room panel opens here rather than on a fixed template,
-   because who is in the room is the decision and it should be made before the
-   room costs anything. Templates are offered first because a curated argument
-   beats an empty roster, but the full registry is one scroll below them. */
+/* ── composing a room ─────────────────────────────────────────────────────────
+   Templates are arguments worth having, so they are set as a short list of
+   propositions rather than a grid of equal tiles. Each shows the table it would
+   seat, wearing the same marks the room will. */
 .room.composing > .room-roster,
 .room.composing > .room-thread,
 .room.composing > .room-rounds,
 .room.composing > .room-composer { display: none; }
 
-.room-compose { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px; }
-.rc-head { margin-bottom: 16px; }
-.rc-head b { display: block; font-family: var(--display); font-size: var(--fs-head); font-weight: 600; }
-.rc-head span { display: block; max-width: 62ch; margin-top: 4px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+.room-compose { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 28px; }
+.rc-head { margin-bottom: 20px; max-width: 62ch; }
+.rc-head b { display: block; font-family: var(--display); font-size: var(--fs-display);
+  font-weight: 600; line-height: 1.1; text-wrap: balance; }
+.rc-head span { display: block; margin-top: 7px; color: var(--muted);
+  font-size: var(--fs-sm); line-height: 1.6; }
 
-.rc-templates { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
-.rc-template { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 14px;
-  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink);
-  cursor: pointer; transition: border-color 140ms var(--ease), transform 80ms var(--ease); }
-.rc-template:hover { border-color: var(--gold); }
-.rc-template:active { transform: translateY(1px); }
-.rc-template b { font-size: var(--fs-body); font-weight: 600; }
-.rc-template span { color: var(--muted); font-size: var(--fs-cap); line-height: 1.5; }
-.rc-template em { font-style: normal; font-family: var(--mono); font-size: var(--fs-cap);
-  color: var(--gold-deep); margin-top: 4px; }
-body.dark .rc-template em { color: var(--gold); }
+.rc-templates { display: grid; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); gap: 9px; }
+.rc-template { display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 14px 16px 13px; background: var(--raised); border: 1px solid var(--line);
+  border-radius: var(--r-sm); color: var(--ink); cursor: pointer;
+  transition: border-color 150ms var(--ease), background 150ms var(--ease); }
+.rc-template:hover, .rc-template:focus-visible { border-color: var(--gold); outline: none; }
+.rc-template b { font-family: var(--display); font-size: var(--fs-head); font-weight: 600; }
+.rc-template span { color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+/* The table it seats, in the app's own mark. Names in the body face: these are
+   people, not data. */
+.rc-seats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-style: normal; }
+.rc-seats i { display: inline-flex; align-items: center; gap: 5px; font-style: normal;
+  font-size: var(--fs-cap); color: var(--muted); }
+.rc-seat-mark { width: 13px; height: 13px; display: block; flex: 0 0 auto; }
+/* Bake-off says of itself that it makes no domain claim. Presenting it as an
+   equal argument would recommend a model comparison as though it were a
+   decision, so it sits quieter than the rooms that are about something. */
+.rc-template.is-lesser { background: none; }
+.rc-template.is-lesser b { font-family: var(--body); font-size: var(--fs-body); }
 
-.rc-own { margin-top: 22px; }
-.rc-sub { font-size: var(--fs-cap); text-transform: uppercase; letter-spacing: .08em;
-  color: var(--muted); margin-bottom: 10px; }
-.rc-agents { display: flex; flex-direction: column; gap: 12px; }
-.rc-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.rc-domain { flex: 0 0 108px; font-family: var(--mono); font-size: var(--fs-cap);
+.rc-own { margin-top: 26px; }
+.rc-sub { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase;
+  letter-spacing: .09em; color: var(--muted); margin-bottom: 12px; }
+.rc-agents { display: flex; flex-direction: column; gap: 9px; }
+.rc-group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.rc-domain { flex: 0 0 104px; font-family: var(--mono); font-size: var(--fs-cap);
   color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-.rc-agent { display: flex; align-items: baseline; gap: 7px; padding: 5px 10px;
-  background: var(--raised); border: 1px solid var(--line); border-radius: 999px;
+.rc-agent { display: inline-flex; align-items: baseline; gap: 7px; padding: 4px 11px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-pill);
   color: var(--ink); cursor: pointer; font-size: var(--fs-cap);
-  transition: border-color 120ms var(--ease), background 120ms var(--ease); }
-.rc-agent:hover { border-color: var(--gold); }
-.rc-agent.on { border-color: var(--gold); background: var(--accent-wash, rgba(184,137,58,.16)); }
+  transition: border-color 130ms var(--ease), background 130ms var(--ease); }
+.rc-agent:hover, .rc-agent:focus-visible { border-color: var(--gold); outline: none; }
+.rc-agent.on { border-color: var(--gold); background: var(--accent-wash); }
 .rc-agent b { font-weight: 600; }
-.rc-agent span { font-family: var(--mono); color: var(--muted); opacity: .8; }
+/* The ceiling is what this agent may never exceed in a room. Mono, dim, and
+   only meaningful next to the tier the room ends up running at. */
+.rc-agent span { font-family: var(--mono); color: var(--muted); opacity: .75; }
 
-.rc-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
-.rc-name { flex: 1; min-width: 180px; font-family: var(--body); font-size: var(--fs-body);
+.rc-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.rc-name { flex: 1; min-width: 190px; font-family: var(--body); font-size: var(--fs-body);
   color: var(--ink); background: var(--raised); border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: 7px 11px; }
 .rc-name:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
 .rc-budget { display: flex; align-items: center; gap: 6px; font-size: var(--fs-cap); color: var(--muted); }
-.rc-budget-input { width: 76px; font-family: var(--mono); font-size: var(--fs-cap); color: var(--ink);
-  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px;
-  font-variant-numeric: tabular-nums; }
+.rc-budget-input { width: 74px; font-family: var(--mono); font-size: var(--fs-cap); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 6px 8px; font-variant-numeric: tabular-nums; }
 .rc-count { font-size: var(--fs-cap); color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .seat, .rc-template, .rc-agent { transition: none; }
+}

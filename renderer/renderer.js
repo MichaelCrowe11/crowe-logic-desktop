@@ -1085,31 +1085,76 @@ async function mountRoom(p, body, seed = {}) {
 
   const money = (n) => "$" + Number(n || 0).toFixed(3);
 
+  /* The roster is a row of living marks.
+
+     Every other surface in this app already says "an agent is working" with the
+     whorl turning - the thinking indicator, the transcript avatar - and a room
+     is the one place where several agents work at once, so it is the surface
+     that needs the grammar most. A word alone ("working") makes the operator
+     read three labels; three marks, one of them turning, is read at a glance.
+
+     Seats are built once and re-stated afterwards. Rebuilding the row would
+     remount every mark and restart every animation, which is how a turning
+     rotor becomes a stutter. */
+  const seats = new Map();
+  const MARK_STATE = { working: "reasoning", queued: "reasoning", failed: "failed", done: "rest", idle: "rest" };
   function drawRoster() {
-    roster.innerHTML = "";
     for (const a of (state?.agents || [])) {
-      const el = document.createElement("div");
-      el.className = "seat" + (a.state === "working" || a.state === "queued" ? " live" : "") + (a.state === "failed" ? " bad" : "");
-      el.setAttribute("role", "listitem");
-      el.innerHTML = `<span class="seat-name">${esc(a.name || a.agentId)}</span>
-        <span class="seat-model">${esc(a.model || "room default")}</span>
-        <span class="seat-state" data-state="${esc(a.state || "idle")}">${esc(a.state || "idle")}</span>
-        <span class="seat-cost">${money(a.cost?.usd)}<em>${a.cost?.calls || 0} calls</em></span>`;
-      roster.appendChild(el);
+      let seat = seats.get(a.agentId);
+      if (!seat) {
+        const el = document.createElement("div");
+        el.className = "seat"; el.setAttribute("role", "listitem");
+        el.innerHTML = `<span class="seat-mark" aria-hidden="true"></span>
+          <span class="seat-name"></span>
+          <span class="seat-state"></span>
+          <span class="seat-cost"></span>`;
+        roster.appendChild(el);
+        const mark = window.CroweMark ? CroweMark.mount(el.querySelector(".seat-mark"), { state: "rest", small: true }) : null;
+        seat = { el, mark, state: "" };
+        seats.set(a.agentId, seat);
+      }
+      seat.el.querySelector(".seat-name").textContent = a.name || a.agentId;
+      seat.el.querySelector(".seat-state").textContent = a.model || "room default";
+      const calls = a.cost?.calls || 0;
+      seat.el.querySelector(".seat-cost").textContent = `${money(a.cost?.usd)} · ${calls} ${calls === 1 ? "call" : "calls"}`;
+      seat.el.dataset.state = a.state || "idle";
+      if (seat.state !== a.state) {
+        seat.state = a.state;
+        if (seat.mark) seat.mark.setState(MARK_STATE[a.state] || "rest");
+      }
     }
   }
 
+  /* Appended, never rebuilt. Same reason as the roster: a mounted mark is a
+     running animation, and redrawing the transcript on every refresh would
+     restart all of them and drop any text the operator was selecting. */
+  let drawn = 0;
   function drawThread() {
-    thread.innerHTML = "";
-    for (const m of (state?.messages || [])) {
+    const msgs = state?.messages || [];
+    if (msgs.length < drawn) { thread.innerHTML = ""; drawn = 0; }   // a room was swapped in
+    for (const [i, m] of msgs.slice(drawn).entries()) {
       const mine = m.author === ":operator";
+      const prev = msgs[drawn + i - 1];
+      /* The rule separates ROUNDS, not messages. Marking every critique drew
+         three rules for one review round, which reads as a striped list rather
+         than as "something different started here". */
+      const startsRound = m.kind === "critique" && (!prev || prev.kind !== "critique");
       const el = document.createElement("div");
-      el.className = "rmsg" + (mine ? " from-operator" : "") + (m.kind === "critique" ? " is-critique" : "");
+      el.className = "rmsg" + (mine ? " from-operator" : "")
+        + (m.kind === "critique" ? " is-critique" : "") + (startsRound ? " starts-round" : "");
       const who = mine ? "You" : (state.agents.find((a) => a.agentId === m.author)?.name || m.author);
-      el.innerHTML = `<div class="rmsg-who">${esc(who)}${m.kind === "critique" ? '<span class="rmsg-tag">reviewing</span>' : ""}</div>
+      el.innerHTML = `<div class="rmsg-head">
+          <span class="rmsg-mark" aria-hidden="true"></span>
+          <span class="rmsg-who">${esc(who)}</span>
+          ${m.kind === "critique" ? '<span class="rmsg-tag">reviewing the others</span>' : ""}
+        </div>
         <div class="rmsg-body">${md(m.content || "")}</div>`;
+      // The operator is a person, not a mark. Only agents wear one.
+      if (!mine && window.CroweMark) CroweMark.mount(el.querySelector(".rmsg-mark"), { state: "rest", small: true });
+      else el.querySelector(".rmsg-mark").remove();
       thread.appendChild(el);
     }
+    drawn = msgs.length;
     thread.scrollTop = thread.scrollHeight;
   }
 
@@ -1129,7 +1174,7 @@ async function mountRoom(p, body, seed = {}) {
     bRev.textContent = `Revise · ${pr.calls || 0} calls`;
     bCrit.disabled = busy || halted || capped || positions < 2;
     bRev.disabled = busy || halted || critiques < 1;
-    capEl.textContent = capped ? `critique capped at ${state.maxCritiqueRounds} rounds`
+    capEl.textContent = capped ? `critique capped at ${state?.maxCritiqueRounds || 2} rounds`
       : halted ? `room halted: ${state.halted}` : "";
     meter.textContent = `${money(state?.spentUsd)} of ${money(state?.budgetUsd)}`;
     meter.classList.toggle("over", halted);
@@ -1225,9 +1270,16 @@ async function mountRoom(p, body, seed = {}) {
   const tWrap = composer.querySelector(".rc-templates");
   for (const t of templates) {
     const b = document.createElement("button");
-    b.type = "button"; b.className = "rc-template";
+    b.type = "button";
+    // Bake-off is demoted rather than hidden: it says of itself that it makes
+    // no domain claim, and a menu that presents it as an equal argument is
+    // recommending a model comparison as if it were a decision.
+    b.className = "rc-template" + (t.id === "bake-off" ? " is-lesser" : "");
     b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
-      <em>${t.agents.map((a) => esc(a.name || a.id)).join(" · ")}</em>`;
+      <em class="rc-seats">${t.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
+    // The same mark the room will wear, so a template reads as the table it
+    // composes rather than as a feature card.
+    if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
     b.addEventListener("click", () => open({ template: t.id }));
     tWrap.appendChild(b);
   }
@@ -1264,10 +1316,12 @@ async function mountRoom(p, body, seed = {}) {
 
   async function open(opts) {
     openBtn.disabled = true;
-    const made = await window.crowe.rooms.create({
-      budgetUsd: Number(composer.querySelector(".rc-budget-input").value) || undefined,
-      ...opts,
-    });
+    /* 0 is a real answer, not a missing one. overBudget() treats a budget of
+       zero as uncapped, so `|| undefined` silently turned "no cap" into the
+       default dollar. Only a blank or unparseable field falls back. */
+    const raw = composer.querySelector(".rc-budget-input").value;
+    const budgetUsd = raw.trim() === "" || !Number.isFinite(Number(raw)) ? undefined : Number(raw);
+    const made = await window.crowe.rooms.create({ budgetUsd, ...opts });
     if (made?.error) { countEl.textContent = made.error; openBtn.disabled = false; return; }
     p.roomId = made.room.id;
     composer.remove();

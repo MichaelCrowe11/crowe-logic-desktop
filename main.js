@@ -1165,6 +1165,7 @@ ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
 ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   if (!roomsRegistry.getAgent(agentId)) return { error: "no such agent" };
+  if (!roomsRegistry.isJoinable(agentId)) return { error: "that agent has been retired from rooms" };
   if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
   room.agents.push({ agentId, model: (roomsRegistry.getAgent(agentId) || {}).model || "", state: "idle" });
   if (!room.defaultAgent) room.defaultAgent = agentId;

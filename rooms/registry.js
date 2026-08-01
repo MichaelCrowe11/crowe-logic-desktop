@@ -37,6 +37,11 @@ function loadAgents() {
 
 function listAgents() { return loadAgents().filter((a) => a.roomJoinable !== false); }
 function getAgent(id) { return loadAgents().find((a) => a.id === String(id)) || null; }
+// roomJoinable is the mechanism for retiring an agent from rooms, so it has to
+// be asked at every point that seats one - composition, join, templates - not
+// only where the roster is listed. getAgent still returns a retired agent, so a
+// room saved before the retirement keeps showing who was in it.
+function isJoinable(id) { const a = getAgent(id); return Boolean(a) && a.roomJoinable !== false; }
 
 /* The ceiling a room may run at: the minimum across its roster, never the max.
    Stated as its own function because it is the one rule that must not be
@@ -129,13 +134,13 @@ const TEMPLATES = [
 // the room builder, the roster strip - wants the name and domain, and resolving
 // once here is what keeps a retired id from reaching any of them.
 function listTemplates() {
-  return TEMPLATES.map((t) => ({ ...t, agents: t.agents.map(getAgent).filter(Boolean) }))
+  return TEMPLATES.map((t) => ({ ...t, agents: t.agents.map(getAgent).filter((a) => a && a.roomJoinable !== false) }))
     .filter((t) => t.agents.length);
 }
 function getTemplate(id) { return listTemplates().find((t) => t.id === String(id)) || null; }
 
 module.exports = {
-  listAgents, getAgent, listTemplates, getTemplate,
+  listAgents, getAgent, isJoinable, listTemplates, getTemplate,
   roomCeiling, effectiveTier, writeCapable, tierRank, TIERS,
   _resetCache: () => { cache = null; },
 };
