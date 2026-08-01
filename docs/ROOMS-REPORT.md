@@ -287,3 +287,23 @@ The model is a stub returning a fixed sentence. This proves the wiring - who is
 addressed, who spends, who reviews whom, what persists - and it does not prove
 that a critique round makes an answer better. That remains the blind A/B in the
 section above, and it needs a real gateway.
+
+
+### The suites were not running in CI
+
+Worth recording, because it made every green check on this branch mean less
+than it looked. `.github/workflows/ci.yml` runs seven scripts by name rather
+than `npm test`, and `scripts/test-rooms.js` was not one of them. Thirty-six
+engine checks and eight end-to-end checks had only ever run on a developer's
+machine, while the pull request reported green.
+
+The same gap covered `scripts/test-packaging.js`, which is the suite that caught
+`rooms/` missing from the build allowlist - a crash at startup in a packaged app
+that no other suite can see, because they all run from the source tree where the
+file is present.
+
+Both are in `ci.yml` now, along with the end-to-end run. The wider gap is real
+and left alone deliberately: `test-companion.js`, `test-qr.js`, `test-icons.js`
+and `test-install-spaces.js` are also absent from CI while passing locally.
+Adding them is a repository decision rather than part of this feature, and
+naming it here is more useful than quietly widening this branch.
