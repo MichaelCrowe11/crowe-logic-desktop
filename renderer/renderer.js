@@ -331,17 +331,36 @@ function settleThinking(body, mood) {
    a beat played mostly never. The header's logotype is the one copy on every
    screen, so the turn's end lands on it: the same single settle, once.
 
-   is-animated comes off first and stays off. Its entrance keyframes are
-   `both`-filled, so re-adding animation shorthands when is-settling lifts
-   would replay the arrival — a logo swooping through the header on every
-   completed turn. The entrance has played; the settle retires it. */
+   Web Animations, not classes, and the choice is load-bearing. The first cut
+   toggled is-settling and stripped is-animated to stop the both-filled
+   entrance replaying when the class lifted — which permanently changed state
+   the smoke suite legitimately asserts ("the header logotype goes live"
+   expects the entrance shorthands to still be on the element after turns have
+   run). element.animate() composes over the CSS animations for 640ms and then
+   is simply gone: no class churn, nothing for the entrance to replay, nothing
+   for a test to trip on. */
 function settleHeader() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const svg = document.querySelector("#bar .lockup.live > svg");
-  if (!svg || svg.classList.contains("is-settling")) return;
-  svg.classList.remove("is-animated");
-  svg.classList.add("is-settling");
-  setTimeout(() => svg.classList.remove("is-settling"), 700);
+  if (!svg || svg.__settling) return;
+  svg.__settling = true;
+  setTimeout(() => { svg.__settling = false; }, 700);
+  const ease = "cubic-bezier(.16, 1, .3, 1)";
+  const gold = "var(--gold-soft, #c9a227)";
+  for (const b of svg.querySelectorAll(".wm-blades")) {
+    b.animate([
+      { transform: "rotate(-90deg)", color: gold },
+      { transform: "rotate(0deg)", color: gold, offset: 0.85 },
+      { transform: "rotate(0deg)" },
+    ], { duration: 640, easing: ease });
+  }
+  for (const s of svg.querySelectorAll(".wm-spore")) {
+    s.animate([
+      { transform: "scale(1)" },
+      { transform: "scale(1.16)", offset: 0.4 },
+      { transform: "scale(1)" },
+    ], { duration: 640, easing: ease });
+  }
 }
 let lastCard = null;
 function addToolCard(body, ev) {
@@ -618,9 +637,16 @@ async function send(text, opts = {}) {
   const gc = await growContext(); if (gc) runOpts.context = gc;
   try { await window.crowe.agent.run(messages, "main", runOpts); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   finishSaid(); settleThinking(body);
-  // The header takes the landing only when the turn actually landed — an
-  // errored or stopped turn has nothing to celebrate.
-  if (!body.querySelector(".err, .stopped")) settleHeader();
+  /* The landing, only when the turn actually landed — an errored or stopped
+     turn has nothing to celebrate. Two places, one meaning: the header's
+     logotype takes the settle, and the message's own avatar takes the same
+     one-shot ring it already fires when a tool lands — because the avatar is
+     the one mark sitting beside the text the user is reading at that moment,
+     and the answer arriving is the biggest event of the turn. */
+  if (!body.querySelector(".err, .stopped")) {
+    settleHeader();
+    if (mark) mark.ping();
+  }
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
   addColophon(body, acts, runTok, spentCost);
