@@ -1,59 +1,56 @@
 <svg id="crowe-logic-motion" class="is-animated" xmlns="http://www.w3.org/2000/svg" viewBox="-25 -100 548.30 150" shape-rendering="geometricPrecision" role="img" aria-labelledby="crowe-logic-motion-title crowe-logic-motion-description">
   <title id="crowe-logic-motion-title">Crowe Logic</title>
-  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae; the tittle of the i is the gold spore.</desc>
+  <desc id="crowe-logic-motion-description">The Crowe Logic logotype. The o of each word is a ring of hyphae around a gold spore; the tittle of the i is the gold spore.</desc>
   <style>
   /* GENERATED-ADJACENT: the entrance choreography for assets/wordmark-motion.svg.
      Kept as its own file so the timing can be edited without touching the
      generator, and inlined verbatim by scripts/gen-mark.js. */
-    #wordmark-letterforms,
-    #rotor-crowe,
-    #rotor-logic,
-    #rotor-crowe-blades,
-    #rotor-logic-blades,
-    #gold-thinking-mark {
+    /* Classes, not ids - for the entrance too, not only the continuous cuts
+       below. Ids are document-global once this file is inlined, so exactly one
+       copy per page could ever play the arrival: whichever the scoping happened
+       to leave unsuffixed. That made the entrance a property of insertion order
+       rather than of the logotype, and the launch veil proved how sharp that is
+       - being first in the markup, it took the bare ids, and the header lockup
+       silently stopped arriving. On classes every copy can play its own
+       entrance, and the id suffixes go back to meaning nothing but valid HTML.
+  
+       The thinking indicator is untouched by this: mountMotionLogotype strips
+       every id and swaps `is-animated` for `is-thinking`, so a mark that is
+       already turning never restarts by arriving. */
+    .wm-letterforms,
+    .wm-rotor,
+    .wm-blades,
+    .wm-spore {
       transform-box: fill-box;
       will-change: opacity, transform;
     }
   
-    #wordmark-letterforms {
+    .wm-letterforms,
+    .wm-rotor {
       transform-origin: center;
     }
   
-    #rotor-crowe,
-    #rotor-logic {
-      transform-origin: center;
-    }
-  
-    #rotor-crowe-blades,
-    #rotor-logic-blades {
-      transform-origin: center;
-    }
-  
-    #gold-thinking-mark {
-      transform-origin: 50% 80%;
-    }
-  
-    .is-animated #wordmark-letterforms {
+    .is-animated .wm-letterforms {
       animation: wordmark-arrive 1400ms cubic-bezier(.2, .75, .25, 1) 120ms both;
     }
   
-    .is-animated #rotor-crowe {
+    .is-animated .wm-rotor-crowe {
       animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) both;
     }
   
-    .is-animated #rotor-logic {
+    .is-animated .wm-rotor-logic {
       animation: rotor-arrive 1700ms cubic-bezier(.16, 1, .3, 1) 140ms both;
     }
   
-    .is-animated #rotor-crowe-blades {
+    .is-animated .wm-blades-crowe {
       animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) both;
     }
   
-    .is-animated #rotor-logic-blades {
+    .is-animated .wm-blades-logic {
       animation: blades-arrive 1600ms cubic-bezier(.16, 1, .3, 1) 140ms both;
     }
   
-    .is-animated #gold-thinking-mark {
+    .is-animated .wm-spore {
       animation: thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both;
     }
   
@@ -115,13 +112,6 @@
        in it, and a dish that spins with its own culture is a loading spinner
        wearing a logo. Holding the ring still is what makes the turn read as an
        engine seen through a window rather than as a progress indicator. */
-    .wm-letterforms,
-    .wm-rotor,
-    .wm-blades,
-    .wm-spore {
-      transform-box: fill-box;
-    }
-  
     .wm-blades { transform-origin: center; }
     .wm-spore  { transform-origin: 50% 80%; }
   
@@ -136,7 +126,7 @@
     /* After the entrance, not instead of it: two comma-separated animations on
        one element, the perpetual one delayed past the arrival it would otherwise
        fight for the same transform. */
-    .is-animated #gold-thinking-mark {
+    .is-animated .wm-spore {
       animation:
         thinking-mark-arrive 1100ms cubic-bezier(.16, 1, .3, 1) 900ms both,
         spore-drift 9s ease-in-out 2000ms infinite;
@@ -189,12 +179,11 @@
     }
   
     @media (prefers-reduced-motion: reduce) {
-      .is-animated #wordmark-letterforms,
-      .is-animated #rotor-crowe,
-      .is-animated #rotor-logic,
-      .is-animated #rotor-crowe-blades,
-      .is-animated #rotor-logic-blades,
-      .is-animated #gold-thinking-mark,
+      .is-animated .wm-letterforms,
+      .is-animated .wm-rotor-crowe,
+      .is-animated .wm-rotor-logic,
+      .is-animated .wm-blades-crowe,
+      .is-animated .wm-blades-logic,
       .wm-spore,
       .is-thinking .wm-blades-crowe,
       .is-thinking .wm-blades-logic,
@@ -213,7 +202,7 @@
   <polygon points="55.30,67.95 55.43,70.63 55.49,73.21 55.42,75.74 55.21,78.21 54.81,80.64 54.18,83.02 53.29,85.34 52.11,87.61 50.58,89.80 48.66,91.88 46.32,93.80 43.33,95.58 45.95,100.45 49.43,98.75 52.63,96.61 55.38,94.18 57.70,91.52 59.60,88.69 61.12,85.76 62.30,82.77 63.17,79.76 63.80,76.75 64.22,73.79 64.51,70.87 64.70,68.05" fill="currentColor"/>
   <polygon points="50.76,59.91 48.51,61.36 46.30,62.70 44.08,63.91 41.83,64.96 39.53,65.82 37.16,66.47 34.70,66.87 32.14,66.97 29.48,66.74 26.72,66.12 23.89,65.05 20.85,63.35 17.95,68.06 21.15,70.22 24.61,71.92 28.10,73.09 31.56,73.77 34.95,74.00 38.25,73.85 41.43,73.37 44.48,72.62 47.39,71.66 50.17,70.55 52.84,69.34 55.38,68.09" fill="currentColor"/>
   <polygon points="55.46,51.95 53.08,50.73 50.81,49.49 48.66,48.17 46.63,46.75 44.73,45.18 42.98,43.45 41.40,41.52 40.03,39.36 38.90,36.94 38.06,34.24 37.57,31.25 37.52,27.77 31.99,27.61 31.72,31.47 31.98,35.31 32.71,38.91 33.86,42.25 35.35,45.31 37.13,48.09 39.13,50.60 41.31,52.87 43.59,54.91 45.95,56.76 48.33,58.47 50.68,60.05" fill="currentColor"/>
-  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="currentColor"/>
+  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="#EFA71B"/>
 </g></g>
 </g>
   <g id="rotor-logic" class="wm-rotor wm-rotor-logic" aria-label="Logic turbine">
@@ -225,7 +214,7 @@
   <polygon points="55.30,67.95 55.43,70.63 55.49,73.21 55.42,75.74 55.21,78.21 54.81,80.64 54.18,83.02 53.29,85.34 52.11,87.61 50.58,89.80 48.66,91.88 46.32,93.80 43.33,95.58 45.95,100.45 49.43,98.75 52.63,96.61 55.38,94.18 57.70,91.52 59.60,88.69 61.12,85.76 62.30,82.77 63.17,79.76 63.80,76.75 64.22,73.79 64.51,70.87 64.70,68.05" fill="currentColor"/>
   <polygon points="50.76,59.91 48.51,61.36 46.30,62.70 44.08,63.91 41.83,64.96 39.53,65.82 37.16,66.47 34.70,66.87 32.14,66.97 29.48,66.74 26.72,66.12 23.89,65.05 20.85,63.35 17.95,68.06 21.15,70.22 24.61,71.92 28.10,73.09 31.56,73.77 34.95,74.00 38.25,73.85 41.43,73.37 44.48,72.62 47.39,71.66 50.17,70.55 52.84,69.34 55.38,68.09" fill="currentColor"/>
   <polygon points="55.46,51.95 53.08,50.73 50.81,49.49 48.66,48.17 46.63,46.75 44.73,45.18 42.98,43.45 41.40,41.52 40.03,39.36 38.90,36.94 38.06,34.24 37.57,31.25 37.52,27.77 31.99,27.61 31.72,31.47 31.98,35.31 32.71,38.91 33.86,42.25 35.35,45.31 37.13,48.09 39.13,50.60 41.31,52.87 43.59,54.91 45.95,56.76 48.33,58.47 50.68,60.05" fill="currentColor"/>
-  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="currentColor"/>
+  <polygon points="60.00,45.00 72.99,52.50 72.99,67.50 60.00,75.00 47.01,67.50 47.01,52.50" fill="#EFA71B"/>
 </g></g>
 </g>
   <g id="gold-thinking-mark" class="wm-spore" aria-label="Gold thinking mark"><g transform="translate(444.6 -58.32) scale(0.52190) translate(-60 -60)">

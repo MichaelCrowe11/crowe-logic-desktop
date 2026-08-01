@@ -20,19 +20,18 @@
     { name: "harness.js", dir: false }, { name: "main.js", dir: false }, { name: "package.json", dir: false },
   ];
 
-  // Gateway catalog, as crowe:catalog:get returns it: 22 deployments with the
+  // Gateway catalog, as crowe:catalog:get returns it: 21 deployments with the
   // flags the Deployments lane renders, plus the resolved role routing the
   // Home surface shows. [model, display, featured, role, available, tools]
   const DEMO_CATALOG = [
     ["crowelm", "CroweLM", true, "", true, true],
     ["crowelm-grower", "CroweLM Grower", true, "cultivation", true, true],
-    ["Kimi-K2.5", "Kimi K2.5", true, "reasoning", true, true],
+    ["GPT-5.6-Sol", "GPT 5.6 Sol", true, "reasoning", true, true],
     ["GLM-4.7", "GLM 4.7", true, "", true, true],
     ["crowelm-talon", "Crowe Talon", false, "", true, true],
     ["crowelm-mini", "CroweLM Mini", false, "", true, true],
     ["GLM-4.7-Flash", "GLM 4.7 Flash", false, "", true, true],
     ["GLM-4.6V", "GLM 4.6V", false, "", true, false],
-    ["Kimi-K2", "Kimi K2", false, "", true, true],
     ["Qwen3-Coder-480B", "Qwen3 Coder 480B", false, "", true, true],
     ["Qwen3-235B-A22B", "Qwen3 235B A22B", false, "", true, true],
     ["Qwen3-VL-72B", "Qwen3 VL 72B", false, "", true, false],
@@ -229,7 +228,7 @@
         resolved: {
           cultivation: { model: "crowelm-grower", source: "bridge" },
           coding: { model: "crowelm", source: "default" },
-          reasoning: { model: "Kimi-K2.5", source: "bridge" },
+          reasoning: { model: "GPT-5.6-Sol", source: "bridge" },
           "long-context": { model: "crowelm", source: "default" },
         },
         defaultModel: "crowelm",

@@ -252,7 +252,7 @@ function createWindow() {
   const spaces = installSpaces();
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#f7f3ea", title: "Crowe Logic",
+    backgroundColor: "#f7f3ea", title: "Crowe Logic", show: false,
     // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
     // and neither can decode .icns, so pointing at the icns left them on the
     // default Electron icon.
@@ -264,6 +264,19 @@ function createWindow() {
       additionalArguments: spaces ? [`--crowe-spaces=${spaces.join(",")}`] : [],
     },
   });
+  /* Held back until the renderer has painted a frame.
+     `backgroundColor` above is the light ground, and the theme lives in the
+     renderer's localStorage where this process cannot read it at construction
+     time - so a user on the dark theme got a window of cream first and their
+     own app a moment later. Showing on ready-to-show means the first thing
+     drawn on screen is already the right one, whichever theme that is.
+     Timed out rather than trusted: if that event never arrives the window must
+     still appear, because a process with no window and no dock behaviour is an
+     app the user cannot get back. */
+  let shown = false;
+  const reveal = () => { if (shown || !mainWindow) return; shown = true; mainWindow.show(); };
+  mainWindow.once("ready-to-show", reveal);
+  setTimeout(reveal, 4000);
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) mainWindow.webContents.send("crowe:browser:navigate", url);

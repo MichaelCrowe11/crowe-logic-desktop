@@ -9,9 +9,29 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785496355150" />
+  <link rel="stylesheet" href="styles.css?v=1785541767072" />
 </head>
 <body>
+  <!-- The theme, before anything is drawn. renderer.js applies it too, but that
+       file is at the end of the body and the default is dark, so the veil below
+       would paint cream and flip a moment later - the flash the veil exists to
+       cover, moved rather than removed. Inline and first, because this is the
+       one position nothing can paint ahead of. Idempotent: applyTheme() toggles
+       the same class and stays the source of truth. -->
+  <script>try { document.body.classList.toggle("dark", localStorage.getItem("crowe-theme") !== "light"); } catch (e) { document.body.classList.add("dark"); }</script>
+
+  <!-- The launch veil. In the markup rather than built by renderer.js, because
+       a veil that arrives on the first script tick has already let the bare
+       shell show for a frame, which is the flash it exists to cover.
+
+       It clears itself in CSS, on a keyframe that ends hidden. Nothing has to
+       run for the app to become usable: if the script never loads, the veil
+       still lifts and the shell underneath is whatever the app managed to
+       render. JS only fills in the animated logotype and removes the node. -->
+  <div id="launch" aria-hidden="true">
+    <span class="lockup launch-mark"><span class="lockup-ink" aria-hidden="true"></span></span>
+  </div>
+
   <header id="bar">
     <button id="sidebar-toggle" class="bar-icon" title="Toggle sidebar (Cmd+B)" aria-label="Toggle sidebar" aria-expanded="true" aria-controls="sidebar">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
@@ -384,9 +404,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785496355150"></script>
-  <script src="mark-geometry.js?v=1785496355150"></script>
-  <script src="mark.js?v=1785496355150"></script>
-  <script src="renderer.js?v=1785496355150"></script>
+  <script src="preview-shim.js?v=1785541767072"></script>
+  <script src="mark-geometry.js?v=1785541767072"></script>
+  <script src="mark.js?v=1785541767072"></script>
+  <script src="renderer.js?v=1785541767072"></script>
 </body>
 </html>
