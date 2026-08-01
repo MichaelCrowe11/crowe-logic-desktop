@@ -323,14 +323,20 @@ const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${
   <svg x="${AOFF}" y="${AOFF}" width="${ASIDE}" height="${ASIDE}" viewBox="${BX0.toFixed(2)} ${BY0.toFixed(2)} ${BW.toFixed(2)} ${BH.toFixed(2)}">
     <path transform="translate(${LX.toFixed(4)} ${LY.toFixed(4)}) scale(${LS.toFixed(6)})" fill="#f7f3ea" d="${LETTER.d}"/>
     <svg x="${SPX.toFixed(2)}" y="${SPY.toFixed(2)}" width="${SPO.toFixed(2)}" height="${SPO.toFixed(2)}" viewBox="0 0 ${VIEW} ${VIEW}">${
-  // Eased taper, not the full one. This single SVG is rasterised down to the
-  // 32px and 16px rungs of the .icns and .ico, and a tip that tapers to 0.8 of
-  // a 120 canvas is a fifth of a pixel there - the outer third of every
-  // filament washes into the tile and the mark measurably shrinks (see the
-  // "still reads at 32px" check in scripts/test-icons.js, which caught exactly
-  // this). The spore is smaller here than the old centred mark was, so it takes
-  // the same treatment the tray does; mark.svg and the lockups keep fine tips.
-  markSvg({ taper: 0.62, scale: SCALE.dark, id: "ic" })
+  /* The logotype's own whorl cut, the same one the o's carry. This single SVG
+     is rasterised down to the 32px and 16px rungs of the .icns and .ico, and a
+     tip that tapers to 0.8 of a 120 canvas is a fifth of a pixel there - the
+     outer third of every filament washes into the tile (the "still reads at
+     32px" check in scripts/test-icons.js caught exactly that). It used to ease
+     the taper to 0.62 and keep the fork, which was a third cut of the mark,
+     invented here and used nowhere else: at the icon's rungs the branches broke
+     into specks and the arms thinned to nothing, leaving a gold dot beside a C.
+
+     0.45 with no fork is not a compromise for the icon's sake - it is what the
+     wordmark already uses in the same situation, an eight-pixel slot, and it is
+     both fatter at the tip and free of branches that cannot survive there. One
+     mark, drawn one way, wherever it has to be small. */
+  markSvg({ taper: 0.45, fork: false, scale: SCALE.dark, id: "ic" })
     .replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
 }</svg>
   </svg>
