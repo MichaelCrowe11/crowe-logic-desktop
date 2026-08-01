@@ -705,7 +705,7 @@
     { role: "long-context", match: /\b(summari[sz]e (?:this|the (?:whole|entire))|entire (?:repo|codebase|document|file)|long document|across all files)\b/i },
   ];
   const ROUTED_ROLES = ["cultivation", "coding", "reasoning", "long-context"];
-  const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower" };
+  const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower", reasoning: "GPT-5.6-Sol" };
   const classifyRole = (text) => (ROLE_MATCH.find((r) => r.match.test(text)) || { role: "default" }).role;
   function catalogModelForRole(role) {
     const m = catalogCache.models.find((x) => x && x.featured && x.available !== false

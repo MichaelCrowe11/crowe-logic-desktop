@@ -1038,14 +1038,11 @@ const ROLE_MATCH = [
   { role: "long-context", match: /\b(summari[sz]e (?:this|the (?:whole|entire))|entire (?:repo|codebase|document|file)|long document|across all files)\b/i },
 ];
 // Bridge: kept only until the catalog carries role tags; drop once dynamic.
-// It carried `reasoning: "Kimi-K2.5"` until 2026-07: a deprecated deployment,
-// and a third-party model name baked into the client — the Home card printed
-// it on the app's front page. Both are gateway concerns, not client ones: a
-// reasoning specialist joins by being role-tagged in the catalog under
-// whatever name the gateway gives it, and until then reasoning turns take the
-// default model, which is what they would have fallen back to anyway the
-// moment the stale id 404'd.
-const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower" };
+// Reasoning moved off Kimi-K2.5 to the GPT 5.6 Sol deployment (Michael's call,
+// 2026-07-31). The id must match the gateway's deployment name; an unknown id
+// falls back to the default model per routeTurn, so a mismatch degrades, not
+// breaks.
+const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower", reasoning: "GPT-5.6-Sol" };
 function classifyRole(text) {
   for (const r of ROLE_MATCH) if (r.match.test(text)) return r.role;
   return "default";

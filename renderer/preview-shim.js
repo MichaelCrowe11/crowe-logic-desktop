@@ -20,13 +20,13 @@
     { name: "harness.js", dir: false }, { name: "main.js", dir: false }, { name: "package.json", dir: false },
   ];
 
-  // Gateway catalog, as crowe:catalog:get returns it: 22 deployments with the
+  // Gateway catalog, as crowe:catalog:get returns it: 21 deployments with the
   // flags the Deployments lane renders, plus the resolved role routing the
   // Home surface shows. [model, display, featured, role, available, tools]
   const DEMO_CATALOG = [
     ["crowelm", "CroweLM", true, "", true, true],
     ["crowelm-grower", "CroweLM Grower", true, "cultivation", true, true],
-    ["crowelm-reasoner", "CroweLM Reasoner", true, "reasoning", true, true],
+    ["GPT-5.6-Sol", "GPT 5.6 Sol", true, "reasoning", true, true],
     ["GLM-4.7", "GLM 4.7", true, "", true, true],
     ["crowelm-talon", "Crowe Talon", false, "", true, true],
     ["crowelm-mini", "CroweLM Mini", false, "", true, true],
@@ -229,10 +229,7 @@
         resolved: {
           cultivation: { model: "crowelm-grower", source: "bridge" },
           coding: { model: "crowelm", source: "default" },
-          // The demo's reasoning specialist resolves from the catalog, the way
-          // a real one joins: role-tagged on the gateway under the gateway's
-          // own name. No third-party model id ships baked into this app.
-          reasoning: { model: "crowelm-reasoner", source: "catalog" },
+          reasoning: { model: "GPT-5.6-Sol", source: "bridge" },
           "long-context": { model: "crowelm", source: "default" },
         },
         defaultModel: "crowelm",

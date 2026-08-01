@@ -396,7 +396,12 @@ function methodPaths(surface) {
   const built = read("mobile/www/index.html");
 
   await check("the bridge loads before anything that reads it", () => {
-    const at = (needle) => built.indexOf(needle);
+    /* Script TAGS, not filenames anywhere in the document. Matching the bare
+       name meant any prose that named a script - an HTML comment explaining
+       what renderer.js does was enough - counted as a load and put the order
+       out. The tags are what the browser actually executes, and the optional
+       query allows for the --dev cache-busting stamp. */
+    const at = (file) => built.search(new RegExp(`<script src="${file.replace(/\./g, "\\.")}(\\?[^"]*)?"`));
     assert(at("mobile-bridge.js") > 0, "mobile-bridge.js was not injected");
     assert(at("mobile-bridge.js") < at("renderer.js"), "the bridge loads after renderer.js");
     assert(at("grow-schema.js") < at("mobile-bridge.js"), "the grow schema loads after the bridge that reads it");

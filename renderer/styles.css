@@ -160,6 +160,48 @@ button { font-family: var(--body); }
    off. 96 x 22 was a 0.3% lie. */
 .lockup { width: 96px; aspect-ratio: 508.3 / 116.82; display: block; position: relative;
   color: var(--ink); }
+
+/* ── Launch ──────────────────────────────────────────────────────────────────
+   Every user sees this and nothing else, once per launch, so it is the one
+   moment worth spending motion on. The app already owned the choreography -
+   rings holding while their blades unwind, the letters rising, the spore
+   landing on the i last - and spent it in a 96px header slot where nobody
+   could see it. Here it plays at the size it was drawn for.
+
+   The veil is not a splash screen: it covers a shell that is already rendering
+   underneath, so it hides a flash rather than inventing a wait. It lifts on a
+   keyframe rather than on a script, so a renderer that fails to boot cannot
+   leave the app behind a curtain. The whole sequence is under 1.4s, and the
+   shell is on screen before the veil has finished going. */
+#launch { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
+  background: var(--cream); animation: launch-lift 1340ms both; }
+#launch .launch-mark { width: min(42vw, 340px); color: var(--ink); }
+/* Ends at display:none, not merely transparent. A fixed, full-bleed element
+   that is only invisible is still in the layer tree and still over the deck -
+   an invariant the smoke suite checks by hand, and one that would otherwise
+   depend on a script running to stay true. Discrete animation of `display`
+   makes the veil genuinely gone at the end of its own keyframe; removing the
+   node afterwards is then tidying, not load-bearing. */
+@keyframes launch-lift {
+  0%, 58%  { opacity: 1; pointer-events: auto; }
+  59%      { pointer-events: none; }
+  99%      { opacity: 0; display: grid; }
+  100%     { opacity: 0; display: none; visibility: hidden; pointer-events: none; }
+}
+/* The shell arrives underneath in the order the eye reads it: the frame first,
+   then the navigation, then the work. Pure CSS and `both`, so there is no
+   state a failed script can strand them in - unstyled-and-visible is the
+   fallback, never invisible-and-waiting. */
+#bar, #sidebar, #workbench, #hud { animation: boot-rise 460ms cubic-bezier(.16, 1, .3, 1) both; }
+#bar      { animation-delay: 700ms; }
+#sidebar  { animation-delay: 790ms; }
+#workbench{ animation-delay: 860ms; }
+#hud      { animation-delay: 940ms; }
+@keyframes boot-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  #launch { display: none; animation: none; }
+  #bar, #sidebar, #workbench, #hud { animation: none; }
+}
 /* The -sm cut, not the full one: at 22px the full cut's o-blades average a
    quarter-pixel and the tittle's gold hex is a 3px speck, so the header wore a
    ring around fog. The small cut redraws only what lives inside the o's and
@@ -169,7 +211,7 @@ button { font-family: var(--body); }
 .lockup-ink { position: absolute; inset: 0; background: currentColor;
   -webkit-mask: url("../assets/wordmark-ink-sm.svg") no-repeat center / 100% 100%;
   mask: url("../assets/wordmark-ink-sm.svg") no-repeat center / 100% 100%; }
-.welcome-logotype > .lockup-ink {
+.welcome-logotype > .lockup-ink, .launch-mark > .lockup-ink {
   -webkit-mask-image: url("../assets/wordmark-ink.svg");
   mask-image: url("../assets/wordmark-ink.svg"); }
 .lockup.live .lockup-ink { display: none; }
@@ -486,11 +528,27 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
    measured 32px below the final line of text and pinned at the left margin,
    and it jumped down there again every time a new paragraph or list opened.
    A caret parked where the writing is not reads as a stray glyph rather than
-   as "still writing", so containers hand it to their own last line. */
-.said.streaming > :last-child:not(:is(ul, ol, table, hr))::after,
+   as "still writing", so containers hand it to their own last line.
+
+   While a reply streams, the unfinished block lives in .md-tail; the blocks
+   before it are settled and never redrawn, so the caret belongs to the tail.
+   display:contents keeps that wrapper out of the box tree entirely, so the
+   blocks inside it space against their settled neighbours exactly as if they
+   were siblings. The tail-less selectors below still apply to a .said that is
+   rendered whole (history rebuild), which carries .streaming for one frame. */
+.said > .md-tail { display: contents; }
+.said > .md-tail:first-child > :first-child { margin-top: 0; }
+.said.streaming > .md-tail > :last-child:not(:is(ul, ol, table, hr))::after,
+.said.streaming > .md-tail > :is(ul, ol):last-child > li:last-child::after,
+.said.streaming > .md-tail > table:last-child tr:last-child > :last-child::after,
+.said.streaming > :last-child:not(:is(ul, ol, table, hr, .md-tail))::after,
 .said.streaming > :is(ul, ol):last-child > li:last-child::after,
 .said.streaming > table:last-child tr:last-child > :last-child::after {
   content: "\258D"; color: var(--gold-soft); animation: pulse 1s steps(2) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .said.streaming > .md-tail > :last-child::after,
+  .said.streaming > :last-child::after { animation: none; }
 }
 
 /* ── Composer ── */

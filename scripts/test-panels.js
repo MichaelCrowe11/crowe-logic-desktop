@@ -332,6 +332,70 @@ const tests = [
               idempotent: true, liveClean: true },
   },
   {
+    name: "the reveal keeps pace with the model instead of trailing it",
+    body: `const r = streamRevealLen;
+      // A 4 KB burst must clear within the lag ceiling, not crawl: the old loop
+      // capped at 300 chars/s and was still typing long after the answer landed.
+      let shown = 0, frames = 0;
+      while (shown < 4000 && frames < 600) { shown = r(shown, 4000, 16); frames++; }
+      const burstMs = frames * 16;
+      // A trickle arrives slower than the base rate, so it reveals as it comes.
+      const trickle = r(100, 108, 16);
+      return { withinLag: burstMs <= 300, cleared: shown, trickle,
+               done: r(500, 500, 16), noTime: r(0, 900, 0) };`,
+    expect: { withinLag: true, cleared: 4000, trickle: 107, done: 500, noTime: 0 },
+  },
+  {
+    name: "only whole paragraphs settle, and never inside a code fence",
+    body: `const s = streamSettleAt;
+      const plain = "one\\n\\ntwo\\n\\nthr";
+      const fenced = "intro\\n\\n\\u0060\\u0060\\u0060js\\na\\n\\nb\\n";
+      const closed = "intro\\n\\n\\u0060\\u0060\\u0060js\\na\\n\\nb\\n\\u0060\\u0060\\u0060\\n\\nafter";
+      return {
+        settles: s(plain, 0, plain.length),
+        resumes: s(plain, 5, plain.length),
+        none: s("no break yet", 0, 12),
+        // The blank line inside an open fence is content, not a boundary.
+        openFence: s(fenced, 0, fenced.length),   // after "intro\\n\\n", not inside the fence
+        // Once the fence closes, the break after it is a real boundary.
+        closedFence: s(closed, 0, closed.length) === closed.indexOf("after"),
+      };`,
+    expect: { settles: 10, resumes: 10, none: 0, openFence: 7, closedFence: true },
+  },
+  {
+    name: "half-typed markup is held back rather than flashed",
+    body: `const f = streamSafeLen, at = (t) => f(t, 0, t.length);
+      const long = "**" + "x".repeat(200);
+      return {
+        bold: at("say **loud"), boldClosed: at("say **loud**"),
+        code: at("run \\u0060npm te"), link: at("see [the doc"),
+        plain: at("nothing pending here"),
+        // Past the hold window an opener is likelier prose than markup, so it
+        // shows rather than stalling the reveal.
+        stale: at(long) === long.length,
+        // Inside a fence every character is literal and nothing waits.
+        inFence: at("\\u0060\\u0060\\u0060\\nrm **x") === 10,
+      };`,
+    expect: { bold: 4, boldClosed: 12, code: 4, link: 4, plain: 20, stale: true, inFence: true },
+  },
+  {
+    name: "a lockup added after the launch veil lifts reuses no live lockup's ids",
+    body: `// The veil is a lockup that is removed once it has played. Suffixing by
+      // position meant every lockup added afterwards shifted down one and was
+      // handed a suffix a lockup still on screen was already using, so the
+      // entrance animation drove the wrong copy.
+      const veil = document.getElementById("launch"); if (veil) veil.remove();
+      const extra = document.createElement("span"); extra.className = "lockup";
+      document.body.appendChild(extra);
+      await liveLockups();
+      const ids = [...document.querySelectorAll("[id]")].map((e) => e.id);
+      const dupes = [...new Set(ids.filter((v, i) => ids.indexOf(v) !== i))];
+      const out = { filled: extra.classList.contains("live"), dupes: dupes.length, veilGone: !document.getElementById("launch") };
+      extra.remove();
+      return out;`,
+    expect: { filled: true, dupes: 0, veilGone: true },
+  },
+  {
     name: "panel state persists to localStorage",
     body: `await __reset("columns");
       await addPanel("browser", { url: "https://example.com/p" });
@@ -882,16 +946,20 @@ const tests = [
         allLive: els.every((e) => e.classList.contains("live")),
         allInlined: svgs.every(Boolean),
         // a background-image cannot produce these; only the inlined <style> can
-        wordAnim: anim("#wordmark-letterforms"),
-        bladeAnim: anim("#rotor-crowe-blades"),
+        // By class, not id. The ids carry a uniqueness suffix that depends on
+        // how many logotypes the document has minted, so an id selector here
+        // asserted insertion order as much as choreography — and broke the day
+        // a second lockup was added ahead of the header.
+        wordAnim: anim(".wm-letterforms"),
+        bladeAnim: anim(".wm-blades-crowe"),
         // The spore carries two: the entrance, then a perpetual drift delayed
         // past it. Split so the arrival stays pinned by name and the drift is
         // checked as its own fact — a comma-joined string would let either one
         // silently disappear behind a rewrite of the other.
-        sporeAnim: anim("#gold-thinking-mark").split(",")[0].trim(),
-        sporeDrifts: anim("#gold-thinking-mark").includes("spore-drift"),
+        sporeAnim: anim(".wm-spore").split(",")[0].trim(),
+        sporeDrifts: anim(".wm-spore").includes("spore-drift"),
         // ink is currentColor, so the logotype tracks the palette
-        inherits: svgs[0].querySelector("#wordmark-letterforms path").getAttribute("fill"),
+        inherits: svgs[0].querySelector(".wm-letterforms path").getAttribute("fill"),
         // the static mask is the fallback and must be hidden once live, but
         // must still exist so a failed fetch leaves a logo on screen
         maskPresent: els.every((e) => !!e.querySelector(".lockup-ink")),
