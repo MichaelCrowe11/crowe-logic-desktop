@@ -49,6 +49,91 @@
   ].map(([model, display, featured, role, available, gateway_tool_calling]) =>
     ({ model, display, featured, role, available, gateway_tool_calling }));
 
+  /* The demo room the rooms.* namespace below drives.
+
+     Three specialists over one SKU, which is the argument the Product Review
+     template exists to have. The canned answers are authored, not generated -
+     the shim has no gateway - but the mechanics around them are the real ones:
+     who is addressed decides who answers, a critique hands each agent the
+     others' positions and never its own, and every call bills the room. */
+  const DEMO_ROOM_AGENTS = [
+    { id: "product-formulation", name: "Product & Formulation", domain: "product", autonomyCeiling: "plan" },
+    { id: "regulatory-affairs", name: "Regulatory Affairs", domain: "regulatory", autonomyCeiling: "plan" },
+    { id: "commerce-support", name: "Commerce & Support", domain: "commerce", autonomyCeiling: "readonly" },
+  ];
+  const DEMO_SAY = {
+    "product-formulation": {
+      say: "Two grams of lion's mane extract per serving, marketed for cognitive performance.",
+      critique: "Regulatory is reading the rodent work as if it were the label. Commerce is pricing a formulation nobody has costed at volume.",
+      revise: "Revised: 500 mg per capsule, two daily. The substantiation point holds and the label drops to structure/function wording.",
+    },
+    "regulatory-affairs": {
+      say: "A cognitive-performance claim needs substantiation on file before the label prints.",
+      critique: "Contesting the 2 g cognitive claim: that is disease-adjacent structure/function wording requiring competent and reliable scientific evidence, and the dose exceeds the intake in the cited work.",
+      revise: "Position unchanged. The revised dose is defensible; the claim wording still decides whether this ships.",
+    },
+    "commerce-support": {
+      say: "Buyers compare this against a $29 shelf; anything above that needs a story.",
+      critique: "The formulation position prices itself out at 2 g per serving, and the regulatory caution under-states what a label rewrite costs in packaging.",
+      revise: "Holding: 500 mg lands on the shelf, so the objection is answered rather than argued.",
+    },
+  };
+  const zeroCost = () => ({ usd: 0, promptTokens: 0, completionTokens: 0, calls: 0 });
+  let DEMO_ROOM = null;
+
+  function newDemoRoom() {
+    return {
+      id: "r-demo", title: "Product Review", template: "product-review",
+      agents: DEMO_ROOM_AGENTS.map((a) => ({ agentId: a.id, name: a.name, domain: a.domain, ceiling: a.autonomyCeiling, model: "", state: "idle", cost: zeroCost() })),
+      defaultAgent: "product-formulation", messages: [],
+      budgetUsd: 0.5, spentUsd: 0, critiqueRounds: 0, halted: "",
+    };
+  }
+  const demoRoomSummary = () => ({ id: DEMO_ROOM.id, title: DEMO_ROOM.title, updatedAt: Date.now(),
+    template: DEMO_ROOM.template, agents: DEMO_ROOM.agents.map((a) => a.agentId), spentUsd: DEMO_ROOM.spentUsd, halted: DEMO_ROOM.halted });
+  const demoRoomState = () => (DEMO_ROOM ? {
+    id: DEMO_ROOM.id, title: DEMO_ROOM.title, template: DEMO_ROOM.template,
+    agents: DEMO_ROOM.agents, defaultAgent: DEMO_ROOM.defaultAgent,
+    tier: "readonly",   // rooms do not write until worktree isolation lands
+    budgetUsd: DEMO_ROOM.budgetUsd, spentUsd: DEMO_ROOM.spentUsd,
+    critiqueRounds: DEMO_ROOM.critiqueRounds, maxCritiqueRounds: 2, halted: DEMO_ROOM.halted,
+  } : null);
+
+  // Who a message is for: @room is everyone, @handle is one, bare is the
+  // default agent alone. The same rule the engine applies, so an unaddressed
+  // agent visibly costs nothing here too.
+  function demoAddress(text) {
+    const roster = DEMO_ROOM.agents.map((a) => a.agentId);
+    const at = (text.match(/@[A-Za-z0-9][\w.-]*/g) || []).map((m) => m.slice(1).toLowerCase());
+    if (at.includes("room")) return roster;
+    const hit = roster.filter((id) => at.includes(id) || at.includes(id.replace(/-/g, "")));
+    return hit.length ? hit : [DEMO_ROOM.defaultAgent];
+  }
+
+  async function demoRound(kind, text) {
+    if (!DEMO_ROOM) DEMO_ROOM = newDemoRoom();
+    if (kind === "say") DEMO_ROOM.messages.push({ author: ":operator", content: text, kind: "say", at: Date.now() });
+    if (kind === "critique") DEMO_ROOM.critiqueRounds += 1;
+
+    const who = kind === "say" ? demoAddress(text) : DEMO_ROOM.agents.map((a) => a.agentId);
+    for (const seat of DEMO_ROOM.agents) seat.state = who.includes(seat.agentId) ? "queued" : "idle";
+    await sleep(260);
+
+    const ran = [];
+    for (const id of who) {
+      const seat = DEMO_ROOM.agents.find((a) => a.agentId === id);
+      seat.state = "done";
+      seat.cost.calls += 1; seat.cost.usd += 0.012;
+      seat.cost.promptTokens += 900; seat.cost.completionTokens += 220;
+      DEMO_ROOM.spentUsd = DEMO_ROOM.agents.reduce((s, a) => s + a.cost.usd, 0);
+      const content = (DEMO_SAY[id] || {})[kind === "say" ? "say" : kind] || `${id} answers.`;
+      const msg = { author: id, content, kind: kind === "critique" ? "critique" : "reply", at: Date.now() };
+      DEMO_ROOM.messages.push(msg);
+      ran.push({ agentId: id, ok: true, text: content, message: msg });
+    }
+    return { ran, room: demoRoomState() };
+  }
+
   // xterm ships from ../node_modules, which http.server rooted at renderer/
   // cannot serve; a text-only stand-in keeps initTerm() alive so the terminal
   // pane still shows its "PTY unavailable" line instead of throwing.
@@ -262,6 +347,58 @@
       async state() { return { status: "dev" }; },
       onChange() { return () => {}; },
     },
+    /* Rooms, as a working demo rather than empty stubs.
+
+       The shim exists so the whole UI can be driven in a browser, and a room
+       surface fed empty arrays would look built while proving nothing. This
+       runs one Product Review room off the real template roster: addressing
+       decides who answers, critique gives each agent the others' positions and
+       never its own, revise moves one of them, and every call bills the room
+       so the cost strip has something true to show.
+
+       DEMO_ROOM is module state on purpose - a room is a conversation, and one
+       that forgot its transcript between calls would not exercise the surface
+       that renders it. */
+    rooms: {
+      async agents() {
+        return {
+          agents: DEMO_ROOM_AGENTS,
+          templates: [{
+            id: "product-review", name: "Product Review",
+            purpose: "A formulation, argued against the rules it has to clear and the customers it has to reach.",
+            agents: DEMO_ROOM_AGENTS, defaultAgent: "product-formulation",
+          }],
+        };
+      },
+      async list() { return DEMO_ROOM ? [demoRoomSummary()] : []; },
+      async create() { DEMO_ROOM = newDemoRoom(); return { room: demoRoomState() }; },
+      async load() { if (!DEMO_ROOM) DEMO_ROOM = newDemoRoom(); return { room: demoRoomState(), messages: DEMO_ROOM.messages }; },
+      async delete() { DEMO_ROOM = null; return { ok: true }; },
+      async join(_id, agentId) {
+        if (DEMO_ROOM && !DEMO_ROOM.agents.some((a) => a.agentId === agentId)) {
+          const meta = DEMO_ROOM_AGENTS.find((a) => a.id === agentId);
+          if (meta) DEMO_ROOM.agents.push({ agentId, name: meta.name, domain: meta.domain, ceiling: meta.autonomyCeiling, model: "", state: "idle", cost: zeroCost() });
+        }
+        return { room: demoRoomState() };
+      },
+      async leave(_id, agentId) {
+        if (DEMO_ROOM) DEMO_ROOM.agents = DEMO_ROOM.agents.filter((a) => a.agentId !== agentId);
+        return { room: demoRoomState() };
+      },
+      async setAgentModel(_id, agentId, model) {
+        const seat = DEMO_ROOM && DEMO_ROOM.agents.find((a) => a.agentId === agentId);
+        if (seat) seat.model = String(model || "");
+        return { room: demoRoomState() };
+      },
+      async project(_id, kind) {
+        const live = DEMO_ROOM ? DEMO_ROOM.agents.filter((a) => a.state !== "failed").length : 0;
+        return { calls: live, agents: live, note: kind === "critique" ? `${live} reviews, each agent over the others' work` : `${live} replies` };
+      },
+      async say(_id, text) { return demoRound("say", String(text || "")); },
+      async critique() { return demoRound("critique"); },
+      async revise() { return demoRound("revise"); },
+    },
+
     plugins: {
       async list() { return { plugins: [
         { id: "crowe-skills", name: "Crowe Skills", official: true, enabled: true, tools: 6 },
