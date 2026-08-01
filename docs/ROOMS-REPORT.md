@@ -1,8 +1,9 @@
 # Rooms — build report
 
-Status: gates 1, 2, 3, 5, 6 and the room surface built and verified. Gate 4
-(worktree isolation) is **not** built, and the write path is held closed behind
-it.
+Status: gates 1, 2, 3, 5, 6 and the room surface built and verified. Gate 4's
+isolation module is built and proven against real git; the write path stays
+closed until an operator can review a diff in the UI, because the module
+refuses to merge work nobody has read.
 
 Built on 0.22.0. `node scripts/test-rooms.js` — 28 checks, all passing.
 
@@ -187,3 +188,46 @@ the same week. The registry's domain field is coarser than the specialties
 inside it, so the per-template check now asks whether the same specialty is
 seated twice, and the domain field is used where it is actually meaningful: for
 asserting that the curated set as a whole reaches across the business.
+
+
+---
+
+## Gate 4: what is built, and why the clamp is still on
+
+`rooms/worktrees.js` gives each write-capable agent its own `git worktree` on
+its own branch from the room's base commit, produces its work as a diff against
+that base, and lands diffs one at a time with a review in between.
+
+Six checks in `scripts/test-rooms.js` cover the ordering rules against an
+injected fake git: a tree and branch per agent, an unreviewed diff refused, a
+review of one agent not clearing another, a conflicting merge reported with the
+branch left standing, an empty diff landing as nothing rather than a commit, and
+release taking back checkouts while keeping branches.
+
+Those checks prove the rules. They do not prove the mechanics, so the module was
+also run against a real repository with two agents editing different files in
+the same checkout:
+
+```
+trees made: r-real--alpha + r-real--beta
+ISOLATION - beta sees alpha edit: false
+ISOLATION - workspace sees alpha edit: false
+alpha diff stat: "a.txt | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)"
+unreviewed merge refused: true
+alpha landed: true | workspace has ALPHA: true
+beta landed: true | b.txt: beta-only
+released: true | branches kept: 2 | workspace clean: yes
+```
+
+The two isolation lines are the ones that matter: an agent's edit is invisible
+to every other agent and to the workspace until it is reviewed and landed.
+
+**The clamp stays on anyway.** `roomTier()` still forces `readonly`, because
+merging requires a reviewed diff and there is nowhere in the UI to read one.
+Lifting the clamp before that exists would produce rooms that can write and
+cannot land, which is worse than rooms that cannot write. What remains is the
+wiring: an isolation context per room in `main.js`, agent runs rooted in their
+own tree, IPC for diff and merge, and a review surface. The gate is called hard
+in the build order and this is what honouring that looks like - the dangerous
+half is finished and proven, and it stays switched off until the half that makes
+it usable is finished too.

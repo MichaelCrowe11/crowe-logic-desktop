@@ -16,6 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 const registry = require("../rooms/registry");
+const wt = require("../rooms/worktrees");
 const rooms = require("../rooms/engine");
 
 let failures = 0;
@@ -514,6 +515,91 @@ const roomOf = (ids, extra = {}) =>
     assert(plain[0].role === "user" && plain[0].content === "HUMAN-SAID", "the human turn was misattributed");
     assert(plain[1].role === "assistant" && plain[1].content === "AGENT-SAID", "the agent turn was misattributed");
     return "collision closed";
+  });
+
+  // ── Gate 4: isolation ──────────────────────────────────────────────────────
+  console.log("");
+  console.log("worktrees (gate 4)");
+
+  /* A fake git that records what it was asked and can be told to fail one
+     command. The ordering rules are the whole point of this module, and they
+     are decidable from the call log without a repository. */
+  function fakeGit(failOn) {
+    const calls = [];
+    const g = async (args) => {
+      calls.push(args);
+      if (failOn && args.includes(failOn)) return { ok: false, out: "", err: "boom" };
+      if (args.includes("diff --cached --stat")) return { ok: true, out: " a.js | 2 +-", err: "" };
+      if (args.includes("diff --cached")) return { ok: true, out: "--- a/a.js\n+++ b/a.js", err: "" };
+      return { ok: true, out: "", err: "" };
+    };
+    g.calls = calls;
+    return g;
+  }
+  const iso = (git) => wt.isolation({ git, roomId: "r-1", root: "/tmp/wt" });
+
+  await check("each agent gets its own tree and branch, from the room's base", async () => {
+    const ctx = iso(fakeGit());
+    const a = await wt.ensureTree(ctx, "product-formulation");
+    const b = await wt.ensureTree(ctx, "regulatory-affairs");
+    assert(!a.error && !b.error, "worktree creation failed");
+    assert(a.dir !== b.dir, "two agents were given the same directory");
+    assert(a.branch !== b.branch, "two agents were given the same branch");
+    assert(ctx.git.calls.every((c) => c.startsWith("worktree add")), "something other than worktree add ran");
+    // Asked twice is not made twice.
+    const again = await wt.ensureTree(ctx, "product-formulation");
+    assert(again.dir === a.dir && ctx.git.calls.length === 2, "an existing tree was recreated");
+    return `${a.branch} and ${b.branch}`;
+  });
+
+  await check("a diff has to be reviewed before it can land", async () => {
+    const ctx = iso(fakeGit());
+    await wt.ensureTree(ctx, "product-formulation");
+    const blocked = await wt.merge(ctx, "product-formulation");
+    assert(blocked.error && blocked.needsReview, `unreviewed work merged: ${JSON.stringify(blocked)}`);
+    assert(blocked.diff && blocked.diff.patch, "the refusal did not carry the diff to review");
+    wt.markReviewed(ctx, "product-formulation");
+    const ok = await wt.merge(ctx, "product-formulation");
+    assert(ok.merged, `reviewed work did not land: ${JSON.stringify(ok)}`);
+    return "refused, reviewed, landed";
+  });
+
+  await check("reviewing one agent's work does not clear another's", async () => {
+    const ctx = iso(fakeGit());
+    await wt.ensureTree(ctx, "a"); await wt.ensureTree(ctx, "b");
+    wt.markReviewed(ctx, "a");
+    const other = await wt.merge(ctx, "b");
+    assert(other.error && other.needsReview, "reviewing one agent cleared another");
+    return "per agent, as it should be";
+  });
+
+  await check("a conflicting merge leaves the work standing rather than dropping it", async () => {
+    const ctx = iso(fakeGit("merge --no-ff"));
+    await wt.ensureTree(ctx, "a"); wt.markReviewed(ctx, "a");
+    const r = await wt.merge(ctx, "a");
+    assert(r.conflict && r.branch, `a conflict was not reported as one: ${JSON.stringify(r)}`);
+    assert(!ctx.trees.a.merged, "a conflicted merge was recorded as merged");
+    return "reported, branch kept";
+  });
+
+  await check("an agent that changed nothing lands as nothing, not as a merge", async () => {
+    const git = fakeGit();
+    const ctx = iso(async (args) => (args.includes("diff --cached") && !args.includes("--stat")
+      ? { ok: true, out: "", err: "" } : git(args)));
+    await wt.ensureTree(ctx, "a"); wt.markReviewed(ctx, "a");
+    const r = await wt.merge(ctx, "a");
+    assert(r.empty && !r.error, `an empty diff was not handled: ${JSON.stringify(r)}`);
+    return "no commit, no merge";
+  });
+
+  await check("release takes back the checkouts and keeps the branches", async () => {
+    const ctx = iso(fakeGit());
+    await wt.ensureTree(ctx, "a"); await wt.ensureTree(ctx, "b");
+    const out = await wt.release(ctx);
+    assert(out.length === 2 && out.every((r) => r.removed && r.kept), "release did not remove both checkouts");
+    assert(!ctx.git.calls.some((c) => c.startsWith("branch -D")), "release deleted a branch holding unlanded work");
+    assert(!Object.keys(ctx.trees).length, "release left trees behind");
+    return "checkouts removed, branches kept";
   });
 
   console.log(failures ? `\n${failures} check(s) failed` : "\nall room checks passed");
