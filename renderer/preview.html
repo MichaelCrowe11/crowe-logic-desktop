@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1785541767072" />
+  <link rel="stylesheet" href="styles.css?v=1785603016810" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -388,6 +388,12 @@
         <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
           <span>Agent fleet</span></button>
+        <button id="panel-add-room" class="pal-row" title="Open a room: several named agents and you in one thread">
+          <!-- Three seats around a table, which is what a room is. Not three
+               avatars: at 16px a cluster of heads is a smudge, and the shape
+               that survives is the arrangement. -->
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4.4" r="1.7"/><circle cx="5.2" cy="16.4" r="1.7"/><circle cx="18.8" cy="16.4" r="1.7"/></svg>
+          <span>Room</span></button>
         <button id="panel-add-workbench" class="pal-row" title="Compose, compare, and save agent runs">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
           <span>Workbench</span></button>
@@ -404,9 +410,9 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1785541767072"></script>
-  <script src="mark-geometry.js?v=1785541767072"></script>
-  <script src="mark.js?v=1785541767072"></script>
-  <script src="renderer.js?v=1785541767072"></script>
+  <script src="preview-shim.js?v=1785603016810"></script>
+  <script src="mark-geometry.js?v=1785603016810"></script>
+  <script src="mark.js?v=1785603016810"></script>
+  <script src="renderer.js?v=1785603016810"></script>
 </body>
 </html>

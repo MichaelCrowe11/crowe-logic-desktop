@@ -1542,3 +1542,70 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 .agent-operation-chip[data-state="waiting"] { color:var(--gold-text); border-color:var(--gold); }
 .agent-event-input span { color:var(--ink); }
 @media (max-width:760px) { .agent-logotype { width:96px; flex-basis:96px; } }
+
+
+/* ── Rooms ───────────────────────────────────────────────────────────────────
+   Several named agents and the operator in one thread. Two things are held
+   deliberately visible: who said a thing, and what it cost. The roster strip
+   carries live state and live spend per seat, in the room rather than in a
+   settings pane, because a room is the one surface where the model bill grows
+   with the number of participants and the operator should watch it happen. */
+.room { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+.room-roster { display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+.seat { flex: 0 0 auto; display: grid; grid-template-columns: auto auto; gap: 1px 10px;
+  padding: 7px 11px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--raised); transition: border-color 140ms var(--ease); }
+.seat.live { border-color: var(--gold); }
+.seat.bad { border-color: var(--danger, #b4483c); }
+.seat-name { grid-column: 1 / -1; font-weight: 600; font-size: var(--fs-sm); }
+.seat-model { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
+.seat-state { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted); justify-self: end; }
+.seat-state[data-state="working"], .seat-state[data-state="queued"] { color: var(--gold); }
+.seat-state[data-state="done"] { color: var(--ok, #4f8a5b); }
+.seat-state[data-state="failed"] { color: var(--danger, #b4483c); }
+.seat-cost { grid-column: 1 / -1; font-family: var(--mono); font-size: var(--fs-cap);
+  color: var(--muted); font-variant-numeric: tabular-nums; }
+.seat-cost em { font-style: normal; margin-left: 8px; opacity: .7; }
+
+.room-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 12px; }
+.rmsg { display: flex; flex-direction: column; gap: 3px; }
+.rmsg-who { font-size: var(--fs-cap); font-weight: 600; letter-spacing: .02em; color: var(--gold-deep); }
+body.dark .rmsg-who { color: var(--gold); }
+.rmsg.from-operator .rmsg-who { color: var(--muted); }
+.rmsg-tag { font-family: var(--mono); font-weight: 400; text-transform: uppercase;
+  letter-spacing: .07em; margin-left: 8px; opacity: .75; }
+.rmsg-body { font-size: var(--fs-body); line-height: 1.6; }
+.rmsg-body > :first-child { margin-top: 0; }
+.rmsg-body > :last-child { margin-bottom: 0; }
+/* A critique is set apart because it is about the message above it, not a new
+   position of its own. */
+.rmsg.is-critique { border-left: 2px solid var(--line-strong, var(--line));
+  padding-left: 11px; margin-left: 2px; }
+.rmsg.is-critique .rmsg-body { color: var(--muted); }
+
+.room-rounds { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-top: 1px solid var(--line); background: var(--panel); }
+.room-rounds .spacer { flex: 1; }
+.room-cap { font-size: var(--fs-cap); color: var(--muted); }
+.room-meter { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.room-meter.over { color: var(--danger, #b4483c); }
+
+.room-composer { position: relative; display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--line); background: var(--panel); }
+.room-input { flex: 1; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 11px; }
+.room-input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.room-suggest { position: absolute; bottom: calc(100% + 6px); left: 12px; right: 12px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
+  box-shadow: var(--z2, 0 8px 24px rgba(0,0,0,.28)); overflow: hidden; z-index: 5; }
+.room-suggest.hidden { display: none; }
+.sug { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+  padding: 7px 11px; background: none; border: none; color: var(--ink); cursor: pointer; }
+.sug:hover, .sug:focus-visible { background: var(--accent-wash, rgba(184,137,58,.14)); outline: none; }
+.sug b { font-family: var(--mono); font-size: var(--fs-cap); }
+.sug span { font-size: var(--fs-cap); color: var(--muted); }
