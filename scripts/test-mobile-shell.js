@@ -459,6 +459,25 @@ app.whenReady().then(async () => {
       console.log("ok      the page under test is this checkout's renderer, through the www build");
     }
 
+    /* This suite's prelude disables all animations (a show:false window never
+       advances them), which is also why it was blind to the one animation bug
+       that mattered: a boot entrance with forwards fill pins `transform: none`
+       over the drawer's translateX(-100%) forever, and the sidebar shipped
+       parked open over the left 320px of every phone screen. A runtime check
+       cannot see what the prelude removed, so the guard is static: no
+       forwards-filling animation may target #sidebar unless the phone sheet
+       explicitly switches the drawer's animation off. */
+    const desktopCss = fs.readFileSync(path.join(ROOT, "renderer", "styles.css"), "utf8");
+    const phoneCss = fs.readFileSync(path.join(ROOT, "mobile", "src", "mobile.css"), "utf8");
+    const sidebarFill = /^[^\n{}]*#sidebar[^\n{}]*\{[^}]*animation:[^};]*\b(both|forwards)\b/m.test(desktopCss);
+    if (sidebarFill && !/body\.mobile #sidebar \{ animation: none; \}/.test(phoneCss)) {
+      failures++;
+      console.log("not ok  a forwards-filling animation targets #sidebar without the phone opting out");
+      console.log("        a finished fill pins transform:none over the drawer's translateX(-100%)");
+    } else {
+      console.log("ok      no forwards-filling animation can pin the drawer open");
+    }
+
     /* A console error at load is the whole class of bug this file exists for:
        it is invisible to a Node test, it happens before anyone taps anything,
        and it takes a surface down with it. Resource 404s are filtered above —

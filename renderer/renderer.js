@@ -310,6 +310,58 @@ setInterval(() => {
   });
 }, 1000);
 function hideThinking(body) { const t = body.querySelector(".thinking"); if (t) t.remove(); }
+/* The terminal hide, distinct from hideThinking on purpose. Mid-turn hides —
+   text arriving, a card taking the indicator's place — stay instant, because a
+   landing played eight times per turn is not a beat, it is a stutter. This one
+   plays the settle (or the failed stop) from wordmark-motion.css exactly once,
+   at the moment the turn actually ends, then removes the node. Reduced motion
+   skips straight to removal — the beat is ornament, the removal is the fact. */
+function settleThinking(body, mood) {
+  const t = body.querySelector(".thinking"); if (!t) return;
+  const svg = t.querySelector("svg");
+  if (!svg || matchMedia("(prefers-reduced-motion: reduce)").matches) { t.remove(); return; }
+  if (svg.classList.contains("is-settling") || svg.classList.contains("is-failed")) return;
+  svg.classList.remove("is-thinking");
+  svg.classList.add(mood === "fail" ? "is-failed" : "is-settling");
+  setTimeout(() => t.remove(), mood === "fail" ? 900 : 700);
+}
+/* Where the landing is actually seen. On the normal path the transcript's
+   indicator has already yielded to the answer by the time the run resolves —
+   text arriving hides it, and that is correct — so a beat played only there is
+   a beat played mostly never. The header's logotype is the one copy on every
+   screen, so the turn's end lands on it: the same single settle, once.
+
+   Web Animations, not classes, and the choice is load-bearing. The first cut
+   toggled is-settling and stripped is-animated to stop the both-filled
+   entrance replaying when the class lifted — which permanently changed state
+   the smoke suite legitimately asserts ("the header logotype goes live"
+   expects the entrance shorthands to still be on the element after turns have
+   run). element.animate() composes over the CSS animations for 640ms and then
+   is simply gone: no class churn, nothing for the entrance to replay, nothing
+   for a test to trip on. */
+function settleHeader() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const svg = document.querySelector("#bar .lockup.live > svg");
+  if (!svg || svg.__settling) return;
+  svg.__settling = true;
+  setTimeout(() => { svg.__settling = false; }, 700);
+  const ease = "cubic-bezier(.16, 1, .3, 1)";
+  const gold = "var(--gold-soft, #c9a227)";
+  for (const b of svg.querySelectorAll(".wm-blades")) {
+    b.animate([
+      { transform: "rotate(-90deg)", color: gold },
+      { transform: "rotate(0deg)", color: gold, offset: 0.85 },
+      { transform: "rotate(0deg)" },
+    ], { duration: 640, easing: ease });
+  }
+  for (const s of svg.querySelectorAll(".wm-spore")) {
+    s.animate([
+      { transform: "scale(1)" },
+      { transform: "scale(1.16)", offset: 0.4 },
+      { transform: "scale(1)" },
+    ], { duration: 640, easing: ease });
+  }
+}
 let lastCard = null;
 function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
@@ -571,7 +623,7 @@ async function send(text, opts = {}) {
     else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
     else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) $("hud-model").textContent = ev.model; }
     else if (ev.type === "stopped") { finishSaid(); hideThinking(body); addStopped(body); }
-    else if (ev.type === "error") { finishSaid(); hideThinking(body); addError(body, ev.text); }
+    else if (ev.type === "error") { finishSaid(); settleThinking(body, "fail"); addError(body, ev.text); }
   });
   // Every turn carries the farm's own records; the harness hands them to the
   // cultivation expert and drops them for everyone else. Sent unconditionally
@@ -584,7 +636,17 @@ async function send(text, opts = {}) {
   if (opts.role) runOpts.role = opts.role;
   const gc = await growContext(); if (gc) runOpts.context = gc;
   try { await window.crowe.agent.run(messages, "main", runOpts); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
-  finishSaid(); hideThinking(body);
+  finishSaid(); settleThinking(body);
+  /* The landing, only when the turn actually landed — an errored or stopped
+     turn has nothing to celebrate. Two places, one meaning: the header's
+     logotype takes the settle, and the message's own avatar takes the same
+     one-shot ring it already fires when a tool lands — because the avatar is
+     the one mark sitting beside the text the user is reading at that moment,
+     and the answer arriving is the biggest event of the turn. */
+  if (!body.querySelector(".err, .stopped")) {
+    settleHeader();
+    if (mark) mark.ping();
+  }
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
   addColophon(body, acts, runTok, spentCost);
@@ -699,8 +761,19 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   });
   const mark = {
     setState(s) {
+      const prev = logotype.state;
       logotype.state = s;
-      if (logotype.svg) logotype.svg.classList.toggle("is-thinking", s === "reasoning");
+      if (!logotype.svg) return;
+      logotype.svg.classList.toggle("is-thinking", s === "reasoning");
+      // Failure is a state the mark holds; settling is a beat it plays on the
+      // way out of reasoning into rest — the landing, after which the idle
+      // drift resumes on its own. Failure gets no landing: engines that ease
+      // gracefully to a stop are claiming the run went well.
+      logotype.svg.classList.toggle("is-failed", s === "failed");
+      if (prev === "reasoning" && s === "idle") {
+        logotype.svg.classList.add("is-settling");
+        setTimeout(() => { if (logotype.svg) logotype.svg.classList.remove("is-settling"); }, 700);
+      }
     },
     // A tool landed. One quick beat of the whole mark, distinct from the rotors
     // so it reads as an event rather than as more of the same turning.

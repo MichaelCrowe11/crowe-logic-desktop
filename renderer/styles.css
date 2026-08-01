@@ -192,7 +192,15 @@ button { font-family: var(--body); }
    then the navigation, then the work. Pure CSS and `both`, so there is no
    state a failed script can strand them in - unstyled-and-visible is the
    fallback, never invisible-and-waiting. */
-#bar, #sidebar, #workbench, #hud { animation: boot-rise 460ms cubic-bezier(.16, 1, .3, 1) both; }
+/* `backwards`, not `both`, and the difference is a phone bug. A finished
+   animation with forwards fill pins its last keyframe over the cascade
+   forever — and this one's last keyframe is `transform: none`, which on a
+   phone overrode the drawer's translateX(-100%) and left the sidebar parked
+   over the left 320px of every screen. The end state of boot-rise IS the
+   natural state, so forwards fill bought nothing on desktop and broke the
+   drawer on mobile. backwards keeps the pre-start hold (no flash before the
+   delay) and releases the cascade the moment the rise lands. */
+#bar, #sidebar, #workbench, #hud { animation: boot-rise 460ms cubic-bezier(.16, 1, .3, 1) backwards; }
 #bar      { animation-delay: 700ms; }
 #sidebar  { animation-delay: 790ms; }
 #workbench{ animation-delay: 860ms; }
