@@ -130,6 +130,16 @@
         <div id="sess-list" class="sess-list"></div>
       </aside>
 
+      <!-- Rooms persist in the same store sessions do, so they belong in the
+           same place: a room closed with its panel was otherwise reachable
+           only by remembering it existed. -->
+      <aside id="rooms-drawer" class="drawer">
+        <div class="drawer-head"><span>Rooms</span><button id="room-new" class="side-icon" title="Open a room">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button></div>
+        <div id="room-list" class="sess-list"></div>
+      </aside>
+
       <div class="side-foot">
         <button id="rail-palette" class="side-foot-btn" title="Command palette (Cmd+K)">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>

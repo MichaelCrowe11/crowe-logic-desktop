@@ -1039,6 +1039,45 @@ function mountWorkbench(p, body) {
   renderLibrary();syncMode();
 }
 
+/* The room list in the rail.
+
+   Rooms are sessions with a roster, so they persist exactly as sessions do -
+   but until this existed the only way back into one was to keep its panel open,
+   which made "persistent agent identities" true in the store and false in the
+   product. Each row carries what a person actually chooses by: who is in the
+   room, and what it has spent. */
+async function refreshRoomList() {
+  const host = $("room-list"); if (!host) return;
+  let list = [];
+  try { list = await window.crowe.rooms.list(); } catch { return; }
+  host.innerHTML = "";
+  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet.</div>'; return; }
+  for (const r of list) {
+    const row = document.createElement("div"); row.className = "sess-row room-row";
+    const seats = (r.agents || []).length;
+    const spent = typeof r.spentUsd === "number" ? `$${r.spentUsd.toFixed(3)}` : "";
+    row.innerHTML = `<div class="sess-main">
+        <div class="sess-title">${esc(r.title || "Room")}</div>
+        <div class="sess-when">${seats} agent${seats === 1 ? "" : "s"}${spent ? " · " + esc(spent) : ""}${r.halted ? " · halted" : ""}</div>
+      </div><button class="sess-del" title="Delete">Delete</button>`;
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".sess-del")) return;
+      // Reuse an open panel rather than stacking a second view of one room:
+      // two panels on one transcript would each paint over the other's state.
+      const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
+      if (open) { focusPanel(open.id); return; }
+      addPanel("room", { roomId: r.id, title: r.title || "Room" });
+    });
+    row.querySelector(".sess-del").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await window.crowe.rooms.delete(r.id);
+      for (const p of panels.filter((p) => p.type === "room" && p.roomId === r.id)) closePanel(p.id);
+      refreshRoomList();
+    });
+    host.appendChild(row);
+  }
+}
+
 /* A room: several named agents and the operator in one thread.
 
    The surface is built around the two facts that make a room different from a
@@ -1258,7 +1297,7 @@ async function mountRoom(p, body, seed = {}) {
       const out = await fn();
       if (out?.room) state = { ...out.room, messages: state.messages };
       await refresh();
-    } finally { busy = false; await drawRounds(); }
+    } finally { busy = false; await drawRounds(); refreshRoomList(); }
   }
 
   wrap.querySelector(".room-composer").addEventListener("submit", async (e) => {
@@ -1392,6 +1431,7 @@ async function mountRoom(p, body, seed = {}) {
     wrap.classList.remove("composing");
     await refresh();
     renderDockTabs();
+    refreshRoomList();
   }
 
   openBtn.addEventListener("click", () => open({
@@ -3206,6 +3246,9 @@ function dismissLaunch() {
   // them turning at once would spend the signal the indicator depends on.
   liveLockups();
   dismissLaunch();
+  const roomNew = $("room-new");
+  if (roomNew) roomNew.addEventListener("click", () => addPanel("room"));
+  refreshRoomList();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");
