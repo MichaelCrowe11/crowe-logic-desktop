@@ -155,6 +155,13 @@ body.dark .m-attach-chip .m-attach-share { color: var(--gold); }
   /* The rail becomes a drawer over the content. It keeps its own markup and
      its own toggle — the header button the desktop already has — so nothing
      in renderer.js needs to know the difference. */
+  /* No boot animation on the drawer. The desktop boot-rise animates the rail
+     into place, but here the rail is an off-canvas drawer whose resting
+     transform is translateX(-100%) — an entrance animation would sweep it
+     across the closed position (and with a forwards fill, park it open over
+     the app, which is exactly the bug that shipped once). The drawer's only
+     legitimate motion is the open/close transition below. */
+  body.mobile #sidebar { animation: none; }
   body.mobile #sidebar {
     position: fixed; z-index: 60; top: 0; bottom: 0; left: 0;
     width: min(82vw, 320px); flex-basis: min(82vw, 320px);
