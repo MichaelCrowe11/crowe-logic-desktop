@@ -88,7 +88,18 @@ function configPath() { return path.join(app.getPath("userData"), "config.json")
 function authStorePath() { return path.join(app.getPath("userData"), "auth.bin"); }
 function readAuthStore() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return {};
+    if (!safeStorage.isEncryptionAvailable()) {
+      /* The mirror of writeAuthStore's fallback, under exactly the same two
+         conditions. Without it the escape hatch below writes a file nothing can
+         read: a headless shell could sign in, and be signed out again on the
+         next loadConfig(), with no error anywhere to say why. That is the case
+         the fallback exists for, so reading it back is not a widening of the
+         exposure - refusing to is just a fallback that does not work. */
+      if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) {
+        return JSON.parse(fs.readFileSync(authStorePath(), "utf8"));
+      }
+      return {};
+    }
     return JSON.parse(safeStorage.decryptString(fs.readFileSync(authStorePath())));
   } catch { return {}; }
 }
@@ -1043,6 +1054,200 @@ ipcMain.handle("crowe:sessions:load", (_e, id) => {
 });
 ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); return { id: currentSession }; });
 ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {} if (currentSession === id) currentSession = null; return { ok: true }; });
+
+// ─── Rooms ───────────────────────────────────────────────────────────────────
+/* Several named agents and the operator in one thread.
+
+   The orchestration is in rooms/engine.js, which takes its model call as an
+   injected dependency; this file supplies the real one. That seam is why
+   scripts/test-rooms.js can prove addressing, concurrency, attribution, the
+   budget and the critique loop without a gateway.
+
+   Two things are deliberately wired through the machinery that already exists
+   rather than beside it:
+
+     stop      every room seat registers its run in `agentRuns` under a
+               composite id, so crowe:agent:stop-all and crowe:operator:stop-all
+               halt room agents without knowing rooms exist. Verified in
+               scripts/test-rooms.js rather than assumed, because both were
+               written when there was only ever one agent.
+     storage   a room is a session with kind:"room". It inherits listing,
+               deletion and backup, and a session written before rooms existed
+               still loads as an ordinary thread. */
+const roomsEngine = require("./rooms/engine");
+const roomsRegistry = require("./rooms/registry");
+
+const roomSeatId = (roomId, agentId) => `room:${roomId}:${agentId}`;
+const liveRooms = new Map();
+
+function roomPath(id) { return path.join(sessionsDir(), id + ".json"); }
+function saveRoom(room) {
+  try { fs.writeFileSync(roomPath(room.id), JSON.stringify(roomsEngine.toSession(room), null, 2)); } catch {}
+}
+function loadRoom(id) {
+  if (liveRooms.has(id)) return liveRooms.get(id);
+  try {
+    const room = roomsEngine.fromSession(JSON.parse(fs.readFileSync(roomPath(id), "utf8")));
+    if (room) liveRooms.set(id, room);
+    return room;
+  } catch { return null; }
+}
+
+/* The real runner. One room seat, one harness turn.
+
+   The seat's persona and pinned model ride the two additive deps the harness
+   grew for this; everything else about the turn is the ordinary operator path,
+   which is what keeps a one-agent room honestly identical to today's thread. */
+function roomRunner(sender, room) {
+  return {
+    runAgent: async ({ agentId, model, systemBrief, messages, tier }) => {
+      const seatId = roomSeatId(room.id, agentId);
+      const run = { aborted: false, controller: null };
+      agentRuns.set(seatId, run);
+      let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+      try {
+        const result = await harness.runAgent(harnessCtx, messages.slice(), {
+          gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
+          send: (ev) => {
+            // Telemetry is captured for attribution as well as forwarded: the
+            // room's cost table is built from the same numbers the HUD shows,
+            // so the per-agent figures cannot drift from the room total.
+            if (ev.type === "telemetry") {
+              usage = { usd: ev.cost || 0, promptTokens: ev.promptTokens || 0, completionTokens: ev.completionTokens || 0 };
+            }
+            try { sender.send("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId }); } catch {}
+          },
+          isAborted: () => run.aborted,
+          setController: (c) => { run.controller = c; },
+          agentId: seatId,
+          persona: systemBrief,
+          model: model || "",
+          tier,
+        });
+        if (run.aborted) return { stopped: true, usage };
+        return { text: result.text || "", error: result.error, usage };
+      } finally {
+        agentRuns.delete(seatId);
+      }
+    },
+  };
+}
+
+// The renderer needs the roster and the templates to compose a room at all.
+ipcMain.handle("crowe:rooms:agents", () => ({
+  agents: roomsRegistry.listAgents(),
+  templates: roomsRegistry.listTemplates(),
+}));
+
+ipcMain.handle("crowe:rooms:list", () => {
+  try {
+    return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
+      try {
+        const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8"));
+        if (d.kind !== "room" || !d.room) return null;
+        return { id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
+          agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" };
+      } catch { return null; }
+    }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch { return []; }
+});
+
+ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+  const room = template
+    ? roomsEngine.fromTemplate(template, { title, budgetUsd })
+    : roomsEngine.createRoom({ title, agentIds, budgetUsd });
+  if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
+  liveRooms.set(room.id, room);
+  saveRoom(room);
+  return { room: roomState(room) };
+});
+
+ipcMain.handle("crowe:rooms:load", (_e, { id } = {}) => {
+  const room = loadRoom(id);
+  return room ? { room: roomState(room), messages: room.messages } : { error: "no such room" };
+});
+
+ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
+  liveRooms.delete(id);
+  try { fs.unlinkSync(roomPath(id)); } catch {}
+  return { ok: true };
+});
+
+ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (!roomsRegistry.getAgent(agentId)) return { error: "no such agent" };
+  if (!roomsRegistry.isJoinable(agentId)) return { error: "that agent has been retired from rooms" };
+  if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
+  room.agents.push({ agentId, model: (roomsRegistry.getAgent(agentId) || {}).model || "", state: "idle" });
+  if (!room.defaultAgent) room.defaultAgent = agentId;
+  saveRoom(room);
+  return { room: roomState(room) };
+});
+
+ipcMain.handle("crowe:rooms:leave", (_e, { id, agentId } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  room.agents = room.agents.filter((a) => a.agentId !== agentId);
+  if (room.defaultAgent === agentId) room.defaultAgent = room.agents[0] ? room.agents[0].agentId : "";
+  saveRoom(room);
+  return { room: roomState(room) };
+});
+
+ipcMain.handle("crowe:rooms:set-agent-model", (_e, { id, agentId, model } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const seat = room.agents.find((a) => a.agentId === agentId);
+  if (!seat) return { error: "that agent is not in this room" };
+  seat.model = String(model || "");
+  saveRoom(room);
+  return { room: roomState(room) };
+});
+
+/* What the renderer is told about a room. The tier is computed rather than
+   stored, so a room that was created while the app sat at Execute cannot come
+   back later still believing it may write. */
+function roomState(room) {
+  const cfg = loadConfig();
+  return {
+    id: room.id, title: room.title, template: room.template,
+    agents: room.agents.map((a) => {
+      const meta = roomsRegistry.getAgent(a.agentId) || {};
+      return { agentId: a.agentId, name: meta.name || a.agentId, domain: meta.domain || "",
+        ceiling: meta.autonomyCeiling || "plan", model: a.model, state: a.state,
+        cost: room.cost[a.agentId] || { usd: 0, promptTokens: 0, completionTokens: 0, calls: 0 } };
+    }),
+    defaultAgent: room.defaultAgent,
+    tier: roomsEngine.roomTier(room, cfg.autonomy || "edit"),
+    budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
+    critiqueRounds: room.critiqueRounds, maxCritiqueRounds: roomsEngine.MAX_CRITIQUE_ROUNDS,
+    halted: room.halted,
+  };
+}
+
+async function runRoomTurn(evt, id, fn) {
+  const room = loadRoom(id);
+  if (!room) return { error: "no such room" };
+  room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
+  const deps = roomRunner(evt.sender, room);
+  const out = await fn(room, deps);
+  saveRoom(room);
+  return { ...out, room: roomState(room) };
+}
+
+ipcMain.handle("crowe:rooms:say", (evt, { id, text } = {}) =>
+  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || ""), deps)));
+
+ipcMain.handle("crowe:rooms:critique", (evt, { id } = {}) =>
+  runRoomTurn(evt, id, (room, deps) => roomsEngine.critique(room, deps)));
+
+ipcMain.handle("crowe:rooms:revise", (evt, { id } = {}) =>
+  runRoomTurn(evt, id, (room, deps) => roomsEngine.revise(room, deps)));
+
+// What a round is about to cost, so the operator can decline it. Calls rather
+// than dollars: the price depends on a transcript nobody has generated yet, and
+// a projected figure with a decimal point in it would be a guess wearing a suit.
+ipcMain.handle("crowe:rooms:project", (_e, { id, kind = "critique" } = {}) => {
+  const room = loadRoom(id);
+  return room ? roomsEngine.projectRound(room, kind) : { error: "no such room" };
+});
 
 // ─── Cultivation records ─────────────────────────────────────────────────────
 /* The farm's own notebook, on disk beside the sessions. No gateway and no

@@ -43,6 +43,20 @@ jobs:
       - name: Run mobile bridge tests
         run: node scripts/test-mobile-bridge.js
 
+      # Third, same reason again. Rooms is the one feature where a mistake costs
+      # money per agent rather than once, so its rules - who is addressed, who
+      # spends, who reviews whom, what the budget halts - are worth holding at
+      # the cheapest gate available.
+      - name: Run room engine tests
+        run: node scripts/test-rooms.js
+
+      # The build allowlist. package.json decides what reaches a packaged app,
+      # and a directory added to the source tree and not to that list is a
+      # crash at startup that every other suite here passes straight through:
+      # they all run from the source tree, where the file is present.
+      - name: Run packaging tests
+        run: node scripts/test-packaging.js
+
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
@@ -78,6 +92,19 @@ jobs:
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-mobile-shell.js
+
+      # The chain in one piece: renderer, preload, ipcMain, engine, harness. The
+      # suites above each cut it somewhere - the engine one injects a fake
+      # runner and never touches IPC, the panel one drives a shim and never
+      # reaches main.js - so both can be green while nothing has called
+      # crowe:rooms:say through a live handler. Needs the plaintext auth opt-in
+      # because a runner has no keychain, which is the case that fallback was
+      # written for.
+      - name: Run rooms end-to-end tests (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+          CROWE_ALLOW_PLAINTEXT_AUTH: "1"
+        run: xvfb-run -a npx electron scripts/test-rooms-live.js
 
       - name: Upload smoke screenshots
         if: always()

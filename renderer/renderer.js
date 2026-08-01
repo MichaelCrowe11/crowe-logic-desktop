@@ -636,7 +636,7 @@ function reorderPanel(from, to) {
 function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySelector(`[data-id="${p.id}"]`); if(el) panelDeck.appendChild(el); }); }
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal"};
+  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room"};
   const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
@@ -645,6 +645,7 @@ async function addPanel(type, seed={}) {
   else if(type === "workflow") mountWorkflow(p, body);
   else if(type === "agents") mountAgentFleet(p, body);
   else if(type === "workbench") mountWorkbench(p, body);
+  else if(type === "room") mountRoom(p, body, seed);
   else mountOperator(p, body);
   savePanelState(); applyStackVisibility(); renderDockTabs(); return p;
 }
@@ -1038,12 +1039,413 @@ function mountWorkbench(p, body) {
   renderLibrary();syncMode();
 }
 
+/* The room list in the rail.
+
+   Rooms are sessions with a roster, so they persist exactly as sessions do -
+   but until this existed the only way back into one was to keep its panel open,
+   which made "persistent agent identities" true in the store and false in the
+   product. Each row carries what a person actually chooses by: who is in the
+   room, and what it has spent. */
+async function refreshRoomList() {
+  const host = $("room-list"); if (!host) return;
+  let list = [];
+  try { list = await window.crowe.rooms.list(); } catch { return; }
+  host.innerHTML = "";
+  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet.</div>'; return; }
+  for (const r of list) {
+    const row = document.createElement("div"); row.className = "sess-row room-row";
+    const seats = (r.agents || []).length;
+    const spent = typeof r.spentUsd === "number" ? `$${r.spentUsd.toFixed(3)}` : "";
+    row.innerHTML = `<div class="sess-main">
+        <div class="sess-title">${esc(r.title || "Room")}</div>
+        <div class="sess-when">${seats} agent${seats === 1 ? "" : "s"}${spent ? " · " + esc(spent) : ""}${r.halted ? " · halted" : ""}</div>
+      </div><button class="sess-del" title="Delete">Delete</button>`;
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".sess-del")) return;
+      // Reuse an open panel rather than stacking a second view of one room:
+      // two panels on one transcript would each paint over the other's state.
+      const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
+      if (open) { focusPanel(open.id); return; }
+      addPanel("room", { roomId: r.id, title: r.title || "Room" });
+    });
+    row.querySelector(".sess-del").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await window.crowe.rooms.delete(r.id);
+      for (const p of panels.filter((p) => p.type === "room" && p.roomId === r.id)) closePanel(p.id);
+      refreshRoomList();
+    });
+    host.appendChild(row);
+  }
+}
+
+/* A room: several named agents and the operator in one thread.
+
+   The surface is built around the two facts that make a room different from a
+   thread, and it refuses to bury either one. Every message wears the name of
+   the agent that wrote it, never a generic assistant label, because "which
+   specialist said this" is the whole reason there is more than one. And the
+   roster strip carries live state and live cost per seat, in the room rather
+   than in a settings pane, because a three-agent room with a two-round critique
+   loop is roughly nine calls where the app used to make one and the operator
+   should be able to watch that happen.
+
+   Critique and revise are buttons rather than remembered commands, and each one
+   states what it is about to spend before it spends it. */
+async function mountRoom(p, body, seed = {}) {
+  const wrap = document.createElement("div"); wrap.className = "room";
+  wrap.innerHTML = `
+    <div class="room-head">
+      <span class="room-logotype" role="img" aria-label="Crowe Logic"></span>
+      <span class="room-name"></span>
+      <span class="room-tier" title="The tier this room may run at: the lowest ceiling among its agents, clamped by your autonomy setting"></span>
+    </div>
+    <div class="room-roster" role="list" aria-label="Room roster"></div>
+    <div class="room-thread" aria-live="polite"></div>
+    <div class="room-rounds">
+      <button class="room-critique ghost sm" disabled>Critique</button>
+      <button class="room-revise ghost sm" disabled>Revise</button>
+      <span class="room-cap"></span>
+      <span class="spacer"></span>
+      <span class="room-meter" title="Spent of this room's budget"></span>
+    </div>
+    <form class="room-composer">
+      <input class="room-input" autocomplete="off" spellcheck="false"
+             placeholder="Address the room with @room, or one agent with @name" aria-label="Message the room">
+      <button class="room-send primary sm" type="submit">Send</button>
+      <div class="room-suggest hidden" role="listbox"></div>
+    </form>`;
+  body.appendChild(wrap);
+
+  const roster = wrap.querySelector(".room-roster");
+  const thread = wrap.querySelector(".room-thread");
+  const input = wrap.querySelector(".room-input");
+  const suggest = wrap.querySelector(".room-suggest");
+  const bCrit = wrap.querySelector(".room-critique");
+  const bRev = wrap.querySelector(".room-revise");
+  const capEl = wrap.querySelector(".room-cap");
+  const meter = wrap.querySelector(".room-meter");
+
+  let state = null, busy = false;
+
+  const money = (n) => "$" + Number(n || 0).toFixed(3);
+
+  /* The panel head wears the logotype, same as the header, the agent panel and
+     the thinking indicator. It is not decoration here: it turns while any seat
+     in the room is working, which is the one state the per-seat marks cannot
+     give at a glance once the roster scrolls sideways. A room either is
+     thinking or it is not, and the mark that carries the product's name is
+     what says so. */
+  const roomMark = { svg: null, on: false };
+  mountMotionLogotype(wrap.querySelector(".room-logotype"), "").then((svg) => {
+    roomMark.svg = svg;
+    if (svg) svg.classList.toggle("is-thinking", roomMark.on);
+  });
+  function setRoomWorking(on) {
+    if (roomMark.on === on) return;
+    roomMark.on = on;
+    if (roomMark.svg) roomMark.svg.classList.toggle("is-thinking", on);
+  }
+
+  /* The roster is a row of living marks.
+
+     Every other surface in this app already says "an agent is working" with the
+     whorl turning - the thinking indicator, the transcript avatar - and a room
+     is the one place where several agents work at once, so it is the surface
+     that needs the grammar most. A word alone ("working") makes the operator
+     read three labels; three marks, one of them turning, is read at a glance.
+
+     Seats are built once and re-stated afterwards. Rebuilding the row would
+     remount every mark and restart every animation, which is how a turning
+     rotor becomes a stutter. */
+  const seats = new Map();
+  const MARK_STATE = { working: "reasoning", queued: "reasoning", failed: "failed", done: "rest", idle: "rest" };
+  function drawRoster() {
+    for (const a of (state?.agents || [])) {
+      let seat = seats.get(a.agentId);
+      if (!seat) {
+        const el = document.createElement("div");
+        el.className = "seat"; el.setAttribute("role", "listitem");
+        el.innerHTML = `<span class="seat-mark" aria-hidden="true"></span>
+          <span class="seat-name"></span>
+          <span class="seat-state"></span>
+          <span class="seat-cost"></span>`;
+        roster.appendChild(el);
+        const mark = window.CroweMark ? CroweMark.mount(el.querySelector(".seat-mark"), { state: "rest", small: true }) : null;
+        seat = { el, mark, state: "" };
+        seats.set(a.agentId, seat);
+      }
+      seat.el.querySelector(".seat-name").textContent = a.name || a.agentId;
+      seat.el.querySelector(".seat-state").textContent = a.model || "room default";
+      const calls = a.cost?.calls || 0;
+      seat.el.querySelector(".seat-cost").textContent = `${money(a.cost?.usd)} · ${calls} ${calls === 1 ? "call" : "calls"}`;
+      seat.el.dataset.state = a.state || "idle";
+      if (seat.state !== a.state) {
+        seat.state = a.state;
+        if (seat.mark) seat.mark.setState(MARK_STATE[a.state] || "rest");
+      }
+    }
+  }
+
+  /* Appended, never rebuilt. Same reason as the roster: a mounted mark is a
+     running animation, and redrawing the transcript on every refresh would
+     restart all of them and drop any text the operator was selecting. */
+  let drawn = 0;
+  function drawThread() {
+    const msgs = state?.messages || [];
+    if (msgs.length < drawn) { thread.innerHTML = ""; drawn = 0; }   // a room was swapped in
+    for (const [i, m] of msgs.slice(drawn).entries()) {
+      const mine = m.author === ":operator";
+      const prev = msgs[drawn + i - 1];
+      /* The rule separates ROUNDS, not messages. Marking every critique drew
+         three rules for one review round, which reads as a striped list rather
+         than as "something different started here". */
+      const startsRound = m.kind === "critique" && (!prev || prev.kind !== "critique");
+      const el = document.createElement("div");
+      el.className = "rmsg" + (mine ? " from-operator" : "")
+        + (m.kind === "critique" ? " is-critique" : "") + (startsRound ? " starts-round" : "");
+      const who = mine ? "You" : (state.agents.find((a) => a.agentId === m.author)?.name || m.author);
+      el.innerHTML = `<div class="rmsg-head">
+          <span class="rmsg-mark" aria-hidden="true"></span>
+          <span class="rmsg-who">${esc(who)}</span>
+          ${m.kind === "critique" ? '<span class="rmsg-tag">reviewing the others</span>' : ""}
+        </div>
+        <div class="rmsg-body">${md(m.content || "")}</div>`;
+      // The operator is a person, not a mark. Only agents wear one.
+      if (!mine && window.CroweMark) CroweMark.mount(el.querySelector(".rmsg-mark"), { state: "rest", small: true });
+      else el.querySelector(".rmsg-mark").remove();
+      thread.appendChild(el);
+    }
+    drawn = msgs.length;
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  /* The projected call count rides on the button itself. A round that is about
+     to make three calls should say three before it is pressed, not after. */
+  async function drawRounds() {
+    const positions = (state?.messages || []).filter((m) => m.kind === "reply").length;
+    const critiques = (state?.messages || []).filter((m) => m.kind === "critique").length;
+    const capped = (state?.critiqueRounds || 0) >= (state?.maxCritiqueRounds || 2);
+    const halted = Boolean(state?.halted);
+
+    const [pc, pr] = await Promise.all([
+      window.crowe.rooms.project(p.roomId, "critique"),
+      window.crowe.rooms.project(p.roomId, "revise"),
+    ]);
+    bCrit.textContent = `Critique · ${pc.calls || 0} calls`;
+    bRev.textContent = `Revise · ${pr.calls || 0} calls`;
+    bCrit.disabled = busy || halted || capped || positions < 2;
+    bRev.disabled = busy || halted || critiques < 1;
+    capEl.textContent = capped ? `critique capped at ${state?.maxCritiqueRounds || 2} rounds`
+      : halted ? `room halted: ${state.halted}` : "";
+    meter.textContent = `${money(state?.spentUsd)} of ${money(state?.budgetUsd)}`;
+    meter.classList.toggle("over", halted);
+  }
+
+  function drawHead() {
+    wrap.querySelector(".room-name").textContent = state?.title || "Room";
+    const tier = state?.tier || "";
+    const tierEl = wrap.querySelector(".room-tier");
+    // Named plainly. "readonly" is the tier id; "reads only" is what it does.
+    tierEl.textContent = tier === "plan" ? "plans only" : tier === "readonly" ? "reads only" : tier;
+    tierEl.hidden = !tier;
+    setRoomWorking((state?.agents || []).some((a) => a.state === "working" || a.state === "queued"));
+  }
+
+  const paint = async () => { drawHead(); drawRoster(); drawThread(); await drawRounds(); };
+
+  async function refresh() {
+    const r = await window.crowe.rooms.load(p.roomId);
+    if (r?.error) { thread.innerHTML = `<div class="card-empty">${esc(r.error)}</div>`; return; }
+    state = { ...r.room, messages: r.messages || [] };
+    p.title = state.title || p.title;
+    await paint();
+  }
+
+  /* Live state, from the events the room's turns already emit.
+
+     A round is one await that resolves when every addressed agent has finished,
+     so painting only from its result left the roster reading "idle" for the
+     whole time the room was working and then jumping to done. With a real
+     gateway that is ten seconds of a surface whose entire purpose is showing
+     who is thinking.
+
+     main.js stamps roomId and roomAgent on every event a seat produces, so the
+     states come from the same stream the transcript already uses rather than
+     from a second guess at who was addressed. */
+  const offEvents = window.crowe.agent.onEvent((ev) => {
+    if (!p.roomId || ev.roomId !== p.roomId || !ev.roomAgent || !state) return;
+    const seat = state.agents.find((a) => a.agentId === ev.roomAgent);
+    if (!seat) return;
+    if (ev.type === "route") seat.state = "working";
+    else if (ev.type === "error") seat.state = "failed";
+    else if (ev.type === "stopped") seat.state = "stopped";
+    else if (ev.type === "final") seat.state = seat.state === "failed" ? "failed" : "done";
+    drawHead(); drawRoster();
+  });
+  // The panel outlives no listener: a closed room panel that kept receiving
+  // events would repaint a roster that is no longer on screen.
+  p.onClose = () => { try { offEvents(); } catch {} };
+
+  async function round(fn) {
+    if (busy) return;
+    busy = true;
+    // Queued before the first call goes out, so the roster changes the moment
+    // the operator presses send rather than when the round comes back.
+    for (const a of (state?.agents || [])) a.state = "queued";
+    drawHead(); drawRoster(); await drawRounds();
+    try {
+      const out = await fn();
+      if (out?.room) state = { ...out.room, messages: state.messages };
+      await refresh();
+    } finally { busy = false; await drawRounds(); refreshRoomList(); }
+  }
+
+  wrap.querySelector(".room-composer").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text || busy) return;
+    input.value = ""; suggest.classList.add("hidden");
+    await round(() => window.crowe.rooms.say(p.roomId, text));
+  });
+  bCrit.addEventListener("click", () => round(() => window.crowe.rooms.critique(p.roomId)));
+  bRev.addEventListener("click", () => round(() => window.crowe.rooms.revise(p.roomId)));
+
+  // @mention autocomplete off the room's own roster, so a handle that is not in
+  // this room is never offered.
+  input.addEventListener("input", () => {
+    const m = input.value.match(/@([\w-]*)$/);
+    if (!m || !state) { suggest.classList.add("hidden"); return; }
+    const q = m[1].toLowerCase();
+    const opts = [{ agentId: "room", name: "Everyone in the room" }, ...state.agents]
+      .filter((a) => a.agentId.toLowerCase().includes(q) || String(a.name).toLowerCase().replace(/\s+/g, "").includes(q));
+    if (!opts.length) { suggest.classList.add("hidden"); return; }
+    suggest.innerHTML = "";
+    for (const a of opts) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "sug";
+      b.innerHTML = `<b>@${esc(a.agentId)}</b><span>${esc(a.name)}</span>`;
+      b.addEventListener("click", () => {
+        input.value = input.value.replace(/@([\w-]*)$/, "@" + a.agentId + " ");
+        suggest.classList.add("hidden"); input.focus();
+      });
+      suggest.appendChild(b);
+    }
+    suggest.classList.remove("hidden");
+  });
+
+  /* A room panel opens on the composer unless it was handed a room to resume.
+
+     Opening straight into a fixed template was the shortcut that made Rooms
+     look like a cultivation feature: the roster underneath spans sixteen
+     domains and the panel only ever showed three of them. Composing first is
+     also the honest order - who is in the room is the decision, and it should
+     be made before the room costs anything. */
+  if (seed.roomId) { p.roomId = seed.roomId; wrap.classList.remove("composing"); await refresh(); return; }
+
+  const composer = document.createElement("div");
+  composer.className = "room-compose";
+  wrap.classList.add("composing");
+  wrap.prepend(composer);
+
+  const { agents = [], templates = [] } = await window.crowe.rooms.agents();
+  const picked = new Set();
+
+  const byDomain = agents.reduce((m, a) => ((m[a.domain || "other"] = m[a.domain || "other"] || []).push(a), m), {});
+  composer.innerHTML = `
+    <div class="rc-head">
+      <span class="rc-logotype" role="img" aria-label="Crowe Logic"></span>
+      <b>Open a room</b>
+      <span>A room earns its cost when a decision has more than one binding constraint. Where there is only one, a single agent is the right answer.</span>
+    </div>
+    <div class="rc-templates"></div>
+    <div class="rc-own">
+      <div class="rc-sub">Or compose your own</div>
+      <div class="rc-agents"></div>
+      <div class="rc-actions">
+        <input class="rc-name" placeholder="Name this room" aria-label="Room name">
+        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Room budget in dollars"></label>
+        <span class="rc-count"></span>
+        <button class="rc-open primary sm" disabled>Open</button>
+      </div>
+    </div>`;
+
+  mountMotionLogotype(composer.querySelector(".rc-logotype"), "");
+
+  const tWrap = composer.querySelector(".rc-templates");
+  for (const t of templates) {
+    const b = document.createElement("button");
+    b.type = "button";
+    // Bake-off is demoted rather than hidden: it says of itself that it makes
+    // no domain claim, and a menu that presents it as an equal argument is
+    // recommending a model comparison as if it were a decision.
+    b.className = "rc-template" + (t.id === "bake-off" ? " is-lesser" : "");
+    b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
+      <em class="rc-seats">${t.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
+    // The same mark the room will wear, so a template reads as the table it
+    // composes rather than as a feature card.
+    if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
+    b.addEventListener("click", () => open({ template: t.id }));
+    tWrap.appendChild(b);
+  }
+
+  const aWrap = composer.querySelector(".rc-agents");
+  const countEl = composer.querySelector(".rc-count");
+  const openBtn = composer.querySelector(".rc-open");
+  const nameEl = composer.querySelector(".rc-name");
+
+  const syncPick = () => {
+    countEl.textContent = picked.size
+      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? " — a room of one behaves like an ordinary thread" : ""}`
+      : "";
+    openBtn.disabled = picked.size === 0;
+  };
+
+  for (const [domain, list] of Object.entries(byDomain)) {
+    const g = document.createElement("div"); g.className = "rc-group";
+    g.innerHTML = `<div class="rc-domain">${esc(domain)}</div>`;
+    for (const a of list) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "rc-agent"; b.title = a.role || "";
+      b.innerHTML = `<b>${esc(a.name)}</b><span>${esc(a.autonomyCeiling || "plan")}</span>`;
+      b.addEventListener("click", () => {
+        if (picked.has(a.id)) { picked.delete(a.id); b.classList.remove("on"); }
+        else { picked.add(a.id); b.classList.add("on"); }
+        syncPick();
+      });
+      g.appendChild(b);
+    }
+    aWrap.appendChild(g);
+  }
+  syncPick();
+
+  async function open(opts) {
+    openBtn.disabled = true;
+    /* 0 is a real answer, not a missing one. overBudget() treats a budget of
+       zero as uncapped, so `|| undefined` silently turned "no cap" into the
+       default dollar. Only a blank or unparseable field falls back. */
+    const raw = composer.querySelector(".rc-budget-input").value;
+    const budgetUsd = raw.trim() === "" || !Number.isFinite(Number(raw)) ? undefined : Number(raw);
+    const made = await window.crowe.rooms.create({ budgetUsd, ...opts });
+    if (made?.error) { countEl.textContent = made.error; openBtn.disabled = false; return; }
+    p.roomId = made.room.id;
+    composer.remove();
+    wrap.classList.remove("composing");
+    await refresh();
+    renderDockTabs();
+    refreshRoomList();
+  }
+
+  openBtn.addEventListener("click", () => open({
+    agentIds: [...picked],
+    title: nameEl.value.trim() || "Room",
+  }));
+}
+
 function mountOperator(p, body) {
   body.innerHTML='<div class="operator-health"><span class="health-dot"></span><b>Operator service</b><span class="health-label">checking</span></div><div class="operator-grid"></div><div class="operator-lists"><section><b>Active agents</b><div class="agent-list">None</div></section><section><b>Active terminals</b><div class="terminal-list">None</div></section></div><div class="operator-actions"><button class="refresh primary sm">Refresh</button><button class="stop-agent ghost sm">Stop main agent</button><button class="stop-voice ghost sm">Stop voice</button><button class="emergency danger sm">Emergency stop all</button></div>';
   const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
   body.querySelector(".refresh").onclick=refresh;body.querySelector(".stop-agent").onclick=async()=>{await window.crowe.agent.stop();refresh()};body.querySelector(".stop-voice").onclick=()=>speechSynthesis.cancel();body.querySelector(".emergency").onclick=async()=>{if(!confirm("Stop every agent and terminal process?"))return;await window.crowe.operator.stopAll();speechSynthesis.cancel();for(const x of terminalPanels.values())x.state.textContent="stopped";refresh()};refresh();p.operatorTimer=setInterval(()=>{if(document.body.contains(body))refresh();else clearInterval(p.operatorTimer)},5000);
 }
-function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
+function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
   if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
@@ -1054,7 +1456,7 @@ function showPane(name){
 }
 function switchPane(name){showPane(name);setRailActive(name)}
 function navigate(u){hideLegacy();let p=[...panels].reverse().find((x)=>x.type==="browser");if(!p){addPanel("browser",{url:u});return}const el=panelDeck.querySelector(`[data-id="${p.id}"]`);const input=el?.querySelector("input.browser-url");if(input){input.value=u;el.querySelector(".go").click()}}
-$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-agent").onclick=()=>addPanel("agent",{title:`Crowe Logic Agent ${panels.filter(p=>p.type==="agent").length+1}`});$("panel-add-system").onclick=()=>{const existing=panels.find(p=>p.type==="system");if(existing){focusPanel(existing.id);return}addPanel("system")};$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");
+$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-agent").onclick=()=>addPanel("agent",{title:`Crowe Logic Agent ${panels.filter(p=>p.type==="agent").length+1}`});$("panel-add-system").onclick=()=>{const existing=panels.find(p=>p.type==="system");if(existing){focusPanel(existing.id);return}addPanel("system")};$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");$("panel-add-room").onclick=()=>addPanel("room");
 $("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;applyStackVisibility();savePanelState();setTimeout(fitTerminals,40)};
 $("glass-launcher").onclick=()=>$("panel-add-agent").click();
 document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(b.dataset.pane));
@@ -2844,6 +3246,9 @@ function dismissLaunch() {
   // them turning at once would spend the signal the indicator depends on.
   liveLockups();
   dismissLaunch();
+  const roomNew = $("room-new");
+  if (roomNew) roomNew.addEventListener("click", () => addPanel("room"));
+  refreshRoomList();
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");

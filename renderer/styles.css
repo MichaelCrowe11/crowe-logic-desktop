@@ -1542,3 +1542,447 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 .agent-operation-chip[data-state="waiting"] { color:var(--gold-text); border-color:var(--gold); }
 .agent-event-input span { color:var(--ink); }
 @media (max-width:760px) { .agent-logotype { width:96px; flex-basis:96px; } }
+
+
+/* ── Rooms ───────────────────────────────────────────────────────────────────
+   Several named agents and the operator at one table.
+
+   The first cut of this surface used the body face for its headings, gray
+   monospace for its people, and identical cards for arguments that are not
+   equally worth having. It worked and it looked like a settings page from a
+   different product - which is the failure mode for the newest feature in an
+   app whose identity is otherwise everywhere.
+
+   So the room is built from what the app already owns. Fraunces carries the
+   headings, as it does the welcome hero. The mono face is reserved for data -
+   cost, deployment, tier - and never for a person's name. And the one bold
+   move, spent here and nowhere else on this surface: every seat wears the
+   whorl, and a seat that is thinking turns. The app already says "working" that
+   way in the thinking indicator and the transcript avatar; a room is where
+   several are working at once, so it is the surface that needs the grammar
+   most. Three marks with one turning is read at a glance; three words are read
+   three times. */
+.room { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+/* ── the head ──
+   The logotype, the room's name, and the tier it may run at. Same placement as
+   the agent panel, at the same size, because a room is a panel of this app and
+   should be recognisable as one before anything inside it is read.
+
+   The mark turns while any seat is working. That is the one state the per-seat
+   marks stop giving once the roster scrolls sideways, and a room either is
+   thinking or it is not. */
+.room-head { display: flex; align-items: center; gap: 12px; padding: 11px 13px 10px;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+.room-logotype { width: 118px; flex: 0 0 118px; aspect-ratio: 548.3 / 150; display: block; color: var(--ink); }
+.room-logotype svg { display: block; width: 100%; height: 100%; }
+.room-name { flex: 1; min-width: 0; font-family: var(--display); font-size: var(--fs-head);
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The tier is a promise about what this room may touch, so it is stated as a
+   plain fact rather than a coloured badge competing with the seats. */
+.room-tier { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  letter-spacing: .04em; white-space: nowrap; }
+.room-tier[hidden] { display: none; }
+
+/* ── the table ── */
+.room-roster { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+.seat { flex: 0 0 auto; display: grid; grid-template-columns: 20px auto;
+  grid-template-rows: auto auto; gap: 0 9px; align-items: center;
+  padding: 6px 11px 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--raised); transition: border-color 160ms var(--ease); }
+.seat[data-state="working"], .seat[data-state="queued"] { border-color: var(--gold); }
+.seat[data-state="failed"] { border-color: var(--danger); }
+.seat-mark { grid-row: 1 / -1; width: 20px; height: 20px; display: block; }
+.seat-name { font-size: var(--fs-sm); font-weight: 600; line-height: 1.25; white-space: nowrap; }
+/* Deployment and spend are data, so they take the mono face and line up. */
+/* One line each. A wrapped price reads as three fragments rather than a
+   number, and the roster scrolls sideways when a room is crowded. */
+.seat-state, .seat-cost { font-family: var(--mono); font-size: var(--fs-cap);
+  color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.3;
+  white-space: nowrap; }
+.seat[data-state="failed"] .seat-name { color: var(--danger); }
+
+/* ── the thread ── */
+.room-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 20px;
+  display: flex; flex-direction: column; gap: 16px; }
+.rmsg { display: flex; flex-direction: column; gap: 5px; }
+.rmsg-head { display: flex; align-items: center; gap: 7px; }
+.rmsg-mark { width: 17px; height: 17px; flex: 0 0 auto; display: block; }
+.rmsg-who { font-size: var(--fs-cap); font-weight: 600; letter-spacing: .03em; }
+.rmsg.from-operator .rmsg-who { color: var(--muted); }
+.rmsg-tag { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  text-transform: lowercase; letter-spacing: .04em; }
+.rmsg-body { font-size: var(--fs-body); line-height: 1.62; padding-left: 24px; max-width: 68ch; }
+.rmsg.from-operator .rmsg-body { padding-left: 0; }
+.rmsg-body > :first-child { margin-top: 0; }
+.rmsg-body > :last-child { margin-bottom: 0; }
+/* A critique is not a lesser message - it is the sharper one. It gets a rule
+   and a label rather than gray text, because dimming the round that raises
+   quality is the wrong instruction to give the eye. */
+/* Only the first critique of a round carries the rule; the rest of the round
+   sits under it as one block. */
+.rmsg.is-critique.starts-round { padding-top: 15px; border-top: 1px solid var(--line); }
+.rmsg.is-critique .rmsg-who { color: var(--gold-deep); }
+body.dark .rmsg.is-critique .rmsg-who { color: var(--gold); }
+
+/* ── the round bar ── */
+.room-rounds { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-top: 1px solid var(--line); background: var(--panel); }
+.room-rounds .spacer { flex: 1; }
+.room-cap { font-size: var(--fs-cap); color: var(--muted); }
+.room-meter { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.room-meter.over { color: var(--danger); }
+
+/* ── the composer bar ── */
+.room-composer { position: relative; display: flex; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--line); background: var(--panel); }
+.room-input { flex: 1; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 11px; }
+.room-input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.room-suggest { position: absolute; bottom: calc(100% + 6px); left: 12px; right: 12px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
+  box-shadow: var(--z2); overflow: hidden; z-index: 5; }
+.room-suggest.hidden { display: none; }
+.sug { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+  padding: 7px 11px; background: none; border: none; color: var(--ink); cursor: pointer; }
+.sug:hover, .sug:focus-visible { background: var(--accent-wash); outline: none; }
+.sug b { font-family: var(--mono); font-size: var(--fs-cap); }
+.sug span { font-size: var(--fs-cap); color: var(--muted); }
+
+/* ── composing a room ─────────────────────────────────────────────────────────
+   Templates are arguments worth having, so they are set as a short list of
+   propositions rather than a grid of equal tiles. Each shows the table it would
+   seat, wearing the same marks the room will. */
+.room.composing > .room-head,
+.room.composing > .room-roster,
+.room.composing > .room-thread,
+.room.composing > .room-rounds,
+.room.composing > .room-composer { display: none; }
+
+.room-compose { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 28px; }
+/* Opening a room is where the product introduces itself, the same way the
+   welcome screen does. The logotype leads, then the proposition. */
+.rc-head { margin-bottom: 22px; max-width: 62ch; }
+.rc-logotype { display: block; width: 168px; aspect-ratio: 548.3 / 150; margin-bottom: 14px; color: var(--ink); }
+.rc-logotype svg { display: block; width: 100%; height: 100%; }
+.rc-head b { display: block; font-family: var(--display); font-size: var(--fs-display);
+  font-weight: 600; line-height: 1.1; text-wrap: balance; }
+.rc-head span { display: block; margin-top: 7px; color: var(--muted);
+  font-size: var(--fs-sm); line-height: 1.6; }
+
+.rc-templates { display: grid; grid-template-columns: repeat(auto-fill, minmax(288px, 1fr)); gap: 9px; }
+.rc-template { display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 14px 16px 13px; background: var(--raised); border: 1px solid var(--line);
+  border-radius: var(--r-sm); color: var(--ink); cursor: pointer;
+  transition: border-color 150ms var(--ease), background 150ms var(--ease); }
+.rc-template:hover, .rc-template:focus-visible { border-color: var(--gold); outline: none; }
+.rc-template b { font-family: var(--display); font-size: var(--fs-head); font-weight: 600; }
+.rc-template span { color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+/* The table it seats, in the app's own mark. Names in the body face: these are
+   people, not data. */
+.rc-seats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-style: normal; }
+.rc-seats i { display: inline-flex; align-items: center; gap: 5px; font-style: normal;
+  font-size: var(--fs-cap); color: var(--muted); }
+.rc-seat-mark { width: 13px; height: 13px; display: block; flex: 0 0 auto; }
+/* Bake-off says of itself that it makes no domain claim. Presenting it as an
+   equal argument would recommend a model comparison as though it were a
+   decision, so it sits quieter than the rooms that are about something. */
+.rc-template.is-lesser { background: none; }
+.rc-template.is-lesser b { font-family: var(--body); font-size: var(--fs-body); }
+
+.rc-own { margin-top: 26px; }
+.rc-sub { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase;
+  letter-spacing: .09em; color: var(--muted); margin-bottom: 12px; }
+.rc-agents { display: flex; flex-direction: column; gap: 9px; }
+.rc-group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.rc-domain { flex: 0 0 104px; font-family: var(--mono); font-size: var(--fs-cap);
+  color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.rc-agent { display: inline-flex; align-items: baseline; gap: 7px; padding: 4px 11px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-pill);
+  color: var(--ink); cursor: pointer; font-size: var(--fs-cap);
+  transition: border-color 130ms var(--ease), background 130ms var(--ease); }
+.rc-agent:hover, .rc-agent:focus-visible { border-color: var(--gold); outline: none; }
+.rc-agent.on { border-color: var(--gold); background: var(--accent-wash); }
+.rc-agent b { font-weight: 600; }
+/* The ceiling is what this agent may never exceed in a room. Mono, dim, and
+   only meaningful next to the tier the room ends up running at. */
+.rc-agent span { font-family: var(--mono); color: var(--muted); opacity: .75; }
+
+.rc-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.rc-name { flex: 1; min-width: 190px; font-family: var(--body); font-size: var(--fs-body);
+  color: var(--ink); background: var(--raised); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 11px; }
+.rc-name:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.rc-budget { display: flex; align-items: center; gap: 6px; font-size: var(--fs-cap); color: var(--muted); }
+.rc-budget-input { width: 74px; font-family: var(--mono); font-size: var(--fs-cap); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 6px 8px; font-variant-numeric: tabular-nums; }
+.rc-count { font-size: var(--fs-cap); color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .seat, .rc-template, .rc-agent { transition: none; }
+}
+
+/* ══ Depth, glass and grading ═══════════════════════════════════════════════
+   A material layer over the existing tokens rather than a replacement for
+   them. Three rules hold it together, and each one is what keeps depth from
+   costing legibility:
+
+   1. Glass is chrome, never a page. It goes on bars, heads, rails and modals -
+      surfaces that frame content - and never on the transcript, the room
+      thread, or anything else a person reads a paragraph on. Text stays on
+      --panel and --raised, which stay opaque, which is why the fifty contrast
+      checks in scripts/check-contrast.js still mean what they say. Blurring
+      the surface under a paragraph is how this look usually fails.
+
+   2. Depth is light, not darkness. Each layer carries a lit top rim and an
+      ambient shadow that widens as it rises, so elevation reads as something
+      catching the light rather than as a drop shadow bolted on. The dark theme
+      inverts the reasoning but not the structure: the rim is a highlight there
+      too, because a dark UI with no lit edges reads as flat paint.
+
+   3. The grade is felt, not seen. Two very low-opacity washes - gold at the top
+      left, blue at the bottom right - give the ground a temperature gradient so
+      backdrop-filter has something to refract. Without a graded ground, glass
+      over flat colour is just a lighter rectangle. The washes sit under 6%
+      because the palette rule stands: gold means one thing, and a tinted room
+      is not one of them. */
+:root {
+  --glass: rgba(255, 255, 255, 0.66);
+  --glass-rim: rgba(255, 255, 255, 0.85);
+  --glass-edge: rgba(23, 23, 26, 0.08);
+  --blur: 20px;
+  --grade-warm: rgba(184, 137, 58, 0.055);
+  --grade-cool: rgba(46, 90, 173, 0.035);
+  /* Elevation: ambient + key + rim, in that order, so a raised thing is lit
+     from above and grounded below rather than floating on one blur. */
+  --e1: 0 1px 1px rgba(26, 23, 20, 0.04), 0 2px 6px -2px rgba(26, 23, 20, 0.10);
+  --e2: 0 1px 1px rgba(26, 23, 20, 0.05), 0 10px 24px -10px rgba(26, 23, 20, 0.20),
+        inset 0 1px 0 var(--glass-rim);
+  --e3: 0 2px 3px rgba(26, 23, 20, 0.06), 0 28px 64px -24px rgba(26, 23, 20, 0.30),
+        inset 0 1px 0 var(--glass-rim);
+  /* Neumorphic press: the same two lights, inverted and tightened. Used only
+     on controls, and only while they are held. */
+  --press: inset 0 2px 5px rgba(26, 23, 20, 0.14), inset 0 -1px 0 var(--glass-rim);
+}
+body.dark {
+  --glass: rgba(26, 26, 30, 0.62);
+  --glass-rim: rgba(255, 255, 255, 0.11);
+  --glass-edge: rgba(0, 0, 0, 0.5);
+  --grade-warm: rgba(210, 173, 98, 0.05);
+  --grade-cool: rgba(107, 155, 224, 0.035);
+  --e1: 0 1px 2px rgba(3, 3, 5, 0.44);
+  --e2: 0 2px 4px rgba(3, 3, 5, 0.42), 0 14px 30px -12px rgba(3, 3, 5, 0.6),
+        inset 0 1px 0 var(--glass-rim);
+  --e3: 0 4px 8px rgba(3, 3, 5, 0.46), 0 34px 70px -26px rgba(3, 3, 5, 0.68),
+        inset 0 1px 0 var(--glass-rim);
+  --press: inset 0 2px 6px rgba(0, 0, 0, 0.55), inset 0 -1px 0 var(--glass-rim);
+}
+
+/* The graded ground. Fixed rather than scrolled, so the light stays put while
+   content moves under it - a gradient that scrolls reads as a texture, and a
+   gradient that holds reads as a room. */
+body {
+  background:
+    radial-gradient(1100px 760px at 10% -12%, var(--grade-warm), transparent 62%),
+    radial-gradient(900px 680px at 104% 112%, var(--grade-cool), transparent 58%),
+    var(--cream);
+  background-attachment: fixed;
+}
+
+/* One material, one rule: translucent fill, blurred backdrop, lit rim.
+   `saturate` is what stops glass going grey - a blur alone desaturates
+   whatever is behind it, and the result looks like frosted plastic. */
+#bar, .dock-bar, #hud, .palette-card,
+.room-head, .room-roster, .room-rounds, .room-composer,
+.panel-head, #sidebar {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(165%);
+  backdrop-filter: blur(var(--blur)) saturate(165%);
+  border-color: var(--glass-edge);
+}
+#bar { box-shadow: 0 1px 0 var(--glass-rim) inset, 0 1px 12px -6px rgba(26,23,20,.28); }
+#sidebar { box-shadow: inset -1px 0 0 var(--glass-edge); }
+#hud { box-shadow: 0 -1px 0 var(--glass-rim) inset, 0 -8px 24px -18px rgba(26,23,20,.4); }
+
+/* Panels rise off the ground rather than sitting in it - but only where a
+   panel is actually a separate card. In stack, the default, the dock tab strip
+   is the panel chrome and the panel deliberately fills the dock edge to edge
+   with no second frame; elevating it there would draw a border the layout
+   spent a rule removing. Depth follows the layout's own logic rather than
+   being applied to everything that can hold a shadow. */
+.panel-deck:not(.stack) .workspace-panel { box-shadow: var(--e2); border-color: var(--glass-edge); }
+.panel-deck:not(.stack) .workspace-panel:focus-within { box-shadow: var(--e3); }
+.palette-card { box-shadow: var(--e3); }
+
+/* Controls take the soft extrusion, and give it back when pressed. This is the
+   one neumorphic move in the system and it is spent on the things a hand
+   actually touches - a card that looks pressable and is not is the reason the
+   style earned its reputation. */
+button.primary, .rc-open, .room-send {
+  box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim);
+  transition: box-shadow 120ms var(--ease), transform 80ms var(--ease);
+}
+button.primary:active, .rc-open:active, .room-send:active {
+  box-shadow: var(--press); transform: translateY(1px);
+}
+
+/* Seats and template cards catch the light at their top edge and lift on
+   hover. The lift is 1px: enough to read as a response, small enough that a
+   roster of three does not look like it is breathing. */
+.seat, .rc-template, .rc-agent {
+  box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim);
+  transition: box-shadow 160ms var(--ease), transform 120ms var(--ease), border-color 140ms var(--ease);
+}
+.rc-template:hover, .rc-agent:hover { box-shadow: var(--e2); transform: translateY(-1px); }
+/* A working seat glows rather than merely bordering, so the roster reads at a
+   glance from across the desk. */
+/* Keyed on the attribute the roster actually sets. drawRoster builds each seat
+   once and updates it in place - so a mounted mark keeps running rather than
+   restarting on every repaint - and it carries state in data-state. Two of
+   these rules were written against a .live class that nothing applies, so the
+   glow on a working seat was dead code that no test could see. */
+.seat[data-state="working"], .seat[data-state="queued"] {
+  box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim), 0 0 0 1px var(--gold), 0 6px 18px -8px rgba(184,137,58,.5);
+}
+.rc-agent.on { box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim), 0 0 0 1px var(--gold); }
+
+/* The composer field is the one recessed surface: it is a place to put
+   something into, and the depth says so. */
+#input, .room-input, .rc-name {
+  box-shadow: inset 0 1px 3px var(--glass-edge);
+}
+#input:focus, .room-input:focus, .rc-name:focus {
+  box-shadow: inset 0 1px 3px var(--glass-edge), 0 0 0 3px var(--focus-halo);
+}
+
+/* The launch veil grades with the same two lights, so the app's first frame
+   already has the depth the rest of it carries. */
+#launch {
+  background:
+    radial-gradient(900px 620px at 50% 38%, var(--grade-warm), transparent 60%),
+    var(--cream);
+}
+
+/* Backdrop-filter is expensive on a machine with no compositor, and a
+   translucent bar with nothing behind it is worse than an opaque one. Both
+   fallbacks land on the solid tokens the contrast suite already proves. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #bar, .dock-bar, #hud, .palette-card,
+  .room-head, .room-roster, .room-rounds, .room-composer,
+  .panel-head, #sidebar { background: var(--panel); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  #bar, .dock-bar, #hud, .palette-card,
+  .room-head, .room-roster, .room-rounds, .room-composer,
+  .panel-head, #sidebar {
+    background: var(--panel);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-template:hover, .rc-agent:hover,
+  button.primary:active, .rc-open:active, .room-send:active { transform: none; }
+}
+
+
+/* ══ Material, second pass ══════════════════════════════════════════════════
+   The first pass established the rules and then stayed too polite about them:
+   glass on the chrome, a wash on the ground, and nothing that reads as a
+   surface at arm's length. This pushes the material to where it was asked to
+   be, and the discipline is unchanged - text still sits on opaque tokens, and
+   all fifty contrast checks still have to pass afterwards.
+
+   Four things carry it. A specular edge, because real glass is brightest where
+   it turns. Grain, because a perfectly smooth translucent plane reads as
+   plastic and eight percent of noise is the difference between a material and
+   a fill. Graded depth in the thread, so a conversation has near and far rather
+   than being one flat column. And dimensional controls, since the things a hand
+   reaches for should be the things that look reachable. */
+
+/* The specular edge. A hairline that is brightest at the top left and fades by
+   the bottom right, which is the same light the elevation shadows assume - two
+   descriptions of one lamp rather than two unrelated effects. */
+#bar, .dock-bar, .palette-card,
+.room-head, .room-roster, .room-rounds, .room-composer, #sidebar {
+  position: relative;
+}
+#bar::after, .dock-bar::after, .palette-card::after,
+.room-head::after, .room-roster::after, .room-rounds::after,
+.room-composer::after, #sidebar::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--glass-rim) 0%, transparent 34%, transparent 100%);
+  opacity: .5; mix-blend-mode: plus-lighter;
+}
+
+/* Grain. A fixed-size SVG turbulence tile at very low opacity, over the ground
+   only - putting it over text would be sharpening noise into the glyphs. */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  opacity: .035;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
+}
+#shell, #bar, #hud { position: relative; z-index: 1; }
+
+/* A third light in the grade, low and centred, so the middle of the screen is
+   marginally warmer than its corners. A room lit from three points stops
+   reading as a gradient and starts reading as a space. */
+body {
+  background:
+    radial-gradient(1100px 760px at 10% -12%, var(--grade-warm), transparent 62%),
+    radial-gradient(900px 680px at 104% 112%, var(--grade-cool), transparent 58%),
+    radial-gradient(1400px 900px at 50% 120%, var(--grade-warm), transparent 70%),
+    var(--cream);
+}
+
+/* Depth in the thread. Agent positions sit on a faintly raised plane and
+   critiques recede, which puts the round's structure in the surface rather
+   than only in the rule and the label. */
+.rmsg:not(.from-operator) .rmsg-body {
+  background: linear-gradient(180deg, var(--raised), var(--panel));
+  border: 1px solid var(--glass-edge); border-radius: 10px;
+  padding: 11px 14px; box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim);
+}
+.rmsg.is-critique .rmsg-body {
+  background: none; border: none; box-shadow: none; padding: 0;
+}
+
+/* Dimensional controls: a gradient face, a lit top edge, a shadow beneath.
+   The gold primary keeps its own hue - this adds form, not colour. */
+button.primary, .rc-open, .room-send {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.16), rgba(0,0,0,.06));
+}
+body.dark button.primary, body.dark .rc-open, body.dark .room-send {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.10), rgba(0,0,0,.16));
+}
+
+/* Seats gain an inner glow while they work, so a busy roster reads as lit from
+   within rather than merely outlined. */
+.seat[data-state="working"], .seat[data-state="queued"] {
+  background-image: radial-gradient(120% 140% at 50% 0%, rgba(184,137,58,.16), transparent 62%);
+}
+
+/* The launch veil gets the same three lights, so the first frame already shows
+   the material the rest of the app is made of. */
+#launch {
+  background:
+    radial-gradient(900px 620px at 50% 34%, var(--grade-warm), transparent 62%),
+    radial-gradient(1200px 800px at 50% 120%, var(--grade-cool), transparent 70%),
+    var(--cream);
+}
+
+/* Everything above is surface. None of it may cost a reader anything, so it all
+   stands down where the platform asks. */
+@media (prefers-reduced-transparency: reduce) {
+  body::before { display: none; }
+  #bar::after, .dock-bar::after, .palette-card::after,
+  .room-head::after, .room-roster::after, .room-rounds::after,
+  .room-composer::after, #sidebar::after { display: none; }
+}
+@media (prefers-contrast: more) {
+  body::before { display: none; }
+  .rmsg:not(.from-operator) .rmsg-body { background: var(--raised); }
+}

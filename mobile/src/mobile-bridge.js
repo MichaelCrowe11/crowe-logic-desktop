@@ -40,6 +40,7 @@
   const RATE_IN = 1.25 / 1e6, RATE_OUT = 10 / 1e6;   // same display rates as main.js
   const MAX_ROUNDS = 12;        // half the desktop's: no shell means far shorter loops
   const TOOL_RESULT_MAX = 4000;
+  const ROOMS_OFF = "Rooms run several agents against one workspace, which lives on the desktop. Open the room there; this phone can drive that machine but cannot host it.";
   // Long command output matters at both ends: what ran is at the top, why it
   // failed is at the bottom. The turn loop slices tool text to TOOL_RESULT_MAX
   // before it reaches the model, which would keep the top and throw away the
@@ -1610,6 +1611,33 @@
       list: () => [],
       enable: () => ({ error: "Plugins run MCP servers as local processes, which mobile does not allow." }),
       disable: () => ({ ok: true }),
+    },
+
+    /* Rooms are desktop-only, and refuse rather than being absent.
+
+       A room runs several harness turns at once against one workspace, with a
+       git worktree per writing agent. The phone has no workspace and cannot
+       fork a process; what it has is a paired desktop, and driving a room there
+       is a companion endpoint that does not exist yet.
+
+       Absent is not an option even so: the phone ships the desktop renderer
+       unmodified, so a rooms surface calling into a missing namespace would be
+       a TypeError at a tap. Every method answers in the shape its caller
+       expects - a list is an empty list, an action is a stated reason - which
+       is the same contract the plugin and git refusals above keep. */
+    rooms: {
+      agents: async () => ({ agents: [], templates: [] }),
+      list: async () => [],
+      create: async () => ({ error: ROOMS_OFF }),
+      load: async () => ({ error: ROOMS_OFF }),
+      delete: async () => ({ ok: true }),
+      join: async () => ({ error: ROOMS_OFF }),
+      leave: async () => ({ error: ROOMS_OFF }),
+      setAgentModel: async () => ({ error: ROOMS_OFF }),
+      say: async () => ({ error: ROOMS_OFF }),
+      critique: async () => ({ error: ROOMS_OFF }),
+      revise: async () => ({ error: ROOMS_OFF }),
+      project: async () => ({ calls: 0, agents: 0, note: ROOMS_OFF }),
     },
 
     keys: {

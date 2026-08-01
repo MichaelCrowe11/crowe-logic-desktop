@@ -1381,6 +1381,15 @@ async function runAgent(ctx, messages, deps) {
 
   // ── ROUTE ── pick the expert deployment for this block, fallback-first.
   const route = routeTurn(ctx, messages, deps.role || "");
+  /* A room seat names its own deployment. Rooms compose named agents whose
+     identity includes which model answers as them, so the router's guess is not
+     the right authority there. Applied after routing rather than instead of it,
+     so the reason string still records what the router would have chosen and an
+     absent pin leaves every existing caller on exactly its old path. */
+  if (deps.model && deps.model !== route.model) {
+    route.reason = `${route.reason} · pinned ${deps.model}`;
+    route.model = deps.model;
+  }
   const state = newState(ctx, cfg, deps, route);
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
   state.journal({ event_type: "TURN_STARTED",
@@ -1398,7 +1407,14 @@ async function runAgent(ctx, messages, deps) {
      just as surely as one asked from the grower's surface, and it deserves the
      same records. Gating here means the operator answering a git question does
      not pay context for a substrate library it will never mention. */
-  let msgs = [{ role: "system", content: deps.context && route.expert === "cultivation" ? sys + "\n\n" + deps.context : sys }, ...messages];
+  /* `persona` is who is speaking; `context` is what the world currently looks
+     like. A room seat carries the first unconditionally - an agent that is
+     Regulatory Affairs is that in every block it runs, not only when the router
+     happened to send it somewhere - while context stays gated to the expert it
+     belongs to. Both absent is the plain operator thread, unchanged. */
+  const persona = deps.persona ? "\n\n" + String(deps.persona) : "";
+  const situational = deps.context && route.expert === "cultivation" ? "\n\n" + deps.context : "";
+  let msgs = [{ role: "system", content: sys + persona + situational }, ...messages];
   const request = String((([...messages].reverse().find((m) => m && m.role === "user")) || {}).content || "");
   const ref = { model: route.model, fellBack: false };
 
