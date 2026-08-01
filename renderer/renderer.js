@@ -1187,16 +1187,99 @@ async function mountRoom(p, body, seed = {}) {
     suggest.classList.remove("hidden");
   });
 
-  // A room panel either resumes one it was given or composes a fresh Product
-  // Review, which is the template worth opening on: a real disagreement between
-  // specialists rather than three agents drafting the same page.
-  if (seed.roomId) p.roomId = seed.roomId;
-  else {
-    const made = await window.crowe.rooms.create({ template: seed.template || "product-review" });
-    if (made?.error) { thread.innerHTML = `<div class="card-empty">${esc(made.error)}</div>`; return; }
-    p.roomId = made.room.id;
+  /* A room panel opens on the composer unless it was handed a room to resume.
+
+     Opening straight into a fixed template was the shortcut that made Rooms
+     look like a cultivation feature: the roster underneath spans sixteen
+     domains and the panel only ever showed three of them. Composing first is
+     also the honest order - who is in the room is the decision, and it should
+     be made before the room costs anything. */
+  if (seed.roomId) { p.roomId = seed.roomId; wrap.classList.remove("composing"); await refresh(); return; }
+
+  const composer = document.createElement("div");
+  composer.className = "room-compose";
+  wrap.classList.add("composing");
+  wrap.prepend(composer);
+
+  const { agents = [], templates = [] } = await window.crowe.rooms.agents();
+  const picked = new Set();
+
+  const byDomain = agents.reduce((m, a) => ((m[a.domain || "other"] = m[a.domain || "other"] || []).push(a), m), {});
+  composer.innerHTML = `
+    <div class="rc-head">
+      <b>Open a room</b>
+      <span>A room earns its cost when a decision has more than one binding constraint. Where there is only one, a single agent is the right answer.</span>
+    </div>
+    <div class="rc-templates"></div>
+    <div class="rc-own">
+      <div class="rc-sub">Or compose your own</div>
+      <div class="rc-agents"></div>
+      <div class="rc-actions">
+        <input class="rc-name" placeholder="Name this room" aria-label="Room name">
+        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Room budget in dollars"></label>
+        <span class="rc-count"></span>
+        <button class="rc-open primary sm" disabled>Open</button>
+      </div>
+    </div>`;
+
+  const tWrap = composer.querySelector(".rc-templates");
+  for (const t of templates) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "rc-template";
+    b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
+      <em>${t.agents.map((a) => esc(a.name || a.id)).join(" · ")}</em>`;
+    b.addEventListener("click", () => open({ template: t.id }));
+    tWrap.appendChild(b);
   }
-  await refresh();
+
+  const aWrap = composer.querySelector(".rc-agents");
+  const countEl = composer.querySelector(".rc-count");
+  const openBtn = composer.querySelector(".rc-open");
+  const nameEl = composer.querySelector(".rc-name");
+
+  const syncPick = () => {
+    countEl.textContent = picked.size
+      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? " — a room of one behaves like an ordinary thread" : ""}`
+      : "";
+    openBtn.disabled = picked.size === 0;
+  };
+
+  for (const [domain, list] of Object.entries(byDomain)) {
+    const g = document.createElement("div"); g.className = "rc-group";
+    g.innerHTML = `<div class="rc-domain">${esc(domain)}</div>`;
+    for (const a of list) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "rc-agent"; b.title = a.role || "";
+      b.innerHTML = `<b>${esc(a.name)}</b><span>${esc(a.autonomyCeiling || "plan")}</span>`;
+      b.addEventListener("click", () => {
+        if (picked.has(a.id)) { picked.delete(a.id); b.classList.remove("on"); }
+        else { picked.add(a.id); b.classList.add("on"); }
+        syncPick();
+      });
+      g.appendChild(b);
+    }
+    aWrap.appendChild(g);
+  }
+  syncPick();
+
+  async function open(opts) {
+    openBtn.disabled = true;
+    const made = await window.crowe.rooms.create({
+      budgetUsd: Number(composer.querySelector(".rc-budget-input").value) || undefined,
+      ...opts,
+    });
+    if (made?.error) { countEl.textContent = made.error; openBtn.disabled = false; return; }
+    p.roomId = made.room.id;
+    composer.remove();
+    wrap.classList.remove("composing");
+    await refresh();
+    renderDockTabs();
+  }
+
+  openBtn.addEventListener("click", () => open({
+    agentIds: [...picked],
+    title: nameEl.value.trim() || "Room",
+  }));
 }
 
 function mountOperator(p, body) {

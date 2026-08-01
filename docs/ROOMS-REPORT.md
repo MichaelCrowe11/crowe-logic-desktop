@@ -1,10 +1,10 @@
 # Rooms — build report
 
-Status: gates 1, 2, 3, 5 and 6 built and verified. Gate 4 (worktree isolation)
-is **not** built, and the write path is held closed behind it. No renderer
-surface yet, so rooms are reachable over IPC and not yet from the UI.
+Status: gates 1, 2, 3, 5, 6 and the room surface built and verified. Gate 4
+(worktree isolation) is **not** built, and the write path is held closed behind
+it.
 
-Built on 0.22.0. `node scripts/test-rooms.js` — 26 checks, all passing.
+Built on 0.22.0. `node scripts/test-rooms.js` — 28 checks, all passing.
 
 ---
 
@@ -116,11 +116,14 @@ asserts a write-capable roster still lands on `readonly`. This is the gate the
 brief called hard, and shipping the write path without worktree isolation is the
 one failure that does not recover by looping.
 
-**No renderer surface.** Everything above is reachable over IPC and from the
-test suite, and from nowhere else. The room switcher, the roster strip, the
-`@mention` autocomplete and the cost-on-the-button are unbuilt. The engine is
-deliberately UI-agnostic, so this is additive work rather than rework, but a
-feature a user cannot open is not shipped.
+**The surface is built, the switcher is not.** A room opens from the add-panel
+palette: a composer offering eight templates and the full twenty-agent roster,
+then the room itself with a roster strip carrying live state and spend, messages
+attributed by agent name, critiques set apart, `@mention` autocomplete from the
+room's own roster, and the projected call count on the critique and revise
+buttons. What is still missing is the room switcher in the activity rail beside
+Sessions: rooms persist and can be resumed over IPC, but the only way to reopen
+one from the UI today is to keep its panel.
 
 **The premise is untested.** The brief is explicit that if critique rounds do
 not measurably improve output on a real task, that is the finding. **I cannot
@@ -153,3 +156,34 @@ templates silently produced empty rosters.
 handlers are syntax-checked and the engine beneath them is covered, but no test
 drives `crowe:rooms:say` through a live `ipcMain`. The first renderer work
 should carry that.
+
+
+---
+
+## Addendum: the composer, and what it says about verticals
+
+The first four templates leaned cultivation, which made a general mechanism look
+like a vertical feature. The registry underneath spans sixteen domains, and
+three of its twenty agents are mycology.
+
+Two things closed that gap. Four more templates - Launch Review, Security
+Posture, Molecule Triage, The Week - built entirely from agents that already
+existed, and a composer that offers the whole roster so a room can be any
+argument rather than one of eight. Driven in a browser: a room composed from
+Revenue, Compliance & Audit and Studio Director, three verticals no template
+names, runs exactly as a template room does.
+
+A rule the tests now hold, and worth stating because it is the product's
+honest boundary: **a room earns its cost when a decision has more than one
+binding constraint, and where there is only one, a single agent is the right
+answer.** The composer says this above the templates. A catalogue that implied
+every question deserves three specialists would teach people to spend triple for
+nothing.
+
+One test of that rule caught a flaw in the rule rather than the code. A check
+that rejected single-`domain` templates flagged The Week, whose three agents all
+carry the `operations` tag while answering completely different questions about
+the same week. The registry's domain field is coarser than the specialties
+inside it, so the per-template check now asks whether the same specialty is
+seated twice, and the domain field is used where it is actually meaningful: for
+asserting that the curated set as a whole reaches across the business.

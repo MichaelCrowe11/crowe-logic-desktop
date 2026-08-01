@@ -49,6 +49,313 @@
   ].map(([model, display, featured, role, available, gateway_tool_calling]) =>
     ({ model, display, featured, role, available, gateway_tool_calling }));
 
+  // GENERATED from rooms/registry.js by scripts/gen-preview.js consumers; the
+  // browser composer must offer what the product offers, not a hand-kept subset.
+  const DEMO_REGISTRY = [
+    {
+      "id": "crowe-logic",
+      "name": "Crowe Logic",
+      "domain": "orchestration",
+      "autonomyCeiling": "edit",
+      "role": "The orchestrating intelligence of the estate. Plans, dispatches a fleet of workers, verifies adversarially across model families, and synthesizes one result."
+    },
+    {
+      "id": "crowelm-frontier",
+      "name": "CroweLM Frontier",
+      "domain": "reasoning",
+      "autonomyCeiling": "edit",
+      "role": "The estate's flagship reasoning tier. Runs on Fable 5 through Cloudflare unified billing with the Crowe Skills corpus and the Crowe knowledge base mounted as tools, grounding every answer in Crowe's own playbooks and data."
+    },
+    {
+      "id": "operator",
+      "name": "Crowe Operator",
+      "domain": "infrastructure",
+      "autonomyCeiling": "edit",
+      "role": "Operates and inspects the Crowe estate across cloud, code, and services."
+    },
+    {
+      "id": "compliance-audit",
+      "name": "Compliance & Audit",
+      "domain": "compliance",
+      "autonomyCeiling": "edit",
+      "role": "NIST 800-171 / CMMC audits, gap detection, SSP and POA&M evidence."
+    },
+    {
+      "id": "commerce-support",
+      "name": "Commerce & Support",
+      "domain": "commerce",
+      "autonomyCeiling": "readonly",
+      "role": "B2B sales, order management, customer support across the Crowe storefronts."
+    },
+    {
+      "id": "product-formulation",
+      "name": "Product & Formulation",
+      "domain": "product",
+      "autonomyCeiling": "plan",
+      "role": "Product development and formulation for mushroom-derived products."
+    },
+    {
+      "id": "drug-discovery",
+      "name": "Drug Discovery Specialist",
+      "domain": "pharma",
+      "autonomyCeiling": "plan",
+      "role": "Target identification, ADMET, molecular modeling."
+    },
+    {
+      "id": "ai-strategy",
+      "name": "AI Strategy Advisor",
+      "domain": "technology",
+      "autonomyCeiling": "plan",
+      "role": "Enterprise AI strategy, LLM and agent architecture."
+    },
+    {
+      "id": "cultivation-intelligence",
+      "name": "Cultivation Intelligence",
+      "domain": "cultivation",
+      "autonomyCeiling": "readonly",
+      "role": "Mushroom cultivation, contamination control, grow-room automation."
+    },
+    {
+      "id": "computational-chemist",
+      "name": "Computational Chemist",
+      "domain": "chemistry",
+      "autonomyCeiling": "plan",
+      "role": "DFT, molecular dynamics, computer-aided drug design."
+    },
+    {
+      "id": "extraction-formulation",
+      "name": "Extraction & Formulation Scientist",
+      "domain": "extraction",
+      "autonomyCeiling": "plan",
+      "role": "CO2 extraction, purification, formulation."
+    },
+    {
+      "id": "mycology-research",
+      "name": "Mycology Research Specialist",
+      "domain": "mycology",
+      "autonomyCeiling": "plan",
+      "role": "Fungal biology, bioactive compound discovery."
+    },
+    {
+      "id": "regulatory-affairs",
+      "name": "Regulatory Affairs Specialist",
+      "domain": "regulatory",
+      "autonomyCeiling": "plan",
+      "role": "FDA, cGMP, supplement and food compliance."
+    },
+    {
+      "id": "facility-design",
+      "name": "Facility Design Engineer",
+      "domain": "engineering",
+      "autonomyCeiling": "plan",
+      "role": "Grow rooms, extraction labs, cleanroom design."
+    },
+    {
+      "id": "scheduling",
+      "name": "Scheduling Agent",
+      "domain": "operations",
+      "autonomyCeiling": "edit",
+      "role": "Calendar and Calendly scheduling."
+    },
+    {
+      "id": "sop",
+      "name": "SOP Agent",
+      "domain": "operations",
+      "autonomyCeiling": "edit",
+      "role": "SOP and digital-product library management (R2 bucket swm-sops)."
+    },
+    {
+      "id": "revenue",
+      "name": "Revenue Agent",
+      "domain": "operations",
+      "autonomyCeiling": "readonly",
+      "role": "Revenue and funnel briefing across Stripe and YouTube."
+    },
+    {
+      "id": "email",
+      "name": "Email Agent",
+      "domain": "operations",
+      "autonomyCeiling": "edit",
+      "role": "Transactional and outreach email from michael@crowelogic.com."
+    },
+    {
+      "id": "auction",
+      "name": "Auction Agent",
+      "domain": "operations",
+      "autonomyCeiling": "readonly",
+      "role": "Auction valuation and max-bid discipline (read-only)."
+    },
+    {
+      "id": "studio",
+      "name": "Crowe Studio Director",
+      "domain": "media",
+      "autonomyCeiling": "readonly",
+      "role": "Grounded script, storyboard, and film direction."
+    }
+  ];
+  const DEMO_TEMPLATES = [
+    {
+      "id": "product-review",
+      "name": "Product Review",
+      "purpose": "A formulation, argued against the rules it has to clear and the customers it has to reach.",
+      "agents": [
+        {
+          "id": "product-formulation",
+          "name": "Product & Formulation"
+        },
+        {
+          "id": "regulatory-affairs",
+          "name": "Regulatory Affairs Specialist"
+        },
+        {
+          "id": "commerce-support",
+          "name": "Commerce & Support"
+        }
+      ],
+      "defaultAgent": "product-formulation"
+    },
+    {
+      "id": "grow-diagnosis",
+      "name": "Grow Diagnosis",
+      "purpose": "A room that is underperforming, read by the people who know the organism, the literature, and the building.",
+      "agents": [
+        {
+          "id": "cultivation-intelligence",
+          "name": "Cultivation Intelligence"
+        },
+        {
+          "id": "mycology-research",
+          "name": "Mycology Research Specialist"
+        },
+        {
+          "id": "facility-design",
+          "name": "Facility Design Engineer"
+        }
+      ],
+      "defaultAgent": "cultivation-intelligence"
+    },
+    {
+      "id": "ship-it",
+      "name": "Ship It",
+      "purpose": "A change, checked by the operator who runs the estate and the auditor who has to evidence it.",
+      "agents": [
+        {
+          "id": "operator",
+          "name": "Crowe Operator"
+        },
+        {
+          "id": "compliance-audit",
+          "name": "Compliance & Audit"
+        },
+        {
+          "id": "crowe-logic",
+          "name": "Crowe Logic"
+        }
+      ],
+      "defaultAgent": "operator"
+    },
+    {
+      "id": "launch-review",
+      "name": "Launch Review",
+      "purpose": "A price, a funnel and an announcement, argued by the three people who each own one of them.",
+      "agents": [
+        {
+          "id": "revenue",
+          "name": "Revenue Agent"
+        },
+        {
+          "id": "commerce-support",
+          "name": "Commerce & Support"
+        },
+        {
+          "id": "email",
+          "name": "Email Agent"
+        }
+      ],
+      "defaultAgent": "revenue"
+    },
+    {
+      "id": "security-posture",
+      "name": "Security Posture",
+      "purpose": "What the framework demands, against what the estate actually runs.",
+      "agents": [
+        {
+          "id": "compliance-audit",
+          "name": "Compliance & Audit"
+        },
+        {
+          "id": "operator",
+          "name": "Crowe Operator"
+        },
+        {
+          "id": "crowe-logic",
+          "name": "Crowe Logic"
+        }
+      ],
+      "defaultAgent": "compliance-audit"
+    },
+    {
+      "id": "molecule-triage",
+      "name": "Molecule Triage",
+      "purpose": "Worth pursuing, possible to model, and possible to actually extract. Three different answers.",
+      "agents": [
+        {
+          "id": "drug-discovery",
+          "name": "Drug Discovery Specialist"
+        },
+        {
+          "id": "computational-chemist",
+          "name": "Computational Chemist"
+        },
+        {
+          "id": "extraction-formulation",
+          "name": "Extraction & Formulation Scientist"
+        }
+      ],
+      "defaultAgent": "drug-discovery"
+    },
+    {
+      "id": "the-week",
+      "name": "The Week",
+      "purpose": "What is booked, what is unanswered, and what actually earns. The three rarely agree.",
+      "agents": [
+        {
+          "id": "scheduling",
+          "name": "Scheduling Agent"
+        },
+        {
+          "id": "email",
+          "name": "Email Agent"
+        },
+        {
+          "id": "revenue",
+          "name": "Revenue Agent"
+        }
+      ],
+      "defaultAgent": "scheduling"
+    },
+    {
+      "id": "bake-off",
+      "name": "Bake-off",
+      "purpose": "One task, three deployments, no domain claim. Useful for comparing models and nothing else.",
+      "agents": [
+        {
+          "id": "crowe-logic",
+          "name": "Crowe Logic"
+        },
+        {
+          "id": "crowelm-frontier",
+          "name": "CroweLM Frontier"
+        },
+        {
+          "id": "operator",
+          "name": "Crowe Operator"
+        }
+      ],
+      "defaultAgent": "crowe-logic"
+    }
+  ];
+
   /* The demo room the rooms.* namespace below drives.
 
      Three specialists over one SKU, which is the argument the Product Review
@@ -81,12 +388,16 @@
   const zeroCost = () => ({ usd: 0, promptTokens: 0, completionTokens: 0, calls: 0 });
   let DEMO_ROOM = null;
 
-  function newDemoRoom() {
+  function newDemoRoom(ids, title, budgetUsd) {
+    const seatIds = ids && ids.length ? ids : DEMO_ROOM_AGENTS.map((a) => a.id);
     return {
-      id: "r-demo", title: "Product Review", template: "product-review",
-      agents: DEMO_ROOM_AGENTS.map((a) => ({ agentId: a.id, name: a.name, domain: a.domain, ceiling: a.autonomyCeiling, model: "", state: "idle", cost: zeroCost() })),
-      defaultAgent: "product-formulation", messages: [],
-      budgetUsd: 0.5, spentUsd: 0, critiqueRounds: 0, halted: "",
+      id: "r-demo", title: title || "Product Review", template: "",
+      agents: seatIds.map((id) => {
+        const meta = DEMO_REGISTRY.find((a) => a.id === id) || { id, name: id, domain: "", autonomyCeiling: "plan" };
+        return { agentId: id, name: meta.name, domain: meta.domain, ceiling: meta.autonomyCeiling, model: "", state: "idle", cost: zeroCost() };
+      }),
+      defaultAgent: seatIds[0], messages: [],
+      budgetUsd: typeof budgetUsd === "number" ? budgetUsd : 0.5, spentUsd: 0, critiqueRounds: 0, halted: "",
     };
   }
   const demoRoomSummary = () => ({ id: DEMO_ROOM.id, title: DEMO_ROOM.title, updatedAt: Date.now(),
@@ -361,17 +672,23 @@
        that renders it. */
     rooms: {
       async agents() {
-        return {
-          agents: DEMO_ROOM_AGENTS,
-          templates: [{
-            id: "product-review", name: "Product Review",
-            purpose: "A formulation, argued against the rules it has to clear and the customers it has to reach.",
-            agents: DEMO_ROOM_AGENTS, defaultAgent: "product-formulation",
-          }],
-        };
+        // The whole roster and every template, so the composer in the browser
+        // shows what the product actually offers rather than the one argument
+        // the demo happens to script.
+        return { agents: DEMO_REGISTRY, templates: DEMO_TEMPLATES };
       },
       async list() { return DEMO_ROOM ? [demoRoomSummary()] : []; },
-      async create() { DEMO_ROOM = newDemoRoom(); return { room: demoRoomState() }; },
+      async create(opts = {}) {
+        // Compose from a template or from a hand-picked roster, the same two
+        // paths main.js offers. An agent with no scripted answer still speaks:
+        // demoRound falls back to a line naming the seat, so a room composed
+        // out of any three agents is drivable here.
+        const t = opts.template ? DEMO_TEMPLATES.find((x) => x.id === opts.template) : null;
+        const ids = t ? t.agents.map((a) => a.id) : (opts.agentIds || []).filter((id) => DEMO_REGISTRY.some((a) => a.id === id));
+        if (!ids.length) return { error: "a room needs at least one agent from the registry" };
+        DEMO_ROOM = newDemoRoom(ids, opts.title || (t ? t.name : "Room"), opts.budgetUsd);
+        return { room: demoRoomState() };
+      },
       async load() { if (!DEMO_ROOM) DEMO_ROOM = newDemoRoom(); return { room: demoRoomState(), messages: DEMO_ROOM.messages }; },
       async delete() { DEMO_ROOM = null; return { ok: true }; },
       async join(_id, agentId) {

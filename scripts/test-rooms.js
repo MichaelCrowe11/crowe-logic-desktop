@@ -85,6 +85,44 @@ const roomOf = (ids, extra = {}) =>
     return "min across roster, then clamped by config";
   });
 
+  await check("templates span the roster rather than one corner of it", () => {
+    /* Three of the first four templates leaned cultivation while the registry
+       spans sixteen domains, which made a general mechanism look like a
+       vertical feature. The rule this asserts is not "more templates" but that
+       the curated set reaches past a single part of the business. */
+    const ts = registry.listTemplates();
+    const domains = new Set(ts.flatMap((t) => t.agents.map((a) => a.domain)));
+    assert(domains.size >= 8, `templates only reach ${domains.size} domains: ${[...domains].join(", ")}`);
+    for (const id of ["launch-review", "security-posture", "molecule-triage", "the-week"]) {
+      assert(ts.some((t) => t.id === id), `missing cross-vertical template ${id}`);
+    }
+    /* Every template must still be a real argument rather than three seats
+       holding one opinion. Judged on distinct agents with distinct roles, not
+       on distinct `domain` tags: that field is coarser than the specialties
+       inside it - scheduling, email and revenue all read as "operations" while
+       answering completely different questions about the same week - so a
+       domain check rejects good rooms and would have deleted this one. The
+       aggregate span above is where the domain field earns its keep. */
+    const flat = ts.filter((t) => t.id !== "bake-off" && t.agents.length > 1)
+      .filter((t) => new Set(t.agents.map((a) => a.role)).size < t.agents.length).map((t) => t.id);
+    assert(!flat.length, `templates seat the same specialty twice: ${flat.join(", ")}`);
+    return `${ts.length} templates across ${domains.size} domains`;
+  });
+
+  await check("a room composes from any agents, with no template at all", async () => {
+    // The composer's path. Three verticals no template names.
+    const room = rooms.createRoom({ title: "Ad hoc", agentIds: ["revenue", "compliance-audit", "studio"] });
+    assert(room.agents.length === 3, "ad-hoc composition dropped agents");
+    assert(room.defaultAgent === "revenue", "ad-hoc room has no default agent");
+    const f = fakeRunner();
+    await rooms.speak(room, "@room go", f);
+    assert(f.calls.length === 3, `expected 3 calls, got ${f.calls.length}`);
+    // An id that is not in the registry is dropped rather than seated.
+    const bad = rooms.createRoom({ agentIds: ["revenue", "not-an-agent"] });
+    assert(bad.agents.length === 1, "an unknown agent id was seated");
+    return "revenue + compliance-audit + studio";
+  });
+
   await check("templates name real specialists, not three interchangeable agents", () => {
     const t = registry.getTemplate("product-review");
     assert(t, "product-review template missing");
