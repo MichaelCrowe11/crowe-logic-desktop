@@ -32,6 +32,7 @@
     ["crowelm-mini", "CroweLM Mini", false, "", true, true],
     ["GLM-4.7-Flash", "GLM 4.7 Flash", false, "", true, true],
     ["GLM-4.6V", "GLM 4.6V", false, "", true, false],
+    ["crowelm-scout", "CroweLM Scout", false, "", true, true],
     ["Qwen3-Coder-480B", "Qwen3 Coder 480B", false, "", true, true],
     ["Qwen3-235B-A22B", "Qwen3 235B A22B", false, "", true, true],
     ["Qwen3-VL-72B", "Qwen3 VL 72B", false, "", true, false],

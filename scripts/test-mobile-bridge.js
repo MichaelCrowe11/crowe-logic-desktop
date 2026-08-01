@@ -85,6 +85,10 @@ function loadMobileSurface(fetchImpl) {
   const src = read("mobile/src/mobile-bridge.js");
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
   assert(win.crowe, "mobile-bridge.js did not install window.crowe");
+  // The picker grant lives on window.crowePhone, beside window.crowe rather
+  // than on it — the surface parity walk below must see exactly the desktop's
+  // shape. Exposed for the phone-file checks without widening the surface.
+  loadMobileSurface.lastWindow = win;
   return win.crowe;
 }
 
@@ -267,6 +271,57 @@ function methodPaths(surface) {
     const refusal = events.find((e) => e.type === "tool_result");
     assert(refusal && refusal.status === "blocked", `log_grow was not blocked: ${JSON.stringify(refusal)}`);
     assert(!(await bridge2.grow.list("log")).length, "the blocked call wrote the record anyway");
+  });
+
+  await check("a file handed to the phone answers at its phone: path, unpaired", async () => {
+    // The picker grant: mobile-ui.js registers what the user chose, and the
+    // file tools answer phone: paths from the store with no machine paired —
+    // pairing is about reaching another computer, and this file never left
+    // this one. The tier still gates: readonly may read, not write.
+    const bridge = loadMobileSurface(fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read_file", arguments: '{"path":"phone:notes.md"}' } }] } }],
+      [{ delta: { content: "The note says water block 12." } }],
+    ]));
+    const win = loadMobileSurface.lastWindow;
+    assert(win.crowePhone, "mobile-bridge.js did not install window.crowePhone");
+    win.crowePhone.add("notes.md", "water block 12 tomorrow");
+    await bridge.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "read my note" }]);
+    off();
+    const tr = seen.find((e) => e.type === "tool_result");
+    assert(tr && /water block 12/.test(String(tr.result)), `read_file phone: answered ${JSON.stringify(tr)}`);
+    assert(result.done, "the turn did not finish");
+  });
+
+  await check("a write to a phone: path updates the app's copy and only that", async () => {
+    const bridge = loadMobileSurface(fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "write_file", arguments: '{"path":"phone:notes.md","content":"rewritten"}' } }] } }],
+      [{ delta: { content: "Done." } }],
+    ]));
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.add("notes.md", "original");
+    await bridge.setConfig({ token: "a.b.c", autonomy: "edit" });
+    const off = await bridge.agent.onEvent(() => {});
+    await bridge.agent.run([{ role: "user", content: "rewrite my note to say rewritten" }]);
+    off();
+    assert(win.crowePhone.get("notes.md") === "rewritten", "the store copy was not updated");
+    // And below Edit, the same call is refused at the tool.
+    const bridge2 = loadMobileSurface(fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c2", function: { name: "write_file", arguments: '{"path":"phone:notes.md","content":"sneaky"}' } }] } }],
+      [{ delta: { content: "understood" } }],
+    ]));
+    const win2 = loadMobileSurface.lastWindow;
+    win2.crowePhone.add("notes.md", "original");
+    await bridge2.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    const seen2 = [];
+    const off2 = await bridge2.agent.onEvent((ev) => seen2.push(ev));
+    await bridge2.agent.run([{ role: "user", content: "rewrite it" }]);
+    off2();
+    assert(win2.crowePhone.get("notes.md") === "original", "a read-only turn rewrote the copy");
+    const refusal = seen2.find((e) => e.type === "tool_result");
+    assert(refusal && /refused/.test(String(refusal.result)), `the write was not refused: ${JSON.stringify(refusal)}`);
   });
 
   await check("an unsigned-in turn says so instead of failing silently", async () => {

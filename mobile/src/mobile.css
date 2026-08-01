@@ -117,6 +117,34 @@ body.mobile #input, body.mobile .modal-card input, body.mobile .modal-card texta
 body.mobile .modal-card select, body.mobile .surface-composer input,
 body.mobile #pal-input, body.mobile #qo-input, body.mobile #git-msg { font-size: 16px; }
 
+/* ── Files from this phone ──
+   The paperclip and its chips row (built by mobile-ui.js; the store and the
+   phone: tool paths are mobile-bridge.js). The row is invisible until it has
+   files, and each chip is two targets: the name shares the current copy —
+   that is what "save" means for a webview holding a picked file — and the ×
+   withdraws the grant. */
+#m-attach-row { display: none; flex-wrap: wrap; gap: 6px; padding: 2px 2px 8px; }
+#m-attach-row.has-files { display: flex; }
+.m-attach-chip {
+  display: inline-flex; align-items: center; max-width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--cream);
+}
+.m-attach-chip .m-attach-share {
+  border: 0; background: transparent; color: var(--gold-deep); cursor: pointer;
+  font-family: var(--mono); font-size: var(--fs-sm); padding: 8px 4px 8px 12px;
+  max-width: 52vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-height: 40px;
+}
+.m-attach-chip .m-attach-x {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 1.05rem; line-height: 1; padding: 8px 12px 8px 6px; min-height: 40px;
+}
+body.dark .m-attach-chip { background: var(--raised); }
+body.dark .m-attach-chip .m-attach-share { color: var(--gold); }
+#m-attach { border: none; background: transparent; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; }
+#m-attach:active { color: var(--ink); }
+
 /* Hover states on a touch screen stick after the tap that triggered them. */
 @media (hover: none) {
   body.mobile .side-new:hover, body.mobile .card:hover { box-shadow: var(--z1); border-color: var(--line); }

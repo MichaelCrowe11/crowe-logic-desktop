@@ -228,18 +228,23 @@ function stageLabel(name) {
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
   return "retrieving";
 }
-/* The motion logotype, fetched once and held. Both the header lockups and every
-   thinking indicator draw from this, so a session pays for the file once. */
-let wordmarkMotion = null, wordmarkMotionPending = null;
-function wordmarkMotionMarkup() {
-  if (wordmarkMotion) return Promise.resolve(wordmarkMotion);
-  if (!wordmarkMotionPending) {
-    wordmarkMotionPending = fetch("../assets/wordmark-motion.svg")
+/* The motion logotype, fetched once per cut and held. There are two cuts of
+   the same drawing on the same viewBox: "sm" redraws the o-blades and the
+   spore for the sizes most mounts actually render (22px header, ~22px
+   thinking line, ~31px agent head — see gen-mark.js on why fine taper is
+   invisible there), and "full" keeps the print-scale detail for the welcome
+   hero, the one mount large enough to resolve it. A session that never shows
+   the hero never pays for the second file. */
+const wordmarkMotionHeld = {}, wordmarkMotionPending = {};
+function wordmarkMotionMarkup(cut = "sm") {
+  if (wordmarkMotionHeld[cut]) return Promise.resolve(wordmarkMotionHeld[cut]);
+  if (!wordmarkMotionPending[cut]) {
+    wordmarkMotionPending[cut] = fetch(cut === "full" ? "../assets/wordmark-motion.svg" : "../assets/wordmark-motion-sm.svg")
       .then((r) => (r.ok ? r.text() : null))
-      .then((t) => (wordmarkMotion = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
+      .then((t) => (wordmarkMotionHeld[cut] = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
       .catch(() => null);
   }
-  return wordmarkMotionPending;
+  return wordmarkMotionPending[cut];
 }
 
 /* A thinking copy keeps the drawing and drops everything that only made sense
@@ -1720,10 +1725,22 @@ async function refreshHome() {
     row.addEventListener("click", async () => { await loadSession(s.id); setSpace("chat"); });
     hs.appendChild(row);
   }
+  /* This card answers the one routing question a person actually has — "which
+     model answers which kind of question?" — in the asker's vocabulary. The
+     router's own labels leaked here for a release: role keys on the left
+     ("long-context") and provenance on the right ("bridge" = static fallback
+     table, "catalog" = role-tagged gateway entry, "default" = neither), which
+     rendered rows like "reasoning · <deployment id> · bridge" — words from three
+     different internal registers. Provenance is an engineering answer and the
+     Deployments lane still gives it; here the only distinction worth ink is
+     whether a specialist takes the question. Specialist rows are tagged
+     "expert", default rows are bare — visibly the same model the
+     "everything else" row already names. */
+  const ROLE_ASKS = { cultivation: "growing", coding: "code", reasoning: "hard problems", "long-context": "long documents" };
   const hr = $("home-routing"); hr.innerHTML = "";
   for (const [role, r] of Object.entries(cat.resolved || {}))
-    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(role)}</span><span class="v">${esc(r.model)}<em class="src">${esc(r.source)}</em></span></div>`);
-  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}<em class="src">operator</em></span></div>`);
+    hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(ROLE_ASKS[role] || role)}</span><span class="v">${esc(r.model)}${r.source === "default" ? "" : '<em class="src">expert</em>'}</span></div>`);
+  hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}</span></div>`);
   let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
   $("home-gateway").innerHTML = `
     <div class="kv"><span class="k">endpoint</span><span class="v">${esc(host)}</span></div>
@@ -2765,9 +2782,18 @@ let lockupSeq = 0;
 async function liveLockups() {
   const todo = [...document.querySelectorAll(".lockup")].filter((el) => !el.classList.contains("live"));
   if (!todo.length) return;
-  const markup = await wordmarkMotionMarkup();
-  if (!markup) return;
+  // The hero and the launch veil are the lockups big enough to resolve the
+  // full cut; the header takes the small one, matching the -sm mask it is
+  // replacing. Both files carry the same ids, which the suffixing below
+  // already scopes per copy — it rewrites the ids inside each copy's own
+  // <style> too, so a suffixed copy's entrance drives itself rather than
+  // whichever copy loaded first.
+  const cutOf = (el) => (el.classList.contains("welcome-logotype") || el.classList.contains("launch-mark") ? "full" : "sm");
+  const markups = {};
+  for (const cut of new Set(todo.map(cutOf))) markups[cut] = await wordmarkMotionMarkup(cut);
   todo.forEach((el) => {
+    const markup = markups[cutOf(el)];
+    if (!markup) return;
     const n = lockupSeq++;
     const scoped = n === 0 ? markup
       : markup.replace(/(\bid="|url\(#|#)(crowe-logic-motion|rotor-[a-z-]+|wordmark-letterforms|gold-thinking-mark)\b/g,
