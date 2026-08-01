@@ -77,6 +77,24 @@ contextBridge.exposeInMainWorld("crowe", {
     new: () => ipcRenderer.invoke("crowe:sessions:new"),
     delete: (id) => ipcRenderer.invoke("crowe:sessions:delete", id),
   },
+  /* Rooms: several named agents and the operator in one thread. A room is a
+     session with a roster, so these sit beside sessions rather than replacing
+     them, and `say` is the only one that spends money without being asked to -
+     which is why `project` exists to price a round before it runs. */
+  rooms: {
+    agents: () => ipcRenderer.invoke("crowe:rooms:agents"),
+    list: () => ipcRenderer.invoke("crowe:rooms:list"),
+    create: (opts) => ipcRenderer.invoke("crowe:rooms:create", opts || {}),
+    load: (id) => ipcRenderer.invoke("crowe:rooms:load", { id }),
+    delete: (id) => ipcRenderer.invoke("crowe:rooms:delete", { id }),
+    join: (id, agentId) => ipcRenderer.invoke("crowe:rooms:join", { id, agentId }),
+    leave: (id, agentId) => ipcRenderer.invoke("crowe:rooms:leave", { id, agentId }),
+    setAgentModel: (id, agentId, model) => ipcRenderer.invoke("crowe:rooms:set-agent-model", { id, agentId, model }),
+    say: (id, text) => ipcRenderer.invoke("crowe:rooms:say", { id, text }),
+    critique: (id) => ipcRenderer.invoke("crowe:rooms:critique", { id }),
+    revise: (id) => ipcRenderer.invoke("crowe:rooms:revise", { id }),
+    project: (id, kind) => ipcRenderer.invoke("crowe:rooms:project", { id, kind }),
+  },
   // Cultivation records — blocks, flushes, contamination, environment, strains,
   // recipes, grow log. Persisted on disk in the main process, like sessions.
   grow: {
