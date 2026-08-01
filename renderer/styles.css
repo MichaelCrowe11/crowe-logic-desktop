@@ -1839,7 +1839,14 @@ button.primary:active, .rc-open:active, .room-send:active {
 .rc-template:hover, .rc-agent:hover { box-shadow: var(--e2); transform: translateY(-1px); }
 /* A working seat glows rather than merely bordering, so the roster reads at a
    glance from across the desk. */
-.seat.live { box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim), 0 0 0 1px var(--gold), 0 6px 18px -8px rgba(184,137,58,.5); }
+/* Keyed on the attribute the roster actually sets. drawRoster builds each seat
+   once and updates it in place - so a mounted mark keeps running rather than
+   restarting on every repaint - and it carries state in data-state. Two of
+   these rules were written against a .live class that nothing applies, so the
+   glow on a working seat was dead code that no test could see. */
+.seat[data-state="working"], .seat[data-state="queued"] {
+  box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim), 0 0 0 1px var(--gold), 0 6px 18px -8px rgba(184,137,58,.5);
+}
 .rc-agent.on { box-shadow: var(--e1), inset 0 1px 0 var(--glass-rim), 0 0 0 1px var(--gold); }
 
 /* The composer field is the one recessed surface: it is a place to put
@@ -1954,7 +1961,7 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 
 /* Seats gain an inner glow while they work, so a busy roster reads as lit from
    within rather than merely outlined. */
-.seat.live {
+.seat[data-state="working"], .seat[data-state="queued"] {
   background-image: radial-gradient(120% 140% at 50% 0%, rgba(184,137,58,.16), transparent 62%);
 }
 
