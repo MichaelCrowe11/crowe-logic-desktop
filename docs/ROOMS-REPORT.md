@@ -231,3 +231,59 @@ own tree, IPC for diff and merge, and a review surface. The gate is called hard
 in the build order and this is what honouring that looks like - the dangerous
 half is finished and proven, and it stays switched off until the half that makes
 it usable is finished too.
+
+
+---
+
+## Addendum: the chain, in one piece
+
+Every suite above cuts the chain somewhere. `scripts/test-rooms.js` injects a
+fake runner, so it proves the engine's rules and never touches IPC. The browser
+preview drives the renderer against a shim, so it proves the surface and never
+reaches `main.js`. Both were green while `crowe:rooms:say` had never once been
+called through a live `ipcMain` - which is the kind of gap two green suites hide
+between them.
+
+`scripts/test-rooms-live.js` boots the real app the way `smoke-shot.js` does and
+drives a room from inside the renderer through the same `window.crowe` the
+product uses. Only the network is replaced, at the process's own `fetch`:
+
+```
+rooms, end to end
+  ok   the roster and templates come back through ipcMain - 20 agents, 8 templates
+  ok   a room is created and persists through the sessions store - at plan
+  ok   addressing one agent spends one call, not three - answered by regulatory-affairs
+  ok   @room reaches every seat, and the answers are attributed
+  ok   a critique round reviews the others and never itself - three critics
+  ok   cost is attributed per seat and sums to the room total - 7 calls, $0.0032
+  ok   a reloaded room restores every agent's view of the transcript - 9 messages, 4 authors
+  ok   stop-all halts the room's agents through the real handler
+```
+
+Pointing `baseUrl` at a loopback server was the obvious approach and the wrong
+one: `loadConfig()` rewrites a loopback gateway back to the real host on purpose,
+so a stale dev URL cannot brick a member install. Weakening that guard to make a
+test pass would have traded a real protection for a convenience, so the fake sits
+at `fetch` instead and every line of the product - config, guard, harness, IPC -
+runs untouched.
+
+### What it found
+
+**A signed-in headless shell was signed out again on the next config load.**
+`writeAuthStore()` has a plaintext fallback for machines with no keychain, gated
+on `CROWE_ALLOW_PLAINTEXT_AUTH` and an unpackaged build, and its comment names
+CI and SSH sessions as the cases it exists for. `readAuthStore()` returned `{}`
+before it could ever read that file back, so the escape hatch wrote something
+nothing could read. The token vanished with no error anywhere to say why. Fixed
+by mirroring the fallback on the read side under the same two conditions.
+
+This is shipped code on `main`, not room code, and no suite in the repo could
+have caught it: every other test either avoids auth or runs where a keychain
+exists.
+
+### What it still does not prove
+
+The model is a stub returning a fixed sentence. This proves the wiring - who is
+addressed, who spends, who reviews whom, what persists - and it does not prove
+that a critique round makes an answer better. That remains the blind A/B in the
+section above, and it needs a real gateway.

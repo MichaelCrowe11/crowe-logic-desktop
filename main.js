@@ -88,7 +88,18 @@ function configPath() { return path.join(app.getPath("userData"), "config.json")
 function authStorePath() { return path.join(app.getPath("userData"), "auth.bin"); }
 function readAuthStore() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return {};
+    if (!safeStorage.isEncryptionAvailable()) {
+      /* The mirror of writeAuthStore's fallback, under exactly the same two
+         conditions. Without it the escape hatch below writes a file nothing can
+         read: a headless shell could sign in, and be signed out again on the
+         next loadConfig(), with no error anywhere to say why. That is the case
+         the fallback exists for, so reading it back is not a widening of the
+         exposure - refusing to is just a fallback that does not work. */
+      if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) {
+        return JSON.parse(fs.readFileSync(authStorePath(), "utf8"));
+      }
+      return {};
+    }
     return JSON.parse(safeStorage.decryptString(fs.readFileSync(authStorePath())));
   } catch { return {}; }
 }
