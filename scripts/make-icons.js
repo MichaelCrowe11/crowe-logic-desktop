@@ -399,10 +399,19 @@ async function main() {
   // retired cube after the mark changed. They come off the same vectors now.
   // The tray source is oversized: main.js resizes it to 18px, and downsampling
   // a 44px render beats upscaling an 18px one on a Retina menu bar.
+  //
+  // avatar.png joins them, and it is the reason scripts/gen-icons.sh could be
+  // deleted. That shell script was the only thing that ever produced this file,
+  // and it needed rsvg-convert and ImageMagick — the external dependency this
+  // script exists to avoid — so nobody ran it, and avatar.png sat at the retired
+  // hex cube long after every other asset had moved. It is the same 1024px
+  // render of mark.svg the shell script made, now written through the funnel so
+  // --check covers it like everything else.
   for (const [out, src, size] of [
     ["tray.png", "mark-tray.svg", 44],
     ["tray-light.png", "mark-tray-light.svg", 44],
     ["mark.png", "mark.svg", 512],
+    ["avatar.png", "mark.svg", 1024],
   ]) {
     put(path.join(ASSETS, out), await render(win, path.join(ASSETS, src), size), `${size}, from ${src}`);
   }
