@@ -16,6 +16,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const zlib = require("zlib");
 const { execFileSync } = require("child_process");
 const { app, BrowserWindow } = require("electron");
 
@@ -88,6 +89,81 @@ async function renderWide(win, src, height) {
   return { png: Buffer.from(dataUrl.split(",")[1], "base64"), width };
 }
 
+// The iOS app icon, which cannot go through render() above.
+//
+// App Store Connect rejects an app icon that carries an alpha channel, and a
+// canvas toDataURL("image/png") is always RGBA — Chromium has no way to emit a
+// truecolour PNG. So this pulls the raw pixels back instead of a PNG, drops the
+// alpha byte, and encodes colour type 2 here. Compositing over an opaque
+// backdrop first is what keeps that drop lossless: icon-ios.svg paints its own
+// full-bleed background, so every pixel is already opaque and discarding the
+// channel changes nothing about the image.
+//
+// Doing it in-process rather than shelling out to sips or ImageMagick keeps the
+// promise the header makes: no image dependency to install, same output on any
+// machine that can run Electron.
+function crc32(buf) {
+  let c, crc = 0xffffffff;
+  for (let n = 0; n < buf.length; n++) {
+    c = (crc ^ buf[n]) & 0xff;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    crc = c ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+function encodeRgbPng(rgba, size) {
+  // Filter byte 0 (None) per scanline. The artwork is a smooth gradient behind
+  // flat shapes, so the fancier filters buy little and cost correctness risk.
+  const stride = size * 3 + 1;
+  const raw = Buffer.alloc(stride * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * stride] = 0;
+    for (let x = 0; x < size; x++) {
+      const s = (y * size + x) * 4, d = y * stride + 1 + x * 3;
+      raw[d] = rgba[s]; raw[d + 1] = rgba[s + 1]; raw[d + 2] = rgba[s + 2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;   // bit depth
+  ihdr[9] = 2;   // colour type 2 = truecolour, no alpha
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw, { level: 9 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+async function renderOpaque(win, src, size) {
+  const b64 = Buffer.from(svgAt(src, size), "utf8").toString("base64");
+  const px = await win.webContents.executeJavaScript(`(async () => {
+    const img = new Image();
+    img.src = "data:image/svg+xml;base64,${b64}";
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = ${size}; c.height = ${size};
+    const g = c.getContext("2d", { alpha: false });
+    g.drawImage(img, 0, 0, ${size}, ${size});
+    return Array.from(g.getImageData(0, 0, ${size}, ${size}).data);
+  })()`);
+  const rgba = Buffer.from(px);
+  // Cheap assertion rather than a silent bad upload: if the SVG ever stops
+  // painting its own background, this catches it here instead of at review.
+  for (let i = 3; i < rgba.length; i += 4) {
+    if (rgba[i] !== 255) throw new Error(`${path.basename(src)} produced a transparent pixel; the iOS icon must be fully opaque`);
+  }
+  return encodeRgbPng(rgba, size);
+}
+
 // ICO with PNG-compressed entries (supported since Windows Vista), which keeps
 // the 256px entry from bloating the file the way a raw BMP would.
 function buildIco(entries) {
@@ -157,6 +233,18 @@ async function main() {
 
   fs.writeFileSync(path.join(ASSETS, "icon.ico"), buildIco(ICO_SIZES.map((size) => ({ size, png: png.get(size) }))));
   console.log(`wrote assets/icon.ico (${ICO_SIZES.join(", ")})`);
+
+  // The phone. Until now this file was placed by hand and never regenerated, so
+  // it froze at the mark as it stood in #34 while the desktop rasters moved
+  // twice — the same drift this script was written to end, just one directory
+  // further out. Xcode's modern appiconset takes a single 1024 and derives the
+  // rest, so there is one file to write.
+  const IOS_ICON = path.join(__dirname, "..", "mobile", "ios", "App", "App",
+    "Assets.xcassets", "AppIcon.appiconset", "AppIcon-512@2x.png");
+  if (fs.existsSync(path.dirname(IOS_ICON))) {
+    fs.writeFileSync(IOS_ICON, await renderOpaque(win, path.join(ASSETS, "icon-ios.svg"), 1024));
+    console.log("wrote mobile iOS AppIcon-512@2x.png (1024, opaque, no alpha)");
+  }
 
   if (process.platform === "darwin") {
     const iconset = fs.mkdtempSync(path.join(os.tmpdir(), "croweicon-")) + "/icon.iconset";

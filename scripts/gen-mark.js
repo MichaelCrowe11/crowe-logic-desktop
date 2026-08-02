@@ -352,6 +352,41 @@ const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${
 `;
 emit("icon.svg", iconSvg);
 
+// The phone's icon, which is the same drawing under different rules. iOS masks
+// the corners itself and rejects any alpha channel, so the Big Sur tile above is
+// wrong there twice over: its rounded rect would sit inside iOS's own rounder
+// mask as a visible second corner, and its transparent margin is a rejection at
+// upload rather than a look.
+//
+// Full bleed, no rim. The rim highlight traces the tile's edge, and once iOS
+// crops that edge the highlight becomes a bright arc cutting across the corners.
+//
+// ART_IOS keeps the two icons the same size to the eye. On the desktop tile the
+// artwork is 0.58 of a 1024 canvas but the tile is only 824 of it, so the mark
+// fills 72% of the visible square. Matching that number here rather than reusing
+// 0.58 is what makes the claim above - one icon at two sizes - actually true;
+// reusing 0.58 would draw the phone's mark noticeably smaller than the Mac's.
+const ART_IOS = 0.72, ASIDE_IOS = TILE * ART_IOS, AOFF_IOS = (TILE - ASIDE_IOS) / 2;
+emit("icon-ios.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2620"/><stop offset="0.55" stop-color="#1a1713"/><stop offset="1" stop-color="#0e0c0a"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="url(#bg)"/>
+  <svg x="${AOFF_IOS}" y="${AOFF_IOS}" width="${ASIDE_IOS}" height="${ASIDE_IOS}" viewBox="${BX0.toFixed(2)} ${BY0.toFixed(2)} ${BW.toFixed(2)} ${BH.toFixed(2)}">
+    <path transform="translate(${LX.toFixed(4)} ${LY.toFixed(4)}) scale(${LS.toFixed(6)})" fill="#f7f3ea" d="${LETTER.d}"/>
+    <svg x="${SPX.toFixed(2)}" y="${SPY.toFixed(2)}" width="${SPO.toFixed(2)}" height="${SPO.toFixed(2)}" viewBox="0 0 ${VIEW} ${VIEW}">${
+  /* Same taper as the desktop icon. The phone never rasterizes this below the
+     home-screen rung, so it could afford the finer cut, but two cuts of one mark
+     is how the drift this whole file exists to prevent starts. */
+  markSvg({ taper: 0.45, fork: false, scale: SCALE.dark, id: "ios" })
+    .replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
+}</svg>
+  </svg>
+</svg>
+`);
+
 // The wordmark is outlines, not <text>. It used to be a <text> element naming
 // the family, which meant assets/lockup.svg — the logo — rendered in Georgia on
 // every machine without Fraunces installed: GitHub, npm, print, anyone opening
