@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Byte for byte the same adaptive icon as ic_launcher.xml, and deliberately
+     so: an adaptive icon is already masked to whatever shape the launcher picks,
+     so there is nothing for a "round" variant to say differently. It exists
+     because AndroidManifest.xml names android:roundIcon and the resource has to
+     resolve. The two files that DO differ are the legacy 48dp PNGs these
+     supersede on Android 7, where the composition owns its own shape.
+
+     See ic_launcher.xml for why the 16.7% insets are gone and what <monochrome>
+     is for. Change one of these files and change the other. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background>
-        <inset android:drawable="@mipmap/ic_launcher_background" android:inset="16.7%" />
-    </background>
-    <foreground>
-        <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />
-    </foreground>
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

@@ -60,6 +60,14 @@ jobs:
       - name: Check preview.html is regenerated
         run: npm run preview:check
 
+      # The vector half of the icon drift check. Pure string and Math work, so
+      # it is byte-identical on every platform and belongs in this block; the
+      # raster half needs the Electron binary and runs further down. Both are
+      # needed: replaying the #44 failure showed the SVGs were all correct and
+      # only the rasters were stale, so this step alone would have been green.
+      - name: Check the brand vectors are regenerated
+        run: node scripts/gen-mark.js --check
+
       # Electron 43 has no postinstall hook, so npm ci leaves dist/ empty and the
       # binary is fetched lazily on first launch. Fetch it up front, then grant
       # chrome-sandbox the SUID bit it requires: it refuses to start rather than
@@ -78,6 +86,25 @@ jobs:
 
       - name: Check palette contrast
         run: node scripts/check-contrast.js
+
+      # The raster half. It re-renders every committed icon from the vectors and
+      # compares, which is the only question staleness answers differently from
+      # scripts/test-icons.js: that file asks whether the icon is the right kind
+      # of picture, this one asks whether it is the current one. It compares
+      # decoded pixels rather than bytes, so a PNG packed by a Mac and one packed
+      # here are allowed to differ in bytes and not in image — which is what lets
+      # this run on ubuntu at all.
+      #
+      # If this is the first red run after an Electron bump, that is the caret
+      # range in package.json changing what Chromium's canvas draws, and
+      # `npm run icons` plus a commit is the fix. If it is red for antialiasing
+      # differences between llvmpipe here and Metal on a Mac, the fix is
+      # app.disableHardwareAcceleration() in make-icons.js and one regeneration
+      # commit, and failing that this step moves to a macOS runner.
+      - name: Check the committed icons match the vectors (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/make-icons.js --check
 
       - name: Run panel behaviour tests (headless via xvfb)
         env:

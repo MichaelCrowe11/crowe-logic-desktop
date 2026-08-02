@@ -17,7 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
     "preview:gen": "node scripts/gen-preview.js",
     "preview:check": "node scripts/gen-preview.js --check",
@@ -25,6 +25,7 @@
     "publish:r2": "bash scripts/publish-r2.sh release",
     "verify:release": "node scripts/verify-release.js",
     "icons": "node scripts/gen-mark.js && electron scripts/make-icons.js",
+    "icons:check": "node scripts/gen-mark.js --check && electron scripts/make-icons.js --check",
     "mobile:www": "node mobile/scripts/build-www.js",
     "mobile:test": "node scripts/test-mobile-bridge.js"
   },

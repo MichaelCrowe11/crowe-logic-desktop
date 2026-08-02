@@ -5,8 +5,19 @@
 // smudge. gen-mark.js was drawing a correct icon.svg the whole time; nothing
 // ever rasterized it.
 //
-// These checks decode the real files, so they fail if someone hand-edits an
-// icon or forgets to re-run `npm run icons` after changing the mark.
+// These checks decode the real files, so they catch art that never came from the
+// pipeline: a hand-placed export, a wrong-sized canvas, an .icns missing half the
+// size ladder, an .ico whose directory lies about what it holds.
+//
+// They cannot catch art from an OLDER RUN of the pipeline, and it is worth being
+// blunt about that, because this header used to claim otherwise. Every assertion
+// below is a property of the drawing - corner alpha, tile extent, mark extent,
+// the ladder - and a stale render satisfies all of them, having been drawn by
+// this same generator one brand revision ago. Measured, not assumed: this file
+// reported 14/14 on the stale rasters that #44 then had to fix by hand.
+// Staleness belongs to `npm run icons:check`, which re-renders from the vectors
+// and compares pixels. Two questions, two files: this one asks whether the icon
+// is the right kind of picture, that one asks whether it is the current one.
 //
 // Usage: npx electron scripts/test-icons.js
 
@@ -68,6 +79,28 @@ function probe(image, size) {
     tile: width_of(span),
     mark: width_of(mark),
   };
+}
+
+// The alpha bounding box of the drawn art, in pixels, at the file's own size.
+// probe() above measures only the horizontal extent, which is all a square tile
+// needs; Android's constraint is on the artwork's diagonal, so this one needs
+// both axes and must not resize on the way.
+function inkBox(image) {
+  const { width, height } = image.getSize();
+  const bmp = image.toBitmap();
+  let minX = width, maxX = -1, minY = height, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (bmp[(y * width + x) * 4 + 3] <= 8) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return { width, w: 0, h: 0, diag: 0 };
+  const w = maxX - minX + 1, h = maxY - minY + 1;
+  return { width, w, h, diag: Math.hypot(w, h) };
 }
 
 // The chunk types iconutil emits for a complete iconset, and the pixel size each
@@ -180,6 +213,67 @@ function main() {
     }
     for (const want of [16, 32, 256]) {
       if (!sizes.includes(want)) throw new Error(`missing the ${want}px entry Windows asks for`);
+    }
+  });
+
+  // Android's adaptive icon, which `npm run icons:check` cannot speak to at all.
+  // A hash check pins the bytes to the vectors; it says nothing about whether
+  // the vectors are safe under a mask the launcher picks and we never see. If
+  // the ink grows — a wider taper, a bigger corona — ART_ANDROID stays 0.44 and
+  // the serifs quietly start getting shaved on circle-masked launchers with
+  // every drift check still green.
+  const ANDROID = path.join(__dirname, "..", "mobile", "android", "app", "src", "main", "res");
+
+  check("the Android adaptive layers are true 108dp assets", () => {
+    // The layers shipped at the 48dp ladder with a 16.7% inset in the XML
+    // papering over the gap, which cost a third of the resolution: 18 pixels of
+    // artwork at ldpi. Nothing else catches this — the drift check compares the
+    // committed art against whatever the generator writes, so moving the
+    // generator to the wrong ladder keeps it green.
+    for (const [name, want] of [["ic_launcher_foreground", 432], ["ic_launcher_background", 432],
+      ["ic_launcher_monochrome", 432], ["ic_launcher", 192], ["ic_launcher_round", 192]]) {
+      const file = path.join(ANDROID, "mipmap-xxxhdpi", `${name}.png`);
+      if (!fs.existsSync(file)) throw new Error(`missing ${name}.png at xxxhdpi`);
+      const d = fs.readFileSync(file);
+      const px = d.readUInt32BE(16);
+      if (px !== want) throw new Error(`${name}.png is ${px}px at xxxhdpi, want ${want}`);
+    }
+  });
+
+  check("the Android adaptive XML matches the layers it points at", () => {
+    // The inset and the 108dp assets are two halves of one change and neither
+    // half errors on its own: ship the big art with the inset still there and
+    // the icon draws at 44% of where it belongs; drop the inset while the art is
+    // still small and it draws at 150% and gets its edges cut.
+    for (const name of ["ic_launcher.xml", "ic_launcher_round.xml"]) {
+      // Comments out first: those files explain the inset at length, and an
+      // assertion that reads prose is an assertion about prose.
+      const xml = fs.readFileSync(path.join(ANDROID, "mipmap-anydpi-v26", name), "utf8")
+        .replace(/<!--[\s\S]*?-->/g, "");
+      if (/<inset/.test(xml)) throw new Error(`${name} still insets the layers, which are 108dp now`);
+      if (!/<monochrome/.test(xml)) throw new Error(`${name} has no <monochrome>; themed icons get a desaturated fallback`);
+    }
+  });
+
+  check("the Android foreground fits the adaptive safe circle", () => {
+    // The mask applies to the centre 72 of 108dp and Google's safe zone for key
+    // content is a 66dp-diameter CIRCLE, so the constraint is on the artwork's
+    // diagonal, not its width. gen-wordmark-icon.py had this reasoning right and
+    // then compared a box side against a circle diameter, which is how the icon
+    // Android shipped got here.
+    const image = nativeImage.createFromPath(path.join(ANDROID, "mipmap-xxxhdpi", "ic_launcher_foreground.png"));
+    if (image.isEmpty()) throw new Error("ic_launcher_foreground.png did not decode");
+    const { width, diag } = inkBox(image);
+    const safe = (width * 66) / 108;
+    if (diag > safe) {
+      throw new Error(`ink diagonal is ${diag.toFixed(0)}px against a ${safe.toFixed(0)}px safe circle`);
+    }
+    // And a floor, because a ceiling alone was green on the art this replaced.
+    // That art measured about 200px of diagonal in this frame — 48% of the
+    // visible tile where iOS and macOS both read at 72% — and every check in
+    // this file passed it.
+    if (diag < safe * 0.85) {
+      throw new Error(`ink diagonal is only ${diag.toFixed(0)}px of a ${safe.toFixed(0)}px safe circle; the mark is drawn too small`);
     }
   });
 
