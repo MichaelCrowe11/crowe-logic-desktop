@@ -101,6 +101,11 @@ const sameImage = (a, b) => a.width === b.width && a.height === b.height && a.bm
 // image itself is verified exact — a stale raster can be pixel-identical to a
 // fresh one only if the vector change did not alter the drawing at all, which
 // is not drift that matters.
+// PNG colour type, or null for anything that is not a PNG. Byte 25 of the
+// signature+IHDR prologue, which is fixed-position in every PNG.
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const colourType = (b) => (b.length > 25 && b.subarray(0, 8).equals(PNG_SIG) ? b[25] : null);
+
 function compare(file, fresh) {
   const name = rel(file);
   if (!fs.existsSync(file)) { stale.push(`${name} (missing)`); return; }
@@ -114,8 +119,31 @@ function compare(file, fresh) {
     stale.push(`${name} (${err.message})`);
     return;
   }
-  if (sameImage(a, b)) reencoded.push(name);
-  else stale.push(`${name} (${a.width}x${a.height} committed, ${b.width}x${b.height} fresh)`);
+  if (!sameImage(a, b)) {
+    stale.push(`${name} (${a.width}x${a.height} committed, ${b.width}x${b.height} fresh)`);
+    return;
+  }
+  // Same picture, but "same picture" is not the whole contract for every target.
+  //
+  // The pixel comparison above is deliberately blind to encoding, which is what
+  // lets a Mac-rendered raster pass on a Linux runner. For the iOS app icon that
+  // blindness is a hole big enough to fail an upload through: an RGBA encoding
+  // with alpha=255 everywhere decodes to bitmap-identical pixels, so it passes
+  // as "re-encoded", and App Store Connect rejects it as ITMS-90717 (an icon
+  // carrying an alpha channel). renderOpaque asserts opacity at GENERATION time
+  // and emits colour type 2, but nothing was checking what is actually
+  // committed — so a hand-edit, a lossless optimiser pass, or a tool that
+  // helpfully "fixed" the file could put alpha back and every check stayed green.
+  //
+  // Comparing the colour type against the fresh render closes it without
+  // hardcoding which files are opaque: the generator already encodes each target
+  // the way that target requires, so the fresh render is the specification.
+  const ca = colourType(current), cb = colourType(fresh);
+  if (ca !== null && cb !== null && ca !== cb) {
+    stale.push(`${name} (PNG colour type ${ca} committed, ${cb} fresh${cb === 2 ? " — an alpha channel here is an App Store rejection" : ""})`);
+    return;
+  }
+  reencoded.push(name);
 }
 
 // The containers are checked by their contents, never by their bytes.
@@ -483,7 +511,16 @@ async function main() {
   for (const name of reencoded) {
     console.log(`ok      ${name} — same picture, different bytes (another encoder wrote it)`);
   }
-  for (const name of skipped) console.log(`note    ${name} is not in this checkout, so its icons were not checked`);
+  // A skip is fine when generating — a checkout without mobile/ still wants its
+  // desktop icons — but in --check mode a skip is the failure this whole file
+  // exists to prevent, one level up. Renaming mobile/android/app/src/main/res
+  // dropped 30 of 41 files from coverage and the run still exited 0, printing a
+  // note nobody reads in CI. The check would then be green precisely because it
+  // had stopped looking, which is how test-icons.js got to 14/14 on stale art.
+  for (const name of skipped) {
+    if (CHECK) stale.push(`${name} is missing from this checkout, so its icons went unchecked — a check that stops looking is not a passing check`);
+    else console.log(`note    ${name} is not in this checkout, so its icons were not checked`);
+  }
   if (stale.length) {
     console.error(`\n${stale.length} of ${touched.length} committed raster${stale.length > 1 ? "s are" : " is"} not what the vectors draw:`);
     for (const name of stale) console.error(`  ${name}`);
