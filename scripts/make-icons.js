@@ -46,9 +46,22 @@ const CHECK = process.argv.includes("--check");
 // macOS wants the full Big Sur ladder; .ico covers the Windows shell sizes.
 const ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024];
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
-// What --check can compare inside the .icns. iconutil emits the 16px rung as
-// ARGB (ic04) rather than PNG, so there is no 16px image in there to decode;
-// that rung's presence is asserted by the ladder check in test-icons.js instead.
+// What --check can compare inside the .icns. iconutil emits the two smallest
+// rungs as ic04/ic05 — Apple's ARGB planes under an icns-specific RLE, not PNG —
+// so there is no image there this script can decode without writing that codec.
+//
+// Stated precisely, because the earlier version of this comment claimed
+// test-icons.js covered them and it does not: that suite asserts ic04 and ic05
+// are PRESENT, never that their content is current. So the 16px and 32px rungs
+// are unverified content, and a hand-spliced one passes.
+//
+// Left that way on purpose. The drift that actually happens is a whole stale
+// .icns, and every PNG rung from 32 up catches that — an ARGB rung can only go
+// stale on its own if someone edits the container by hand, since iconutil
+// rebuilds all rungs together from the same fresh renders. Writing an ARGB+RLE
+// decoder to close a tampering-only gap would add a fragile codec that this
+// script cannot validate anywhere but one machine, and a check that is subtly
+// wrong is worse than one that is honestly narrow.
 const ICNS_PNG_SIZES = ICNS_SIZES.filter((s) => s >= 32);
 const ICNS_NAMES = {
   16: ["icon_16x16.png"],
