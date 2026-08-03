@@ -97,7 +97,45 @@ function bitmap(buf, what) {
   const { width, height } = img.getSize();
   return { width, height, bmp: img.toBitmap() };
 }
-const sameImage = (a, b) => a.width === b.width && a.height === b.height && a.bmp.equals(b.bmp);
+/* Exact bytes are still proof, and still the fast path. When they differ, the
+   picture is compared with a tolerance, because this check runs on a Linux CI
+   box against art rendered on a Mac and Skia does not rasterise antialiased
+   vectors to identical bitmaps across platforms. Nothing below this line was
+   wrong about that being desirable; the assumption that it was already true is
+   what was wrong. It held while the ladder covered 14 files, and expanding it
+   to 41 is what exposed it: every .ico rung and every Android mipmap failed on
+   Linux against art this machine calls current.
+
+   The tolerance is shaped to the difference it admits. Renderer noise lives on
+   the edges of shapes — a thin band of pixels whose coverage was rounded the
+   other way, each off by a little. A real vector change moves or recolours
+   area, which is many pixels off by a lot. So a raster passes when nearly every
+   channel is nearly identical, and fails the moment the difference stops
+   looking like an edge and starts looking like a shape.
+
+   Both numbers are reported on failure, so the next person to see this does not
+   have to guess which of the two they are holding. */
+const PIXEL_DELTA = 24;      // a channel step one edge pixel may be rounded by
+const PIXEL_BUDGET = 0.03;   // and the share of channels allowed to reach it
+let lastDiff = null;
+function diffNote() {
+  if (!lastDiff) return "";
+  return ` — ${(lastDiff.share * 100).toFixed(2)}% of channels off by more than ${PIXEL_DELTA}, worst ${lastDiff.worst}`;
+}
+const sameImage = (a, b) => {
+  lastDiff = null;
+  if (a.width !== b.width || a.height !== b.height) return false;
+  if (a.bmp.equals(b.bmp)) return true;
+  const A = a.bmp, B = b.bmp;
+  let over = 0, worst = 0;
+  for (let i = 0; i < A.length; i++) {
+    const d = A[i] > B[i] ? A[i] - B[i] : B[i] - A[i];
+    if (d > worst) worst = d;
+    if (d > PIXEL_DELTA) over++;
+  }
+  lastDiff = { over, worst, share: over / A.length };
+  return lastDiff.share <= PIXEL_BUDGET;
+};
 
 // Bytes first, pixels second, and that order is the whole portability story.
 //
@@ -133,7 +171,7 @@ function compare(file, fresh) {
     return;
   }
   if (!sameImage(a, b)) {
-    stale.push(`${name} (${a.width}x${a.height} committed, ${b.width}x${b.height} fresh)`);
+    stale.push(`${name} (${a.width}x${a.height} committed, ${b.width}x${b.height} fresh${diffNote()})`);
     return;
   }
   // Same picture, but "same picture" is not the whole contract for every target.
@@ -188,7 +226,7 @@ function checkContainer(file, embedded, png, want) {
       if (sameImage(bitmap(blob, `${name} @${size}`), bitmap(png.get(size), `the fresh ${size}px render`))) {
         reencoded.push(`${name} @${size}px`);
       } else {
-        stale.push(`${name} (the ${size}px entry is not what icon.svg draws)`);
+        stale.push(`${name} (the ${size}px entry is not what icon.svg draws${diffNote()})`);
       }
     } catch (err) {
       stale.push(`${name} @${size}px (${err.message})`);
