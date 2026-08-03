@@ -1110,6 +1110,93 @@ body.dark .gr-id { color: var(--gold); }
    look like the same quiet control it was a moment ago. */
 .gr-del.armed { color: var(--diff-del-fg); border-color: var(--err-fg); background: var(--err-bg); }
 .gr-note { font-family: var(--body); font-size: var(--fs-sm); color: var(--muted); line-height: 1.5; margin-top: 3px; }
+
+/* ── The lane's view bar, and the views it switches between ──
+   The bar is chrome over a list the grower already knows, so it stays quiet: no
+   fill, one hairline under it, and the selected tab marked by a rule rather than
+   by a filled pill. The count on the right is the only number, and it only says
+   "n of m" while a filter is narrowing the set. */
+.grow-views { display: flex; align-items: center; gap: 10px; margin: 0 0 10px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.gv-tabs { display: flex; gap: 2px; }
+.gv-tab { font-family: var(--body); font-size: var(--fs-sm); color: var(--muted);
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  padding: 5px 10px; cursor: pointer; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.gv-tab:hover { color: var(--ink); }
+.gv-tab.on { color: var(--ink); border-bottom-color: var(--gold); font-weight: 600; }
+.gv-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.gv-q { flex: 1; min-width: 0; max-width: 280px; margin-left: auto;
+  font-family: var(--body); font-size: var(--fs-sm); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 9px; }
+.gv-q:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.gv-count { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); flex: 0 0 auto; }
+
+.grow-table-wrap { overflow-x: auto; }
+.grow-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: var(--fs-sm); }
+.grow-table th { text-align: left; padding: 0; border-bottom: 1px solid var(--line-strong); }
+.grow-table th.num, .grow-table td.num { text-align: right; }
+.gt-h { width: 100%; text-align: inherit; font: inherit; font-size: var(--fs-cap);
+  letter-spacing: .03em; text-transform: uppercase; color: var(--muted);
+  background: transparent; border: none; padding: 7px 10px; cursor: pointer; white-space: nowrap; }
+.gt-h:hover { color: var(--ink); }
+.gt-h.on { color: var(--gold-text); }
+.gt-h span { margin-left: 4px; }
+.gt-h:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.gt-row { cursor: pointer; }
+.gt-row td { padding: 7px 10px; border-bottom: 1px solid var(--line); color: var(--ink); white-space: nowrap; }
+.gt-row:hover td { background: var(--raised); }
+.gt-row.editing td { background: var(--raised); box-shadow: inset 0 2px 0 var(--gold); }
+/* The first column is the lot code in every lane that has one, and it is the
+   thing the eye runs down, so it keeps the gold the list view gives it. */
+.gt-row td:first-child { color: var(--gold-deep); }
+body.dark .gt-row td:first-child { color: var(--gold); }
+
+/* Columns scroll sideways rather than squeezing: a pipeline with six stages on a
+   phone is a horizontal thing, and shrinking each column to fit turns every card
+   into a truncated code. */
+.grow-board { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; align-items: flex-start; }
+.gb-col { flex: 0 0 210px; min-width: 210px; background: var(--panel);
+  border: 1px solid var(--line); border-top-color: var(--hair-top);
+  border-radius: var(--r-lg); padding: 8px; }
+.gb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 2px 4px 8px; font-family: var(--mono); font-size: var(--fs-cap);
+  letter-spacing: .03em; text-transform: uppercase; }
+.gb-head b { color: var(--ink); font-weight: 600; }
+.gb-head span { color: var(--muted); }
+.gb-card { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+  background: var(--raised); border: 1px solid var(--line); border-top-color: var(--hair-top);
+  border-radius: var(--r-md); padding: 8px 9px; margin-bottom: 6px; cursor: pointer;
+  font-family: var(--mono); font-size: var(--fs-sm); box-shadow: var(--z1); }
+.gb-card:hover { border-color: var(--gold); }
+.gb-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.gb-card.editing { box-shadow: inset 2px 0 0 var(--gold), var(--z1); }
+.gb-id { color: var(--gold-deep); }
+body.dark .gb-id { color: var(--gold); }
+.gb-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gb-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.gb-flags em { font-style: normal; font-size: var(--fs-cap); color: var(--muted);
+  border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 6px; }
+.gb-empty { color: var(--muted); font-size: var(--fs-cap); padding: 4px 5px 6px; }
+
+/* ── The lot code, as the link it always was ──
+   A row that names a lot now opens that lot's trace. The code is styled as the
+   text it already was rather than as a button, because a row of buttons reads
+   as a toolbar; the underline on hover and the focus ring are what say it is a
+   control. Everything else on the row still opens the record for correction. */
+button.gr-id, .gt-lot, button.gb-id {
+  font: inherit; color: inherit; background: transparent; border: none;
+  padding: 0; text-align: left; cursor: pointer; }
+button.gr-id { color: var(--gold-deep); }
+body.dark button.gr-id { color: var(--gold); }
+.gt-lot { color: var(--gold-deep); padding: 7px 10px; width: 100%; }
+body.dark .gt-lot { color: var(--gold); }
+button.gr-id:hover, .gt-lot:hover, button.gb-id:hover { text-decoration: underline; }
+button.gr-id:focus-visible, .gt-lot:focus-visible, button.gb-id:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-xs); }
+/* The board card stopped being a button so the code inside it could be one. */
+.gb-open { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+  font: inherit; color: inherit; background: transparent; border: none; padding: 0; cursor: pointer; }
+.gb-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
 .surface-status { display: flex; align-items: center; gap: 16px; margin-top: 24px; padding-top: 10px;
   border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
 .surface-status .spacer { flex: 1; }

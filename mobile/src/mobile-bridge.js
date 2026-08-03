@@ -1405,7 +1405,26 @@
   window.crowe = promisify({
     // Every space ships on mobile; the phone chrome decides how they are reached.
     installSpaces: null,
-    mobile: { platform: PLATFORM, native: NATIVE },
+    /* Also the flag renderer.js branches on: it is the one part of the bridge
+       that exists before any class is put on the body, so a panel deck mounting
+       during init can still tell which shell it is in. */
+    mobile: {
+      platform: PLATFORM, native: NATIVE,
+      /* The browser panel's Open button. SFSafariViewController on iOS, Custom
+         Tabs on Android — the page keeps the cookies the user already has, and
+         the app keeps its process. Refusing anything that is not http(s) keeps
+         a saved bookmark from becoming a way to reach a native scheme. The
+         window.open fallback is `npm run serve`, where there is no plugin and a
+         new tab is the honest equivalent. */
+      openExternal: async (url) => {
+        url = String(url || "").trim();
+        if (!/^https?:\/\//i.test(url)) return { error: "only http and https addresses open here" };
+        const Browser = plugin("Browser");
+        if (Browser) { await Browser.open({ url }); return { ok: true }; }
+        window.open(url, "_blank", "noopener");
+        return { ok: true };
+      },
+    },
 
     agent: {
       run: async (messages, id = "main", options = {}) => {

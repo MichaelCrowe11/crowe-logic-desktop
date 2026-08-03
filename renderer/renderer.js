@@ -853,6 +853,11 @@ function browserUserAgent(ua) {
   return ua.replace(/(\(KHTML, like Gecko\) ).*?(Chrome\/)/, "$1$2").replace(/ Electron\/[\d.]+/, "");
 }
 function mountBrowser(p, body) {
+  /* The phone has no engine to embed, so it gets a different panel entirely.
+     Branching on window.crowe.mobile rather than body.classList: mobile-ui.js
+     adds the class after renderer.js has run, and a restored panel deck mounts
+     during init - the class is not reliably there yet, the bridge always is. */
+  if (window.crowe && window.crowe.mobile) return mountBrowserHandoff(p, body);
   body.style.position="relative";
   const bar=document.createElement("div");bar.className="browser-tools";
   bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false" aria-label="Address"><button class="go ghost sm">Go</button>';
@@ -864,6 +869,49 @@ function mountBrowser(p, body) {
   bar.querySelector(".back").onclick=()=>w.canGoBack()&&w.goBack();bar.querySelector(".forward").onclick=()=>w.canGoForward()&&w.goForward();bar.querySelector(".reload").onclick=()=>w.reload();bar.querySelector(".hist").onclick=()=>showList(p.history,"History");bar.querySelector(".bookmark").onclick=()=>{const u=w.getURL()||p.url;if(u&&!p.bookmarks.includes(u))p.bookmarks.push(u);savePanelState()};bar.querySelector(".bookmarks").onclick=()=>showList(p.bookmarks,"Bookmarks");bar.querySelector(".go").onclick=()=>go(input.value);input.onkeydown=(e)=>{if(e.key==="Enter")go(input.value)};
   const navigated=()=>{const u=w.getURL();if(!u)return;input.value=u;p.url=u;if(p.history[p.history.length-1]!==u)p.history.push(u);p.history=p.history.slice(-100);savePanelState()};
   w.addEventListener("did-navigate",navigated);w.addEventListener("did-navigate-in-page",navigated);go(p.url);
+}
+/* <webview> is Electron's element. In the Capacitor WKWebView it parses as an
+   unknown inline box, so this panel drew a toolbar over nothing and every
+   control on it threw on a method that had never existed there: canGoBack,
+   goBack, reload, getURL. It did not degrade, it just failed silently on the
+   first tap.
+
+   The address, the history and the bookmarks all still mean something on a
+   phone, so they stay. Only the viewport goes: Open hands the page to the
+   system browser, which on iOS is SFSafariViewController - the sanctioned
+   in-app browser, and the only one where a login can complete against the
+   cookies the user already has. */
+function mountBrowserHandoff(p, body) {
+  p.history=p.history||[]; p.bookmarks=p.bookmarks||[];
+  const bar=document.createElement("div");bar.className="browser-tools";
+  bar.innerHTML='<input class="browser-url" spellcheck="false" autocapitalize="none" autocorrect="off" inputmode="url" aria-label="Address"><button class="go primary sm">Open</button><button class="bookmark ghost sm" title="Bookmark this address">Bookmark</button><button class="bookmarks ghost sm">Saved</button>';
+  const host=document.createElement("div");host.className="browser-host browser-handoff";
+  body.append(bar,host);
+  const input=bar.querySelector("input");input.value=p.url||"";
+  let showing="Recent";
+  const list=()=>showing==="Recent"?p.history:p.bookmarks;
+  const render=()=>{
+    const items=list();
+    host.innerHTML=`<div class="bh-head"><b>${showing}</b>${items.length?'<button class="ghost sm bh-clear">Clear</button>':""}</div>`
+      +(items.length?[...items].reverse().slice(0,40).map((u)=>`<button class="bh-row" data-u="${esc(u)}">${esc(u)}</button>`).join("")
+                    :`<p class="bh-empty">${showing==="Saved"?"Nothing saved yet.":"Nothing opened yet."}</p>`)
+      +'<p class="bh-note">Pages open in the phone’s browser. This panel keeps the addresses.</p>';
+    host.querySelectorAll(".bh-row").forEach((b)=>{b.onclick=()=>go(b.dataset.u)});
+    const clear=host.querySelector(".bh-clear");
+    if(clear)clear.onclick=()=>{if(showing==="Recent")p.history=[];else p.bookmarks=[];savePanelState();render()};
+  };
+  const go=async(u)=>{
+    u=normalizeBrowserUrl(u);if(!u)return;
+    input.value=u;p.url=u;
+    if(p.history[p.history.length-1]!==u)p.history.push(u);
+    p.history=p.history.slice(-100);savePanelState();render();
+    try{await window.crowe.mobile.openExternal(u)}catch{/* the sheet was dismissed, or there is no plugin to dismiss */}
+  };
+  bar.querySelector(".go").onclick=()=>go(input.value);
+  input.onkeydown=(e)=>{if(e.key==="Enter"){e.preventDefault();go(input.value)}};
+  bar.querySelector(".bookmark").onclick=()=>{const u=normalizeBrowserUrl(input.value||p.url);if(u&&!p.bookmarks.includes(u))p.bookmarks.push(u);savePanelState();showing="Saved";render()};
+  bar.querySelector(".bookmarks").onclick=()=>{showing=showing==="Saved"?"Recent":"Saved";render()};
+  render();
 }
 const WORKFLOW_TEMPLATES=[
   {name:"Service Call Recovery",nodes:[{name:"Call Intake",prompt:"Review the customer request, identify urgency, trade, location, and missing details."},{name:"Dispatch Planner",prompt:"Create the best booking and dispatch plan from this request."},{name:"Customer Follow-up",prompt:"Write a concise confirmation and next-step message for the customer."}]},
@@ -2498,22 +2546,47 @@ async function renderGrowLane(lane) {
   const editing = cultEdit ? rows.find((r) => r && r.id === cultEdit) || null : null;
   if (cultEdit && !editing) cultEdit = null; // it was deleted out from under us
   body.appendChild(growForm(lane, def, rows, refs, editing));
+  const q = laneQuery(lane);
+  const matched = rows.filter((r) => growMatch(def, r, q));
+  const sort = laneSort(lane);
+  const sorted = sort
+    ? matched.slice().sort(growCompare(def, sort.k, sort.dir))
+    : matched.slice().sort((a, b) => growWhen(def, b) - growWhen(def, a));
+  body.appendChild(growViewBar(lane, def, rows.length, sorted.length));
+  if (!sorted.length) {
+    const empty = document.createElement("div"); empty.className = "card-empty";
+    empty.textContent = q
+      ? `Nothing here matches "${q}".`
+      : `No ${def.plural} yet — the first one goes in above.`;
+    body.appendChild(empty);
+    return;
+  }
+  $("lane-sub").textContent = `${def.sub}  ·  ${sorted.length} ${sorted.length === 1 ? def.one : def.plural}`;
+  const view = laneView(lane);
+  if (view === "table") { body.appendChild(growTable(lane, def, sorted, editing)); return; }
+  if (view === "board" && growGroupKey(def)) { body.appendChild(growBoard(lane, def, sorted, editing)); return; }
   const list = document.createElement("div"); list.className = "grow-list";
-  const sorted = rows.slice().sort((a, b) => growWhen(def, b) - growWhen(def, a));
-  if (!sorted.length) list.innerHTML = `<div class="card-empty">No ${esc(def.plural)} yet — the first one goes in above.</div>`;
-  else $("lane-sub").textContent = `${def.sub}  ·  ${sorted.length} ${sorted.length === 1 ? def.one : def.plural}`;
   for (const r of sorted) {
     const row = document.createElement("div");
     row.className = "growrow" + (editing && editing.id === r.id ? " editing" : "");
     const flags = (def.flags(r) || []).filter(Boolean);
     const note = (def.note ? def.note(r) : r.notes) || "";
+    /* The lot code is its own control now: it traces, and the rest of the row
+       still opens the record for correction. Two buttons rather than one
+       nested in the other, which is not markup a browser will accept. */
+    const lot = growLotOf(lane, r);
     row.innerHTML =
-      `<div class="gr-main"><button class="gr-open" title="Edit this ${esc(def.one)}">` +
-      `<span class="gr-id">${esc(def.id(r) || "—")}</span>` +
+      `<div class="gr-main">` +
+      (lot
+        ? `<button class="gr-id gr-trace" title="Trace lot ${esc(lot)}">${esc(def.id(r) || "—")}</button>`
+        : `<span class="gr-id">${esc(def.id(r) || "—")}</span>`) +
+      `<button class="gr-open" title="Edit this ${esc(def.one)}">` +
       `<span class="gr-name">${esc(def.name(r) || "")}</span>` +
       `<span class="gr-flags">${flags.map((x) => `<em>${esc(x)}</em>`).join("")}</span></button>` +
       `<button class="gr-del" title="Delete">Delete</button></div>` +
       (note ? `<div class="gr-note">${esc(note)}</div>` : "");
+    const tb = row.querySelector(".gr-trace");
+    if (tb) tb.addEventListener("click", () => growTraceTo(lot));
     row.querySelector(".gr-open").addEventListener("click", () => {
       cultEdit = cultEdit === r.id ? null : r.id; // a second click puts it back
       renderGrowLane(lane);
@@ -2539,6 +2612,186 @@ async function renderGrowLane(lane) {
   }
   body.appendChild(list);
 }
+/* ── Views over a lane ───────────────────────────────────────────────────────
+   A lane in GROW is already a database definition and not just a form: `fields`
+   carries the columns, `opts` on a field is an enum, `from` is a relation to
+   another lane, and `date` names the column a calendar would key on. So the
+   views below are read off the same definition the form is, and a new record
+   type still costs data rather than a surface.
+
+   Three views, and each one answers a question the flat list could not:
+
+     list    what happened most recently. The original, and still the default,
+             because a dated journal is what a grower opens the app for.
+     table   what is true across every row at once. Sortable columns, because
+             "heaviest flush" and "oldest block still fruiting" are questions
+             about the whole set, not about the newest member of it.
+     board   where everything stands. Grouped by the lane's first enum, which
+             for blocks is the stage, so the wall of lots becomes the pipeline
+             it actually is.
+
+   View, sort and query are per lane and persisted: a grower who works in the
+   board comes back to the board. They live in one localStorage key rather than
+   three, so a lane's whole view state is written and read as a unit. */
+const GROW_VIEW_KEY = "crowe-grow-views";
+function growViews() { try { return JSON.parse(localStorage.getItem(GROW_VIEW_KEY) || "{}") || {}; } catch { return {}; } }
+function growViewPatch(lane, patch) {
+  const all = growViews(); all[lane] = { ...(all[lane] || {}), ...patch };
+  try { localStorage.setItem(GROW_VIEW_KEY, JSON.stringify(all)); } catch { /* private mode, and the view is not worth failing over */ }
+}
+function laneView(lane) { return growViews()[lane]?.view || "list"; }
+function laneSort(lane) { return growViews()[lane]?.sort || null; }
+function laneQuery(lane) { return growViews()[lane]?.q || ""; }
+
+/* The column a board groups by: the lane's first enum field. Lanes without one
+   (env, strains, recipes) have nothing to stack into columns, so they fall back
+   to the list and the Board button is not offered. */
+function growGroupKey(def) { return (def.fields.find((f) => f.opts && f.opts.length) || {}).k || null; }
+
+/* Which field on a lane holds the lot the row belongs to. Blocks are the lot;
+   flushes and contamination point at one. The rest (env by room, the strain and
+   recipe libraries, the journal) are not about a single lot and get no link,
+   because a link that lands on "no block record" is worse than no link. */
+const GROW_LOT = { blocks: "code", flushes: "block", contam: "block" };
+function growLotOf(lane, r) { const k = GROW_LOT[lane]; return k ? String(r[k] || "") : ""; }
+
+/* Trace is already the record detail view: one lot, every block, flush,
+   contamination reading, environment row and journal note recorded against it,
+   with the export the compliance file wants. It was only reachable by typing a
+   lot code into its own lane, so the rows that name a lot now go there. The nav
+   button is clicked rather than the state set directly, for the reason the rest
+   of this file clicks controls it already owns: the button also moves the lane
+   highlight and whatever else open() decides, and a second path would drift. */
+function growTraceTo(code) {
+  if (!code) return;
+  traceLot = String(code);
+  const b = document.querySelector('#cult-nav [data-cult="trace"]');
+  if (b) b.click(); else { cultLane = "trace"; renderTrace(); }
+}
+
+/* Every word has to appear somewhere in the row, in any field. Substring rather
+   than prefix: a grower searching "trich" wants the Trichoderma rows, and one
+   searching "260722" wants the lot whether it is the block's own code or the
+   block a flush came off. */
+function growMatch(def, r, q) {
+  if (!q) return true;
+  const hay = [...def.fields.map((f) => r[f.k]), def.id(r), def.name(r)].filter(Boolean).join(" ").toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
+}
+
+/* Sorted by what the column holds, not by how it prints: a weight of 10 sorts
+   above 9, and a date sorts by its stamp. Blanks sink to the bottom in either
+   direction, because a row with no weight is not the lightest harvest. */
+function growCompare(def, k, dir) {
+  const fd = def.fields.find((f) => f.k === k) || {};
+  return (a, b) => {
+    const av = a[k], bv = b[k];
+    const ae = av === undefined || av === null || av === "", be = bv === undefined || bv === null || bv === "";
+    if (ae || be) return ae && be ? 0 : ae ? 1 : -1;
+    if (fd.type === "number") return dir * ((Number(av) || 0) - (Number(bv) || 0));
+    if (fd.type === "date") return dir * ((growStamp(av) || 0) - (growStamp(bv) || 0));
+    return dir * String(av).localeCompare(String(bv), undefined, { numeric: true });
+  };
+}
+
+function growOpen(lane, id) { cultEdit = cultEdit === id ? null : id; renderGrowLane(lane); }
+
+function growViewBar(lane, def, total, shown) {
+  const bar = document.createElement("div"); bar.className = "grow-views";
+  const view = laneView(lane), q = laneQuery(lane), grouped = growGroupKey(def);
+  const tabs = [["list", "List"], ["table", "Table"], ...(grouped ? [["board", "Board"]] : [])];
+  bar.innerHTML =
+    `<div class="gv-tabs" role="tablist">${tabs.map(([v, label]) =>
+      `<button type="button" class="gv-tab${v === view ? " on" : ""}" role="tab" aria-selected="${v === view}" data-v="${v}">${label}</button>`).join("")}</div>` +
+    `<input class="gv-q" type="search" spellcheck="false" placeholder="Filter ${esc(def.plural)}" aria-label="Filter ${esc(def.plural)}" value="${esc(q)}">` +
+    `<span class="gv-count">${q && shown !== total ? `${shown} of ${total}` : `${total}`}</span>`;
+  bar.querySelectorAll(".gv-tab").forEach((b) => b.addEventListener("click", () => {
+    growViewPatch(lane, { view: b.dataset.v }); renderGrowLane(lane);
+  }));
+  /* Re-rendered on input, and focus put back where it was: the lane redraws
+     under the field the grower is still typing into. */
+  const qi = bar.querySelector(".gv-q");
+  qi.addEventListener("input", () => {
+    growViewPatch(lane, { q: qi.value });
+    const at = qi.selectionStart;
+    renderGrowLane(lane).then(() => {
+      const next = $("lane-body").querySelector(".gv-q");
+      if (next) { next.focus(); try { next.setSelectionRange(at, at); } catch { /* search inputs refuse this in some engines */ } }
+    });
+  });
+  return bar;
+}
+
+function growTable(lane, def, rows, editing) {
+  const wrap = document.createElement("div"); wrap.className = "grow-table-wrap";
+  const sort = laneSort(lane);
+  const table = document.createElement("table"); table.className = "grow-table";
+  table.innerHTML =
+    `<thead><tr>${def.fields.map((f) => {
+      const on = sort && sort.k === f.k;
+      return `<th${f.type === "number" ? ' class="num"' : ""}><button type="button" data-k="${f.k}" class="gt-h${on ? " on" : ""}">` +
+        `${esc(f.label)}${on ? `<span aria-hidden="true">${sort.dir > 0 ? "↑" : "↓"}</span>` : ""}</button></th>`;
+    }).join("")}</tr></thead>` +
+    `<tbody>${rows.map((r) => `<tr class="gt-row${editing && editing.id === r.id ? " editing" : ""}" data-id="${esc(r.id)}">` +
+      def.fields.map((f) => {
+        const v = r[f.k];
+        const txt = f.type === "date" && v ? fmtDay(v) : (v === undefined || v === null ? "" : String(v));
+        // The lot cell traces; every other cell falls through to the row's own
+        // click, which opens the record.
+        if (f.k === GROW_LOT[lane] && v) return `<td><button type="button" class="gt-lot" data-lot="${esc(v)}">${esc(txt)}</button></td>`;
+        return `<td${f.type === "number" ? ' class="num"' : ""}>${esc(txt)}</td>`;
+      }).join("") + `</tr>`).join("")}</tbody>`;
+  /* A second click on the sorted column reverses it, a third clears it and puts
+     the lane back on its own date order. */
+  table.querySelectorAll(".gt-h").forEach((h) => h.addEventListener("click", () => {
+    const k = h.dataset.k;
+    const cur = laneSort(lane);
+    const next = !cur || cur.k !== k ? { k, dir: 1 } : cur.dir > 0 ? { k, dir: -1 } : null;
+    growViewPatch(lane, { sort: next }); renderGrowLane(lane);
+  }));
+  table.querySelectorAll(".gt-lot").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation(); growTraceTo(b.dataset.lot);
+  }));
+  table.querySelectorAll(".gt-row").forEach((tr) => tr.addEventListener("click", () => growOpen(lane, tr.dataset.id)));
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function growBoard(lane, def, rows, editing) {
+  const k = growGroupKey(def);
+  const opts = (def.fields.find((f) => f.k === k) || {}).opts || [];
+  const board = document.createElement("div"); board.className = "grow-board";
+  /* An "unset" column only when something is in it. A permanently empty column
+     for a field nobody fills is a reminder of a chore, not a view. */
+  const unset = rows.filter((r) => !r[k]);
+  const cols = [...opts.map((o) => [o, rows.filter((r) => r[k] === o)]), ...(unset.length ? [["unset", unset]] : [])];
+  for (const [name, items] of cols) {
+    const col = document.createElement("div"); col.className = "gb-col";
+    col.innerHTML = `<div class="gb-head"><b>${esc(name)}</b><span>${items.length}</span></div>`;
+    for (const r of items) {
+      const lot = growLotOf(lane, r);
+      const card = document.createElement("div");
+      card.className = "gb-card" + (editing && editing.id === r.id ? " editing" : "");
+      const flags = (def.flags(r) || []).filter(Boolean).filter((f) => f !== r[k]);
+      card.innerHTML =
+        (lot
+          ? `<button type="button" class="gb-id gb-trace" title="Trace lot ${esc(lot)}">${esc(def.id(r) || "—")}</button>`
+          : `<span class="gb-id">${esc(def.id(r) || "—")}</span>`) +
+        `<button type="button" class="gb-open" title="Edit this ${esc(def.one)}">` +
+        `<span class="gb-name">${esc(def.name(r) || "")}</span>` +
+        (flags.length ? `<span class="gb-flags">${flags.map((x) => `<em>${esc(x)}</em>`).join("")}</span>` : "") +
+        `</button>`;
+      const tb = card.querySelector(".gb-trace");
+      if (tb) tb.addEventListener("click", () => growTraceTo(lot));
+      card.querySelector(".gb-open").addEventListener("click", () => growOpen(lane, r.id));
+      col.appendChild(card);
+    }
+    if (!items.length) col.insertAdjacentHTML("beforeend", `<div class="gb-empty">None</div>`);
+    board.appendChild(col);
+  }
+  return board;
+}
+
 /* Redraw whatever the Cultivation space is showing, when the store changes under
    it - today that means the agent wrote a record on a turn the grower ran from
    somewhere else in the app.
