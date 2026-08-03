@@ -115,8 +115,24 @@ function bitmap(buf, what) {
 
    Both numbers are reported on failure, so the next person to see this does not
    have to guess which of the two they are holding. */
+/* Both numbers are measured rather than guessed, from this repo's own art on a
+   Linux runner against a mac's renders:
+
+     renderer noise      3.18% - 4.80% of channels, worst delta 73 - 105
+     a different picture 53% and 62%, worst delta 255
+
+   The noise is entirely on the small rungs — 16, 24, 32, 36 and 44px — and
+   nothing at 48px or above needed any tolerance at all, which is the shape you
+   would expect: on a 16px icon almost every pixel is an edge, so a rounding
+   difference occupies a far larger share of the image than the same difference
+   at 512px.
+
+   8% sits in the valley between those two populations: two-thirds clear of the
+   worst noise seen, and still nearly seven times under the cheapest real
+   difference. If a future run lands between 5% and 50%, that is not a threshold
+   to widen — it is art that genuinely changed. */
 const PIXEL_DELTA = 24;      // a channel step one edge pixel may be rounded by
-const PIXEL_BUDGET = 0.03;   // and the share of channels allowed to reach it
+const PIXEL_BUDGET = 0.08;   // and the share of channels allowed to reach it
 let lastDiff = null;
 function diffNote() {
   if (!lastDiff) return "";
