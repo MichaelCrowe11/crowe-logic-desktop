@@ -22,7 +22,36 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const RAW = path.join(ROOT, "marketing/ios/6.9/raw");
-const OUT = path.join(ROOT, "marketing/ios/6.9/framed");
+
+/* Two targets, because the stores do not take the same picture.
+ *
+ * App Store Connect accepts the device capture itself, so the iOS panel keeps
+ * 1320x2868 and nothing is resized on the way up.
+ *
+ * Play caps a phone screenshot at 2:1. The raw capture is 2868/1320 = 2.17:1
+ * and would be refused, which is the kind of thing you find out at the end of
+ * an upload. Its panel is a 16:9 canvas with the same capture inset — a
+ * reframing rather than a crop, so nothing in the shot is lost. */
+const TARGETS = [
+  {
+    label: "App Store 6.9\"",
+    out: path.join(ROOT, "marketing/ios/6.9/framed"),
+    w: 1320, h: 2868, margin: 96,
+    rule_y: 196, rule_w: 76,
+    head_size: 92, head_y: 252, head_step: 104,
+    sub_size: 36, sub_gap: 24, sub_step: 52,
+    shot_w: 1040, shot_top: 700,
+  },
+  {
+    label: "Play phone 16:9",
+    out: path.join(ROOT, "marketing/android/phone"),
+    w: 1080, h: 1920, margin: 78,
+    rule_y: 150, rule_w: 62,
+    head_size: 72, head_y: 196, head_step: 82,
+    sub_size: 29, sub_gap: 20, sub_step: 42,
+    shot_w: 700, shot_top: 470,
+  },
+];
 
 /* No em dashes, no emojis, and nothing that describes the app as an "AI".
    Each line says what the surface under it actually does. */
@@ -43,8 +72,8 @@ function main() {
     console.error(`capture them into ${RAW} first`);
     process.exit(1);
   }
-  fs.mkdirSync(OUT, { recursive: true });
-  const spec = JSON.stringify({ raw: RAW, out: OUT, panels: PANELS });
+  for (const t of TARGETS) fs.mkdirSync(t.out, { recursive: true });
+  const spec = JSON.stringify({ raw: RAW, targets: TARGETS, panels: PANELS });
   const res = execFileSync("python3", [PY], { input: spec, encoding: "utf8" });
   process.stdout.write(res);
 }

@@ -30,3 +30,10 @@ mobile/icons/
 # Resolved by whichever Xcode opens the project first, and rewritten by the
 # next one. The Package.swift that pins the plugins IS committed.
 mobile/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# Android signing material. The upload key is the one secret that, if it leaks,
+# lets someone else ship an update to your users, so it never enters history:
+# build.gradle reads it from here or from the environment.
+mobile/android/keystore.properties
+*.jks
+*.keystore

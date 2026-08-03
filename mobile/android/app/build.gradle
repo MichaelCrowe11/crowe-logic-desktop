@@ -1,5 +1,46 @@
 apply plugin: 'com.android.application'
 
+/* The version comes from mobile/package.json, which is the one place it is
+   written. What was here before was the Capacitor template's versionCode 1 and
+   versionName "1.0", untouched, while the app it built called itself 0.23.0
+   everywhere else — a listing that disagrees with the app the user is running,
+   and a versionCode Play rejects the second time it sees it.
+
+   versionCode has to be a single ascending integer, so it is derived rather
+   than kept by hand: major * 10000 + minor * 100 + patch. 0.24.0 becomes 2400.
+   That is ascending for as long as minor and patch stay under 100, which is
+   asserted below rather than assumed, and it is already past the 1 the template
+   shipped, so the first upload does not collide with anything. */
+def croweVersion = new groovy.json.JsonSlurper().parse(file("../../package.json")).version
+def croweSemver = (croweVersion =~ /^(\d+)\.(\d+)\.(\d+)/)
+if (!croweSemver.find()) {
+    throw new GradleException("mobile/package.json version '${croweVersion}' is not a semver this can derive a versionCode from")
+}
+def croweMinor = croweSemver.group(2).toInteger()
+def crowePatch = croweSemver.group(3).toInteger()
+if (croweMinor > 99 || crowePatch > 99) {
+    throw new GradleException("versionCode derivation carries minor and patch in two digits each; ${croweVersion} overflows it")
+}
+def croweVersionCode = croweSemver.group(1).toInteger() * 10000 + croweMinor * 100 + crowePatch
+
+/* Signing material never lives in this repo. It is read from
+   android/keystore.properties, which is git-ignored, or from the environment so
+   a CI runner can pass it as secrets. When none of it is present the release
+   build simply goes unsigned rather than failing: an unsigned release is still
+   worth building to catch a packaging regression, and Play will refuse it long
+   before a person could mistake it for shippable. */
+def croweKeystoreProps = new Properties()
+def croweKeystoreFile = rootProject.file("keystore.properties")
+if (croweKeystoreFile.exists()) croweKeystoreFile.withInputStream { croweKeystoreProps.load(it) }
+def croweStorePath = croweKeystoreProps['storeFile'] ?: System.getenv('CROWE_ANDROID_KEYSTORE')
+def croweStorePass = croweKeystoreProps['storePassword'] ?: System.getenv('CROWE_ANDROID_KEYSTORE_PASSWORD')
+def croweKeyAlias = croweKeystoreProps['keyAlias'] ?: System.getenv('CROWE_ANDROID_KEY_ALIAS')
+def croweKeyPass = croweKeystoreProps['keyPassword'] ?: System.getenv('CROWE_ANDROID_KEY_PASSWORD')
+def croweCanSign = croweStorePath && file(croweStorePath).exists() && croweStorePass && croweKeyAlias && croweKeyPass
+if (!croweCanSign && croweStorePath) {
+    logger.warn("crowe: a keystore was named but is incomplete or missing at ${croweStorePath}; the release build will be unsigned")
+}
+
 android {
     namespace = "com.crowelogic.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +48,8 @@ android {
         applicationId "com.crowelogic.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode croweVersionCode
+        versionName croweVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +57,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (croweCanSign) {
+            release {
+                storeFile file(croweStorePath)
+                storePassword croweStorePass
+                keyAlias croweKeyAlias
+                keyPassword croweKeyPass
+            }
+        }
+    }
     buildTypes {
         release {
+            if (croweCanSign) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
