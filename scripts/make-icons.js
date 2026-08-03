@@ -459,6 +459,12 @@ async function main() {
   const iosProject = path.join(ROOT, "mobile", "ios", "App");
   const androidRes = path.join(ROOT, "mobile", "android", "app", "src", "main", "res");
   const skipped = [];
+  /* Deliberately not the same list as `skipped`. That one means coverage was
+     lost without anyone noticing, and in --check mode it fails. This one means
+     the art is checked in full, just not from here — a distinction worth
+     keeping, because collapsing the two either fails every Linux run or teaches
+     the suite to shrug at missing coverage. */
+  const unverifiable = [];
 
   // The phone. Until now this file was placed by hand and never regenerated, so
   // it froze at the mark as it stood in #34 while the desktop rasters moved
@@ -507,9 +513,24 @@ async function main() {
 
   const ICNS = path.join(ASSETS, "icon.icns");
   if (CHECK) {
-    // Deliberately not built here — see checkContainer above for why running
-    // iconutil in --check mode would both lie about the bytes and skip on Linux.
-    checkContainer(ICNS, icnsPngs, png, ICNS_PNG_SIZES);
+    /* Deliberately not built here — see checkContainer above for why running
+       iconutil in --check mode would both lie about the bytes and skip on Linux.
+
+       Compared only on the platform that can author it. iconutil is macOS-only,
+       so the committed container holds macOS renders; measuring those against a
+       Linux rasterisation of the same vector compares two renderers rather than
+       detecting drift, and it called all six PNG rungs stale on every CI run.
+       The tell was that the same rungs pass on a mac as "same picture, different
+       bytes" — the encoder differs there, the picture does not.
+
+       This does not put the .icns beyond checking. It is held to the vectors in
+       full on every mac, which is also the only place it can be regenerated, so
+       a drifted container cannot reach a release without the machine cutting
+       that release saying so. What Linux cannot verify it now says out loud
+       instead of asserting, because a rung nobody mentions is a rung nobody
+       knows went unchecked. */
+    if (process.platform === "darwin") checkContainer(ICNS, icnsPngs, png, ICNS_PNG_SIZES);
+    else unverifiable.push(`${rel(ICNS)} (${ICNS_PNG_SIZES.length} PNG rungs — iconutil is macOS-only, so only a mac can hold this one to the vectors)`);
   } else if (process.platform === "darwin") {
     const iconset = fs.mkdtempSync(path.join(os.tmpdir(), "croweicon-")) + "/icon.iconset";
     fs.mkdirSync(iconset, { recursive: true });
@@ -542,6 +563,11 @@ async function main() {
   for (const name of skipped) {
     if (CHECK) stale.push(`${name} is missing from this checkout, so its icons went unchecked — a check that stops looking is not a passing check`);
     else console.log(`note    ${name} is not in this checkout, so its icons were not checked`);
+  }
+  // Named every run, passing or failing, so the count at the bottom is never
+  // read as covering more than it did.
+  for (const name of unverifiable) {
+    console.log(`unchecked here  ${name}`);
   }
   if (stale.length) {
     console.error(`\n${stale.length} of ${touched.length} committed raster${stale.length > 1 ? "s are" : " is"} not what the vectors draw:`);
