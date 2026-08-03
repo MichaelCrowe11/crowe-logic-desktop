@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The layers are true 108dp assets now - `npm run icons` draws them straight
+     off assets/icon-android-background.svg and icon-android-foreground.svg - so
+     they are referenced directly.
+
+     They used to be wrapped in <inset android:inset="16.7%">, which was
+     @capacitor/assets compensating for having written them at the 48dp ladder:
+     16.7% a side maps a 48dp asset onto the 72dp mask extent inside the 108dp
+     layer. Correct arithmetic, but it threw away a third of the resolution - 18
+     pixels of artwork at ldpi - and it becomes a bug the moment the assets are
+     the size they claim to be, because it would draw the icon at two-thirds
+     scale. The two halves had to land in one commit for that reason: 108dp art
+     under the old inset renders at 44% of where it belongs, 48dp art without it
+     renders at 150% and gets its edges cut, and nothing in the build errors
+     either way.
+
+     <monochrome> is what targetSdk 36 wants. Without it a themed-icon user gets
+     the whole icon auto-desaturated, which is the worst available fate for a
+     mark whose entire colour story is that gold appears exactly once. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background>
-        <inset android:drawable="@mipmap/ic_launcher_background" android:inset="16.7%" />
-    </background>
-    <foreground>
-        <inset android:drawable="@mipmap/ic_launcher_foreground" android:inset="16.7%" />
-    </foreground>
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>

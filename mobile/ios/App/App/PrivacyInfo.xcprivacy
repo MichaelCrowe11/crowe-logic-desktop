@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Apple requires a privacy manifest, and requires that every "required
+	  reason API" the binary touches be declared with a reason code. Missing or
+	  incomplete declarations are rejected at upload, not at review, so this
+	  file is a build artifact rather than paperwork.
+
+	  Capacitor ships two manifests of its own
+	  (node_modules/@capacitor/ios/Capacitor/Capacitor/PrivacyInfo.xcprivacy and
+	  the Cordova bridge's), but both declare an empty NSPrivacyAccessedAPITypes.
+	  @capacitor/preferences ships no manifest at all while calling UserDefaults
+	  in Preferences.swift and PreferencesPlugin.swift. That gap is why the
+	  declaration below has to live in the app target: nothing upstream makes it.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+	  Left empty deliberately, and it is the one entry here that is a business
+	  declaration rather than a fact about the binary. It must agree with the
+	  privacy answers in App Store Connect. Confirm what the gateway retains
+	  from a conversation before submitting; if anything is retained and linked
+	  to the user, this array is where it is declared.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!--
+			  @capacitor/preferences stores this app's own settings in
+			  UserDefaults and reads back only what it wrote. CA92.1 is the
+			  reason code for exactly that: access limited to the app itself,
+			  never to identify a device across installs.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

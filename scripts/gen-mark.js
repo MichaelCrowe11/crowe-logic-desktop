@@ -22,7 +22,15 @@
 // renderer/mark-geometry.js. That geometry module is what renderer/mark.js
 // animates, so the static identity and the live thinking state are one shape:
 // the icon spins up into the running state without a cut.
-// Run: node scripts/gen-mark.js
+//
+//   node scripts/gen-mark.js             regenerate
+//   node scripts/gen-mark.js --check     fail if the committed vectors are stale
+//
+// --check is the vector half of `npm run icons:check`. It regenerates in memory
+// and compares, writing nothing — the same idiom scripts/gen-preview.js uses.
+// Pure string and Math work, so it is byte-identical on every platform and can
+// run in CI's cheap pure-Node block; the raster half needs Electron and lives in
+// scripts/make-icons.js.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -251,12 +259,24 @@ function markSvg(opts) {
 }
 
 // ── Emit ────────────────────────────────────────────────────────────────────
-const A = (p) => path.join(__dirname, "..", "assets", p);
-// Writes and records the name, so the summary line below cannot drift out of
-// step with what actually landed on disk — the same drift this whole pipeline
-// exists to prevent, one level up.
+const ROOT = path.join(__dirname, "..");
+const CHECK = process.argv.includes("--check");
+
+// The single write funnel. Everything this file produces goes through put(),
+// which is what makes coverage automatic instead of an inventory somebody has
+// to remember to extend: --check swaps the sink for a comparator, so a vector
+// added below is checked the day it is added. icon-ios.svg proved that the
+// right way round — it needed no list edit to be picked up.
 const wrote = [];
-const emit = (name, body) => { fs.writeFileSync(A(name), body); wrote.push(name); };
+const stale = [];
+function put(rel, body) {
+  wrote.push(rel);
+  const abs = path.join(ROOT, rel);
+  if (!CHECK) { fs.writeFileSync(abs, body); return; }
+  const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+  if (current !== body) stale.push(current === null ? `${rel} (missing)` : rel);
+}
+const emit = (name, body) => put(path.posix.join("assets", name), body);
 emit("mark.svg", markSvg({ scale: SCALE.paper, id: "m" }));
 // Simple: the small-size variant, and it has to actually be simple. It kept the
 // fork while claiming not to, which is why it read no better than the primary —
@@ -312,6 +332,42 @@ const SPX = LW / 2 + LETTER.spore.x * 100 - SPO / 2;
 const SPY = 50 + LETTER.spore.y * 100 - SPO / 2;
 const BX0 = Math.min(0, SPX), BY0 = Math.min(0, SPY);
 const BW = Math.max(LW, SPX + SPO) - BX0, BH = Math.max(100, SPY + SPO) - BY0;
+// The one gradient every tile in this family is painted with. It was written
+// out per composition, which was survivable at two and is not at seven: the
+// phone, the Mac, and the three Android layers all have to be the same charcoal
+// or the platforms stop looking like one product.
+const BG = `<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2620"/><stop offset="0.55" stop-color="#1a1713"/><stop offset="1" stop-color="#0e0c0a"/>
+    </linearGradient>`;
+
+// The letter and its spore, fitted to a square placement box. Every composition
+// below places exactly this — the nested <svg> does the fitting, so a caller
+// only picks where and how big.
+//
+// It used to be copy-pasted into the two icons that existed, each copy carrying
+// a comment about how two cuts of one mark is how drift starts. Android needs
+// five more, so the paste was about to make that argument seven times over
+// while quietly disproving it.
+//
+// `mark` defaults to the cut every tile has always used: taper 0.45, no fork.
+// The 0.8-wide tips of the primary are a fifth of a pixel once this is
+// rasterised to the 32px and 16px rungs of the .icns and .ico, so the outer
+// third of every filament washes into the tile (the "still reads at 32px" check
+// in scripts/test-icons.js caught exactly that), and the fork breaks into
+// specks down there. 0.45 unforked is not a compromise invented for the icon —
+// it is what the wordmark already uses in the same situation, an eight-pixel
+// slot. One mark, drawn one way, wherever it has to be small.
+const ARTBOX = `viewBox="${BX0.toFixed(2)} ${BY0.toFixed(2)} ${BW.toFixed(2)} ${BH.toFixed(2)}"`;
+function letterArt(off, side, id, opts) {
+  const { ink = "#f7f3ea", mark = { taper: 0.45, fork: false, scale: SCALE.dark } } = opts || {};
+  return `<svg x="${off.toFixed(2)}" y="${off.toFixed(2)}" width="${side.toFixed(2)}" height="${side.toFixed(2)}" ${ARTBOX}>
+    <path transform="translate(${LX.toFixed(4)} ${LY.toFixed(4)}) scale(${LS.toFixed(6)})" fill="${ink}" d="${LETTER.d}"/>
+    <svg x="${SPX.toFixed(2)}" y="${SPY.toFixed(2)}" width="${SPO.toFixed(2)}" height="${SPO.toFixed(2)}" viewBox="0 0 ${VIEW} ${VIEW}">${
+    markSvg({ ...mark, id }).replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
+  }</svg>
+  </svg>`;
+}
+
 // The letter and spore span this much of the canvas on their long axis. The
 // old whorl sat near 47%; scripts/test-icons.js wants the bright artwork over
 // 40% at 256px and over 35% once it is rasterised down to 32. A nested <svg>
@@ -319,38 +375,136 @@ const BW = Math.max(LW, SPX + SPO) - BX0, BH = Math.max(100, SPY + SPO) - BY0;
 const ART = 0.58, ASIDE = TILE * ART, AOFF = (TILE - ASIDE) / 2;
 const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2b2620"/><stop offset="0.55" stop-color="#1a1713"/><stop offset="1" stop-color="#0e0c0a"/>
-    </linearGradient>
+    ${BG}
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="rgba(255,255,255,0.14)"/><stop offset="0.2" stop-color="rgba(255,255,255,0.03)"/><stop offset="1" stop-color="rgba(255,255,255,0)"/>
     </linearGradient>
   </defs>
   <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="url(#bg)"/>
   <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="url(#rim)" stroke-width="4"/>
-  <svg x="${AOFF}" y="${AOFF}" width="${ASIDE}" height="${ASIDE}" viewBox="${BX0.toFixed(2)} ${BY0.toFixed(2)} ${BW.toFixed(2)} ${BH.toFixed(2)}">
-    <path transform="translate(${LX.toFixed(4)} ${LY.toFixed(4)}) scale(${LS.toFixed(6)})" fill="#f7f3ea" d="${LETTER.d}"/>
-    <svg x="${SPX.toFixed(2)}" y="${SPY.toFixed(2)}" width="${SPO.toFixed(2)}" height="${SPO.toFixed(2)}" viewBox="0 0 ${VIEW} ${VIEW}">${
-  /* The logotype's own whorl cut, the same one the o's carry. This single SVG
-     is rasterised down to the 32px and 16px rungs of the .icns and .ico, and a
-     tip that tapers to 0.8 of a 120 canvas is a fifth of a pixel there - the
-     outer third of every filament washes into the tile (the "still reads at
-     32px" check in scripts/test-icons.js caught exactly that). It used to ease
-     the taper to 0.62 and keep the fork, which was a third cut of the mark,
-     invented here and used nowhere else: at the icon's rungs the branches broke
-     into specks and the arms thinned to nothing, leaving a gold dot beside a C.
-
-     0.45 with no fork is not a compromise for the icon's sake - it is what the
-     wordmark already uses in the same situation, an eight-pixel slot, and it is
-     both fatter at the tip and free of branches that cannot survive there. One
-     mark, drawn one way, wherever it has to be small. */
-  markSvg({ taper: 0.45, fork: false, scale: SCALE.dark, id: "ic" })
-    .replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "")
-}</svg>
-  </svg>
+  ${letterArt(AOFF, ASIDE, "ic")}
 </svg>
 `;
 emit("icon.svg", iconSvg);
+
+// The phone's icon, which is the same drawing under different rules. iOS masks
+// the corners itself and rejects any alpha channel, so the Big Sur tile above is
+// wrong there twice over: its rounded rect would sit inside iOS's own rounder
+// mask as a visible second corner, and its transparent margin is a rejection at
+// upload rather than a look.
+//
+// Full bleed, no rim. The rim highlight traces the tile's edge, and once iOS
+// crops that edge the highlight becomes a bright arc cutting across the corners.
+//
+// ART_IOS keeps the two icons the same size to the eye. On the desktop tile the
+// artwork is 0.58 of a 1024 canvas but the tile is only 824 of it, so the mark
+// fills 72% of the visible square. Matching that number here rather than reusing
+// 0.58 is what makes the claim above - one icon at two sizes - actually true;
+// reusing 0.58 would draw the phone's mark noticeably smaller than the Mac's.
+const ART_IOS = 0.72, ASIDE_IOS = TILE * ART_IOS, AOFF_IOS = (TILE - ASIDE_IOS) / 2;
+emit("icon-ios.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <defs>
+    ${BG}
+  </defs>
+  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="url(#bg)"/>
+  ${letterArt(AOFF_IOS, ASIDE_IOS, "ios")}
+</svg>
+`);
+
+// ── Android ─────────────────────────────────────────────────────────────────
+// A third composition, and it is genuinely a third one: neither tile above can
+// be reused, because on Android the mask is chosen by the launcher and not by
+// us. An adaptive icon is two 108dp layers; the launcher shows the middle 72dp
+// of them through a shape it picks — circle, squircle, teardrop, rounded
+// square — and parallaxes the layers against each other. So:
+//
+//   - No rim, for iOS's reason twice over. The highlight traces an edge that is
+//     about to be cropped by a shape we cannot predict, and a cropped highlight
+//     is a bright arc lying across the corner of the icon.
+//   - The background layer must be opaque edge to edge. It slides under the
+//     mask during the parallax, and any hole in it shows the user's wallpaper
+//     through the middle of the icon. make-icons.js runs it through
+//     renderOpaque(), so that becomes a build-time throw instead of a bug that
+//     only appears on one OEM's launcher.
+//   - The safe zone is a 66dp-diameter CIRCLE inside the 72dp mask extent, so
+//     the constraint is on the artwork's DIAGONAL, not its width.
+//
+// That last point is where the icon Android has been shipping went wrong.
+// gen-wordmark-icon.py reasoned its way to the 66-of-108 number correctly and
+// then compared a box SIDE against a circle DIAMETER, which would have clipped;
+// @capacitor/assets then wrote the layers at the 48dp ladder and the anydpi XML
+// inset them 16.7% to compensate, shrinking everything by another third. Two
+// errors partly cancelling, landing on a mark at 48% of the visible tile where
+// iOS and macOS both read at 72%.
+//
+// Done properly: the art box is 105.32 x 100, so placed by a square nested
+// <svg> it renders S wide by 0.9495*S tall and its diagonal is 1.3790*S.
+// Solving 1.3790*S <= 66 gives S <= 47.86dp, hence 0.44 of the 108dp layer —
+// a 47.5dp box with a 65.5dp diagonal. The mark then reads at 66% of the
+// visible tile: an 8% concession to a mask we are not allowed to know about,
+// against 48% today. 0.4835 is the ceiling before a real circle mask starts
+// cutting the box corners, and it would hit exact iOS parity, but it spends the
+// entire safe-zone margin. Do not go past it; scripts/test-icons.js asserts the
+// rendered diagonal so that a fatter mark cannot quietly creep out to it.
+const COVER_ANDROID = 0.66;                        // of the visible 72dp tile
+const ART_ANDROID = COVER_ANDROID * 72 / 108;      // = 0.44 of the 108dp layer
+const AND_FG = TILE * ART_ANDROID, AND_FG_OFF = (TILE - AND_FG) / 2;
+
+emit("icon-android-background.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <defs>
+    ${BG}
+  </defs>
+  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="url(#bg)"/>
+</svg>
+`);
+
+emit("icon-android-foreground.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  ${letterArt(AND_FG_OFF, AND_FG, "an")}
+</svg>
+`);
+
+// The themed cut. targetSdk is 36, and a themed-icon user on a Pixel whose app
+// ships no <monochrome> gets the whole icon auto-desaturated — which is the
+// worst available fate for a mark whose entire colour story is that gold
+// appears exactly once. One flat colour, and the launcher tints it.
+//
+// The mark survives being flattened for a specific reason: the spore rides in
+// the C's aperture rather than on its stroke, so a single-colour silhouette
+// stays a letter with a hexagon beside it instead of fusing into a blob. Same
+// placement as the foreground, so the two layers register.
+emit("icon-android-mono.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  ${letterArt(AND_FG_OFF, AND_FG, "am", {
+    ink: "#000000",
+    mark: { taper: 0.45, fork: false, pal: { blue: "#000000", gold: "#000000" } },
+  })}
+</svg>
+`);
+
+// The pre-Oreo pair. minSdk is 24, so only Android 7.0 and 7.1 ever draw these
+// — but wrong art is wrong art, and the resources have to resolve for every
+// configuration whatever the floor is. No mask here, so the composition owns
+// its own shape: a rounded square on the Big Sur corner proportion for the
+// square icon, a full circle for the round one, and the mark at the same 66% of
+// the visible extent both times so all three placements share one number.
+const AND_GRID = 942, AND_RAD = Math.round(AND_GRID * (RAD / GRID));
+const AND_SQ = AND_GRID * COVER_ANDROID, AND_SQ_OFF = (TILE - AND_SQ) / 2;
+const AND_RD = TILE * COVER_ANDROID, AND_RD_OFF = (TILE - AND_RD) / 2;
+emit("icon-android-legacy.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <defs>
+    ${BG}
+  </defs>
+  <rect x="${(TILE - AND_GRID) / 2}" y="${(TILE - AND_GRID) / 2}" width="${AND_GRID}" height="${AND_GRID}" rx="${AND_RAD}" fill="url(#bg)"/>
+  ${letterArt(AND_SQ_OFF, AND_SQ, "al")}
+</svg>
+`);
+emit("icon-android-round.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <defs>
+    ${BG}
+  </defs>
+  <circle cx="${TILE / 2}" cy="${TILE / 2}" r="${TILE / 2}" fill="url(#bg)"/>
+  ${letterArt(AND_RD_OFF, AND_RD, "ar")}
+</svg>
+`);
 
 // The wordmark is outlines, not <text>. It used to be a <text> element naming
 // the family, which meant assets/lockup.svg — the logo — rendered in Georgia on
@@ -596,6 +750,21 @@ const geometry = {
   },
   palette: { blue: C.blue, gold: C.gold, blueHot: "#4D9FE8", goldHot: "#F7C75A" },
 };
-fs.writeFileSync(path.join(__dirname, "..", "renderer", "mark-geometry.js"),
+// Through put() like everything else. It used to be its own fs.writeFileSync,
+// which is exactly the shape of hole --check exists to close: one output that
+// bypasses the sink is one output nothing ever compares, and this is the one
+// the running app reads.
+put(path.posix.join("renderer", "mark-geometry.js"),
   `// Generated by scripts/gen-mark.js - do not edit by hand.\nwindow.CROWE_MARK_GEOMETRY = ${JSON.stringify(geometry, null, 2)};\n`);
-console.log(`wrote ${wrote.length} vectors to assets/ (${wrote.join(", ")}) + renderer/mark-geometry.js`);
+
+if (CHECK) {
+  if (stale.length) {
+    console.error(`${stale.length} generated vector${stale.length > 1 ? "s are" : " is"} stale:`);
+    for (const name of stale) console.error(`  ${name}`);
+    console.error("\nRun `npm run icons` and commit the result.");
+    process.exit(1);
+  }
+  console.log(`checked ${wrote.length} generated vectors against the committed copies; all current.`);
+} else {
+  console.log(`wrote ${wrote.length} generated vectors (${wrote.join(", ")})`);
+}

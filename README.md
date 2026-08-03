@@ -93,15 +93,36 @@ which has to be registered before sign-in works on a device.
 
 ## Brand assets (one source of truth)
 
-The mark is the corporate double-C hex cube (blue hexagonal C + gold inner C
-firing an arrow out the upper-right edge), generated as exact vector geometry:
+The mark is a chiral spore-whorl: a gold hexagonal core — the inoculum — with
+six ink hyphae on the hex axes, every one curling the same rotational
+direction. Gold appears in exactly one place, the core. The curl is what keeps
+it out of other people's symbols: a straight six-fold radial is
+mirror-symmetric, and mirror-symmetric six-fold forms are already the AI
+sparkle and the snowflake. It replaced an isometric double-C hex cube, which
+spoke freight and ERP and collapsed into mud below about 24px.
+
+Everything derives from one generator, and nothing is drawn by hand:
 
 ```bash
-node scripts/gen-mark.js    # mark.svg, mark-simple.svg, mark-tray.svg, icon.svg,
-                            # renderer/mark-geometry.js (living mark polygons)
-scripts/gen-icons.sh        # icon.icns / icon.ico / icon.png / avatar.png /
-                            # mark.png / tray.png (needs rsvg-convert + magick)
+npm run icons         # 24 vectors + renderer/mark-geometry.js, then every
+                      # raster: icon.png/.ico/.icns, tray, mark, avatar,
+                      # wordmarks, the iOS app icon, the Android mipmaps
+npm run icons:check   # fail if any committed asset is not what the vectors
+                      # draw today. Writes nothing.
 ```
+
+`icons:check` exists because the assets drifted from the vectors four separate
+times, and `scripts/test-icons.js` reported 14/14 through every one of them.
+Its assertions are properties of the drawing — corner alpha, tile extent, the
+macOS ladder — and those hold across brand revisions, so a render from an older
+run of the same generator satisfies all of them. Re-rendering and comparing is
+the only question staleness answers differently. It runs in `npm test` and CI.
+
+There is no separate icon shell script. `scripts/gen-icons.sh` used to build
+half this set with rsvg-convert and ImageMagick; it needed tools nobody had
+installed, so it went unrun and `avatar.png` — which only it produced — sat at
+the retired cube for months. Chromium does the rasterizing now, so there is
+nothing to install.
 
 Tune proportions in `scripts/gen-mark.js` and rerun; the in-app living mark
 (`renderer/mark.js`) animates the same geometry (idle breath, reasoning drive,

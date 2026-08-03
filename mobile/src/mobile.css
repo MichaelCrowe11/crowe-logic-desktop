@@ -96,6 +96,47 @@ body.mobile:not(.m-paired) #studio-film { display: none !important; }
   font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted);
 }
 
+/* ── The browser panel, where the page is not ours to draw ──
+   renderer.js swaps the <webview> viewport for a handoff list on this shell
+   (mountBrowserHandoff); this is what stands in its place. The toolbar wraps
+   because an address and three buttons do not fit across 390px, and the address
+   is its own row so it keeps a full-width target. */
+body.mobile .browser-tools { flex-wrap: wrap; }
+/* styles.css gives this field nothing but `flex: 1`, so it fell through to the
+   user-agent default: a white box with black text, which on the dark console is
+   the brightest thing on the screen. Every other field in the app is a raised
+   step with a strong hairline, so this one is too. */
+body.mobile .browser-tools input {
+  flex: 1 1 100%; min-height: 44px; font-size: 16px;
+  padding: 10px 12px; border-radius: var(--r-md);
+  background: var(--raised); color: var(--ink);
+  border: 1px solid var(--line-strong);
+}
+body.mobile .browser-tools input::placeholder { color: var(--muted); opacity: .72; }
+body.mobile .browser-tools input:focus {
+  outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo);
+}
+body.mobile .browser-tools button { min-height: 40px; }
+.browser-handoff { display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; }
+.bh-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+}
+.bh-head b {
+  font-family: var(--mono); font-size: var(--fs-sm); font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.bh-row {
+  display: block; width: 100%; min-height: 44px; text-align: left; padding: 12px;
+  border: 0; border-bottom: 1px solid var(--hair); background: transparent;
+  color: var(--ink); font-family: var(--mono); font-size: var(--fs-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bh-row:active { background: var(--cream); }
+body.dark .bh-row:active { background: var(--raised); }
+.bh-empty, .bh-note { margin: 0; padding: 14px 12px; color: var(--muted); font-size: var(--fs-sm); }
+.bh-note { border-top: 1px solid var(--hair); }
+
 /* ── Touch sizing ──
    44px is the smallest target Apple's HIG and Android's Material both accept.
    Applied to the controls a thumb actually goes for, not to every button:
@@ -181,6 +222,23 @@ body.dark .m-attach-chip .m-attach-share { color: var(--gold); }
     body.mobile #sidebar, body.mobile #m-scrim { transition: none; }
   }
 
+  /* The drawer has to out-rank the scrim, and its own z-index cannot do that
+     from inside #shell. styles.css gives #shell `position: relative; z-index: 1`
+     to clear the body::before noise layer, which also makes it a stacking
+     context — so #sidebar's z-index 60 is scoped to that context and the whole
+     rail paints at level 1, while #m-scrim, a body child, sits at 55 in the root
+     context. 55 beats 1, so the scrim covered the drawer it exists to sit
+     behind: the rail opened already dimmed, and every tap on a nav row landed on
+     the scrim, whose handler closes the drawer. The nav opened and then refused
+     to navigate, which is what "the side nav does not work" looks like.
+
+     z-index: auto keeps #shell positioned but stops it opening a stacking
+     context, so #sidebar competes in the root context where 60 beats 55. The
+     noise layer stays underneath: it is z-index 0 and precedes #shell in tree
+     order, so an auto-level positioned #shell paints after it. Scoped to the
+     one-column layout, where the rail is a drawer and the scrim exists at all. */
+  body.mobile #shell { z-index: auto; }
+
   /* The workbench stops being a split. One of its two panes is on screen at a
      time, chosen by the tab bar; the divider has nothing left to drag. */
   body.mobile #workbench { grid-template-columns: 1fr; }
@@ -234,6 +292,20 @@ body.dark .m-attach-chip .m-attach-share { color: var(--gold); }
      never move sideways — a horizontal body scroll on a phone reads as a
      broken layout, not as more content. */
   body.mobile table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* The lane's view bar. The tabs and the filter cannot share a line at 390px,
+     so the filter takes its own full-width row under them and keeps a real
+     target. 16px on the field, like every other input here, or iOS zooms the
+     page on focus and the grower has no way back out. */
+  body.mobile .grow-views { flex-wrap: wrap; row-gap: 8px; }
+  body.mobile .gv-tab { min-height: 40px; padding: 6px 12px; }
+  body.mobile .gv-q { order: 3; flex: 1 1 100%; max-width: none; min-height: 44px; font-size: 16px; margin-left: 0; }
+  body.mobile .gv-count { order: 2; margin-left: auto; }
+  /* Board columns are a little narrower than on the desktop, so the next one
+     shows at the edge and the row reads as scrollable rather than as cut off. */
+  body.mobile .gb-col { flex-basis: 172px; min-width: 172px; }
+  body.mobile .gb-card { min-height: 44px; }
+  body.mobile .grow-board, body.mobile .grow-table-wrap { overscroll-behavior-x: contain; }
 }
 
 /* ── The tab bar ──
@@ -274,3 +346,107 @@ body.mobile.kb-open .m-tabs { display: none; }   /* the keyboard is the toolbar 
    at the other. */
 body.dark .m-tab[aria-current="true"] .ic { color: var(--gold); }
 body.dark.mobile #m-scrim { background: rgba(0,0,0,0.6); }
+
+/* ── Material, and the shading under it ─────────────────────────────────────
+   Three things have to be true together before a translucent panel reads as
+   glass rather than as a tinted rectangle:
+
+     · refraction   a real backdrop blur with saturation pushed past 100%, so
+                    colour behind the surface blooms through it instead of
+                    going grey.
+     · specular     a bright hairline on the top edge only. That is the edge a
+                    light above the screen would catch, and it is what gives
+                    the panel an apparent thickness.
+     · body         a fill that is lighter at the top than at the bottom, so
+                    the surface has a near face and a far one.
+
+   Where the blur is honest, and where it is not. A backdrop filter can only
+   work on what is painted behind it, and body.mobile is a strict flex column:
+   the header and the tab bar sit beside the shell, not over it, so there is
+   nothing under them but the background grade. They get the material language
+   (graded body, specular top edge, rim below) so the chrome reads as one
+   family, but no blur, because a blur there would cost a compositor layer to
+   soften a gradient nobody can see moving.
+
+   The drawer and the sheets do overlay live content, so those get the real
+   thing. That is also what the design system asks for: glass is an accent for
+   navigation and palettes, and glass used as wallpaper is the single clearest
+   tell that a surface was styled rather than designed.
+
+   Content keeps opaque steps. Its depth comes from lightness and a lit top
+   edge, which is the same trick one layer down. */
+body.mobile {
+  --m-glass: rgba(250,250,252,0.80);
+  --m-spec: rgba(255,255,255,0.90);
+  --m-rim: rgba(23,23,26,0.07);
+  --m-body: linear-gradient(to bottom, rgba(255,255,255,0.50), rgba(255,255,255,0.10) 46%, rgba(255,255,255,0) 78%);
+}
+body.dark.mobile {
+  --m-glass: rgba(16,16,18,0.78);
+  --m-spec: rgba(255,255,255,0.17);
+  --m-rim: rgba(255,255,255,0.06);
+  --m-body: linear-gradient(to bottom, rgba(255,255,255,0.055), rgba(255,255,255,0.014) 46%, rgba(255,255,255,0) 78%);
+}
+
+/* The chrome. Material without the blur, for the reason above. */
+body.mobile #bar {
+  background: var(--m-body), var(--panel);
+  box-shadow: inset 0 1px 0 var(--m-spec), 0 1px 0 var(--m-rim);
+}
+body.mobile .m-tabs {
+  background: var(--m-body), var(--panel);
+  box-shadow: inset 0 1px 0 var(--m-spec);
+}
+
+/* The drawer and the sheets, where there is live content behind the surface
+   and the blur earns its layer. The tint stays heavy enough that a label keeps
+   its 4.5:1 over whatever happens to be underneath it. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body.mobile #sidebar,
+  body.mobile .modal-card,
+  body.mobile .palette-card {
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    background: var(--m-body), var(--m-glass);
+  }
+}
+/* The drawer is a vertical pane, so it is lit down its leading edge as well as
+   across the top: a rim light on the right is the edge nearest the content. */
+body.mobile #sidebar {
+  box-shadow: inset 0 1px 0 var(--m-spec), inset -1px 0 0 var(--m-rim), var(--z3);
+}
+body.mobile .modal-card, body.mobile .palette-card {
+  box-shadow: inset 0 1px 0 var(--m-spec), var(--z3);
+}
+
+/* Content surfaces. --panel sits about ten points above the base in the dark
+   theme, which is a step you can measure and not one you can see, so on a
+   phone every card read as a hairline outline on flat ground. Raising them one
+   step and lighting the top edge is the whole fix. */
+body.mobile .card, body.mobile .chip, body.mobile .surface-composer {
+  background: var(--raised);
+  border-top-color: var(--hair-top);
+}
+body.mobile .card { box-shadow: var(--z2); }
+body.mobile .chip { box-shadow: var(--z1); }
+body.mobile .chip:active { background: var(--panel); }
+
+/* The current tab, as a gold wash with its own lit edge rather than a colour
+   change alone. Children are lifted over the pill: the pill is positioned and
+   they are not, so without this it paints on top of its own label. */
+body.mobile .m-tab { position: relative; }
+body.mobile .m-tab[aria-current="true"]::before {
+  content: ""; position: absolute; inset: 4px 6px auto; height: calc(100% - 10px);
+  border-radius: var(--r-lg); background: var(--accent-wash);
+  box-shadow: inset 0 1px 0 var(--hair-top);
+}
+body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1; }
+
+/* Where the platform asks for less, the material stands down to the opaque
+   step it was drawn over. Nothing here is load-bearing. */
+@media (prefers-reduced-transparency: reduce) {
+  body.mobile #sidebar, body.mobile .modal-card, body.mobile .palette-card {
+    -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--panel);
+  }
+  body.mobile #bar, body.mobile .m-tabs { background: var(--panel); }
+}

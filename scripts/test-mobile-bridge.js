@@ -144,7 +144,14 @@ function methodPaths(surface) {
     // A phone cannot, so it drives a machine that can, over Tailscale. There is
     // nothing for the desktop to grow here — it is already standing where these
     // calls are trying to reach.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run"];
+    //
+    // mobile.openExternal is the same shape of deliberate. The desktop opens a
+    // page by embedding one: the browser panel mounts an Electron <webview> and
+    // drives it. That element does not exist in a WKWebView, so the phone hands
+    // the address to the system browser instead. There is nothing for the
+    // desktop to grow here either — it already has the engine this is standing
+    // in for.
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
