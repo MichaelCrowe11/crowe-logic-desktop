@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The App Store channel. The archive itself is signed with whatever the
+       build machine had, which is a development identity; the export is where
+       it is re-signed for distribution, so this file is what decides where the
+       build can actually go. -->
+  <key>method</key>
+  <string>app-store-connect</string>
+  <key>teamID</key>
+  <string>6QLMV9UCPP</string>
+  <key>signingStyle</key>
+  <string>automatic</string>
+  <!-- dSYMs go up with the build, so a crash report from a user comes back
+       symbolicated instead of as addresses. -->
+  <key>uploadSymbols</key>
+  <true/>
+  <key>destination</key>
+  <string>export</string>
+</dict>
+</plist>
