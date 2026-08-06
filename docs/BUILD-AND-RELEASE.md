@@ -12,9 +12,11 @@ ships as a phone app from the same renderer through a Capacitor shell in
 `mobile/`.
 
 **This is not Crowe Logic Cortex.** That is a separate Electron app in a separate
-repo (`crowe-cortex`, `io.crowelogic.cortex`). Two desktop apps with overlapping
-names live in this estate; how they relate is a positioning question that has not
-been written down anywhere.
+repo (`crowe-cortex`, `io.crowelogic.cortex`). The README states the division:
+this one is Electron on Windows, Linux and macOS, covering the gap Cortex leaves
+as a macOS-only app. Worth knowing before you go looking for a build rail in the
+wrong repo, and worth confirming with Michael before writing it into anything
+customer-facing, since the two names overlap in a way the products do not.
 
 | Target | Command | Artifacts |
 | --- | --- | --- |
