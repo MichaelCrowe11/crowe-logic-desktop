@@ -74,7 +74,15 @@ const full = args.includes('--full');
 // scripts/test-verify-release.js that proves these checks can actually fail.
 const baseArg = args.find((a) => a.startsWith('--base='));
 const BASE = (baseArg ? baseArg.slice(7) : LIVE).replace(/\/$/, '');
-const version = (args.find((a) => !a.startsWith('--')) || process.env.GITHUB_REF_NAME || pkg.version).replace(/^v/, '');
+// GITHUB_REF_NAME is the tag on a tag-triggered run and the branch on every
+// other kind, and only the first one names a release. Unguarded, the scheduled
+// run read "main" as a version and spent three days failing every check against
+// a release that does not exist, while the actual release was fine. Take it
+// when it is shaped like a version; a branch falls through to package.json,
+// which is what this workflow's own comment always said it checked.
+const ref = process.env.GITHUB_REF_NAME;
+const fromRef = /^v?\d+\.\d+\.\d+/.test(ref || '') ? ref : null;
+const version = (args.find((a) => !a.startsWith('--')) || fromRef || pkg.version).replace(/^v/, '');
 
 let failures = 0;
 let warnings = 0;
