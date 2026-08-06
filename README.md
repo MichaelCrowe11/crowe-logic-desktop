@@ -38,6 +38,12 @@ npm run build:win     # NSIS .exe   (build on Windows or an ephemeral Windows VM
 npm run build:linux   # AppImage + deb
 ```
 
+Signing prerequisites, the store-submission path for both phones, how the icon
+drift gate works and what it does not prove, and the gotchas that have actually
+bitten: [docs/BUILD-AND-RELEASE.md](docs/BUILD-AND-RELEASE.md). Read it before a
+first build on a new machine — `build:mac` needs a notarytool credential profile
+that is not created by `npm install`.
+
 ### Shipping a narrower build
 
 Every build shows all four spaces by default. To hand someone an install that
