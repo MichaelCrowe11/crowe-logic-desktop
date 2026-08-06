@@ -62,9 +62,11 @@ Bump a version by editing `mobile/package.json` and running
 The derivation only ascends while minor and patch each stay under 100. Both sides
 assert that rather than assume it.
 
-> The formula is written twice, in two languages. A parity check that compares the
-> constants both sides use — and that catches a guard widened past the carry —
-> is in PR #50.
+> The formula is written twice, in two languages. `scripts/test-version-parity.js`
+> compares the constants both sides use, anchors them to the number
+> `sync-version.js --check` actually reports, and asserts the guard equals the
+> carry — so widening both guards to 999 fails rather than silently encoding
+> `0.100.0` as `1.0.0`. It runs in `npm test`.
 
 ## Signing and submission
 
@@ -227,7 +229,8 @@ object exists.
 
 `.github/workflows/verify-release.yml` also runs this on a daily cron.
 
-**Verified gotcha, fixed in PR #49.** The scheduled run was red every morning from
+**Gotcha, now fixed — worth knowing because the shape recurs.** The scheduled run
+was red every morning from
 2026-08-03 against a release that was healthy the whole time. `verify-release.js`
 resolved the version as `argv || GITHUB_REF_NAME || pkg.version`, and on a
 scheduled run `GITHUB_REF_NAME` is the *branch* — so it verified a release called
