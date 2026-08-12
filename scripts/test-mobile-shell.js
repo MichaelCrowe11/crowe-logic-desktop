@@ -322,16 +322,33 @@ const tests = [
        workspace running on the phone, and when no machine is paired, point at
        the way to get one instead of describing a machine that is not there. */
     name: "the first thing the app says is something it can do",
-    body: `const text = document.getElementById("transcript").textContent;
-      const firstChip = (document.querySelector(".welcome .chip") || {}).textContent || "";
-      return {
-        // A folder to open and a terminal on the device: neither exists here,
-        // paired or not. "on my Mac" is a different claim and a true one.
-        localWorkspace: /project folder|a real terminal/i.test(text),
-        // Unpaired, the honest opener names the way to get a machine.
-        offersPairing: /pair a desktop|remote machine/i.test(text),
-        leadsWithCultivation: /grow log|contamination|flush|fruiting/i.test(firstChip),
-      };`,
+    /* Read the settled copy, not a fixed moment. The first-run card is
+       appended empty, filled a statement later, and mobilised a macrotask
+       after that (mobile-ui.js runs mobiliseCopy through a MutationObserver
+       and a setTimeout). Alone that all lands well inside the load settle;
+       under full-suite load the turns arrive late and a one-shot read catches
+       the desktop prose mid-swap. Polling keeps the assertion — a swap that
+       never happens still fails here, eight seconds later. */
+    body: `const read = () => {
+        const text = document.getElementById("transcript").textContent;
+        const firstChip = (document.querySelector(".welcome .chip") || {}).textContent || "";
+        return {
+          // A folder to open and a terminal on the device: neither exists here,
+          // paired or not. "on my Mac" is a different claim and a true one.
+          localWorkspace: /project folder|a real terminal/i.test(text),
+          // Unpaired, the honest opener names the way to get a machine.
+          offersPairing: /pair a desktop|remote machine/i.test(text),
+          leadsWithCultivation: /grow log|contamination|flush|fruiting/i.test(firstChip),
+        };
+      };
+      const settled = (s) => !s.localWorkspace && s.offersPairing && !s.leadsWithCultivation;
+      const deadline = Date.now() + 8000;
+      let state = read();
+      while (!settled(state) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+        state = read();
+      }
+      return state;`,
     expect: { localWorkspace: false, offersPairing: true, leadsWithCultivation: false },
   },
   {
