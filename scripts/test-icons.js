@@ -157,9 +157,15 @@ function main() {
 
   const subjects = [
     ["icon.png", nativeImage.createFromPath(path.join(ASSETS, "icon.png"))],
-    // nativeImage cannot open .icns, so probe the largest image inside it.
-    ["icon.icns", nativeImage.createFromBuffer(icns.pngs.get(Math.max(...icns.pngs.keys())))],
   ];
+  if (icns.pngs.size === 0) {
+    check("icon.icns contains a probeable PNG", () => {
+      throw new Error("no PNG chunks found in icon.icns");
+    });
+  } else {
+    // nativeImage cannot open .icns, so probe the largest image inside it.
+    subjects.push(["icon.icns", nativeImage.createFromBuffer(icns.pngs.get(Math.max(...icns.pngs.keys())))]);
+  }
 
   for (const [file, image] of subjects) {
     check(`${file} decodes`, () => {
