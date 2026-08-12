@@ -1,0 +1,39 @@
+# Version updates for the three npm trees and the workflows. Security alerts
+# were piling up with nothing opening the fix PR - eleven sat open before
+# 0.24.0 - so let the robot do the filing. Weekly, grouped, so the noise is
+# one PR per tree, not one per package.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    # Electron majors track Chromium and need a deliberate upgrade with the
+    # packaging and updater re-verified, not a drive-by bump.
+    ignore:
+      - dependency-name: electron
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+    groups:
+      capacitor:
+        patterns: ["*"]
+    # Capacitor majors change the native projects under ios/ and android/;
+    # those migrations are run by hand with the platforms open.
+    ignore:
+      - dependency-name: "@capacitor/*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
