@@ -70,7 +70,19 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           CROWE_SKIP_NOTARIZE: "1"
         run: ${{ matrix.command }}
-      - if: runner.os != 'macOS'
+      # Windows Authenticode. With the secrets unset these render as empty
+      # strings, which electron-builder treats as "no certificate" and builds
+      # unsigned exactly as before - so this is safe to keep wired while the
+      # cert is procured. Buy an OV/EV cert (or move to Azure Trusted Signing)
+      # and set WINDOWS_CERTIFICATE (base64 pfx) + WINDOWS_CERTIFICATE_PASSWORD
+      # and the same tag pipeline starts shipping signed installers. Until
+      # then SmartScreen shows "unknown publisher" on every install.
+      - if: runner.os == 'Windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: ${{ matrix.command }}
+      - if: runner.os == 'Linux'
         run: ${{ matrix.command }}
       # The macOS artifact is uploaded under a name the R2 publish job ignores,
       # so an unnotarized build can never reach the update channel.

@@ -301,6 +301,34 @@ function createWindow() {
   mainWindow.webContents.on("will-navigate", (event, url) => { if (!url.startsWith("file://")) { event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); } });
 }
 
+/* The main window's setWindowOpenHandler routes its own popups into the
+   browser panel, but the panel's <webview> hosts arbitrary pages with
+   allowpopups on, and windows opened from *inside* it are created by the
+   webview's own webContents - which had no handler. So any page in the in-app
+   browser could window.open() a raw, unguarded native window: no popup
+   routing, no navigation guard, wearing the app's name.
+
+   Guarding at app scope instead of per-window catches every webContents this
+   process will ever create, including ones no code here asked for. Popups
+   from a webview go where the main window's already go: into the browser
+   panel, one surface, one set of rules. The preload/node checks on attach are
+   belt-and-braces - nothing in the renderer sets those attributes today, and
+   this keeps a future <webview> from quietly acquiring them. */
+app.on("web-contents-created", (_event, contents) => {
+  if (contents.getType() === "webview") {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url) && mainWindow) mainWindow.webContents.send("crowe:browser:navigate", url);
+      return { action: "deny" };
+    });
+  }
+  contents.on("will-attach-webview", (event, webPreferences, params) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    if (!/^https?:\/\//i.test(params.src || "")) event.preventDefault();
+  });
+});
+
 // ─── Crowe ID auth (OAuth2 Authorization Code + PKCE, loopback redirect) ──────
 // Public client `crowe-cli` must allow the loopback redirect http://127.0.0.1/*
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
