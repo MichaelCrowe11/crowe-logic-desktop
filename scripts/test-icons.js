@@ -160,7 +160,8 @@ function main() {
   ];
   if (icns.pngs.size === 0) {
     check("icon.icns contains a probeable PNG", () => {
-      throw new Error("no PNG chunks found in icon.icns");
+      const found = icns.types.size ? [...icns.types].join(", ") : "none";
+      throw new Error(`no PNG chunks found in icon.icns (chunk types present: ${found})`);
     });
   } else {
     // nativeImage cannot open .icns, so probe the largest image inside it.

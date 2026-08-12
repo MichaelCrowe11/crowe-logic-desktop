@@ -22,7 +22,7 @@ updates:
     schedule:
       interval: weekly
     groups:
-      capacitor:
+      mobile:
         patterns: ["*"]
     # Capacitor majors change the native projects under ios/ and android/;
     # those migrations are run by hand with the platforms open.
