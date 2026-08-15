@@ -271,6 +271,58 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "stop still reaches it";
   });
 
+  // ─── Refusals and escalations ─────────────────────────────────────────────
+
+  await check("a refused capability resolves in the shape its call site reads", async () => {
+    // The renderer awaits these without a catch (pty.start at renderer.js:724,
+    // fs.list at 1651). A rejection there is an unhandled throw and a panel
+    // stuck on "starting"; the mobile bridge resolves, and so must this one.
+    const { crowe: web } = loadWebSurface();
+    const pty = await web.pty.start({ id: "t1", cols: 80, rows: 24 });
+    assert(pty && pty.ok === false && pty.error, `pty.start shape: ${JSON.stringify(pty)}`);
+    const ls = await web.fs.list("/");
+    assert(ls && Array.isArray(ls.entries) && ls.entries.length === 0 && ls.error, `fs.list shape: ${JSON.stringify(ls)}`);
+    const st = await web.git.status();
+    assert(st && st.repo === false && st.error, `git.status shape: ${JSON.stringify(st)}`);
+    for (const arr of [web.fs.walk(), web.fs.pick(), web.git.log(), web.git.branches()]) {
+      assert(Array.isArray(await arr), "an array-returning method must still return an array");
+    }
+    return "resolved, not rejected";
+  });
+
+  await check("a refusal a Workspace can satisfy carries the offer to open one", async () => {
+    const { crowe: web } = loadWebSurface();
+    for (const [name, p] of [["pty.start", web.pty.start({})], ["fs.list", web.fs.list("/")], ["git.status", web.git.status()]]) {
+      const r = await p;
+      assert(r.remedy && r.remedy.kind === "workspace", `${name} carries no workspace remedy`);
+      assert(/^https:\/\/croweos\.com\//.test(r.remedy.url), `${name} remedy points at ${r.remedy.url}`);
+      assert(r.remedy.label, `${name} remedy has no label`);
+    }
+    return "terminal, files, git escalate to croweos.com";
+  });
+
+  await check("a refusal nothing can satisfy carries no remedy", async () => {
+    // Plugins run MCP servers as local processes; a Workspace does not change
+    // that for the browser tab. Offering one would be a remedy that does not
+    // remedy, which is worse than the plain refusal.
+    const { crowe: web } = loadWebSurface();
+    const r = await web.plugins.enable("x");
+    assert(r && r.error && !r.remedy, `plugins.enable: ${JSON.stringify(r)}`);
+    return "plain refusal";
+  });
+
+  await check("the renderer shows a remedy where it shows the reason", () => {
+    // Additive on Electron: the preload never sets `remedy`, so both sites are
+    // inert there. Matched on the field name rather than the copy, so rewording
+    // the offer does not fail this.
+    const src = read("renderer/renderer.js");
+    const term = src.slice(src.indexOf("window.crowe.pty.start({id:p.id"));
+    assert(/remedy/.test(term.slice(0, 600)), "terminal panel does not print the remedy under the refusal");
+    const tree = src.slice(src.indexOf("async function loadTree("));
+    assert(/remedy/.test(tree.slice(0, 1200)), "files tree does not offer the remedy");
+    return "terminal and files";
+  });
+
   // ─── Rooms ────────────────────────────────────────────────────────────────
 
   await check("the bundled engine is the engine in rooms/, byte for byte", () => {

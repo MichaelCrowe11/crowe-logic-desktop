@@ -721,7 +721,11 @@ async function mountTerminal(p, body, systemTerminal=false) {
   /* Say why the shell did not open. It always claimed "unavailable in this
      build", which is wrong and unactionable when the real answer is that the
      autonomy tier withholds the shell and the operator can just raise it. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok)t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`)};
+  /* A refusal may carry a remedy: a bridge that cannot give a shell here but
+     knows where one exists (the web build points at a Crowe Workspace) says so
+     in the same reply, and the panel prints the offer under the reason. The
+     desktop preload never sets `remedy`, so on Electron this line is inert. */
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
@@ -1650,6 +1654,20 @@ window.crowe.onBrowserNavigate((u)=>{navigate(u)});
 async function loadTree(dir) {
   const r = await window.crowe.fs.list(dir);
   const tree = $("files-tree"); tree.innerHTML = "";
+  /* A bridge with no filesystem answers with an empty list AND a reason, and
+     may name where a filesystem exists (`remedy`, set by the web build for a
+     Crowe Workspace). Rendering only the "../" row would read as an empty
+     directory, which is the one thing a refusal must not look like. */
+  if (r && r.error && !(r.entries || []).length) {
+    const why = document.createElement("div"); why.className = "frow"; why.textContent = r.error; tree.appendChild(why);
+    if (r.remedy && r.remedy.url) {
+      const go = document.createElement("div"); go.className = "frow dir"; go.textContent = (r.remedy.label || "Open in your Workspace") + " →";
+      go.title = r.remedy.detail || r.remedy.url;
+      go.onclick = () => window.open(r.remedy.url, "_blank", "noopener");
+      tree.appendChild(go);
+    }
+    return;
+  }
   const up = document.createElement("div"); up.className = "frow dir"; up.textContent = "../"; up.onclick = () => loadTree(r.cwd + "/.."); tree.appendChild(up);
   for (const e of r.entries) {
     const row = document.createElement("div"); row.className = "frow" + (e.dir ? " dir" : ""); row.textContent = e.dir ? e.name + "/" : e.name;

@@ -39,13 +39,50 @@
     "4308671c-c5ca-48ef-9bff-c685eaeb1bdf", // Crowe Logic Context
   ];
 
-  const unsupported = (surface) => () =>
-    Promise.reject(
-      new Error(
-        `${surface} is not available in the browser build. It needs a local ` +
-          `filesystem, shell or OS integration; use the desktop app.`,
-      ),
-    );
+  /* Three answers a capability can give here, and the shape each one takes.
+
+     Rule 2 at the top of this file says a capability the browser cannot have
+     refuses with a stated reason. Two things about how it used to refuse were
+     wrong, and both were found by running the renderer against it. It
+     REJECTED, and the renderer awaits pty.start (renderer.js:724) and fs.list
+     (renderer.js:1651) without a catch, so opening a terminal panel on the web
+     threw and the panel sat on "starting". The mobile bridge, which the same
+     renderer already runs against, resolves with an `error` field in the shape
+     each call site reads, and that is the contract kept here now.
+
+     And it stopped at "use the desktop app", when the thing it was refusing
+     exists one domain over: Crowe Workspaces is a real streamed Linux desktop
+     with a shell, a filesystem and git. So a refusal that a Workspace can
+     satisfy carries a `remedy`, an offer to open one, and the renderer shows
+     it. A refusal that carries a reason is one field away from carrying a
+     remedy; a silent empty array would have had nowhere to put one.
+
+     `remedy` is additive. The desktop never sets it and the renderer only
+     reads it when present, so nothing on Electron changes shape. */
+  const WORKSPACES_URL =
+    (typeof window !== "undefined" && window.CROWE_WORKSPACES_URL) || "https://croweos.com/#/dashboard";
+
+  const workspaceRemedy = (surface) => ({
+    kind: "workspace",
+    label: "Open in your Workspace",
+    url: WORKSPACES_URL,
+    detail: `${surface} runs in a Crowe Workspace: a real Linux desktop streamed to this browser.`,
+  });
+
+  // A refusal a Workspace can satisfy. `shape` is merged in so each call site
+  // gets the fields it reads (entries, cwd, repo, ok) alongside the reason.
+  const escalate = (surface, shape = {}) => async () =>
+    Object.assign({}, shape, {
+      error: `${surface} is not available in the browser build. Open a Workspace to use it.`,
+      remedy: workspaceRemedy(surface),
+    });
+
+  // A refusal nothing here can satisfy: no remedy, same resolved shape.
+  const unsupported = (surface, shape = {}) => async () =>
+    Object.assign({}, shape, {
+      error: `${surface} is not available in the browser build. It needs a local ` +
+        `filesystem, shell or OS integration; use the desktop app.`,
+    });
 
   /* -------------------------------------------------------------- identity */
 
@@ -587,25 +624,31 @@
     edit: { decide: async () => ({ ok: false }) },
     approval: { decide: async () => ({ ok: false }) },
 
+    // The three a Workspace satisfies. Shapes per call site, as the mobile
+    // bridge keeps them: pty.start reads ok/error (renderer.js:724); fs.list
+    // iterates entries and reads cwd (renderer.js:1651); git.status reads repo.
+    // Arrays stay arrays: a list that answered with an object drew nothing and
+    // said nothing.
     pty: {
-      start: unsupported("The terminal"),
+      start: escalate("The terminal", { ok: false }),
       input: () => {},
       resize: () => {},
-      close: unsupported("The terminal"),
+      close: async () => ({ ok: true }),
       onData: () => () => {},
     },
     fs: {
-      list: unsupported("The file browser"),
-      read: unsupported("File reading"),
-      walk: unsupported("Workspace indexing"),
-      pick: unsupported("The file picker"),
-      readContext: unsupported("File context"),
+      list: escalate("The file browser", { cwd: "", entries: [] }),
+      read: escalate("File reading", {}),
+      walk: async () => [],
+      pick: async () => [],
+      readContext: async () => [],
     },
     git: {
-      status: unsupported("Git"), diff: unsupported("Git"), stage: unsupported("Git"),
-      unstage: unsupported("Git"), commit: unsupported("Git"), log: unsupported("Git"),
-      branches: unsupported("Git"), checkout: unsupported("Git"),
-      pull: unsupported("Git"), push: unsupported("Git"),
+      status: escalate("Git", { repo: false, cwd: "" }),
+      diff: async () => "",
+      stage: escalate("Git", {}), unstage: escalate("Git", {}),
+      commit: escalate("Git", {}), log: async () => [], branches: async () => [],
+      checkout: escalate("Git", {}), pull: escalate("Git", {}), push: escalate("Git", {}),
     },
 
     sessions,
