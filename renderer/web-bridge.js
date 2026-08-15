@@ -164,21 +164,63 @@
 
   /* ----------------------------------------------------------------- catalog */
 
+  /* Named agents, from the models the edge lets this user see.
+
+     Open WebUI's custom models are already the thing the agent platforms are
+     converging on this month: a name, a description that works as a standing
+     brief, and the knowledge collections that scope its retrieval. Two of them
+     serve paying customers today. What the web build lacked was any way to
+     reach them: it listed the bare gateway lanes and pinned retrieval to three
+     collection ids written into this file.
+
+     So the catalog asks Open WebUI first and the gateway second. Rows that
+     carry `info` are custom models, surfaced with their own name and their
+     description in the role column, and marked as agents so a run against one
+     sends no `files`: the agent's knowledge IS its scope, and pinning the SWM
+     collections on top would answer a Peoria Ford question out of a mushroom
+     transcript. Rows without `info` are the plain lanes, and get the pinned
+     collections as before.
+
+     Until the edge exposes /app/owui/api/models it answers 404 there, and the
+     catalog falls back to the gateway list exactly as it did, so nothing
+     regresses while that line waits to be applied. */
+  const agentModels = new Set();
+
+  const laneRow = (id) => {
+    const display = id
+      .replace(/^crowelm-/, "CroweLM ")
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return [id, display, /apex|parallel|flash/.test(id), "", true, true];
+  };
+
   // The renderer expects rows of [model, display, featured, role, available, tools].
   async function catalogGet() {
+    agentModels.clear();
+    try {
+      const r = await fetch(`${OWUI}/models`, { headers: { accept: "application/json" } });
+      if (r.ok) {
+        const body = await r.json();
+        const rows = (body && body.data) || [];
+        if (rows.length) {
+          return rows.map((m) => {
+            const info = m.info || null;
+            if (!info) return laneRow(m.id);
+            agentModels.add(m.id);
+            const meta = info.meta || {};
+            const knowledge = Array.isArray(meta.knowledge) ? meta.knowledge.length : 0;
+            const role = String(meta.description || "").trim() || (knowledge ? `Agent over ${knowledge} knowledge collection${knowledge === 1 ? "" : "s"}` : "Agent");
+            return [m.id, m.name || m.id, true, role, true, true];
+          });
+        }
+      }
+    } catch (_) {
+      // Fall through to the gateway list; the reason is the same either way.
+    }
     const r = await fetch(`${GW}/models`, { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error(`Catalog unavailable (${r.status}).`);
     const body = await r.json();
-    const rows = body.data || [];
-    return rows.map((m) => {
-      const id = m.id;
-      const display = id
-        .replace(/^crowelm-/, "CroweLM ")
-        .replace(/-/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase());
-      const featured = /apex|parallel|flash/.test(id);
-      return [id, display, featured, "", true, true];
-    });
+    return ((body && body.data) || []).map((m) => laneRow(m.id));
   }
 
   /* -------------------------------------------------------------------- run */
@@ -194,17 +236,17 @@
      one this file already had drifted from the gateway's once. Emits nothing
      itself: `onDelta` and the returned usage are the caller's to attribute. */
   async function streamCompletion({ model, messages, maxTokens, signal, onDelta }) {
+    const body = { model, messages, stream: true, max_tokens: maxTokens || 2048 };
+    // A named agent carries its own knowledge; pinning the operator's corpus on
+    // top would let one customer's question retrieve from another's pack. A
+    // plain lane has no scope of its own, so it gets the operator's.
+    if (!agentModels.has(model)) {
+      body.files = COLLECTIONS.map((cid) => ({ type: "collection", id: cid }));
+    }
     const res = await fetch(`${OWUI}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        max_tokens: maxTokens || 2048,
-        // Scopes retrieval to the operator's own corpus for this turn.
-        files: COLLECTIONS.map((cid) => ({ type: "collection", id: cid })),
-      }),
+      body: JSON.stringify(body),
       signal,
     });
 

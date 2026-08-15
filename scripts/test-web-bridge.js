@@ -271,6 +271,71 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "stop still reaches it";
   });
 
+  // ─── Named agents ─────────────────────────────────────────────────────────
+
+  /* An edge that exposes Open WebUI's model list: two custom models (agents)
+     with descriptions and knowledge, one plain lane; and records every
+     chat/completions body so the scope decision can be read off the wire. */
+  function agentEdge({ modelsStatus = 200 } = {}) {
+    const bodies = [];
+    const impl = async (url, init = {}) => {
+      const u = String(url);
+      if (u.endsWith("/app/owui/api/models")) {
+        if (modelsStatus !== 200) return new Response("", { status: modelsStatus });
+        return new Response(JSON.stringify({ data: [
+          { id: "toxictee-manager", name: "ToxicTee Manager", info: { meta: { description: "Runs the ToxicTee brand.", knowledge: [{ id: "k1" }] } } },
+          { id: "peoria-ford", name: "Peoria Ford", info: { meta: { knowledge: [{ id: "k2" }, { id: "k3" }] } } },
+          { id: "crowelm-apex", name: "crowelm-apex" },
+        ] }), { status: 200 });
+      }
+      if (u.endsWith("/app/gw/v1/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "crowelm-apex" }, { id: "crowelm-flash" }] }), { status: 200 });
+      }
+      if (u.includes("/chat/completions")) {
+        bodies.push(JSON.parse(init.body || "{}"));
+        return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\ndata: [DONE]\n`, { status: 200 });
+      }
+      return new Response("", { status: 404 });
+    };
+    impl.bodies = bodies;
+    return impl;
+  }
+
+  await check("custom models surface as named agents with their brief", async () => {
+    const { crowe: web } = loadWebSurface({ fetchImpl: agentEdge() });
+    const rows = await web.catalog.get();
+    const byId = Object.fromEntries(rows.map((r) => [r[0], r]));
+    assert(byId["toxictee-manager"], "agent missing from catalog");
+    assert.strictEqual(byId["toxictee-manager"][1], "ToxicTee Manager", "agent must show its own name, not a lane label");
+    assert.strictEqual(byId["toxictee-manager"][3], "Runs the ToxicTee brand.", "agent description belongs in the role column");
+    assert(/2 knowledge collections/.test(byId["peoria-ford"][3]), `undescribed agent should say what it knows: ${byId["peoria-ford"][3]}`);
+    assert.strictEqual(byId["crowelm-apex"][1], "CroweLM Apex", "a plain lane keeps the lane label");
+    return `${rows.length} rows, 2 agents`;
+  });
+
+  await check("a run against a named agent sends no pinned collections", async () => {
+    // The agent's knowledge is its scope. Pinning the SWM collections on top
+    // would answer a Peoria Ford question out of a mushroom transcript.
+    const edge = agentEdge();
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    await web.catalog.get();
+    await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "peoria-ford" });
+    await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "crowelm-apex" });
+    assert.strictEqual(edge.bodies.length, 2, "expected two runs");
+    assert(!("files" in edge.bodies[0]), "agent run must not carry pinned collections");
+    assert(Array.isArray(edge.bodies[1].files) && edge.bodies[1].files.length === 3, "plain lane must keep the operator's three collections");
+    return "agent unscoped, lane pinned";
+  });
+
+  await check("when the edge hides the model list the catalog falls back to the gateway", async () => {
+    // Today the edge answers 404 for /app/owui/api/models. Nothing may regress
+    // while that line waits to be applied.
+    const { crowe: web } = loadWebSurface({ fetchImpl: agentEdge({ modelsStatus: 404 }) });
+    const rows = await web.catalog.get();
+    assert.deepStrictEqual(rows.map((r) => r[0]).sort(), ["crowelm-apex", "crowelm-flash"], `fallback rows: ${rows.map((r) => r[0])}`);
+    return "gateway lanes";
+  });
+
   // ─── Refusals and escalations ─────────────────────────────────────────────
 
   await check("a refused capability resolves in the shape its call site reads", async () => {
