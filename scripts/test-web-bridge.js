@@ -76,7 +76,9 @@ function loadWebSurface({ fetchImpl, seedConfig, rooms = true } = {}) {
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
     AbortController,
     TextDecoder,
-    console,
+    // The bridge warns once when it routes around an unopened edge; that is
+    // for a browser console, not for a test log, so warn is quiet here.
+    console: Object.assign(Object.create(console), { warn: () => {} }),
   };
   // app.html loads rooms-web.js ahead of the bridge; do the same here so the
   // bridge sees the engine the way a browser tab does. `rooms:false` is the
