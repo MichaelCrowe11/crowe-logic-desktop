@@ -34,6 +34,11 @@ async function check(name, fn) {
   }
 }
 function assert(cond, message) { if (!cond) throw new Error(message); }
+// The room checks compare structures; keep the house `assert(cond, msg)` and
+// borrow node's equality helpers for those, so a mismatch prints both sides.
+const nodeAssert = require("assert");
+assert.strictEqual = nodeAssert.strictEqual;
+assert.deepStrictEqual = nodeAssert.deepStrictEqual;
 
 // ─── Load both bridges ───────────────────────────────────────────────────────
 
@@ -54,7 +59,7 @@ function loadPreloadSurface() {
 // web-bridge.js runs in a plain browser tab. Give it the globals it touches at
 // load: storage, an origin, and a fetch that fails the way an unreachable edge
 // does unless a test supplies its own.
-function loadWebSurface({ fetchImpl, seedConfig } = {}) {
+function loadWebSurface({ fetchImpl, seedConfig, rooms = true } = {}) {
   const store = new Map();
   if (seedConfig) store.set("crowe.web.config", JSON.stringify(seedConfig));
 
@@ -73,9 +78,36 @@ function loadWebSurface({ fetchImpl, seedConfig } = {}) {
     TextDecoder,
     console,
   };
+  // app.html loads rooms-web.js ahead of the bridge; do the same here so the
+  // bridge sees the engine the way a browser tab does. `rooms:false` is the
+  // old-app.html case, where the surface must still answer.
+  if (rooms) new Function("window", read("renderer/rooms-web.js"))(win);
   new Function(...Object.keys(sandbox), read("renderer/web-bridge.js"))(...Object.values(sandbox));
   assert(win.crowe, "web-bridge.js did not install window.crowe");
-  return { crowe: win.crowe, store };
+  return { crowe: win.crowe, store, win };
+}
+
+/* An edge that answers chat/completions in SSE, one canned reply per call,
+   attributing nothing: the bridge is what has to attribute. `replies` is
+   consumed in call order; each may be a string or an Error to fail that seat. */
+function fakeEdge(replies) {
+  let n = 0;
+  const calls = [];
+  const impl = async (url, init = {}) => {
+    if (!String(url).includes("/chat/completions")) return new Response("{}", { status: 200 });
+    const body = JSON.parse(init.body || "{}");
+    calls.push({ model: body.model, messages: body.messages });
+    const r = replies[Math.min(n++, replies.length - 1)];
+    if (r instanceof Error) return new Response(r.message, { status: 500 });
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: r } }] })}\n`,
+      `data: ${JSON.stringify({ choices: [{ finish_reason: "stop" }], usage: { prompt_tokens: 40, completion_tokens: 12 } })}\n`,
+      "data: [DONE]\n",
+    ].join("");
+    return new Response(frames, { status: 200 });
+  };
+  impl.calls = calls;
+  return impl;
 }
 
 // Every callable path in an exposed surface, one level of grouping deep —
@@ -237,6 +269,125 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     second.catch(() => {});
     assert(aborted, "run one's finally removed run two's controller, so stop() aborted nothing");
     return "stop still reaches it";
+  });
+
+  // ─── Rooms ────────────────────────────────────────────────────────────────
+
+  await check("the bundled engine is the engine in rooms/, byte for byte", () => {
+    // build-rooms-web.js wraps the sources verbatim. If either source appears
+    // in the bundle in any edited form, the web is running a second engine.
+    const bundle = read("renderer/rooms-web.js");
+    for (const src of ["rooms/engine.js", "rooms/registry.js"]) {
+      const body = read(src).split("\n").map((l) => (l.length ? "    " + l : l)).join("\n");
+      assert(bundle.includes(body), `${src} is not embedded verbatim in renderer/rooms-web.js`);
+    }
+    return "verbatim";
+  });
+
+  await check("the web roster is the desktop roster", () => {
+    const { crowe: web } = loadWebSurface();
+    const registry = require(path.join(root, "rooms", "registry.js"));
+    return web.rooms.agents().then(({ agents, templates }) => {
+      assert.strictEqual(agents.length, registry.listAgents().length, "agent count differs");
+      assert.strictEqual(templates.length, registry.listTemplates().length, "template count differs");
+      return `${agents.length} agents, ${templates.length} templates`;
+    });
+  });
+
+  await check("a room turn is attributed to the seat that spoke, on the edge", async () => {
+    // Two seats, one addressed message. The engine decides who runs; the
+    // bridge has to call the edge once per addressed seat, hand it the seat's
+    // own model and brief, and put the answer in the transcript under that
+    // seat's id. Nothing here mocks the engine.
+    const edge = fakeEdge(["Pasteurize; the pressure vessel is the expense.", "Sterilize; the contam rate is the expense."]);
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const { agents } = await web.rooms.agents();
+    const [a, b] = agents.slice(0, 2).map((x) => x.id);
+    const made = await web.rooms.create({ title: "straw", agentIds: [a, b], budgetUsd: 1 });
+    assert(made.room && made.room.id, `create failed: ${JSON.stringify(made)}`);
+    assert.strictEqual(made.room.tier, "readonly", "a web room must clamp to readonly (Gate 4)");
+
+    const out = await web.rooms.say(made.room.id, `@room pasteurize or sterilize straw?`);
+    assert(out.ran && out.ran.length === 2, `expected two seats to run, got ${JSON.stringify(out.ran)}`);
+    assert(out.ran.every((r) => r.ok), `a seat failed: ${JSON.stringify(out.ran)}`);
+    assert.strictEqual(edge.calls.length, 2, `edge was called ${edge.calls.length} times for two seats`);
+
+    // Each call carried the seat's brief as the system message.
+    for (const c of edge.calls) {
+      assert.strictEqual(c.messages[0].role, "system", "seat brief missing");
+      assert(/You are /.test(c.messages[0].content), "seat brief did not name the agent");
+    }
+
+    const loaded = await web.rooms.load(made.room.id);
+    const authors = loaded.messages.filter((m) => m.kind === "reply").map((m) => m.author).sort();
+    assert.deepStrictEqual(authors, [a, b].sort(), `replies attributed to ${authors}`);
+    assert(loaded.room.spentUsd === 0, "web rooms report cost 0 until the ledger prices them");
+    const calls = loaded.room.agents.map((s) => s.cost.calls);
+    assert.deepStrictEqual(calls, [1, 1], `per-seat call counts ${calls}`);
+    return `2 seats, 2 calls, attributed`;
+  });
+
+  await check("seat events carry roomId and roomAgent for the roster", async () => {
+    const edge = fakeEdge(["one"]);
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const { agents } = await web.rooms.agents();
+    const made = await web.rooms.create({ title: "ev", agentIds: [agents[0].id] });
+    const seen = [];
+    const off = web.agent.onEvent((ev) => seen.push(ev));
+    await web.rooms.say(made.room.id, "hello");
+    off();
+    const types = seen.map((e) => e.type);
+    for (const t of ["route", "assistant_delta", "final"]) assert(types.includes(t), `missing ${t} event: ${types}`);
+    for (const e of seen) {
+      assert.strictEqual(e.roomId, made.room.id, "event missing roomId");
+      assert.strictEqual(e.roomAgent, agents[0].id, "event missing roomAgent");
+      assert.strictEqual(e.agentId, `room:${made.room.id}:${agents[0].id}`, "seat id must be room:<room>:<agent>");
+    }
+    return `${seen.length} events stamped`;
+  });
+
+  await check("a failed seat is marked failed and does not enter the transcript", async () => {
+    const edge = fakeEdge([new Error("upstream fell over"), "fine"]);
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const { agents } = await web.rooms.agents();
+    const [a, b] = agents.slice(0, 2).map((x) => x.id);
+    const made = await web.rooms.create({ title: "fail", agentIds: [a, b] });
+    const out = await web.rooms.say(made.room.id, "@room go");
+    const failed = out.ran.filter((r) => !r.ok);
+    assert.strictEqual(failed.length, 1, `expected one failed seat, got ${JSON.stringify(out.ran)}`);
+    const loaded = await web.rooms.load(made.room.id);
+    const replies = loaded.messages.filter((m) => m.kind === "reply");
+    assert.strictEqual(replies.length, 1, "the failed seat's error must not be in the transcript");
+    const seat = loaded.room.agents.find((s) => s.agentId === failed[0].agentId);
+    assert.strictEqual(seat.state, "failed", `seat state ${seat.state}`);
+    return "contained";
+  });
+
+  await check("rooms persist across a reload and stay out of the sessions rail", async () => {
+    const edge = fakeEdge(["x"]);
+    const first = loadWebSurface({ fetchImpl: edge });
+    const { agents } = await first.crowe.rooms.agents();
+    const made = await first.crowe.rooms.create({ title: "persist", agentIds: [agents[0].id] });
+    await first.crowe.rooms.say(made.room.id, "hi");
+    // Same storage, fresh bridge: what a page reload is.
+    const raw = first.store.get("crowe.web.sessions");
+    const second = loadWebSurface({ fetchImpl: edge });
+    second.store.set("crowe.web.sessions", raw);
+    const list = await second.crowe.rooms.list();
+    assert(list.some((r) => r.id === made.room.id), "room not listed after reload");
+    const loaded = await second.crowe.rooms.load(made.room.id);
+    assert.strictEqual(loaded.messages.length, 2, "transcript did not survive reload");
+    const threads = await second.crowe.sessions.list();
+    assert(!threads.some((s) => s.id === made.room.id), "a room leaked into the sessions rail");
+    return "survives reload, separate rail";
+  });
+
+  await check("without the engine the surface still answers, with a reason", async () => {
+    const { crowe: web } = loadWebSurface({ rooms: false });
+    const made = await web.rooms.create({ title: "x", agentIds: ["crowe-logic"] });
+    assert(made.error && /engine/.test(made.error), `expected a stated reason, got ${JSON.stringify(made)}`);
+    assert.deepStrictEqual(await web.rooms.list(), []);
+    return "stated reason";
   });
 
   // ─── The web entry point ──────────────────────────────────────────────────

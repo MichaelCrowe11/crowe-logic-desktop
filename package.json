@@ -17,8 +17,10 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/test-web-bridge.js && node mobile/scripts/sync-version.js --check && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node mobile/scripts/sync-version.js --check && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
+    "rooms:web": "node scripts/build-rooms-web.js",
+    "rooms:web:check": "node scripts/build-rooms-web.js --check",
     "preview:gen": "node scripts/gen-preview.js",
     "preview:check": "node scripts/gen-preview.js --check",
     "preview": "node scripts/gen-preview.js && python3 -m http.server 8731 --directory .",
@@ -80,7 +82,10 @@
       "node_modules/tiny-typed-emitter/**",
       "node_modules/universalify/**",
       "!renderer/preview.html",
-      "!renderer/preview-shim.js"
+      "!renderer/preview-shim.js",
+      "!renderer/app.html",
+      "!renderer/web-bridge.js",
+      "!renderer/rooms-web.js"
     ],
     "mac": {
       "icon": "assets/icon.icns",

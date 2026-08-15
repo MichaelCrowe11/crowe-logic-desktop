@@ -102,10 +102,16 @@
   // The renderer reads `updatedAt` (renderer.js:1970, 2247, 2296) and formats it
   // with `new Date(...)`. Returning `at` instead rendered every row as
   // "Invalid Date".
+  // Rooms share this store (kind:"room") but are listed by rooms.list, as on
+  // the desktop where the sessions rail and the rooms rail are two views of one
+  // directory. A room in the sessions rail would open as a thread with a
+  // roster it cannot show.
   const sessions = {
     list: async () =>
-      readJSON(KEY_SESSIONS, []).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
-    load: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s.id === id) || null,
+      readJSON(KEY_SESSIONS, [])
+        .filter((s) => s && s.kind !== "room")
+        .map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
+    load: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s.id === id && s.kind !== "room") || null,
     new: async () => {
       const all = readJSON(KEY_SESSIONS, []);
       const s = { id: `s-${Date.now()}`, title: "Untitled", updatedAt: Date.now(), messages: [] };
@@ -142,6 +148,86 @@
 
   const controllers = new Map();
 
+  /* One streamed completion against the edge.
+
+     Shared by the operator thread and by every seat in a room, so there is
+     exactly one place that knows the wire format, the SSE framing and the
+     usage frame. Before rooms this lived inside agentRun; a second copy for the
+     room runner would have been the second SSE parser to keep in step, and the
+     one this file already had drifted from the gateway's once. Emits nothing
+     itself: `onDelta` and the returned usage are the caller's to attribute. */
+  async function streamCompletion({ model, messages, maxTokens, signal, onDelta }) {
+    const res = await fetch(`${OWUI}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        max_tokens: maxTokens || 2048,
+        // Scopes retrieval to the operator's own corpus for this turn.
+        files: COLLECTIONS.map((cid) => ({ type: "collection", id: cid })),
+      }),
+      signal,
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Gateway returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+    }
+    if (!res.body) throw new Error("Gateway returned no body.");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let usage = null;
+    let text = "";
+
+    const frame = (line) => {
+      if (!line.startsWith("data:")) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") return;
+      let chunk;
+      try { chunk = JSON.parse(payload); } catch (_) { return; }
+      if (chunk.usage) usage = chunk.usage;
+      const delta = ((chunk.choices || [])[0] || {}).delta || {};
+      if (delta.content) {
+        text += delta.content;
+        if (onDelta) onDelta(delta.content);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        // Flush the decoder and read the residue as a last frame. The final
+        // event is the one carrying usage, and a stream that ends without a
+        // trailing newline would otherwise drop it and report zero tokens.
+        buffer += decoder.decode();
+        frame(buffer.trim());
+        buffer = "";
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      // Hold the trailing partial line back so a chunk boundary landing
+      // mid-JSON does not throw away a frame.
+      let nl;
+      while ((nl = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        frame(line);
+      }
+    }
+
+    return {
+      text,
+      usage: usage
+        ? { promptTokens: usage.prompt_tokens || 0, completionTokens: usage.completion_tokens || 0 }
+        : null,
+    };
+  }
+
   async function agentRun(messages, id = "main", options = {}) {
     const model = options.model || "crowelm-apex";
     const controller = new AbortController();
@@ -168,61 +254,19 @@
     for (const m of messages) wire.push({ role: m.role, content: m.content });
 
     try {
-      const res = await fetch(`${OWUI}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages: wire,
-          stream: true,
-          max_tokens: options.maxTokens || 2048,
-          // Scopes retrieval to the operator's own corpus for this turn.
-          files: COLLECTIONS.map((cid) => ({ type: "collection", id: cid })),
-        }),
+      const out = await streamCompletion({
+        model,
+        messages: wire,
+        maxTokens: options.maxTokens,
         signal: controller.signal,
+        onDelta: (piece) => { text += piece; send({ type: "assistant_delta", text: piece }); },
       });
 
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(`Gateway returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
-      }
-      if (!res.body) throw new Error("Gateway returned no body.");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let usage = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // Hold the trailing partial line back so a chunk boundary landing
-        // mid-JSON does not throw away a frame.
-        let nl;
-        while ((nl = buffer.indexOf("\n")) !== -1) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (!payload || payload === "[DONE]") continue;
-          let chunk;
-          try { chunk = JSON.parse(payload); } catch (_) { continue; }
-          if (chunk.usage) usage = chunk.usage;
-          const delta = ((chunk.choices || [])[0] || {}).delta || {};
-          if (delta.content) {
-            text += delta.content;
-            send({ type: "assistant_delta", text: delta.content });
-          }
-        }
-      }
-
-      if (usage) {
+      if (out.usage) {
         send({
           type: "telemetry",
-          promptTokens: usage.prompt_tokens || 0,
-          completionTokens: usage.completion_tokens || 0,
+          promptTokens: out.usage.promptTokens,
+          completionTokens: out.usage.completionTokens,
           cost: 0, // Priced by the gateway's ledger, not guessed here.
         });
       }
@@ -247,6 +291,183 @@
       if (controllers.get(id) === controller) controllers.delete(id);
     }
   }
+
+  /* ------------------------------------------------------------------ rooms */
+
+  // The same engine the desktop runs, bundled by scripts/build-rooms-web.js
+  // and loaded by app.html ahead of this file. Absent (an old app.html, or the
+  // script failing to load) the rooms surface answers in the shape its caller
+  // expects with a stated reason, the contract every refusal in this file keeps.
+  const ROOMS = (typeof window !== "undefined" && window.CroweRooms) || null;
+  const ROOMS_OFF = "Rooms are unavailable: the room engine did not load in this build.";
+
+  // Rooms ride the sessions store, as they do on the desktop: same key, told
+  // apart by kind:"room", so a room written here is a session with a roster.
+  const liveRooms = new Map();
+  const readRoomRecords = () => readJSON(KEY_SESSIONS, []).filter((s) => s && s.kind === "room" && s.room);
+  function saveRoom(room) {
+    const all = readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== room.id);
+    all.unshift(ROOMS.engine.toSession(room));
+    writeJSON(KEY_SESSIONS, all.slice(0, 200));
+  }
+  function loadRoom(id) {
+    if (liveRooms.has(id)) return liveRooms.get(id);
+    const rec = readRoomRecords().find((s) => s.id === id);
+    const room = rec ? ROOMS.engine.fromSession(rec) : null;
+    if (room) liveRooms.set(id, room);
+    return room;
+  }
+
+  // What the renderer is told about a room. Mirrors main.js roomState: the
+  // tier is computed rather than stored, and on the web the configured tier is
+  // whatever getConfig reports, which is readonly, so Gate 4 holds twice.
+  function roomState(room) {
+    const cfg = readJSON(KEY_CONFIG, {});
+    return {
+      id: room.id, title: room.title, template: room.template,
+      agents: room.agents.map((a) => {
+        const meta = ROOMS.registry.getAgent(a.agentId) || {};
+        return { agentId: a.agentId, name: meta.name || a.agentId, domain: meta.domain || "",
+          ceiling: meta.autonomyCeiling || "plan", model: a.model, state: a.state,
+          cost: room.cost[a.agentId] || { usd: 0, promptTokens: 0, completionTokens: 0, calls: 0 } };
+      }),
+      defaultAgent: room.defaultAgent,
+      tier: ROOMS.engine.roomTier(room, cfg.autonomy || "readonly"),
+      budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
+      critiqueRounds: room.critiqueRounds, maxCritiqueRounds: ROOMS.engine.MAX_CRITIQUE_ROUNDS,
+      halted: room.halted,
+    };
+  }
+
+  const roomSeatId = (roomId, agentId) => `room:${roomId}:${agentId}`;
+
+  /* The runner a room's seats call. This is the whole difference between the
+     desktop and the web: main.js hands the engine the harness, this hands it
+     the edge. Everything the engine decides, addressing, visibility, the
+     budget, the critique loop, is untouched.
+
+     Every event a seat produces is stamped with roomId and roomAgent, because
+     the renderer's roster (renderer.js:1397) reads seat states off the same
+     stream the transcript uses rather than guessing who was addressed. */
+  function roomRunner(room) {
+    return {
+      runAgent: async ({ agentId, model, systemBrief, messages }) => {
+        const seatId = roomSeatId(room.id, agentId);
+        const controller = new AbortController();
+        controllers.set(seatId, controller);
+        const send = (ev) => emit(Object.assign({ agentId: seatId, roomId: room.id, roomAgent: agentId }, ev));
+        let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+        try {
+          send({ type: "route", model: model || "" });
+          const wire = [{ role: "system", content: systemBrief }, ...messages];
+          const out = await streamCompletion({
+            model: model || "crowelm-apex",
+            messages: wire,
+            signal: controller.signal,
+            onDelta: (piece) => send({ type: "assistant_delta", text: piece }),
+          });
+          if (out.usage) {
+            usage = { usd: 0, promptTokens: out.usage.promptTokens, completionTokens: out.usage.completionTokens };
+            send({ type: "telemetry", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, cost: 0 });
+          }
+          if (!out.text) { send({ type: "error", text: "The model returned no content." }); return { text: "", error: "empty answer", usage }; }
+          send({ type: "final", text: out.text });
+          return { text: out.text, usage };
+        } catch (err) {
+          if (err && err.name === "AbortError") { send({ type: "stopped" }); return { stopped: true, usage }; }
+          send({ type: "error", text: (err && err.message) || String(err) });
+          return { text: "", error: (err && err.message) || String(err), usage };
+        } finally {
+          if (controllers.get(seatId) === controller) controllers.delete(seatId);
+        }
+      },
+    };
+  }
+
+  async function runRoomTurn(id, fn) {
+    const room = loadRoom(id);
+    if (!room) return { error: "no such room" };
+    room.tier = ROOMS.engine.roomTier(room, readJSON(KEY_CONFIG, {}).autonomy || "readonly");
+    const out = await fn(room, roomRunner(room));
+    saveRoom(room);
+    return Object.assign({}, out, { room: roomState(room) });
+  }
+
+  const rooms = ROOMS
+    ? {
+        agents: async () => ({ agents: ROOMS.registry.listAgents(), templates: ROOMS.registry.listTemplates() }),
+        list: async () =>
+          readRoomRecords()
+            .map((d) => ({ id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
+              agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" }))
+            .sort((a, b) => b.updatedAt - a.updatedAt),
+        create: async ({ template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+          const room = template
+            ? ROOMS.engine.fromTemplate(template, { title, budgetUsd })
+            : ROOMS.engine.createRoom({ title, agentIds, budgetUsd });
+          if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
+          liveRooms.set(room.id, room);
+          saveRoom(room);
+          return { room: roomState(room) };
+        },
+        load: async (id) => {
+          const room = loadRoom(id);
+          return room ? { room: roomState(room), messages: room.messages } : { error: "no such room" };
+        },
+        delete: async (id) => {
+          liveRooms.delete(id);
+          writeJSON(KEY_SESSIONS, readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== id));
+          return { ok: true };
+        },
+        join: async (id, agentId) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          if (!ROOMS.registry.getAgent(agentId)) return { error: "no such agent" };
+          if (!ROOMS.registry.isJoinable(agentId)) return { error: "that agent has been retired from rooms" };
+          if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
+          room.agents.push({ agentId, model: (ROOMS.registry.getAgent(agentId) || {}).model || "", state: "idle" });
+          if (!room.defaultAgent) room.defaultAgent = agentId;
+          saveRoom(room);
+          return { room: roomState(room) };
+        },
+        leave: async (id, agentId) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          room.agents = room.agents.filter((a) => a.agentId !== agentId);
+          if (room.defaultAgent === agentId) room.defaultAgent = room.agents[0] ? room.agents[0].agentId : "";
+          saveRoom(room);
+          return { room: roomState(room) };
+        },
+        setAgentModel: async (id, agentId, model) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const seat = room.agents.find((a) => a.agentId === agentId);
+          if (!seat) return { error: "that agent is not in this room" };
+          seat.model = String(model || "");
+          saveRoom(room);
+          return { room: roomState(room) };
+        },
+        say: async (id, text) => runRoomTurn(id, (room, deps) => ROOMS.engine.speak(room, String(text || ""), deps)),
+        critique: async (id) => runRoomTurn(id, (room, deps) => ROOMS.engine.critique(room, deps)),
+        revise: async (id) => runRoomTurn(id, (room, deps) => ROOMS.engine.revise(room, deps)),
+        // Calls rather than dollars, as on the desktop: the price depends on a
+        // transcript nobody has generated yet.
+        project: async (id, kind = "critique") => {
+          const room = loadRoom(id);
+          return room ? ROOMS.engine.projectRound(room, kind) : { error: "no such room" };
+        },
+      }
+    : {
+        agents: async () => ({ agents: [], templates: [] }),
+        list: async () => [],
+        create: async () => ({ error: ROOMS_OFF }),
+        load: async () => ({ error: ROOMS_OFF }),
+        delete: async () => ({ ok: true }),
+        join: async () => ({ error: ROOMS_OFF }),
+        leave: async () => ({ error: ROOMS_OFF }),
+        setAgentModel: async () => ({ error: ROOMS_OFF }),
+        say: async () => ({ error: ROOMS_OFF }),
+        critique: async () => ({ error: ROOMS_OFF }),
+        revise: async () => ({ error: ROOMS_OFF }),
+        project: async () => ({ calls: 0, agents: 0, note: ROOMS_OFF }),
+      };
 
   /* ----------------------------------------------------------------- config */
 
@@ -389,14 +610,7 @@
 
     sessions,
 
-    rooms: {
-      agents: async () => [],
-      list: async () => [],
-      create: unsupported("Rooms"), load: unsupported("Rooms"), delete: unsupported("Rooms"),
-      join: unsupported("Rooms"), leave: unsupported("Rooms"),
-      setAgentModel: unsupported("Rooms"), say: unsupported("Rooms"),
-      critique: unsupported("Rooms"), revise: unsupported("Rooms"), project: unsupported("Rooms"),
-    },
+    rooms,
 
     grow: {
       list: async () => [],

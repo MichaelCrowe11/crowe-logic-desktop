@@ -86,13 +86,21 @@ check("the mac icon named in the build config exists", () => {
   return icon;
 });
 
-check("the preview harness is excluded, not shipped", () => {
+check("the preview harness and the web build are excluded, not shipped", () => {
   // preview-shim.js fakes the whole preload surface. Shipping it would put a
-  // second, stubbed window.crowe inside the signed app.
-  for (const f of ["renderer/preview.html", "renderer/preview-shim.js"]) {
+  // second, stubbed window.crowe inside the signed app. The web files are the
+  // same shape of thing: web-bridge.js is a third window.crowe, backed by HTTP,
+  // and rooms-web.js is the room engine bundled for a browser. Inert inside
+  // Electron, since index.html never loads them, but a signed app should not
+  // carry a second implementation of its own bridge.
+  const excluded = [
+    "renderer/preview.html", "renderer/preview-shim.js",
+    "renderer/app.html", "renderer/web-bridge.js", "renderer/rooms-web.js",
+  ];
+  for (const f of excluded) {
     assert(pkg.build.files.includes(`!${f}`), `${f} is not excluded from the build`);
   }
-  return "preview.html, preview-shim.js";
+  return excluded.map((f) => f.replace("renderer/", "")).join(", ");
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall packaging checks passed");

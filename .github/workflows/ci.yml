@@ -49,7 +49,9 @@ jobs:
       # production with no build step in between. Also holds the rule the bridge
       # states about itself, that it never puts a credential in browser storage.
       - name: Run web bridge tests
-        run: node scripts/test-web-bridge.js
+        run: |
+          node scripts/build-rooms-web.js --check
+          node scripts/test-web-bridge.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who

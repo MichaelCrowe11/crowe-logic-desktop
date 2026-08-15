@@ -1,19 +1,18 @@
 <!doctype html>
 <!-- Hand-maintained. Keep in step with renderer/index.html by hand.
      This is the web entry point: same shell as index.html, but it loads
-     web-bridge.js before renderer.js so window.crowe is backed by HTTP instead
-     of the Electron preload.
+     rooms-web.js and web-bridge.js before renderer.js so window.crowe is
+     backed by HTTP instead of the Electron preload.
 
      It is NOT generated. scripts/gen-preview.js produces renderer/preview.html
      and nothing else, so `npm run preview:gen` will never rebuild this file and
      a "do not edit, regenerate instead" note would send you to a script that
-     cannot help. scripts/test-web-bridge.js is what catches drift from
-     index.html and from the preload's surface.
+     cannot help. scripts/test-web-bridge.js is what catches drift from the
+     preload's surface; rooms-web.js IS generated, by scripts/build-rooms-web.js.
 
-     It is also NOT excluded from the packaged desktop build: package.json
-     build.files ships renderer/** with no exclusions, so this file and
-     web-bridge.js are inside the app bundle. They are inert there, because
-     index.html is the Electron entry and never loads them. -->
+     Excluded from the packaged desktop build with web-bridge.js and
+     rooms-web.js via package.json build.files, alongside preview.html:
+     scripts/test-packaging.js holds that. -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -430,6 +429,10 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <!-- The room engine, verbatim from rooms/ (scripts/build-rooms-web.js). It
+       must define window.CroweRooms before web-bridge.js reads it, or the
+       rooms surface answers with a stated reason instead of a roster. -->
+  <script src="rooms-web.js?v=1786749581348"></script>
   <script src="web-bridge.js?v=1786749581348"></script>
   <script src="mark-geometry.js?v=1786749581348"></script>
   <script src="mark.js?v=1786749581348"></script>
