@@ -235,6 +235,21 @@
      room runner would have been the second SSE parser to keep in step, and the
      one this file already had drifted from the gateway's once. Emits nothing
      itself: `onDelta` and the returned usage are the caller's to attribute. */
+  /* Whether the edge has opened the Open WebUI path at all.
+
+     It has not, as of 2026-08-15: /app/owui/api/chat/completions answers a bare
+     Caddy 404 for every model, while /app/gw/v1/chat/completions answers 200.
+     The switch to OWUI for retrieval was made in this file before the line
+     that exposes it was applied on the VM, so every chat on the web build has
+     failed since. This bridge cannot fix the edge; what it can do is refuse to
+     be broken by it. A bare 404 there (no body, no content type: Caddy, not
+     OWUI, which answers JSON) marks OWUI as unopened for this page load and
+     routes to the gateway, which is the same OpenAI-shaped stream without the
+     collections. Retrieval is unscoped on that path and it is said so once in
+     the console. The moment the edge line lands, the first call succeeds and
+     OWUI carries traffic again with no code change here. */
+  let owuiUnopened = false;
+
   async function streamCompletion({ model, messages, maxTokens, signal, onDelta }) {
     const body = { model, messages, stream: true, max_tokens: maxTokens || 2048 };
     // A named agent carries its own knowledge; pinning the operator's corpus on
@@ -243,12 +258,37 @@
     if (!agentModels.has(model)) {
       body.files = COLLECTIONS.map((cid) => ({ type: "collection", id: cid }));
     }
-    const res = await fetch(`${OWUI}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    });
+
+    const post = (base) =>
+      fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      });
+
+    // Caddy's own 404 has no content type and names itself in `server`; OWUI's
+    // 404 for an unknown model is JSON with a detail. Only the first means the
+    // path is unopened.
+    const unopened = (r) =>
+      r.status === 404 &&
+      (!r.headers.get("content-type") || /^caddy/i.test(r.headers.get("server") || ""));
+
+    let res = owuiUnopened ? null : await post(OWUI);
+    if (!res || unopened(res)) {
+      if (!owuiUnopened) {
+        owuiUnopened = true;
+        try {
+          console.warn(
+            "[crowe] The edge has not opened /app/owui/api yet; answering through the gateway " +
+              "without the operator's collections. Retrieval is unscoped until that line is applied.",
+          );
+        } catch (_) {}
+      }
+      // The gateway ignores `files`; sent anyway so the wire is identical and
+      // OWUI picks it up unchanged when it takes over.
+      res = await post(GW);
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");

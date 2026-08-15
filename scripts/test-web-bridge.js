@@ -336,6 +336,54 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "gateway lanes";
   });
 
+  // ─── The edge that has not opened OWUI ────────────────────────────────────
+
+  await check("when the edge 404s the OWUI path, chat answers through the gateway", async () => {
+    // Production on 2026-08-15: /app/owui/api/chat/completions is a bare Caddy
+    // 404 for every model; /app/gw/v1/chat/completions is 200. The bridge must
+    // route around that rather than fail every turn until the edge is fixed.
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => {
+      const u = String(url);
+      calls.push(u);
+      // A real Caddy 404: null body (so no content-type is synthesised) and the
+      // server header Caddy sets. new Response("") would add text/plain, which
+      // is not what the edge sends and would mask the case being tested.
+      if (u.startsWith("/app/owui/api/chat/completions")) return new Response(null, { status: 404, headers: { server: "Caddy" } });
+      if (u.startsWith("/app/gw/v1/chat/completions")) {
+        return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "via gateway" } }] })}\ndata: [DONE]\n`, { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    };
+    const { crowe: web } = loadWebSurface({ fetchImpl });
+    const first = await web.agent.run([{ role: "user", content: "hi" }], "main");
+    assert.strictEqual(first.text, "via gateway", `first run: ${JSON.stringify(first)}`);
+    const second = await web.agent.run([{ role: "user", content: "again" }], "main");
+    assert.strictEqual(second.text, "via gateway");
+    const owuiCalls = calls.filter((u) => u.startsWith("/app/owui/api/chat/completions")).length;
+    assert.strictEqual(owuiCalls, 1, `OWUI probed ${owuiCalls} times; after one bare 404 it should be remembered for the page`);
+    return "falls back once, remembers";
+  });
+
+  await check("a JSON 404 from OWUI is an OWUI error, not an unopened edge", async () => {
+    // OWUI itself answers 404 with a JSON detail for an unknown model. That is
+    // a real error to surface, not a reason to abandon the path.
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(String(url));
+      if (String(url).startsWith("/app/owui/api/chat/completions")) {
+        return new Response(JSON.stringify({ detail: "Model not found" }), { status: 404, headers: { "content-type": "application/json" } });
+      }
+      return new Response("{}", { status: 200 });
+    };
+    const { crowe: web } = loadWebSurface({ fetchImpl });
+    let err = null;
+    try { await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "nope" }); } catch (e) { err = e; }
+    assert(err && /404/.test(err.message) && /Model not found/.test(err.message), `expected the OWUI detail surfaced, got ${err && err.message}`);
+    assert(!calls.some((u) => u.startsWith("/app/gw/v1/chat/completions")), "must not fall back to the gateway on an OWUI-level 404");
+    return "surfaced, no fallback";
+  });
+
   // ─── Refusals and escalations ─────────────────────────────────────────────
 
   await check("a refused capability resolves in the shape its call site reads", async () => {
