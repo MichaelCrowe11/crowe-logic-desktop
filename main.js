@@ -868,7 +868,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   denyPendingApprovals();
   return { ok: true, stopped: agentRuns.size };
 });
-ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "" }) => {
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
   if (licensed) {
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
@@ -889,6 +889,10 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       // decides what is worth saying, the main process decides how much of the
       // context window a caller may spend saying it.
       context: String(context || "").slice(0, 8000),
+      // The session's standing brief is who is speaking for this thread; the
+      // harness already composes `persona` ahead of `context`, so a briefed
+      // session and a room seat are the same mechanism from here down.
+      persona: String(brief || "").slice(0, 4000),
     });
     if (id === "main") {
       try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
@@ -1033,26 +1037,60 @@ ipcMain.handle("crowe:set-config", async (_e, patch) => {
 function sessionsDir() { const d = path.join(app.getPath("userData"), "sessions"); try { fs.mkdirSync(d, { recursive: true }); } catch {} return d; }
 let currentSession = null;
 function newSessionId() { return "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7); }
+function readSession(id) {
+  try { return JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); } catch { return null; }
+}
 function persistSession(messages) {
   if (!messages || !messages.length) return;
   if (!currentSession) currentSession = newSessionId();
   const firstUser = messages.find((m) => m.role === "user");
   const title = String(firstUser?.content || "Untitled").replace(/\s+/g, " ").slice(0, 60);
+  // Read-merge-write: a session's name and brief are set outside the run and
+  // must outlive it. Writing {id, title, messages} alone here would drop them,
+  // which is the one way a session could stop being an agent by being used.
+  const prior = readSession(currentSession) || {};
   fs.writeFileSync(path.join(sessionsDir(), currentSession + ".json"),
-    JSON.stringify({ id: currentSession, title, updatedAt: Date.now(), messages }, null, 2));
+    JSON.stringify({ id: currentSession, title, updatedAt: Date.now(), messages,
+      name: prior.name || "", brief: prior.brief || "" }, null, 2));
+}
+/* What a session may be told about itself, and how much. Allowlisted so
+   nothing else rides in through this door; capped so a brief cannot quietly
+   become the whole context window. Mirrored in web-bridge.js and
+   mobile-bridge.js, which the bridge parity tests hold to this surface. */
+const SESSION_FIELDS = { name: 80, brief: 4000 };
+function sessionPatch(patch) {
+  const out = {};
+  for (const key of Object.keys(SESSION_FIELDS)) {
+    if (patch && Object.prototype.hasOwnProperty.call(patch, key)) {
+      out[key] = String(patch[key] == null ? "" : patch[key]).slice(0, SESSION_FIELDS[key]);
+    }
+  }
+  return out;
 }
 ipcMain.handle("crowe:sessions:list", () => {
   try {
     return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
-      try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8")); return { id: d.id, title: d.title, updatedAt: d.updatedAt, current: d.id === currentSession }; } catch { return null; }
+      try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8")); if (d.kind === "room") return null; return { id: d.id, title: d.title, name: d.name || "", updatedAt: d.updatedAt, current: d.id === currentSession }; } catch { return null; }
     }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
   } catch { return []; }
 });
 ipcMain.handle("crowe:sessions:load", (_e, id) => {
-  try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title }; }
+  try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "" }; }
   catch (e) { return { error: String(e) }; }
 });
 ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); return { id: currentSession }; });
+// Name and brief for a session, before or after it has any messages. A session
+// that exists as an id but not yet as a file gets one here, so the agent exists
+// before its first turn does. The current thread follows the id if it had none.
+ipcMain.handle("crowe:sessions:update", (_e, { id, patch } = {}) => {
+  const sid = String(id || currentSession || newSessionId());
+  const fields = sessionPatch(patch);
+  const prior = readSession(sid) || { id: sid, title: "Untitled", updatedAt: Date.now(), messages: [] };
+  const next = { ...prior, ...fields, id: sid, updatedAt: Date.now() };
+  try { fs.writeFileSync(path.join(sessionsDir(), sid + ".json"), JSON.stringify(next, null, 2)); } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  if (!currentSession) currentSession = sid;
+  return { ok: true, id: sid, name: next.name || "", brief: next.brief || "" };
+});
 ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {} if (currentSession === id) currentSession = null; return { ok: true }; });
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────

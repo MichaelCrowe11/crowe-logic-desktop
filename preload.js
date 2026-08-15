@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld("crowe", {
     load: (id) => ipcRenderer.invoke("crowe:sessions:load", id),
     new: () => ipcRenderer.invoke("crowe:sessions:new"),
     delete: (id) => ipcRenderer.invoke("crowe:sessions:delete", id),
+    // A session's name and standing brief. The name replaces the auto title in
+    // the rail; the brief rides every turn of that session as the persona.
+    update: (id, patch) => ipcRenderer.invoke("crowe:sessions:update", { id, patch: patch || {} }),
   },
   /* Rooms: several named agents and the operator in one thread. A room is a
      session with a roster, so these sit beside sessions rather than replacing

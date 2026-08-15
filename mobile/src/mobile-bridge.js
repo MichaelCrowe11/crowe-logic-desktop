@@ -1106,6 +1106,10 @@
       send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
 
       const convo = [{ role: "system", content: systemPrompt(route) }];
+      // The session's standing brief: who is speaking for this thread, ahead of
+      // what the world looks like, as the desktop harness orders persona and
+      // context.
+      if (opts.brief) convo.push({ role: "system", content: String(opts.brief).slice(0, 4000) });
       if (opts.context) convo.push({ role: "system", content: `Situation on this device:\n${String(opts.context).slice(0, 8000)}` });
       convo.push(...compact(messages));
 
@@ -1169,9 +1173,14 @@
     const firstUser = messages.find((m) => m.role === "user");
     const title = String(firstUser?.content || "Untitled").replace(/\s+/g, " ").slice(0, 60);
     const updatedAt = Date.now();
-    await store.set(`session:${currentSession}`, { id: currentSession, title, updatedAt, messages });
+    // Read-merge-write: the name and brief were set outside the run and must
+    // outlive it. A write of {id, title, messages} alone would drop them.
+    const prior = (await store.get(`session:${currentSession}`)) || {};
+    const name = prior.name || "";
+    const brief = prior.brief || "";
+    await store.set(`session:${currentSession}`, { id: currentSession, title, updatedAt, messages, name, brief });
     const index = (await sessionIndex()).filter((s) => s.id !== currentSession);
-    index.unshift({ id: currentSession, title, updatedAt });
+    index.unshift({ id: currentSession, title, name, updatedAt });
     // 200 threads is more history than a phone has any use for, and Preferences
     // is not a database — trimming here keeps the list read cheap.
     const keep = index.slice(0, 200);
@@ -1557,9 +1566,27 @@
         const d = await store.get(`session:${id}`);
         if (!d) return { error: "no such session" };
         currentSession = id;
-        return { messages: d.messages || [], title: d.title };
+        return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "" };
       },
       new: () => { currentSession = newSessionId(); return { id: currentSession }; },
+      // Name and brief for a session, before or after it has messages. Same
+      // allowlist and caps as main.js and web-bridge.js, which the parity test
+      // holds; a session that is only an id so far gets a record here.
+      update: async (id, patch) => {
+        const sid = String(id || currentSession || newSessionId());
+        const fields = {};
+        for (const [key, cap] of [["name", 80], ["brief", 4000]]) {
+          if (patch && Object.prototype.hasOwnProperty.call(patch, key)) fields[key] = String(patch[key] == null ? "" : patch[key]).slice(0, cap);
+        }
+        const prior = (await store.get(`session:${sid}`)) || { id: sid, title: "Untitled", updatedAt: Date.now(), messages: [] };
+        const next = { ...prior, ...fields, id: sid, updatedAt: Date.now() };
+        await store.set(`session:${sid}`, next);
+        const index = (await sessionIndex()).filter((s) => s.id !== sid);
+        index.unshift({ id: sid, title: next.title, name: next.name || "", updatedAt: next.updatedAt });
+        await store.set("sessions", index.slice(0, 200));
+        if (!currentSession) currentSession = sid;
+        return { ok: true, id: sid, name: next.name || "", brief: next.brief || "" };
+      },
       delete: async (id) => {
         await store.remove(`session:${id}`);
         await store.set("sessions", (await sessionIndex()).filter((s) => s.id !== id));

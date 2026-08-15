@@ -634,6 +634,8 @@ async function send(text, opts = {}) {
   // transcript stays a conversation instead of a stale snapshot of the store.
   const runOpts = {};
   if (opts.role) runOpts.role = opts.role;
+  // The session's standing brief rides every turn of that session.
+  if (sessionMeta.brief) runOpts.brief = sessionMeta.brief;
   const gc = await growContext(); if (gc) runOpts.context = gc;
   try { await window.crowe.agent.run(messages, "main", runOpts); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
   finishSaid(); settleThinking(body);
@@ -1967,8 +1969,52 @@ const drawer = $("sessions-drawer");
    already carry their svg, and it indexes ids over every lockup rather than over
    the pending ones, so the header's are never renumbered out from under it. */
 function resetWelcome() { transcript.innerHTML = WELCOME_HTML; bindChips(); liveLockups(); }
+
+/* The session as an agent: a name and a standing brief.
+
+   A thread that has a name and a brief is what the general agent platforms
+   converged on this month, a session with an identity and a job. The name
+   replaces the auto title in the rail; the brief is sent on every turn of that
+   session ahead of everything else the turn carries (the bridges hand it to
+   the harness as `persona`, before `context`, so a briefed session and a room
+   seat are the same mechanism). Nothing here changes what an unnamed thread
+   does: with both fields empty the turn is what it always was.
+
+   The editor sits at the top of the sessions drawer for the CURRENT thread
+   only. `sessionId` follows sessions.new / sessions.load, and is picked up
+   from the rail's `current` row after a first turn on a thread that was
+   never explicitly created (the desktop mints the id at persist time). */
+let sessionId = null;
+let sessionMeta = { name: "", brief: "" };
+function drawSessionMeta(host) {
+  const box = document.createElement("div");
+  box.className = "sess-meta";
+  box.innerHTML = `
+    <input class="rc-name sess-name" placeholder="Name this session (optional)" maxlength="80" aria-label="Session name">
+    <textarea class="rc-name sess-brief" rows="2" placeholder="Standing brief for this session. Sent with every turn." maxlength="4000" aria-label="Session brief"></textarea>`;
+  const nameEl = box.querySelector(".sess-name");
+  const briefEl = box.querySelector(".sess-brief");
+  nameEl.value = sessionMeta.name || "";
+  briefEl.value = sessionMeta.brief || "";
+  const save = async () => {
+    const patch = { name: nameEl.value.trim(), brief: briefEl.value.trim() };
+    if (patch.name === (sessionMeta.name || "") && patch.brief === (sessionMeta.brief || "")) return;
+    // A thread that was never explicitly created has no id yet; make one now so
+    // the agent exists before its first turn does.
+    if (!sessionId) { const made = await window.crowe.sessions.new(); sessionId = made && made.id ? made.id : sessionId; }
+    const r = await window.crowe.sessions.update(sessionId, patch);
+    if (r && r.ok) { sessionMeta = { name: r.name || "", brief: r.brief || "" }; if (r.id) sessionId = r.id; renderSessions(); }
+  };
+  nameEl.addEventListener("change", save);
+  briefEl.addEventListener("change", save);
+  // Enter in the name field commits; the brief keeps Enter for newlines.
+  nameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nameEl.blur(); } });
+  host.appendChild(box);
+}
 async function newChat() {
-  await window.crowe.sessions.new();
+  const made = await window.crowe.sessions.new();
+  sessionId = made && made.id ? made.id : null;
+  sessionMeta = { name: "", brief: "" };
   messages.length = 0;
   resetWelcome();
   input.value = ""; input.style.height = "auto"; input.focus();
@@ -1982,11 +2028,19 @@ $("sess-new").addEventListener("click", newChat);
 async function renderSessions() {
   const list = await window.crowe.sessions.list();
   const el = $("sess-list"); el.innerHTML = "";
-  if (!list.length) { el.innerHTML = '<div class="sess-empty">No saved sessions yet.</div>'; return; }
+  // The current thread's id, if the bridge minted it at persist time rather
+  // than on New chat, is only knowable from the rail.
+  const cur = list.find((s) => s.current);
+  if (cur && !sessionId) sessionId = cur.id;
+  if (cur && cur.name && !sessionMeta.name) sessionMeta.name = cur.name;
+  drawSessionMeta(el);
+  if (!list.length) { const e = document.createElement("div"); e.className = "sess-empty"; e.textContent = "No saved sessions yet."; el.appendChild(e); return; }
   for (const s of list) {
     const row = document.createElement("div"); row.className = "sess-row" + (s.current ? " current" : "");
     const when = new Date(s.updatedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(s.title || "Untitled")}</div><div class="sess-when">${esc(when)}</div></div><button class="sess-del" title="Delete">Delete</button>`;
+    const shown = s.name || s.title || "Untitled";
+    const sub = s.name && s.title && s.title !== "Untitled" ? `${esc(s.title)} · ${esc(when)}` : esc(when);
+    row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(shown)}</div><div class="sess-when">${sub}</div></div><button class="sess-del" title="Delete">Delete</button>`;
     row.addEventListener("click", (e) => { if (e.target.closest(".sess-del")) return; loadSession(s.id); });
     row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation(); await window.crowe.sessions.delete(s.id); renderSessions(); });
     el.appendChild(row);
@@ -1994,7 +2048,9 @@ async function renderSessions() {
 }
 async function loadSession(id) {
   const r = await window.crowe.sessions.load(id);
-  if (r.error) return;
+  if (!r || r.error) return;
+  sessionId = id;
+  sessionMeta = { name: r.name || "", brief: r.brief || "" };
   messages.length = 0; for (const m of (r.messages || [])) messages.push(m);
   rebuildTranscript();
   renderSessions();

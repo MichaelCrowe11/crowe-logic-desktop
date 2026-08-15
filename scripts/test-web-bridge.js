@@ -442,6 +442,82 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "one probe, rooms local";
   });
 
+  // ─── Named sessions ───────────────────────────────────────────────────────
+
+  await check("a session can be named and briefed, and both survive the next run", async () => {
+    // A session is an agent when it has a name and a standing brief. The name
+    // replaces the auto title in the rail; the brief is sent on every turn.
+    // Both must survive the run-time write that titles and persists the
+    // transcript, which is where the desktop's own persistSession would have
+    // dropped them had it not been read-merge-written.
+    const edge = chatsEdge({ open: false });
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const { id } = await web.sessions.new();
+    const upd = await web.sessions.update(id, { name: "Straw desk", brief: "You are the substrate specialist for this farm." });
+    assert(upd && upd.ok, `update failed: ${JSON.stringify(upd)}`);
+    await web.agent.run([{ role: "user", content: "How wet?" }], "main");
+    const rows = await web.sessions.list();
+    const row = rows.find((r) => r.current);
+    assert(row, "no current row after the run");
+    assert.strictEqual(row.name, "Straw desk", `rail should carry the name, got ${JSON.stringify(row)}`);
+    assert.strictEqual(row.title, "How wet?", "the auto title still records the first question");
+    const loaded = await web.sessions.load(row.id);
+    assert.strictEqual(loaded.brief, "You are the substrate specialist for this farm.", "brief did not survive the run");
+    assert.strictEqual(loaded.name, "Straw desk");
+    return "name and brief persist across a run";
+  });
+
+  await check("a run with a brief sends it as the first system message", async () => {
+    let body = null;
+    const fetchImpl = async (url, init = {}) => {
+      const u = String(url);
+      if (u.startsWith("/app/owui/api/chat/completions")) return new Response(null, { status: 404, headers: { server: "Caddy" } });
+      if (u.startsWith("/app/gw/v1/chat/completions")) {
+        body = JSON.parse(init.body);
+        return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\ndata: [DONE]\n`, { status: 200 });
+      }
+      return new Response(null, { status: 404, headers: { server: "Caddy" } });
+    };
+    const { crowe: web } = loadWebSurface({ fetchImpl });
+    await web.agent.run([{ role: "user", content: "hi" }], "main", { brief: "Answer as the grower.", context: "block 12: colonizing" });
+    assert(body, "no request reached the gateway");
+    assert.strictEqual(body.messages[0].role, "system");
+    assert(/Answer as the grower\./.test(body.messages[0].content), `brief missing from the first system message: ${body.messages[0].content}`);
+    // The brief is who is speaking; the records are what the world looks like.
+    // Both are system messages and the brief comes first, as in the harness.
+    assert.strictEqual(body.messages[1].role, "system");
+    assert(/block 12/.test(body.messages[1].content), "context must follow the brief");
+    assert.strictEqual(body.messages[2].role, "user");
+    return "brief first, then context";
+  });
+
+  await check("update refuses unknown fields and caps the brief", async () => {
+    const { crowe: web } = loadWebSurface({ fetchImpl: chatsEdge({ open: false }) });
+    const { id } = await web.sessions.new();
+    await web.sessions.update(id, { name: "n", brief: "b", token: "sk-live-no", role: "admin" });
+    await web.agent.run([{ role: "user", content: "q" }], "main");
+    const loaded = await web.sessions.load((await web.sessions.list()).find((r) => r.current).id);
+    assert(!("token" in loaded) && !("role" in loaded), "unknown fields were persisted onto the session");
+    const long = await web.sessions.update(loaded.id, { brief: "x".repeat(10_000) });
+    assert(long.ok && long.brief.length <= 4000, `brief was not capped: ${long.brief && long.brief.length}`);
+    return "allowlisted, capped";
+  });
+
+  await check("the renderer sends the session brief on every turn and draws the editor", () => {
+    // Held by field name, not copy. The bridges are held to sessions.update by
+    // the parity walk above; this is the one place the renderer has to hand
+    // the brief to agent.run and give the person somewhere to write it.
+    const src = read("renderer/renderer.js");
+    assert(/runOpts\.brief\s*=\s*sessionMeta\.brief/.test(src), "renderer does not pass the session brief to agent.run");
+    assert(/window\.crowe\.sessions\.update\(/.test(src), "renderer never calls sessions.update");
+    assert(/class="sess-meta"/.test(src) || /className\s*=\s*"sess-meta"/.test(src), "no session name/brief editor in the drawer");
+    for (const bridge of ["renderer/web-bridge.js", "mobile/src/mobile-bridge.js", "main.js"]) {
+      const b = read(bridge);
+      assert(/brief/.test(b) && /(persona|role:\s*"system")/.test(b), `${bridge} does not carry the brief into the system prompt`);
+    }
+    return "renderer and three bridges";
+  });
+
   // ─── The edge that has not opened OWUI ────────────────────────────────────
 
   await check("when the edge 404s the OWUI path, chat answers through the gateway", async () => {

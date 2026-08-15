@@ -167,7 +167,7 @@
     list: async () =>
       readJSON(KEY_SESSIONS, [])
         .filter((s) => s && s.kind !== "room")
-        .map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
+        .map(({ id, title, updatedAt, name }) => ({ id, title, updatedAt, name: name || "" })),
     get: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s && s.id === id && s.kind !== "room") || null,
     put: async (record) => {
       const all = readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== record.id);
@@ -187,7 +187,9 @@
       if (!r.ok) throw new Error(`sessions list ${r.status}`);
       const rows = await r.json();
       return (Array.isArray(rows) ? rows : [])
-        .map((c) => ({ id: c.id, title: c.title || "Untitled", updatedAt: Number(c.updated_at || 0) * 1000 }));
+        // The list endpoint carries no body, so `title` here is name-or-title
+        // and the rail shows it as such; load() separates the two.
+        .map((c) => ({ id: c.id, title: c.title || "Untitled", name: "", updatedAt: Number(c.updated_at || 0) * 1000 }));
     },
     get: async (id) => {
       const r = await fetch(`${OWUI}/v1/chats/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } });
@@ -195,13 +197,20 @@
       if (!r.ok) throw new Error(`session load ${r.status}`);
       const c = await r.json();
       const own = (c.chat && c.chat.crowe) || {};
-      return { id: c.id, title: c.title || (c.chat && c.chat.title) || "Untitled",
+      return { id: c.id, serverId: c.id, title: own.title || c.title || (c.chat && c.chat.title) || "Untitled",
+        name: own.name || "", brief: own.brief || "",
         updatedAt: Number(c.updated_at || 0) * 1000, messages: Array.isArray(own.messages) ? own.messages : [] };
     },
     put: async (record) => {
       // A record with a server id updates in place; without one it is created
       // and takes the id the server minted, which is why put returns the record.
-      const chat = { title: record.title, crowe: { messages: record.messages, updatedAt: record.updatedAt } };
+      // OWUI's own list shows `title`, so it gets the name when there is one and
+      // the auto title otherwise; the auto title, name and brief all ride in
+      // `crowe` so nothing is lost to that choice.
+      const chat = {
+        title: record.name || record.title,
+        crowe: { messages: record.messages, updatedAt: record.updatedAt, title: record.title, name: record.name || "", brief: record.brief || "" },
+      };
       const url = record.serverId
         ? `${OWUI}/v1/chats/${encodeURIComponent(record.serverId)}`
         : `${OWUI}/v1/chats/new`;
@@ -243,13 +252,35 @@
     const firstUser = messages.find((m) => m.role === "user");
     const title = String((firstUser && firstUser.content) || "Untitled").replace(/\s+/g, " ").slice(0, 60);
     const existing = currentSession ? await s.get(currentSession).catch(() => null) : null;
+    // Read-merge-write: the name and the brief were set before this run and
+    // must outlive it. A write of {id, title, messages} alone would drop them,
+    // which is the one way a session could stop being an agent by being used.
     const record = {
       id: currentSession || newSessionId(),
       serverId: existing && existing.serverId ? existing.serverId : (s.kind === "remote" && existing ? existing.id : undefined),
       title, updatedAt: Date.now(), messages,
+      name: (existing && existing.name) || "",
+      brief: (existing && existing.brief) || "",
     };
     const saved = await s.put(record);
     currentSession = saved.id;
+  }
+
+  /* What a session may be told about itself. A name replaces the auto title in
+     the rail; a brief is a standing instruction sent as the first system
+     message of every turn in that session (web-bridge agentRun; the desktop
+     hands it to the harness as `persona`, the phone as its own system line).
+     Allowlisted, so nothing else rides in through this door, and capped, so a
+     brief cannot quietly become the whole context window. */
+  const SESSION_FIELDS = { name: 80, brief: 4000 };
+  function sessionPatch(patch) {
+    const out = {};
+    for (const key of Object.keys(SESSION_FIELDS)) {
+      if (patch && Object.prototype.hasOwnProperty.call(patch, key)) {
+        out[key] = String(patch[key] == null ? "" : patch[key]).slice(0, SESSION_FIELDS[key]);
+      }
+    }
+    return out;
   }
 
   const sessions = {
@@ -265,7 +296,26 @@
       const rec = await s.get(id);
       if (!rec) return null;
       currentSession = rec.id;
-      return { id: rec.id, title: rec.title, updatedAt: rec.updatedAt, messages: rec.messages || [] };
+      return { id: rec.id, title: rec.title, name: rec.name || "", brief: rec.brief || "",
+        updatedAt: rec.updatedAt, messages: rec.messages || [] };
+    },
+    // Name and brief for a session, before or after it has any messages. A
+    // session that has been created but not yet run has no record; update
+    // makes one, so the agent exists before its first turn does.
+    update: async (id, patch) => {
+      const s = await store();
+      const fields = sessionPatch(patch);
+      const existing = (await s.get(id).catch(() => null)) || null;
+      const record = Object.assign(
+        { id, title: "Untitled", updatedAt: Date.now(), messages: [], name: "", brief: "" },
+        existing || {},
+        fields,
+        { updatedAt: Date.now() },
+      );
+      const saved = await s.put(record);
+      // A remote store mints the id on first write; the current thread follows it.
+      if (currentSession === id || !currentSession) currentSession = saved.id;
+      return { ok: true, id: saved.id, name: saved.name || "", brief: saved.brief || "" };
     },
     // As on the desktop, a new session is an id and nothing else until the
     // first run writes into it; an empty record in the rail is a row that
@@ -476,6 +526,9 @@
     // "Every turn carries the farm's own records"). Dropping it silently meant
     // the model answered cultivation questions with no knowledge of this grow.
     const wire = [];
+    // The session's standing brief, first, as the harness does with `persona`:
+    // who is speaking before what the world looks like.
+    if (options.brief) wire.push({ role: "system", content: String(options.brief).slice(0, 4000) });
     if (options.context) {
       wire.push({
         role: "system",
