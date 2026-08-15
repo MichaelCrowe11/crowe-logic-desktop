@@ -132,32 +132,149 @@
     try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {}
   };
 
-  // Sessions live in localStorage rather than on the server. That is a real
-  // limitation and it is stated rather than hidden: history is per-browser and
-  // does not follow the user to another device. Server-side sessions are the
-  // next step, not a missing detail.
-  // The renderer reads `updatedAt` (renderer.js:1970, 2247, 2296) and formats it
-  // with `new Date(...)`. Returning `at` instead rendered every row as
-  // "Invalid Date".
-  // Rooms share this store (kind:"room") but are listed by rooms.list, as on
-  // the desktop where the sessions rail and the rooms rail are two views of one
-  // directory. A room in the sessions rail would open as a thread with a
-  // roster it cannot show.
-  const sessions = {
+  /* Sessions: two stores behind one seam, and a transcript that is actually
+     written.
+
+     The first web build created a session on New chat and never wrote a
+     message into it, so every thread was "Untitled" with nothing inside and a
+     reload lost the conversation. The desktop persists after every run
+     (main.js:894, persistSession: title from the first user message, the
+     messages plus the answer, one file per session). agentRun does the same
+     here now, through `store`.
+
+     `store` is the seam. `localStore` is localStorage: per-browser, stated as
+     such. `remoteStore` is Open WebUI's chats API at /app/owui/api/v1/chats,
+     which is per-user and follows the person to another device, and which the
+     edge does not expose yet: it answers a bare Caddy 404 there today. So the
+     seam probes once per page load and takes the remote store only on a clean
+     200; anything else is local, exactly as before, and the moment the edge
+     line lands the next load is server-side with no change here. Rooms stay
+     on the local record for now (their sessions ride the same key), which is
+     why the seam is a function and not a swap of `readJSON`.
+
+     The remote record keeps this bridge's own message shape under
+     `chat.crowe`, beside the title OWUI reads for its own list, so an OWUI
+     upgrade that reshapes its history cannot reach into a Crowe transcript.
+
+     The renderer reads `updatedAt` (renderer.js:1970, 2247, 2296) and formats
+     it with `new Date(...)`; OWUI reports seconds, so it is scaled here. Rooms
+     share the local key (kind:"room") but are listed by rooms.list, as on the
+     desktop where the sessions rail and the rooms rail are two views of one
+     directory. */
+
+  const localStore = {
+    kind: "local",
     list: async () =>
       readJSON(KEY_SESSIONS, [])
         .filter((s) => s && s.kind !== "room")
         .map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
-    load: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s.id === id && s.kind !== "room") || null,
-    new: async () => {
-      const all = readJSON(KEY_SESSIONS, []);
-      const s = { id: `s-${Date.now()}`, title: "Untitled", updatedAt: Date.now(), messages: [] };
-      all.unshift(s);
+    get: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s && s.id === id && s.kind !== "room") || null,
+    put: async (record) => {
+      const all = readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== record.id);
+      all.unshift(record);
       writeJSON(KEY_SESSIONS, all.slice(0, 200));
-      return s;
+      return record;
     },
     delete: async (id) => {
-      writeJSON(KEY_SESSIONS, readJSON(KEY_SESSIONS, []).filter((s) => s.id !== id));
+      writeJSON(KEY_SESSIONS, readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== id));
+    },
+  };
+
+  const remoteStore = {
+    kind: "remote",
+    list: async () => {
+      const r = await fetch(`${OWUI}/v1/chats/?page=1`, { headers: { accept: "application/json" } });
+      if (!r.ok) throw new Error(`sessions list ${r.status}`);
+      const rows = await r.json();
+      return (Array.isArray(rows) ? rows : [])
+        .map((c) => ({ id: c.id, title: c.title || "Untitled", updatedAt: Number(c.updated_at || 0) * 1000 }));
+    },
+    get: async (id) => {
+      const r = await fetch(`${OWUI}/v1/chats/${encodeURIComponent(id)}`, { headers: { accept: "application/json" } });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`session load ${r.status}`);
+      const c = await r.json();
+      const own = (c.chat && c.chat.crowe) || {};
+      return { id: c.id, title: c.title || (c.chat && c.chat.title) || "Untitled",
+        updatedAt: Number(c.updated_at || 0) * 1000, messages: Array.isArray(own.messages) ? own.messages : [] };
+    },
+    put: async (record) => {
+      // A record with a server id updates in place; without one it is created
+      // and takes the id the server minted, which is why put returns the record.
+      const chat = { title: record.title, crowe: { messages: record.messages, updatedAt: record.updatedAt } };
+      const url = record.serverId
+        ? `${OWUI}/v1/chats/${encodeURIComponent(record.serverId)}`
+        : `${OWUI}/v1/chats/new`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ chat }),
+      });
+      if (!r.ok) throw new Error(`session save ${r.status}`);
+      const saved = await r.json();
+      return Object.assign({}, record, { id: saved.id || record.serverId, serverId: saved.id || record.serverId });
+    },
+    delete: async (id) => {
+      await fetch(`${OWUI}/v1/chats/${encodeURIComponent(id)}`, { method: "DELETE" });
+    },
+  };
+
+  let storePromise = null;
+  function store() {
+    if (storePromise) return storePromise;
+    storePromise = (async () => {
+      try {
+        const r = await fetch(`${OWUI}/v1/chats/?page=1`, { headers: { accept: "application/json" } });
+        if (r.ok && /json/.test(r.headers.get("content-type") || "")) return remoteStore;
+      } catch (_) {}
+      return localStore;
+    })();
+    return storePromise;
+  }
+
+  // The thread the operator is in, as on the desktop (main.js:1034). Set by
+  // sessions.new and sessions.load, consumed by persistSession after a run.
+  let currentSession = null;
+  const newSessionId = () => "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+
+  async function persistSession(messages) {
+    if (!messages || !messages.length) return;
+    const s = await store();
+    const firstUser = messages.find((m) => m.role === "user");
+    const title = String((firstUser && firstUser.content) || "Untitled").replace(/\s+/g, " ").slice(0, 60);
+    const existing = currentSession ? await s.get(currentSession).catch(() => null) : null;
+    const record = {
+      id: currentSession || newSessionId(),
+      serverId: existing && existing.serverId ? existing.serverId : (s.kind === "remote" && existing ? existing.id : undefined),
+      title, updatedAt: Date.now(), messages,
+    };
+    const saved = await s.put(record);
+    currentSession = saved.id;
+  }
+
+  const sessions = {
+    list: async () => {
+      const s = await store();
+      const rows = await s.list();
+      return rows
+        .map((row) => Object.assign({}, row, { current: row.id === currentSession }))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    },
+    load: async (id) => {
+      const s = await store();
+      const rec = await s.get(id);
+      if (!rec) return null;
+      currentSession = rec.id;
+      return { id: rec.id, title: rec.title, updatedAt: rec.updatedAt, messages: rec.messages || [] };
+    },
+    // As on the desktop, a new session is an id and nothing else until the
+    // first run writes into it; an empty record in the rail is a row that
+    // opens onto nothing.
+    new: async () => { currentSession = newSessionId(); return { id: currentSession }; },
+    delete: async (id) => {
+      const s = await store();
+      await s.delete(id);
+      if (currentSession === id) currentSession = null;
       return true;
     },
   };
@@ -397,6 +514,12 @@
       }
 
       send({ type: "final", text });
+      // The operator thread is persisted after every run, as main.js:894 does.
+      // Rooms carry their own record and never come through this path with the
+      // "main" id. A failed write must not fail a run that already answered.
+      if (id === "main") {
+        try { await persistSession([...messages, { role: "assistant", content: text }]); } catch (_) {}
+      }
       return { text };
     } catch (err) {
       if (err && err.name === "AbortError") return { text, aborted: true };

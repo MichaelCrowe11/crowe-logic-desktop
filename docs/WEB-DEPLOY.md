@@ -39,6 +39,13 @@ same Caddyfile lands (see `crowelm-platform/docs/identity/`).
 
 ## Procedure
 
+All of the below is one command now: `bash scripts/deploy-web.sh` (and
+`--verify`, `--rollback`). It refuses uncommitted renderer files and a stale
+rooms bundle, takes the dated backup, reloads Caddy, and checks the served
+engine hash and stamp against HEAD when `CROWE_APP_AUTH=user:pass` is set in
+your shell for that one command. The steps are kept here so the script can be
+read against them.
+
 Run from a checkout of this repo on the branch being deployed, with `npm test`
 green. Each command is one line and each is safe to rerun.
 

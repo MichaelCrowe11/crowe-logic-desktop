@@ -336,6 +336,110 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "gateway lanes";
   });
 
+  // ─── Sessions ─────────────────────────────────────────────────────────────
+
+  /* An edge where OWUI's chats API is open, backed by an in-memory table with
+     server-minted ids and OWUI's wire shapes (seconds for updated_at, `chat`
+     wrapper on write, bare array on list). Chat completions answer through the
+     gateway so a run can happen. */
+  function chatsEdge({ open = true } = {}) {
+    const table = new Map();
+    let n = 0;
+    const impl = async (url, init = {}) => {
+      const u = String(url);
+      const m = init.method || "GET";
+      if (u.startsWith("/app/owui/api/v1/chats")) {
+        if (!open) return new Response(null, { status: 404, headers: { server: "Caddy" } });
+        const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
+        if (u.startsWith("/app/owui/api/v1/chats/?") && m === "GET") {
+          return json([...table.values()].map((c) => ({ id: c.id, title: c.title, updated_at: c.updated_at, created_at: c.created_at })));
+        }
+        if (u === "/app/owui/api/v1/chats/new" && m === "POST") {
+          const { chat } = JSON.parse(init.body);
+          const id = `owui-${++n}`;
+          const now = Math.floor(Date.now() / 1000);
+          table.set(id, { id, title: chat.title, chat, updated_at: now, created_at: now });
+          return json(table.get(id));
+        }
+        const id = decodeURIComponent(u.slice("/app/owui/api/v1/chats/".length));
+        if (m === "GET") return table.has(id) ? json(table.get(id)) : json({ detail: "not found" }, 404);
+        if (m === "POST") {
+          if (!table.has(id)) return json({ detail: "not found" }, 404);
+          const { chat } = JSON.parse(init.body);
+          const row = table.get(id);
+          Object.assign(row, { title: chat.title, chat, updated_at: Math.floor(Date.now() / 1000) + 1 });
+          return json(row);
+        }
+        if (m === "DELETE") { table.delete(id); return json(true); }
+      }
+      if (u.startsWith("/app/owui/api/chat/completions")) return new Response(null, { status: 404, headers: { server: "Caddy" } });
+      if (u.startsWith("/app/gw/v1/chat/completions")) {
+        return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "answer" } }] })}\ndata: [DONE]\n`, { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    };
+    impl.table = table;
+    return impl;
+  }
+
+  await check("a run writes the transcript into the current session (local)", async () => {
+    // The first web build never wrote a message into a session, so every thread
+    // stayed "Untitled" and empty. This is main.js:894 on the web.
+    const edge = chatsEdge({ open: false });
+    const { crowe: web, store } = loadWebSurface({ fetchImpl: edge });
+    await web.sessions.new();
+    await web.agent.run([{ role: "user", content: "How wet should straw be?" }], "main");
+    const rows = await web.sessions.list();
+    assert.strictEqual(rows.length, 1, `expected one session, got ${rows.length}`);
+    assert.strictEqual(rows[0].title, "How wet should straw be?", `title was ${rows[0].title}`);
+    assert(rows[0].current === true, "the session just written is not marked current");
+    // Reload: same storage, fresh bridge.
+    const again = loadWebSurface({ fetchImpl: edge });
+    again.store.set("crowe.web.sessions", store.get("crowe.web.sessions"));
+    const loaded = await again.crowe.sessions.load(rows[0].id);
+    assert(loaded && loaded.messages.length === 2, `transcript did not survive reload: ${JSON.stringify(loaded)}`);
+    assert.strictEqual(loaded.messages[1].content, "answer");
+    return "titled, persisted, reloads";
+  });
+
+  await check("when the edge opens OWUI chats, sessions live on the server", async () => {
+    const edge = chatsEdge({ open: true });
+    const { crowe: web, store } = loadWebSurface({ fetchImpl: edge });
+    await web.sessions.new();
+    await web.agent.run([{ role: "user", content: "Sterilize or pasteurize?" }], "main");
+    await web.agent.run([{ role: "user", content: "Sterilize or pasteurize?" }, { role: "assistant", content: "answer" }, { role: "user", content: "why?" }], "main");
+    assert.strictEqual(edge.table.size, 1, `expected one server chat, got ${edge.table.size} (a second run must update, not create)`);
+    const [row] = [...edge.table.values()];
+    assert.strictEqual(row.title, "Sterilize or pasteurize?");
+    assert.strictEqual(row.chat.crowe.messages.length, 4, "the second run's transcript did not update the same chat");
+    assert(!store.get("crowe.web.sessions"), "server-side sessions must not also be written to localStorage");
+    // A different browser, same server: the session is there.
+    const other = loadWebSurface({ fetchImpl: edge });
+    const rows = await other.crowe.sessions.list();
+    assert.strictEqual(rows.length, 1);
+    assert(rows[0].updatedAt > 1e12, `updatedAt must be milliseconds for new Date(); got ${rows[0].updatedAt}`);
+    const loaded = await other.crowe.sessions.load(rows[0].id);
+    assert.strictEqual(loaded.messages.length, 4);
+    await other.crowe.sessions.delete(rows[0].id);
+    assert.strictEqual(edge.table.size, 0, "delete did not reach the server");
+    return "server-side, cross-browser, ms timestamps";
+  });
+
+  await check("the store is chosen once per page and rooms stay on the local record", async () => {
+    let probes = 0;
+    const base = chatsEdge({ open: true });
+    const counting = async (url, init) => { if (String(url).startsWith("/app/owui/api/v1/chats/?")) probes += 1; return base(url, init); };
+    const { crowe: web } = loadWebSurface({ fetchImpl: counting });
+    await web.sessions.list(); await web.sessions.list(); await web.sessions.new();
+    // One probe plus the two real lists: the probe is not re-run per call.
+    assert(probes <= 3, `chats endpoint hit ${probes} times for one probe and two lists`);
+    const { agents } = await web.rooms.agents();
+    const made = await web.rooms.create({ title: "r", agentIds: [agents[0].id] });
+    assert(made.room, "room did not create with the remote session store active");
+    assert.strictEqual(base.table.size, 0, "a room must not be written to OWUI chats");
+    return "one probe, rooms local";
+  });
+
   // ─── The edge that has not opened OWUI ────────────────────────────────────
 
   await check("when the edge 404s the OWUI path, chat answers through the gateway", async () => {
