@@ -9,12 +9,17 @@ procedure.
 
 ## What ships
 
-Four files from `renderer/`, and only these four change between deploys:
+Six files, and only these six change between deploys:
 
     renderer/app.html        the web entry point (hand-maintained)
     renderer/web-bridge.js   window.crowe over HTTP
     renderer/rooms-web.js    the room engine, bundled (generated; see below)
     renderer/renderer.js     the shell, shared with desktop and mobile
+    mobile/src/mobile.css    the phone layer: one column under 820px, shell
+                             rules under body.mobile; served as mobile.css
+    mobile/src/mobile-ui.js  the phone chrome: tab bar, scrim, keyboard insets;
+                             loaded by app.html only on a coarse pointer or a
+                             narrow screen; served as mobile-ui.js
 
 `renderer.js`, `styles.css`, `mark.js` and `mark-geometry.js` are the same
 bytes the desktop ships. If a deploy touches `renderer.js` it must be the

@@ -16,9 +16,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <!-- The phone reads these; the desktop ignores them. Without the viewport
+       line a phone renders the desktop shell at desktop width and scales it
+       down, which is what /app looked like on a phone until today. Same lines
+       mobile/scripts/build-www.js gives the iOS and Android shells. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1786836375567" />
+  <link rel="stylesheet" href="styles.css?v=1786837683448" />
+  <!-- The phone layer, after the desktop sheet and never editing it. Its
+       one-column rules gate on width, so a narrow window on any device gets
+       one pane; its shell rules gate on body.mobile, which only the phone
+       chrome below sets. On a wide screen this file changes nothing. -->
+  <link rel="stylesheet" href="mobile.css?v=1786837683448" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -432,10 +450,28 @@
   <!-- The room engine, verbatim from rooms/ (scripts/build-rooms-web.js). It
        must define window.CroweRooms before web-bridge.js reads it, or the
        rooms surface answers with a stated reason instead of a roster. -->
-  <script src="rooms-web.js?v=1786836375567"></script>
-  <script src="web-bridge.js?v=1786836375567"></script>
-  <script src="mark-geometry.js?v=1786836375567"></script>
-  <script src="mark.js?v=1786836375567"></script>
-  <script src="renderer.js?v=1786836375567"></script>
+  <script src="rooms-web.js?v=1786837683448"></script>
+  <script src="web-bridge.js?v=1786837683448"></script>
+  <script src="mark-geometry.js?v=1786837683448"></script>
+  <script src="mark.js?v=1786837683448"></script>
+  <script src="renderer.js?v=1786837683448"></script>
+  <!-- The phone chrome: bottom tab bar, drawer scrim, keyboard insets, honest
+       first-run copy. It mirrors controls the renderer wires up on load, so it
+       goes after renderer.js, and it is loaded only where a phone is what this
+       is: a coarse pointer, or a screen at or under the one-column width. Every
+       native plugin it touches is guarded, so it runs in a plain browser tab
+       the same way it runs in the iOS shell without Capacitor. -->
+  <script>
+    (function () {
+      var phone = false;
+      try {
+        phone = window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(max-width: 820px)").matches;
+      } catch (e) {}
+      if (!phone) return;
+      var s = document.createElement("script");
+      s.src = "mobile-ui.js?v=1786837683448";
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>

@@ -749,6 +749,28 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "order correct";
   });
 
+  await check("app.html carries the phone layer the iOS shell gets, gated to phones", () => {
+    // Without the viewport line a phone renders the desktop shell at desktop
+    // width and scales it down. mobile.css and mobile-ui.js are the phone layer
+    // build-www.js gives the native shells; here they ride the same page, the
+    // sheet unconditionally (its rules gate themselves) and the chrome only
+    // where a phone is what this is.
+    const html = read("renderer/app.html");
+    assert(/<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/.test(html), "no viewport meta");
+    const styles = html.indexOf('href="styles.css'); const mobileCss = html.indexOf('href="mobile.css');
+    assert(mobileCss > styles && styles !== -1, "mobile.css must load after styles.css");
+    const renderer = html.indexOf('src="renderer.js'); const ui = html.indexOf('mobile-ui.js');
+    assert(ui > renderer && renderer !== -1, "mobile-ui.js must come after renderer.js");
+    assert(!/<script src="mobile-ui\.js/.test(html), "mobile-ui.js must be gated, not a bare script tag (it would put the tab bar on every desktop)");
+    assert(/pointer: coarse/.test(html) && /max-width: 820px/.test(html), "the phone gate must test a coarse pointer or the one-column width");
+    // The chrome must run in a plain tab: every native plugin it reaches for is
+    // null-guarded. Held on the source so a new plugin use cannot ship unguarded.
+    const ui_src = read("mobile/src/mobile-ui.js");
+    const uses = [...ui_src.matchAll(/const (\w+) = plugin\("(\w+)"\)/g)].map((m) => m[1]);
+    for (const name of uses) assert(new RegExp(`if \\(!?${name}\\)`).test(ui_src), `${name} is used without a guard in mobile-ui.js`);
+    return `viewport, sheet, gated chrome; ${uses.length} plugins guarded`;
+  });
+
   await check("app.html does not claim to be generated", () => {
     // scripts/gen-preview.js produces renderer/preview.html and nothing else, so
     // a "regenerate instead of editing" note points at a script that cannot.

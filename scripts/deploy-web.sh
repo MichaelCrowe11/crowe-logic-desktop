@@ -28,7 +28,11 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/google_compute_engine}"
 SSH=(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=15 "$HOST")
 SCP=(scp -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=15)
 DEST=/var/lib/docker/volumes/caddy_config/_data/crowe-app/renderer
-FILES=(app.html web-bridge.js rooms-web.js renderer.js)
+# The four renderer files, plus the phone layer, which lives in mobile/src and
+# is served beside them under the names app.html asks for. renderer/ is the
+# source of truth for the first four; mobile/src for the last two.
+FILES=(app.html web-bridge.js rooms-web.js renderer.js mobile.css mobile-ui.js)
+src_of() { case "$1" in mobile.css|mobile-ui.js) echo "mobile/src/$1" ;; *) echo "renderer/$1" ;; esac; }
 PUBLIC="${PUBLIC:-https://crowelm.com/app/renderer}"
 
 stamp_local() { grep -oE '\?v=[0-9]+' "$ROOT/renderer/app.html" | head -1; }
@@ -73,18 +77,19 @@ esac
 cd "$ROOT"
 
 # Refuse to ship anything but committed bytes.
-if [ -n "$(git status --porcelain -- renderer/)" ]; then
-  echo "renderer/ has uncommitted changes; commit them first (only committed bytes have passed the suites):" >&2
-  git status --short -- renderer/ >&2
+if [ -n "$(git status --porcelain -- renderer/ mobile/src/)" ]; then
+  echo "renderer/ or mobile/src/ has uncommitted changes; commit them first (only committed bytes have passed the suites):" >&2
+  git status --short -- renderer/ mobile/src/ >&2
   exit 1
 fi
 node scripts/build-rooms-web.js --check >/dev/null || { echo "renderer/rooms-web.js is stale; run npm run rooms:web and commit" >&2; exit 1; }
 node scripts/test-web-bridge.js >/dev/null || { echo "test-web-bridge.js failing; not deploying" >&2; exit 1; }
 
 echo "shipping $(git log -1 --format='%h %s') stamp $(stamp_local)"
-"${SCP[@]}" "${FILES[@]/#/renderer/}" "$HOST:/tmp/"
+SRC=(); for f in "${FILES[@]}"; do SRC+=("$(src_of "$f")"); done
+"${SCP[@]}" "${SRC[@]}" "$HOST:/tmp/"
 
-"${SSH[@]}" "D=$DEST; B=\$D/.bak-\$(date +%Y%m%d-%H%M%S); sudo mkdir -p \$B && sudo cp -a \$D/*.js \$D/*.html \$B/ 2>/dev/null || true; for f in ${FILES[*]}; do sudo install -m 0644 -o root -g root /tmp/\$f \$D/\$f && rm -f /tmp/\$f; done && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 && echo \"installed; backup \$B\""
+"${SSH[@]}" "D=$DEST; B=\$D/.bak-\$(date +%Y%m%d-%H%M%S); sudo mkdir -p \$B && sudo cp -a \$D/*.js \$D/*.html \$D/*.css \$B/ 2>/dev/null || true; for f in ${FILES[*]}; do sudo install -m 0644 -o root -g root /tmp/\$f \$D/\$f && rm -f /tmp/\$f; done && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 && echo \"installed; backup \$B\""
 
 verify || true
 echo "rollback: bash scripts/deploy-web.sh --rollback"
