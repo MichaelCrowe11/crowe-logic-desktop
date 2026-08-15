@@ -47,6 +47,25 @@
       ),
     );
 
+  /* -------------------------------------------------------------- identity */
+
+  // One source of truth for "who did the edge let in", because two of them
+  // disagreed. `auth.status()` asked /app/whoami and could report a null user,
+  // while `license.status()` returned `authenticated: true` unconditionally —
+  // and the renderer decides the "Sign in with your Crowe ID" state from the
+  // license one (renderer.js:1098) while the composer reads the auth one
+  // (renderer.js:3425). An unreachable /app/whoami therefore produced a signed
+  // out composer inside a signed in shell.
+  async function whoami() {
+    try {
+      const r = await fetch("/app/whoami", { headers: { accept: "text/plain" } });
+      if (!r.ok) return "";
+      return (await r.text()).trim();
+    } catch (_) {
+      return "";
+    }
+  }
+
   /* ---------------------------------------------------------------- events */
 
   const listeners = [];
@@ -221,9 +240,71 @@
       send({ type: "error", text: err.message || String(err) });
       throw err;
     } finally {
-      controllers.delete(id);
+      // Only retract our OWN registration. An unconditional delete(id) meant a
+      // second run started under the same id had its controller removed by the
+      // first run finishing, so agent.stop(id) then aborted nothing and the
+      // stream ran to completion with no way to interrupt it.
+      if (controllers.get(id) === controller) controllers.delete(id);
     }
   }
+
+  /* ----------------------------------------------------------------- config */
+
+  // Only these may be written. An allowlist rather than a denylist because the
+  // failure it prevents is silent: `setConfig` used to Object.assign the whole
+  // patch into localStorage, so `setConfig({ token })` published a credential
+  // into browser storage — the exact thing rule 1 at the top of this file says
+  // this bridge never does. A denylist would have to be updated every time a
+  // new secret-bearing key is invented; this refuses everything not named.
+  const WRITABLE = [
+    "theme", "model", "autonomy", "onboarded",
+    "autoApprove", "approvals", "turnBudgetUsd", "telemetry",
+  ];
+
+  // Mirrors main.js:1017, which is the shape the renderer was written against.
+  // It reports `hasToken`, never `token` — the desktop has never handed the
+  // renderer a credential and the web build must not be the first to.
+  //
+  // `baseUrl` is a real value rather than undefined: renderer.js:2267 does
+  // `new URL(cfg.baseUrl).host` for the status line, and undefined threw into
+  // its catch and rendered the literal string "undefined".
+  function projectConfig(c) {
+    return {
+      baseUrl: location.origin + "/app",
+      hasToken: false,
+      cwd: "",
+      autoApprove: false,
+      // "edit" and "execute" claim a filesystem and a shell this build refuses
+      // to provide, so the honest default is the one that matches what a
+      // browser can actually do.
+      autonomy: c.autonomy || "readonly",
+      approvals: c.approvals || {},
+      verifier: false,
+      turnBudgetUsd: c.turnBudgetUsd,
+      telemetry: false,
+      onboarded: Boolean(c.onboarded),
+      mcp: [],
+      ptyAvailable: false,
+      theme: c.theme || "system",
+      model: c.model || "crowelm-apex",
+      version: window.CROWE_VERSION || "",
+    };
+  }
+
+  // Anything the shipped build already wrote stays in that browser's storage
+  // until something removes it, and a credential does not expire because the
+  // code that stored it was fixed. So the first load after this change drops
+  // every key the allowlist does not name, which includes any `token` the
+  // previous `Object.assign` persisted.
+  (function purgeStoredConfig() {
+    const stored = readJSON(KEY_CONFIG, null);
+    if (!stored || typeof stored !== "object") return;
+    let dropped = false;
+    for (const key of Object.keys(stored)) {
+      if (!WRITABLE.includes(key)) { delete stored[key]; dropped = true; }
+    }
+    if (dropped) writeJSON(KEY_CONFIG, stored);
+  })();
 
   /* ----------------------------------------------------------------- expose */
 
@@ -252,11 +333,7 @@
         error: "Sign-out is handled by the browser for this deployment. Close the window or clear saved credentials.",
       }),
       status: async () => {
-        let who = "";
-        try {
-          const r = await fetch("/app/whoami", { headers: { accept: "text/plain" } });
-          if (r.ok) who = (await r.text()).trim();
-        } catch (_) {}
+        const who = await whoami();
         return who ? { user: { email: who, tier: "Web" } } : { user: null };
       },
     },
@@ -266,8 +343,11 @@
     // fleet needs entitlements this build does not have, and reporting it as
     // licensed would unlock buttons that then fail.
     license: {
+      // `authenticated` is derived rather than asserted. Hardcoding true here
+      // let the shell claim a signed in user while `auth.status()` reported
+      // none, which is the disagreement the renderer cannot resolve.
       status: async () => ({
-        authenticated: true,
+        authenticated: Boolean(await whoami()),
         selectedWorkspaceId: "web",
         workspaces: [
           {
@@ -353,11 +433,14 @@
     },
     operator: { status: async () => ({ running: 0 }), stopAll: async () => true },
 
-    getConfig: async () => readJSON(KEY_CONFIG, { theme: "system", model: "crowelm-apex" }),
+    getConfig: async () => projectConfig(readJSON(KEY_CONFIG, {})),
     setConfig: async (patch) => {
-      const next = Object.assign(readJSON(KEY_CONFIG, {}), patch || {});
-      writeJSON(KEY_CONFIG, next);
-      return next;
+      const stored = readJSON(KEY_CONFIG, {});
+      for (const key of WRITABLE) {
+        if (patch && Object.prototype.hasOwnProperty.call(patch, key)) stored[key] = patch[key];
+      }
+      writeJSON(KEY_CONFIG, stored);
+      return projectConfig(stored);
     },
   };
 })();
