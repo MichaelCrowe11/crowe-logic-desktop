@@ -59,7 +59,7 @@ function loadPreloadSurface() {
 // web-bridge.js runs in a plain browser tab. Give it the globals it touches at
 // load: storage, an origin, and a fetch that fails the way an unreachable edge
 // does unless a test supplies its own.
-function loadWebSurface({ fetchImpl, seedConfig, rooms = true } = {}) {
+function loadWebSurface({ fetchImpl, seedConfig, rooms = true, location } = {}) {
   const store = new Map();
   if (seedConfig) store.set("crowe.web.config", JSON.stringify(seedConfig));
 
@@ -72,7 +72,7 @@ function loadWebSurface({ fetchImpl, seedConfig, rooms = true } = {}) {
   const sandbox = {
     window: win,
     localStorage,
-    location: { origin: "https://crowelm.com" },
+    location: location || { origin: "https://crowelm.com" },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
     AbortController,
     TextDecoder,
@@ -564,6 +564,38 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     assert(err && /404/.test(err.message) && /Model not found/.test(err.message), `expected the OWUI detail surfaced, got ${err && err.message}`);
     assert(!calls.some((u) => u.startsWith("/app/gw/v1/chat/completions")), "must not fall back to the gateway on an OWUI-level 404");
     return "surfaced, no fallback";
+  });
+
+  // ─── Sign-in at the edge ──────────────────────────────────────────────────
+
+  await check("behind basic auth, sign-in is a no-op and sign-out a stated refusal", async () => {
+    const fetchImpl = async (url) => String(url).startsWith("/oauth2/")
+      ? new Response(null, { status: 404, headers: { server: "Caddy" } })
+      : new Response("crowe", { status: 200 });
+    const win = { };
+    const { crowe: web } = loadWebSurface({ fetchImpl });
+    const li = await web.auth.login();
+    assert(li.ok && !li.redirecting, `login should be a no-op: ${JSON.stringify(li)}`);
+    const lo = await web.auth.logout();
+    assert(lo.ok === false && lo.error, "logout should refuse with a reason behind basic auth");
+    return "no-op login, refused logout";
+  });
+
+  await check("behind Crowe ID, sign-in sends the browser to the edge and back", async () => {
+    // oauth2-proxy answers /oauth2/auth with 401 for a visitor and 202 for a
+    // signed-in one; either means the identity edge is applied.
+    const nav = [];
+    const fetchImpl = async (url) => String(url).startsWith("/oauth2/auth")
+      ? new Response(null, { status: 401 })
+      : new Response("", { status: 200 });
+    const { crowe: web } = loadWebSurface({ fetchImpl, location: { origin: "https://crowelm.com", pathname: "/app/renderer/app.html", search: "", assign: (u) => nav.push(u) } });
+    const li = await web.auth.login();
+    assert(li.ok && li.redirecting, `expected a redirect: ${JSON.stringify(li)}`);
+    assert(nav.length === 1 && /^\/oauth2\/start\?rd=/.test(nav[0]), `login navigated to ${nav[0]}`);
+    assert(/app%2Frenderer%2Fapp\.html/.test(nav[0]), "the return path must bring the person back to the shell");
+    const lo = await web.auth.logout();
+    assert(lo.ok && /^\/oauth2\/sign_out/.test(nav[1] || ""), `logout navigated to ${nav[1]}`);
+    return "start and sign_out with a return";
   });
 
   // ─── Refusals and escalations ─────────────────────────────────────────────

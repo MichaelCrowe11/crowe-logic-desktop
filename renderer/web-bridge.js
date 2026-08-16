@@ -103,6 +103,25 @@
     }
   }
 
+  // Whether Crowe ID sits at the edge: oauth2-proxy answers /oauth2/auth with
+  // 202 (signed in) or 401 (not), and a JSON body or none; a bare Caddy 404
+  // means the identity edge has not been applied and basic auth still guards
+  // this page. Asked once per load.
+  let oidcPromise = null;
+  function oidcAtEdge() {
+    if (oidcPromise) return oidcPromise;
+    oidcPromise = (async () => {
+      try {
+        const r = await fetch("/oauth2/auth", { headers: { accept: "application/json" }, redirect: "manual" });
+        if (r.status === 404 && (!r.headers.get("content-type") || /^caddy/i.test(r.headers.get("server") || ""))) return false;
+        return r.status === 202 || r.status === 401 || r.status === 200;
+      } catch (_) {
+        return false;
+      }
+    })();
+    return oidcPromise;
+  }
+
   /* ---------------------------------------------------------------- events */
 
   const listeners = [];
@@ -842,12 +861,36 @@
     // authenticated user. refreshAuth() (renderer.js:3425) reads `user.email`
     // and treats anything falsy as signed out, which is what kept the composer
     // showing "Sign in with your Crowe ID to start".
+    /* Sign-in and sign-out, and what they do depends on what the edge is.
+
+       Behind basic auth (today) the browser holds the credential and there is
+       nothing for the shell to do: login is a no-op that succeeds, logout is a
+       stated refusal. Behind Crowe ID (the identity edge, once applied) the
+       sidecar answers /oauth2/auth, and then the shell's "Sign in with Crowe ID"
+       button is real: it sends the browser to /oauth2/start with a return to
+       this page, and sign-out clears the session cookie at /oauth2/sign_out.
+       Which world this is gets asked once per page load, and the answer is read
+       the same way the OWUI probe reads it: a bare Caddy 404 means not there. */
     auth: {
-      login: async () => ({ ok: true }),
-      logout: async () => ({
-        ok: false,
-        error: "Sign-out is handled by the browser for this deployment. Close the window or clear saved credentials.",
-      }),
+      login: async () => {
+        if (await oidcAtEdge()) {
+          const back = (typeof location !== "undefined" && location.pathname + location.search) || "/app/renderer/app.html";
+          if (typeof location !== "undefined") location.assign("/oauth2/start?rd=" + encodeURIComponent(back));
+          return { ok: true, redirecting: true };
+        }
+        return { ok: true };
+      },
+      logout: async () => {
+        if (await oidcAtEdge()) {
+          const back = (typeof location !== "undefined" && location.pathname) || "/app/renderer/app.html";
+          if (typeof location !== "undefined") location.assign("/oauth2/sign_out?rd=" + encodeURIComponent(back));
+          return { ok: true, redirecting: true };
+        }
+        return {
+          ok: false,
+          error: "Sign-out is handled by the browser for this deployment. Close the window or clear saved credentials.",
+        };
+      },
       status: async () => {
         const who = await whoami();
         return who ? { user: { email: who, tier: "Web" } } : { user: null };

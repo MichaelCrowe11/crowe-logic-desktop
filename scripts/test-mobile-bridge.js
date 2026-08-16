@@ -556,6 +556,17 @@ function methodPaths(surface) {
     return "ts.net only, on both platforms";
   });
 
-  console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
+    await check("the drawer stays open while typing a session name or brief", () => {
+    // mobile-ui closes the drawer on any tap in the sessions list, so a row tap
+    // navigates cleanly. The current session's name and brief fields live in
+    // that same list (renderer.js drawSessionMeta) and must not close it.
+    const ui = read("mobile/src/mobile-ui.js");
+    const rr = read("renderer/renderer.js");
+    assert(/className\s*=\s*"sess-meta"/.test(rr), "renderer no longer draws .sess-meta; update this check");
+    assert(/closest\("\.sess-meta"\)/.test(ui), "mobile-ui closes the drawer on taps inside .sess-meta");
+    return "editor taps ignored";
+  });
+
+console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();
