@@ -566,6 +566,17 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "surfaced, no fallback";
   });
 
+  await check("the update banner stays hidden on the web", async () => {
+    // renderer.js renderUpdate hides the banner only for status idle, current or
+    // dev. The first web build returned a `state` field instead, which the
+    // renderer never reads, and every page load showed an empty banner.
+    const { crowe: web } = loadWebSurface();
+    for (const s of [await web.update.state(), await web.update.check()]) {
+      assert(["idle", "current", "dev"].includes(s && s.status), `update shape would show the banner: ${JSON.stringify(s)}`);
+    }
+    return "status current";
+  });
+
   // ─── Sign-in at the edge ──────────────────────────────────────────────────
 
   await check("behind basic auth, sign-in is a no-op and sign-out a stated refusal", async () => {

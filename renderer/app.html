@@ -31,12 +31,12 @@
   <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1786838890560" />
+  <link rel="stylesheet" href="styles.css?v=1786841999961" />
   <!-- The phone layer, after the desktop sheet and never editing it. Its
        one-column rules gate on width, so a narrow window on any device gets
        one pane; its shell rules gate on body.mobile, which only the phone
        chrome below sets. On a wide screen this file changes nothing. -->
-  <link rel="stylesheet" href="mobile.css?v=1786838890560" />
+  <link rel="stylesheet" href="mobile.css?v=1786841999961" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -450,11 +450,11 @@
   <!-- The room engine, verbatim from rooms/ (scripts/build-rooms-web.js). It
        must define window.CroweRooms before web-bridge.js reads it, or the
        rooms surface answers with a stated reason instead of a roster. -->
-  <script src="rooms-web.js?v=1786838890560"></script>
-  <script src="web-bridge.js?v=1786838890560"></script>
-  <script src="mark-geometry.js?v=1786838890560"></script>
-  <script src="mark.js?v=1786838890560"></script>
-  <script src="renderer.js?v=1786838890560"></script>
+  <script src="rooms-web.js?v=1786841999961"></script>
+  <script src="web-bridge.js?v=1786841999961"></script>
+  <script src="mark-geometry.js?v=1786841999961"></script>
+  <script src="mark.js?v=1786841999961"></script>
+  <script src="renderer.js?v=1786841999961"></script>
   <!-- The phone chrome: bottom tab bar, drawer scrim, keyboard insets, honest
        first-run copy. It mirrors controls the renderer wires up on load, so it
        goes after renderer.js, and it is loaded only where a phone is what this
@@ -469,7 +469,7 @@
       } catch (e) {}
       if (!phone) return;
       var s = document.createElement("script");
-      s.src = "mobile-ui.js?v=1786838890560";
+      s.src = "mobile-ui.js?v=1786841999961";
       document.body.appendChild(s);
     })();
   </script>

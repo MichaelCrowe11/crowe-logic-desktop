@@ -977,10 +977,16 @@
 
     catalog: { get: catalogGet },
 
+    // The renderer reads `status` (renderer.js renderUpdate) and hides the
+    // banner for idle, current and dev; anything else shows it. The first web
+    // build answered {state:"web"}, a field the renderer never reads, so every
+    // page load opened an update banner with no text and a "Later" button.
+    // The web build updates by deploy, which is "current" from where the shell
+    // stands, and the palette's "Check for updates" says so.
     update: {
-      check: async () => ({ available: false }),
+      check: async () => ({ status: "current", version: window.CROWE_VERSION || "" }),
       download: unsupported("Updates"), install: unsupported("Updates"),
-      state: async () => ({ state: "web" }),
+      state: async () => ({ status: "current", version: window.CROWE_VERSION || "" }),
       onChange: () => () => {},
     },
 
