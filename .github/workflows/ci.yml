@@ -43,6 +43,16 @@ jobs:
       - name: Run mobile bridge tests
         run: node scripts/test-mobile-bridge.js
 
+      # Same bargain as mobile, same cost, and this one is already serving real
+      # traffic at /app. The renderer ships to the browser verbatim over
+      # web-bridge.js, so a dropped method is a TypeError at a click in
+      # production with no build step in between. Also holds the rule the bridge
+      # states about itself, that it never puts a credential in browser storage.
+      - name: Run web bridge tests
+        run: |
+          node scripts/build-rooms-web.js --check
+          node scripts/test-web-bridge.js
+
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
       # spends, who reviews whom, what the budget halts - are worth holding at

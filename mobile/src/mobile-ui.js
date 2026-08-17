@@ -43,7 +43,14 @@
   // The sessions list is rebuilt whenever a thread is saved, so its rows are
   // bound by delegation instead of one by one.
   const sessList = $("sess-list");
-  if (sessList) sessList.addEventListener("click", () => setTimeout(() => setDrawer(false), 0));
+  // A tap on a session row navigates and the drawer should close behind it. A
+  // tap in the current session's name or brief field at the top of the same
+  // list is the opposite: the person is about to type, and a drawer that
+  // closes under the keyboard makes those two fields unusable on a phone.
+  if (sessList) sessList.addEventListener("click", (e) => {
+    if (e.target && e.target.closest && e.target.closest(".sess-meta")) return;
+    setTimeout(() => setDrawer(false), 0);
+  });
 
   // ─── Tab bar ───────────────────────────────────────────────────────────────
   const PANE_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></svg>';

@@ -730,6 +730,12 @@ body.dark .side-new .ic { color: var(--gold); }
   text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
 .sess-list { flex: 1; overflow-y: auto; padding: 6px; }
 .sess-empty, .git-empty { color: var(--muted); font-size: var(--fs-sm); padding: 14px 10px; text-align: center; }
+/* The current session's name and brief, at the top of the drawer. Reuses the
+   room composer's input rule so the two places a person names something look
+   like one place. */
+.sess-meta { display: flex; flex-direction: column; gap: 6px; padding: 4px 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.sess-meta .rc-name { min-width: 0; width: 100%; font-size: var(--fs-sm); }
+.sess-meta .sess-brief { resize: vertical; min-height: 44px; line-height: 1.4; }
 .sess-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-md); cursor: pointer;
   border: 1px solid transparent; transition: background 120ms var(--ease), border-color 120ms var(--ease); }
 .sess-row:hover { background: var(--cream); border-color: var(--line); }
