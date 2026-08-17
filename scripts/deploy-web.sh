@@ -31,7 +31,7 @@ DEST=/var/lib/docker/volumes/caddy_config/_data/crowe-app/renderer
 # The four renderer files, plus the phone layer, which lives in mobile/src and
 # is served beside them under the names app.html asks for. renderer/ is the
 # source of truth for the first four; mobile/src for the last two.
-FILES=(app.html web-bridge.js rooms-web.js renderer.js mobile.css mobile-ui.js)
+FILES=(app.html web-bridge.js web-ui.js rooms-web.js renderer.js mobile.css mobile-ui.js)
 src_of() { case "$1" in mobile.css|mobile-ui.js) echo "mobile/src/$1" ;; *) echo "renderer/$1" ;; esac; }
 PUBLIC="${PUBLIC:-https://crowelm.com/app/renderer}"
 

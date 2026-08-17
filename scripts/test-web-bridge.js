@@ -814,6 +814,25 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return `viewport, sheet, gated chrome; ${uses.length} plugins guarded`;
   });
 
+  await check("web-ui rewrites sentences the renderer still contains, and app.html loads it", () => {
+    // Same bargain the phone chrome makes: rewrites match the desktop's own
+    // copy, so reword it there without rewording it here and this fails rather
+    // than the web quietly going back to promising a terminal.
+    const ui = read("renderer/web-ui.js");
+    const rr = read("renderer/renderer.js");
+    const ih = read("renderer/index.html");
+    const needles = [...ui.matchAll(/\["((?:[^"\\]|\\.)*)",\s*\n?\s*"(?:[^"\\]|\\.)*"\]/g)].map((m) => m[1]);
+    assert(needles.length >= 4, `expected the COPY table to yield needles, got ${needles.length}`);
+    for (const n of needles) assert(rr.includes(n) || ih.includes(n), `web-ui rewrites a sentence the renderer no longer contains: ${n.slice(0, 60)}`);
+    assert(/Ask it to reason, run commands, edit files, and browse/.test(ih), "index.html welcome text moved; check webWelcome still targets .welcome p");
+    const html = read("renderer/app.html");
+    const r = html.indexOf('src="renderer.js'); const wu = html.indexOf('src="web-ui.js'); const gate = html.indexOf("pointer: coarse");
+    assert(wu > r && wu < gate, "web-ui.js must load after renderer.js and before the phone gate");
+    assert(/crowe:mobile-ui/.test(html) && /crowe:mobile-ui/.test(ui), "the phone gate must announce mobile-ui so web-ui can re-apply its copy");
+    assert(/data-tier="edit"/.test(ui) && /data-tier="execute"/.test(ui), "web-ui must hide the edit and execute tiers");
+    return `${needles.length} needles held; wired`;
+  });
+
   await check("app.html does not claim to be generated", () => {
     // scripts/gen-preview.js produces renderer/preview.html and nothing else, so
     // a "regenerate instead of editing" note points at a script that cannot.

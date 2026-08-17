@@ -95,7 +95,7 @@ check("the preview harness and the web build are excluded, not shipped", () => {
   // carry a second implementation of its own bridge.
   const excluded = [
     "renderer/preview.html", "renderer/preview-shim.js",
-    "renderer/app.html", "renderer/web-bridge.js", "renderer/rooms-web.js",
+    "renderer/app.html", "renderer/web-bridge.js", "renderer/web-ui.js", "renderer/rooms-web.js",
   ];
   for (const f of excluded) {
     assert(pkg.build.files.includes(`!${f}`), `${f} is not excluded from the build`);

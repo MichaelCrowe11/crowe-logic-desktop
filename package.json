@@ -85,6 +85,7 @@
       "!renderer/preview-shim.js",
       "!renderer/app.html",
       "!renderer/web-bridge.js",
+      "!renderer/web-ui.js",
       "!renderer/rooms-web.js"
     ],
     "mac": {

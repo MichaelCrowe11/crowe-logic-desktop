@@ -9,10 +9,12 @@ procedure.
 
 ## What ships
 
-Six files, and only these six change between deploys:
+Seven files, and only these seven change between deploys:
 
     renderer/app.html        the web entry point (hand-maintained)
     renderer/web-bridge.js   window.crowe over HTTP
+    renderer/web-ui.js       the web chrome: honest first-run copy, hides the
+                             tiers the browser refuses, a Workspace link
     renderer/rooms-web.js    the room engine, bundled (generated; see below)
     renderer/renderer.js     the shell, shared with desktop and mobile
     mobile/src/mobile.css    the phone layer: one column under 820px, shell
