@@ -19,6 +19,9 @@ const { execFile } = require('child_process');
 
 const VERSION = '1.2.3';
 const VERIFY = path.join(__dirname, 'verify-release.js');
+// The real version, for the scenario that asserts the script falls back to it.
+// Read rather than written down, so cutting a release does not turn this red.
+const PKG_VERSION = require('../package.json').version;
 
 // An AppImage keeps its blockmap inside itself rather than in a sidecar:
 // payload, then the deflated blockmap, then that blockmap's length as a
@@ -140,9 +143,21 @@ function serve(state) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-function run(port) {
+// Most scenarios name the version on the command line, which is also how the
+// bug below survived: the argument always won, so the fallbacks underneath it
+// were never exercised by anything. `version: null` omits it and leaves the
+// script to work out for itself which release it is looking at.
+function run(port, opts = {}) {
+  const version = 'version' in opts ? opts.version : VERSION;
+  const args = [VERIFY];
+  if (version != null) args.push(version);
+  args.push(`--base=http://127.0.0.1:${port}`);
+  // Blank rather than inherited: run this suite inside Actions and the real
+  // GITHUB_REF_NAME would otherwise reach through and make the result depend on
+  // which branch the checkout happens to be on.
+  const env = { ...process.env, GITHUB_REF_NAME: '', ...(opts.env || {}) };
   return new Promise((resolve) => {
-    execFile(process.execPath, [VERIFY, VERSION, `--base=http://127.0.0.1:${port}`],
+    execFile(process.execPath, args, { env },
       (err, stdout, stderr) => resolve({ code: err ? err.code : 0, out: stdout + stderr }));
   });
 }
@@ -284,6 +299,36 @@ const scenarios = [
       assert.match(r.out, /not ok\s+download page offers this release/);
     },
   },
+  // Which release is under test is itself a thing that can be wrong, and when it
+  // is, every check below it fails for a reason that has nothing to do with the
+  // release. These two pin the resolution rather than the checks.
+  {
+    // The scheduled run passes no version, and GitHub sets GITHUB_REF_NAME to
+    // whatever ref it ran on - for a cron, the branch. Read as a version that
+    // verifies a release called "main": all three feeds mismatch, SHA256SUMS
+    // 404s, and the page has no "vmain" in it. Red every morning against a
+    // release that is perfectly healthy, which is how a gate gets turned off.
+    name: 'a scheduled run on a branch verifies package.json, not the branch name',
+    run: { version: null, env: { GITHUB_REF_NAME: 'main' } },
+    break: () => {},
+    expect: (r) => {
+      assert.doesNotMatch(r.out, /verify-release: main\b/,
+        `verified a release named after the branch\n${r.out}`);
+      assert.match(r.out, new RegExp(`verify-release: ${PKG_VERSION.replace(/\./g, '\\.')}\\b`),
+        `expected it to fall back to package.json's ${PKG_VERSION}\n${r.out}`);
+    },
+  },
+  {
+    // The fallback still earns its place: a tag-triggered run names the release
+    // in GITHUB_REF_NAME, and package.json is not necessarily still on it.
+    name: "a tag-triggered run verifies the tag's version",
+    run: { version: null, env: { GITHUB_REF_NAME: `v${VERSION}` } },
+    break: () => {},
+    expect: (r) => {
+      assert.strictEqual(r.code, 0, `expected exit 0, got ${r.code}\n${r.out}`);
+      assert.match(r.out, /all checks passed/);
+    },
+  },
 ];
 
 (async () => {
@@ -292,7 +337,7 @@ const scenarios = [
     const state = baseline(s.appImage ? s.appImage() : undefined);
     s.break(state);
     const server = await serve(state);
-    const result = await run(server.address().port);
+    const result = await run(server.address().port, s.run || {});
     server.close();
     try {
       s.expect(result, state);
