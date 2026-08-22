@@ -31,12 +31,12 @@
   <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1786925501158" />
+  <link rel="stylesheet" href="styles.css?v=1787432400000" />
   <!-- The phone layer, after the desktop sheet and never editing it. Its
        one-column rules gate on width, so a narrow window on any device gets
        one pane; its shell rules gate on body.mobile, which only the phone
        chrome below sets. On a wide screen this file changes nothing. -->
-  <link rel="stylesheet" href="mobile.css?v=1786925501158" />
+  <link rel="stylesheet" href="mobile.css?v=1787432400000" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -450,16 +450,16 @@
   <!-- The room engine, verbatim from rooms/ (scripts/build-rooms-web.js). It
        must define window.CroweRooms before web-bridge.js reads it, or the
        rooms surface answers with a stated reason instead of a roster. -->
-  <script src="rooms-web.js?v=1786925501158"></script>
-  <script src="web-bridge.js?v=1786925501158"></script>
-  <script src="mark-geometry.js?v=1786925501158"></script>
-  <script src="mark.js?v=1786925501158"></script>
-  <script src="renderer.js?v=1786925501158"></script>
+  <script src="rooms-web.js?v=1787432400000"></script>
+  <script src="web-bridge.js?v=1787432400000"></script>
+  <script src="mark-geometry.js?v=1787432400000"></script>
+  <script src="mark.js?v=1787432400000"></script>
+  <script src="renderer.js?v=1787432400000"></script>
   <!-- The web chrome: what the shell says it can do, in a browser. Rewrites the
        desktop's first-run copy to turns the web can take and hides the two
        autonomy tiers the bridge refuses. After renderer.js, before the phone
        gate below, on every width. -->
-  <script src="web-ui.js?v=1786925501158"></script>
+  <script src="web-ui.js?v=1787432400000"></script>
   <!-- The phone chrome: bottom tab bar, drawer scrim, keyboard insets, honest
        first-run copy. It mirrors controls the renderer wires up on load, so it
        goes after renderer.js, and it is loaded only where a phone is what this
@@ -477,7 +477,7 @@
       // web-ui.js listens for this and re-applies the web's welcome copy over
       // the phone chrome's, which otherwise promises a paired desktop.
       s.onload = function () { try { window.dispatchEvent(new Event("crowe:mobile-ui")); } catch (e) {} };
-      s.src = "mobile-ui.js?v=1786925501158";
+      s.src = "mobile-ui.js?v=1787432400000";
       document.body.appendChild(s);
     })();
   </script>

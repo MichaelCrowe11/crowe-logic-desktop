@@ -243,10 +243,14 @@ button { font-family: var(--body); }
 .badge { font-family: var(--mono); font-size: var(--fs-sm); color: var(--gold-deep); background: var(--cream);
   border: 1px solid var(--line); padding: 3px 10px; border-radius: var(--r-pill); }
 body.dark .badge { color: var(--gold); }
-button.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink);
+button.ghost, a.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink);
   padding: 4px 12px; border-radius: var(--r-md); cursor: pointer;
   transition: border-color 120ms var(--ease), color 120ms var(--ease), background 120ms var(--ease); }
-button.ghost:hover { border-color: var(--gold); color: var(--gold-text); }
+button.ghost:hover, a.ghost:hover { border-color: var(--gold); color: var(--gold-text); }
+/* A link dressed as a ghost button (the web build's Workspace link). Without
+   this it took the browser's link blue, the one colour this palette does not
+   have, and read as a leak rather than a control. */
+a.ghost { text-decoration: none; display: inline-flex; align-items: center; line-height: 1.2; }
 /* No drop shadow. A 28px button casting a shadow is decoration pretending to be
    depth — depth in this app is the stepped surfaces, and a control that floats
    off its own panel undercuts them. Shadows are reserved for things that
@@ -884,7 +888,7 @@ body.dark .git-x.mod { color: var(--gold); }
   border-radius: var(--r-md); padding: 7px 10px; color: var(--ink); }
 #git-msg:focus { outline: none; border-color: var(--focus); }
 button.sm { padding: 5px 12px; font-size: var(--fs-sm); }
-button.ghost.sm { padding: 3px 10px; font-size: var(--fs-cap); }
+button.ghost.sm, a.ghost.sm { padding: 3px 10px; font-size: var(--fs-cap); }
 
 /* ── Official plugins picker (Settings) ── */
 .plugs { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto;
@@ -2087,3 +2091,17 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
   body::before { display: none; }
   .rmsg:not(.from-operator) .rmsg-body { background: var(--raised); }
 }
+
+/* ── The plan card (web build; web-ui.js) ──
+   One card, in the transcript, in the assistant's own voice: the price is read
+   from the checkout catalog at open, never written here. */
+.plan-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; background: var(--panel); max-width: 520px; }
+.plan-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.plan-head b { font-family: var(--display); font-weight: 600; font-size: var(--fs-head); }
+.plan-price { font-family: var(--mono); font-size: var(--fs-sm); color: var(--gold-text); white-space: nowrap; }
+.plan-why { margin: 8px 0 6px; }
+.plan-feats { margin: 0 0 12px 1.1em; padding: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; }
+.plan-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.plan-note { margin-top: 8px; }
+.plan-note:empty { display: none; }
+#upgrade-pill { color: var(--gold-text); border-color: var(--gold); white-space: nowrap; }

@@ -843,6 +843,104 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "header matches reality";
   });
 
+
+  // ─── The plan: whoami's two shapes, the paywall, the way up ─────────────────
+
+  const edgeWith = (whoamiBody, { json = true, extra } = {}) => async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes("/app/whoami")) {
+      return new Response(whoamiBody, { status: 200, headers: json ? { "content-type": "application/json" } : { "content-type": "text/plain" } });
+    }
+    if (extra) { const r = await extra(u, init); if (r) return r; }
+    return new Response("{}", { status: 200 });
+  };
+
+  await check("whoami JSON: the badge gets the plan name and billing knows it is paid", async () => {
+    const { crowe: web } = loadWebSurface({ fetchImpl: edgeWith(JSON.stringify({ email: "pete@example.com", tier: "pro" })) });
+    const { user } = await web.auth.status();
+    assert(user && user.email === "pete@example.com", `email not read: ${JSON.stringify(user)}`);
+    assert(user.tier === "Pro", `tier label should be Pro, got ${user.tier}`);
+    const plan = await web.billing.plan();
+    assert(plan.known === true && plan.paid === true, `plan should be known+paid: ${JSON.stringify(plan)}`);
+    const lic = await web.license.status();
+    assert(lic.authenticated === true, "license.status must still agree with auth.status");
+    return "pro";
+  });
+
+  await check("whoami JSON: a free tier is said plainly, and an unstated tier is not called free", async () => {
+    const free = loadWebSurface({ fetchImpl: edgeWith(JSON.stringify({ email: "new@example.com", tier: "free" })) }).crowe;
+    const f = await free.billing.plan();
+    assert(f.known && !f.paid, `free should be known and unpaid: ${JSON.stringify(f)}`);
+    assert((await free.auth.status()).user.tier === "Free", "badge should say Free");
+    const blank = loadWebSurface({ fetchImpl: edgeWith(JSON.stringify({ email: "old@example.com", tier: "" })) }).crowe;
+    const b = await blank.billing.plan();
+    assert(b.known === false && b.paid === false, `an empty tier must be unknown, not free: ${JSON.stringify(b)}`);
+    assert((await blank.auth.status()).user.tier === "", "an unstated tier must print nothing after the email");
+    return "free said, unknown withheld";
+  });
+
+  await check("whoami text (an edge applied before this build) still signs the person in", async () => {
+    const { crowe: web } = loadWebSurface({ fetchImpl: edgeWith("pete@example.com", { json: false }) });
+    const { user } = await web.auth.status();
+    assert(user && user.email === "pete@example.com" && user.tier === "", `text shape misread: ${JSON.stringify(user)}`);
+    assert((await web.billing.plan()).known === false, "text shape carries no tier");
+    return "both shapes read";
+  });
+
+  await check("a 402 from the edge becomes one paywall error and one crowe:paywall event", async () => {
+    const paid402 = async (u) => (u.includes("/chat/completions")
+      ? new Response(JSON.stringify({ error: "payment_required", pricing: "/pricing" }), { status: 402, headers: { "content-type": "application/json" } })
+      : null);
+    const { crowe: web, win } = loadWebSurface({ fetchImpl: edgeWith(JSON.stringify({ email: "new@example.com", tier: "free" }), { extra: paid402 }) });
+    const fired = [];
+    win.dispatchEvent = (ev) => { fired.push(ev.type); return true; };
+    const events = [];
+    web.agent.onEvent((ev) => events.push(ev));
+    // agentRun reports the error as an event and then rethrows (the desktop's
+    // contract, renderer.js catches it); both halves are asserted here.
+    let thrown = null;
+    await web.chat([{ role: "user", content: "hello" }]).catch((e) => { thrown = e; });
+    assert(thrown && /free plan/.test(thrown.message), `chat must reject with the paywall text, got ${thrown && thrown.message}`);
+    const err = events.find((e) => e.type === "error");
+    assert(err && /free plan/.test(err.text) && /Pro/.test(err.text), `expected the paywall text, got ${JSON.stringify(err)}`);
+    assert(!events.some((e) => e.type === "error" && /Gateway returned 402/.test(e.text)), "402 must not be reported as a gateway fault");
+    assert(fired.filter((t) => t === "crowe:paywall").length === 1, `paywall event fired ${fired.filter((t) => t === "crowe:paywall").length} times`);
+    return "said once, announced once";
+  });
+
+  await check("billing.checkout posts the slug and the signed-in email to the one ladder, and nothing else", async () => {
+    let posted = null;
+    const capture = async (u, init) => {
+      if (/\/v1\/checkout$/.test(u)) { posted = { url: u, init }; return new Response(JSON.stringify({ url: "https://checkout.stripe.com/c/pay/cs_test_1", id: "cs_test_1" }), { status: 200, headers: { "content-type": "application/json" } }); }
+      return null;
+    };
+    const { crowe: web } = loadWebSurface({ fetchImpl: edgeWith(JSON.stringify({ email: "new@example.com", tier: "free" }), { extra: capture }) });
+    const r = await web.billing.checkout("pro");
+    assert(r.ok && r.url.startsWith("https://checkout.stripe.com/"), `checkout did not return Stripe's url: ${JSON.stringify(r)}`);
+    assert(posted && /crowe-checkout/.test(posted.url), `posted to ${posted && posted.url}`);
+    const body = JSON.parse(posted.init.body);
+    assert(body.slug === "pro" && body.email === "new@example.com", `body was ${posted.init.body}`);
+    assert(Object.keys(body).sort().join() === "email,slug", "checkout body must carry only slug and email");
+    const signedOut = loadWebSurface({ fetchImpl: edgeWith("", { json: false }) }).crowe;
+    const no = await signedOut.billing.checkout("pro");
+    assert(no.ok === false && /Sign in/.test(no.error), "a signed-out checkout must refuse with a reason");
+    return "slug + email only";
+  });
+
+  await check("the plan surfaces are wired: web-ui listens, styles exist, the phone header makes room", () => {
+    const ui = read("renderer/web-ui.js");
+    const css = read("renderer/styles.css");
+    const mcss = read("mobile/src/mobile.css");
+    assert(/addEventListener\("crowe:paywall"/.test(ui), "web-ui must open the plan card on crowe:paywall");
+    assert(/billing\.checkout\("pro"\)/.test(ui) && /billing\.catalog\(\)/.test(ui), "web-ui must read the price from the catalog and check out through the bridge");
+    assert(/query\.get\("upgraded"\)/.test(ui) && /query\.get\("pricing"\)/.test(ui), "web-ui must handle the /welcome and /pricing returns");
+    assert(!/\$\s*\d+\s*(\/|a )\s*month/.test(ui), "no price may be written into web-ui.js; it comes from the catalog");
+    assert(/\.plan-card \{/.test(css) && /#upgrade-pill/.test(css), "styles.css must style the plan card and the pill");
+    assert(/button\.ghost, a\.ghost \{/.test(css), "a.ghost must share the ghost button's rule (the Workspace link was link-blue)");
+    assert(/body\.mobile #web-workspace \{ display: none; \}/.test(mcss), "mobile.css must hide the Workspace link at phone width");
+    return "wired";
+  });
+
   console.log(failures ? `\n${failures} failed` : "\nall passed");
   process.exit(failures ? 1 : 0);
 })();

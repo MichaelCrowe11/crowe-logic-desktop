@@ -93,14 +93,52 @@
   // license one (renderer.js:1098) while the composer reads the auth one
   // (renderer.js:3425). An unreachable /app/whoami therefore produced a signed
   // out composer inside a signed in shell.
+  /* Who the edge let in, and what that Crowe ID is entitled to.
+
+     /app/whoami answers JSON once the plan is at the edge: {"email", "tier"},
+     where `tier` is the Keycloak `crowe_tier` attribute carried by oauth2-proxy
+     as the groups claim and copied onto the request. Before that line is
+     applied it answers the bare email as text, and both shapes are read so a
+     page served ahead of its edge still knows who is signed in. A tier the
+     edge did not state is "" and is reported as unknown, not as free: the edge
+     decides what a turn may do (it answers 402), this only decides what to
+     say. Vocabulary per crowe-logic-foundry control_plane/plans.py. */
+  const PAID_TIERS = ["personal", "pro", "team", "max", "enterprise", "byok"];
   async function whoami() {
     try {
-      const r = await fetch("/app/whoami", { headers: { accept: "text/plain" } });
-      if (!r.ok) return "";
-      return (await r.text()).trim();
+      const r = await fetch("/app/whoami", { headers: { accept: "application/json, text/plain" } });
+      if (!r.ok) return { email: "", tier: "" };
+      const raw = (await r.text()).trim();
+      if (raw.startsWith("{")) {
+        try {
+          const j = JSON.parse(raw);
+          const tier = String(j.tier || "").split(",")[0].trim().toLowerCase();
+          return { email: String(j.email || "").trim(), tier };
+        } catch (_) { /* not JSON after all; read it as the text shape */ }
+      }
+      return { email: raw.includes("@") ? raw : "", tier: "" };
     } catch (_) {
-      return "";
+      return { email: "", tier: "" };
     }
+  }
+  const tierLabel = (tier) => (tier ? tier.charAt(0).toUpperCase() + tier.slice(1) : "");
+
+  /* The plan, and the way up.
+
+     The edge answers 402 on the model paths when the signed-in Crowe ID is on
+     the free tier. The way up is the estate's one ladder, the crowe-checkout
+     Worker: GET /v1/catalog is the price list and the ONLY source of a price
+     this build will show; POST /v1/checkout {slug, email} mints a Stripe
+     Checkout session whose metadata names the Crowe ID to upgrade; and the
+     control plane's Stripe webhook (api.crowelogic.com/api/billing/webhook)
+     stamps `crowe_tier` on that account when payment lands. Stripe returns the
+     buyer to crowelm.com/welcome, which the edge turns into a fresh sign-in so
+     the session carries the new tier. Nothing here touches a card or a key. */
+  const CHECKOUT_URL =
+    (typeof window !== "undefined" && window.CROWE_CHECKOUT_URL) || "https://crowe-checkout.yellow-block-3adc.workers.dev";
+  const PAYWALL_TEXT = "This Crowe ID is on the free plan. Pro unlocks the operator, the rooms and the named agents.";
+  function paywall(detail) {
+    try { window.dispatchEvent(new CustomEvent("crowe:paywall", { detail: detail || {} })); } catch (_) {}
   }
 
   // Whether Crowe ID sits at the edge: oauth2-proxy answers /oauth2/auth with
@@ -476,6 +514,15 @@
       res = await post(GW);
     }
 
+    if (res.status === 402) {
+      // The edge refused the turn on the plan, not on the request. Said once
+      // in the transcript, and announced so web-ui.js can put the way up
+      // next to it.
+      let detail = {};
+      try { detail = await res.json(); } catch (_) {}
+      paywall(detail);
+      throw new Error(PAYWALL_TEXT);
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new Error(`Gateway returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
@@ -871,6 +918,33 @@
        this page, and sign-out clears the session cookie at /oauth2/sign_out.
        Which world this is gets asked once per page load, and the answer is read
        the same way the OWUI probe reads it: a bare Caddy 404 means not there. */
+    // Web-only. The desktop's license.billing opens the workspace portal; this
+    // is the member's own plan and the one ladder, read from the checkout
+    // Worker so no price is written into this file.
+    billing: {
+      plan: async () => {
+        const who = await whoami();
+        return { email: who.email, tier: who.tier, known: Boolean(who.tier), paid: PAID_TIERS.includes(who.tier) };
+      },
+      catalog: async () => {
+        const r = await fetch(`${CHECKOUT_URL}/v1/catalog`, { headers: { accept: "application/json" } });
+        if (!r.ok) return { error: `Catalog unavailable (${r.status}).` };
+        return r.json();
+      },
+      checkout: async (slug = "pro") => {
+        const who = await whoami();
+        if (!who.email) return { ok: false, error: "Sign in with Crowe ID first, so the upgrade lands on the right account." };
+        const r = await fetch(`${CHECKOUT_URL}/v1/checkout`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ slug, email: who.email }),
+        });
+        let j = {};
+        try { j = await r.json(); } catch (_) {}
+        if (!r.ok || !j.url) return { ok: false, error: j.error || `Checkout unavailable (${r.status}).` };
+        return { ok: true, url: j.url };
+      },
+    },
     auth: {
       login: async () => {
         if (await oidcAtEdge()) {
@@ -893,7 +967,11 @@
       },
       status: async () => {
         const who = await whoami();
-        return who ? { user: { email: who, tier: "Web" } } : { user: null };
+        if (!who.email) return { user: null };
+        // `tier` is what the badge prints after the email (renderer.js:3505):
+        // the plan name when the edge stated one, nothing when it did not,
+        // rather than a word invented here. `plan` and `paid` are for web-ui.js.
+        return { user: { email: who.email, tier: tierLabel(who.tier), plan: who.tier, paid: PAID_TIERS.includes(who.tier) } };
       },
     },
 
@@ -906,7 +984,7 @@
       // let the shell claim a signed in user while `auth.status()` reported
       // none, which is the disagreement the renderer cannot resolve.
       status: async () => ({
-        authenticated: Boolean(await whoami()),
+        authenticated: Boolean((await whoami()).email),
         selectedWorkspaceId: "web",
         workspaces: [
           {
