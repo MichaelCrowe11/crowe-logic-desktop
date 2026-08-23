@@ -450,3 +450,15 @@ body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1
   }
   body.mobile #bar, body.mobile .m-tabs { background: var(--panel); }
 }
+
+/* ── The web build on a phone ──
+   web-ui.js adds a Workspace link and an Upgrade pill to the header, and at
+   phone width the header has room for the lockup, one button and the badge.
+   The Workspace stays one tap away inside every refusal that needs it, and the
+   plan lives in the transcript card. Inert in the iOS shell, where neither
+   element exists. */
+@media (max-width: 820px) {
+  body.mobile #web-workspace { display: none; }
+  body.mobile #signin, body.mobile #upgrade-pill { white-space: nowrap; padding: 4px 9px; font-size: var(--fs-cap); }
+  body.mobile #userbadge { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
