@@ -204,6 +204,7 @@
       '<p class="said plan-why"></p>',
       '<ul class="plan-feats"></ul>',
       '<div class="plan-row"><button type="button" class="primary plan-go">Upgrade with Stripe</button><button type="button" class="ghost plan-later">Not now</button></div>',
+      '<div class="plan-more" hidden><span class="plan-more-label">Need more?</span><div class="plan-more-row"></div></div>',
       '<p class="hint plan-note"></p>',
       "</div>",
     ].join(""));
@@ -226,14 +227,36 @@
     } catch (_) {
       priceEl.textContent = "price at checkout";
     }
-    card.querySelector(".plan-go").addEventListener("click", async (e) => {
-      const b = e.currentTarget;
-      b.disabled = true; b.textContent = "Opening Stripe";
-      const r = await billing.checkout("pro");
+    // One path to Stripe, shared by the Pro button and every higher-tier chip:
+    // the bridge posts {slug, email}, the reply is a session url or a reason.
+    const goCheckout = async (slug, btn, restore) => {
+      btn.disabled = true; const was = btn.textContent; btn.textContent = "Opening Stripe";
+      const r = await billing.checkout(slug);
       if (r && r.ok && r.url) { location.assign(r.url); return; }
-      b.disabled = false; b.textContent = "Upgrade with Stripe";
+      btn.disabled = false; btn.textContent = restore || was;
       card.querySelector(".plan-note").textContent = (r && r.error) || "Checkout is not answering. Try again in a moment.";
-    });
+    };
+    card.querySelector(".plan-go").addEventListener("click", (e) => goCheckout("pro", e.currentTarget, "Upgrade with Stripe"));
+
+    /* The tiers above Pro. Discoverable here rather than only by a /c/<slug>
+       link: a compact chip each, name and price read from the same catalog,
+       so a heavier user upgrades past Pro without leaving the conversation.
+       Silent if the catalog does not list them (older Worker), so this never
+       shows an empty row. */
+    try {
+      const cat2 = await billing.catalog();
+      const higher = ((cat2 && cat2.ladder) || []).filter((i) => ["scale", "studio", "business"].includes(i.slug) && i.amount);
+      if (higher.length) {
+        const more = card.querySelector(".plan-more");
+        const row = card.querySelector(".plan-more-row");
+        row.innerHTML = higher.map((i) =>
+          `<button type="button" class="ghost sm plan-tier" data-slug="${esc(i.slug)}" title="${esc((i.features || [])[0] || i.tagline || "")}">${esc(i.name.replace(/^Crowe Logic /, ""))} · ${money(i.amount, i.interval)}</button>`
+        ).join("");
+        row.querySelectorAll(".plan-tier").forEach((btn) =>
+          btn.addEventListener("click", (e) => goCheckout(e.currentTarget.dataset.slug, e.currentTarget)));
+        more.hidden = false;
+      }
+    } catch (_) { /* keep the Pro card; the higher tiers are an add-on */ }
     card.querySelector(".plan-later").addEventListener("click", () => wrap.remove());
   }
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
