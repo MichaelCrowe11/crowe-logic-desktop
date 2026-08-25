@@ -622,6 +622,9 @@ async function send(text, opts = {}) {
     }
     else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
     else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) $("hud-model").textContent = ev.model; }
+    // The account's plan does not include the routed model. Said in plain words
+    // above the route card, once per turn, instead of the gateway's 403.
+    else if (ev.type === "plan") { finishSaid(); addNotice(body, ev.text, "plan"); }
     else if (ev.type === "stopped") { finishSaid(); hideThinking(body); addStopped(body); }
     else if (ev.type === "error") { finishSaid(); settleThinking(body, "fail"); addError(body, ev.text); }
   });
@@ -3502,7 +3505,9 @@ async function refreshAuth() {
   authed = Boolean(user && user.email);
   if (authed) {
     btn.classList.add("hidden");
-    badge.textContent = user.tier ? `${user.email} · ${user.tier}` : user.email;
+    // No tier claim is the free tier at the gateway; say so here, before the
+    // first turn, rather than letting a 403 be the first sign of it.
+    badge.textContent = `${user.email} · ${user.tier || "free tier"}`;
     badge.classList.remove("hidden");
   } else { btn.classList.remove("hidden"); badge.classList.add("hidden"); }
   return authed;

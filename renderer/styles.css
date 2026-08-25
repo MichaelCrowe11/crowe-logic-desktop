@@ -857,6 +857,8 @@ body.dark .vc-check.unknown .vc-res { color: var(--gold); }
   padding: 5px 0 5px 10px; margin: 8px 0; }
 .notice.budget { border-left-color: var(--gold-deep); }
 body.dark .notice.budget { border-left-color: var(--gold); }
+.notice.plan { border-left-color: var(--gold-deep); }
+body.dark .notice.plan { border-left-color: var(--gold); }
 
 /* ── Git / version-control pane ── */
 #pane-git { padding: 0; }

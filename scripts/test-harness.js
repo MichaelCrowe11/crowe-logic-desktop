@@ -724,6 +724,92 @@ test("a routed expert that errors falls back once and the turn survives", async 
   assert.deepStrictEqual(seen, ["specialist", "test-model"]);
 });
 
+// ─── Plan gate ───────────────────────────────────────────────────────────────
+const PLAN_CATALOG = [
+  { model: "crowelm", name: "CroweLM", min_plan: "personal" },
+  { model: "crowelm-grower", name: "CroweLM Grower", min_plan: "personal" },
+  { model: "crowelm-mycelium", name: "CroweLM Mycelium", min_plan: "free-anonymous" },
+];
+test("plan ranking mirrors the gateway: aliases, unknown fails to free, tier maps to plan", () => {
+  assert.ok(H.planRank("enterprise") > H.planRank("personal"));
+  assert.ok(H.planRank("personal") > H.planRank("free"));
+  assert.strictEqual(H.planRank("developer"), H.planRank("personal"));
+  assert.strictEqual(H.planRank("no-such-plan"), -1);
+  assert.strictEqual(H.planRank(""), -1);
+  assert.strictEqual(H.tierToPlan(""), "free");
+  assert.strictEqual(H.tierToPlan("Enterprise"), "enterprise");
+  assert.strictEqual(H.tierToPlan("garbage"), "free");
+  assert.strictEqual(H.freeModel(PLAN_CATALOG), "crowelm-mycelium");
+  assert.strictEqual(H.freeModel([]), H.FREE_MODEL);
+  assert.deepStrictEqual(H.planGateOf("HTTP 403: Model 'crowelm' requires personal plan or higher"),
+    { model: "crowelm", required: "personal" });
+  assert.strictEqual(H.planGateOf("HTTP 403: forbidden"), null);
+});
+test("a token with no tier claim routes to the free model before the first call", async () => {
+  const ctx = makeCtx({ model: "crowelm" });
+  ctx.getCatalog = () => PLAN_CATALOG;
+  ctx.planTier = () => "";   // signed in, no crowe_tier: the gateway calls this free
+  const r = H.routeTurn(ctx, [{ role: "user", content: "what time is it" }]);
+  assert.strictEqual(r.model, "crowelm-mycelium");
+  assert.strictEqual(r.fallback, "crowelm-mycelium");
+  assert.deepStrictEqual(r.planLimited, { model: "crowelm", required: "personal" });
+  const seen = [];
+  const deps = makeDeps(async (stage, n, _m, _t, model) => { seen.push(model); return reply([], "free answer"); });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "what time is it" }], deps);
+  assert.strictEqual(out.text, "free answer");
+  assert.deepStrictEqual(seen, ["crowelm-mycelium"]);
+  const plan = deps.ofType("plan");
+  assert.strictEqual(plan.length, 1);
+  assert.strictEqual(plan[0].blocked, "crowelm");
+  assert.match(plan[0].text, /personal plan or higher/);
+  assert.doesNotMatch(plan[0].text, /AI|—/);
+});
+test("a paid tier keeps the routed model, and an unknown tier is left to the gateway", () => {
+  const ctx = makeCtx({ model: "crowelm" });
+  ctx.getCatalog = () => PLAN_CATALOG;
+  ctx.planTier = () => "enterprise";
+  assert.strictEqual(H.routeTurn(ctx, [{ role: "user", content: "what time is it" }]).model, "crowelm");
+  assert.strictEqual(H.routeTurn(ctx, [{ role: "user", content: "how do I sterilise substrate" }]).model, "crowelm-grower");
+  ctx.planTier = () => null;   // nobody signed in: no pre-routing, gatewayChat answers "not signed in"
+  assert.strictEqual(H.routeTurn(ctx, [{ role: "user", content: "what time is it" }]).model, "crowelm");
+  delete ctx.planTier;         // older main without the hook: same
+  assert.strictEqual(H.routeTurn(ctx, [{ role: "user", content: "what time is it" }]).model, "crowelm");
+});
+test("a plan-gate 403 falls to the free model once and the turn survives", async () => {
+  const ctx = makeCtx({ model: "crowelm" });
+  ctx.getCatalog = () => PLAN_CATALOG;
+  ctx.planTier = () => "pro";  // the mirror says pro; the gateway disagrees (stale claim, revoked plan)
+  const seen = [];
+  const deps = makeDeps(async (stage, n, _m, _t, model) => {
+    seen.push(model);
+    if (model !== "crowelm-mycelium") return { error: `HTTP 403: Model '${model}' requires personal plan or higher` };
+    return reply([], "free answer");
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "what time is it" }], deps);
+  assert.strictEqual(out.text, "free answer");
+  // Straight to the free model: the default model sits behind the same gate.
+  assert.deepStrictEqual(seen, ["crowelm", "crowelm-mycelium"]);
+  assert.strictEqual(deps.ofType("plan").length, 1);
+  assert.strictEqual(deps.ofType("error").length, 0);
+  assert.ok(ctx.journalEvents.some((e) => e.event_type === "MODEL_FALLBACK" && /plan gate/.test(e.output_summary)));
+});
+test("a plan gate on the free model itself ends the turn with a plain message", async () => {
+  const ctx = makeCtx({ model: "crowelm" });
+  ctx.getCatalog = () => PLAN_CATALOG;
+  const seen = [];
+  const deps = makeDeps(async (stage, n, _m, _t, model) => {
+    seen.push(model);
+    return { error: `HTTP 403: Model '${model}' requires personal plan or higher` };
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "what time is it" }], deps);
+  assert.strictEqual(out.stop, "error");
+  assert.deepStrictEqual(seen, ["crowelm", "crowelm-mycelium"]);
+  const errs = deps.ofType("error");
+  assert.strictEqual(errs.length, 1);
+  assert.match(errs[0].text, /no plan that includes crowelm-mycelium/);
+  assert.doesNotMatch(errs[0].text, /HTTP 403/);
+});
+
 // ─── Streaming ───────────────────────────────────────────────────────────────
 test("a streamed burst arrives as deltas with a receipt marked streamed", async () => {
   const ctx = makeCtx();

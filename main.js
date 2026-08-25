@@ -870,6 +870,10 @@ const harnessCtx = {
   // "main" because chat is the only surface that offers the tool.
   authorWorkflow: (wf) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "workflow_authored", workflow: wf, agentId: "main" }); },
   getCatalog: () => catalogCache.models,
+  // The token's tier claim, read the way the gateway reads it: absent means
+  // free, not unknown. Null only when nobody is signed in, so the harness
+  // routes as before and gatewayChat's own "not signed in" answer stands.
+  planTier: () => { const u = currentUser(); return u ? String(u.tier || "") : null; },
   // Only plugin-managed servers are tier-gated; hand-configured MCP servers
   // keep their historic ungated behavior even if named like a manifest id.
   getPlugins: () => BUILTIN_PLUGINS.filter((p) => PLUGIN_MANAGED.has(p.id)),

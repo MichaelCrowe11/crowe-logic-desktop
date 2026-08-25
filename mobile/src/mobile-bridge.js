@@ -713,15 +713,66 @@
       && x.gateway_tool_calling !== false && x.role === role);
     return m ? m.model : null;
   }
+  // ─── Plan gate ─────────────────────────────────────────────────────────────
+  // Same mirror as harness.js: the gateway admits a model when the account's
+  // plan ranks at or above the catalog's `min_plan`, and a token with no tier
+  // claim is the free plan. Route a free account to the free model up front;
+  // keep the 403 handler for the day the mirror is stale.
+  const PLAN_RANK = { "free-anonymous": -1, free: -1, byok: 0, personal: 1, pro: 2, team: 3, max: 4, scale: 5, studio: 6, business: 7, enterprise: 8 };
+  const PLAN_ALIASES = { developer: "personal", lab: "team" };
+  const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
+  const FREE_MODEL = "crowelm-mycelium";
+  const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
+  function planRank(plan) {
+    const key = String(plan || "").trim().toLowerCase();
+    const canonical = PLAN_ALIASES[key] || key;
+    return canonical in PLAN_RANK ? PLAN_RANK[canonical] : -1;
+  }
+  function sessionPlan() {
+    const u = currentUser();
+    if (!u) return null;
+    return TIER_PLAN[String(u.tier || "").trim().toLowerCase()] || "free";
+  }
+  function freeModel() {
+    const m = (catalogCache.models || []).find((x) => x && x.model && planRank(x.min_plan) < 0);
+    return m ? m.model : FREE_MODEL;
+  }
+  function minPlanFor(model) {
+    const m = (catalogCache.models || []).find((x) => x && x.model === model);
+    return m && m.min_plan ? m.min_plan : null;
+  }
+  function planBlocks(model) {
+    const plan = sessionPlan();
+    if (plan === null) return false;
+    const floor = minPlanFor(model);
+    return Boolean(floor) && planRank(plan) < planRank(floor);
+  }
+  function planGateOf(err) {
+    const m = PLAN_GATE_RE.exec(String(err || ""));
+    return m ? { model: m[1], required: m[2] } : null;
+  }
+  function planNotice(free, required) {
+    return `This Crowe ID has no plan that includes the routed model, so ${free} is answering. The full CroweLM tiers need a ${required || "personal"} plan or higher.`;
+  }
   function routeTurn(messages, pin) {
     const dflt = config.model || "crowelm";
     const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
     const role = pin && pin !== "default" ? pin : classifyRole(String((last && last.content) || ""));
-    if (role === "default") return { expert: "operator", model: dflt, reason: "default operator" };
-    const dynamic = catalogModelForRole(role);
-    const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
-    const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
-    return { expert: role, model, reason: `${role} · ${src}${pin ? " · pinned" : ""}` };
+    let route;
+    if (role === "default") route = { expert: "operator", model: dflt, reason: "default operator" };
+    else {
+      const dynamic = catalogModelForRole(role);
+      const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
+      const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
+      route = { expert: role, model, reason: `${role} · ${src}${pin ? " · pinned" : ""}` };
+    }
+    if (planBlocks(route.model)) {
+      const free = freeModel();
+      route.planLimited = { model: route.model, required: minPlanFor(route.model) };
+      route.reason = `${route.reason} · ${route.model} needs a ${route.planLimited.required} plan, using ${free}`;
+      route.model = free;
+    }
+    return route;
   }
   function resolveRoles() {
     const dflt = config.model || "crowelm";
@@ -1103,7 +1154,12 @@
 
     try {
       const route = routeTurn(messages, String(opts.role || ""));
+      if (route.planLimited) {
+        send({ type: "plan", model: route.model, blocked: route.planLimited.model, required: route.planLimited.required,
+               text: planNotice(route.model, route.planLimited.required) });
+      }
       send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
+      let planGated = false;
 
       const convo = [{ role: "system", content: systemPrompt(route) }];
       // The session's standing brief: who is speaking for this thread, ahead of
@@ -1135,7 +1191,21 @@
                  lastMs: r.elapsedMs || 0, cost: meter.cost, budget });
         }
         if (r.aborted || run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
-        if (r.error) { send({ type: "error", text: r.error }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: r.error, text }; }
+        if (r.error) {
+          // Plan gate: refused for this account's plan. Once, to the free
+          // model; a second refusal there is the account's answer.
+          const gate = planGateOf(r.error);
+          if (gate && !planGated && route.model !== freeModel()) {
+            planGated = true; route.model = freeModel();
+            send({ type: "plan", model: route.model, blocked: gate.model, required: gate.required, text: planNotice(route.model, gate.required) });
+            send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });
+            round -= 1; continue;
+          }
+          const err = gate
+            ? `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`
+            : r.error;
+          send({ type: "error", text: err }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: err, text };
+        }
 
         if (r.content) {
           send({ type: "assistant", text: r.content, streamed: Boolean(r.streamed) });
@@ -1441,6 +1511,9 @@
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };
         }
+        // A call with no messages answers, it does not reject: an unhandled
+        // rejection is a console error in the WebView and a crash in Node.
+        if (!Array.isArray(messages)) return { done: false, error: "nothing to send", text: "" };
         const result = await runAgent(messages.slice(), String(id || "main"), options || {});
         if (id === "main") { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
         return { done: Boolean(result.done), text: result.text || "", error: result.error };

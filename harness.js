@@ -1043,6 +1043,68 @@ const ROLE_MATCH = [
 // falls back to the default model per routeTurn, so a mismatch degrades, not
 // breaks.
 const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower", reasoning: "GPT-5.6-Sol" };
+
+// ─── Plan gate ───────────────────────────────────────────────────────────────
+// The gateway admits a model only when the account's plan ranks at or above the
+// model's `min_plan` (control_plane/gateway.py MODEL_PLAN_ACCESS, plans.py
+// PLAN_RANK). A Crowe ID token whose `crowe_tier` is missing or unrecognised
+// resolves to the free plan there, which admits exactly one model. Mirrored
+// here so a free account is routed to that model before the first call rather
+// than shown the gateway's 403 after it, and so the 403 still lands somewhere
+// useful when the mirror is stale: the gateway stays the authority.
+const PLAN_RANK = { "free-anonymous": -1, free: -1, byok: 0, personal: 1, pro: 2, team: 3, max: 4, scale: 5, studio: 6, business: 7, enterprise: 8 };
+const PLAN_ALIASES = { developer: "personal", lab: "team" };
+// Token tier -> gateway plan, as control_plane/oidc.py tier_to_plan reads it.
+// Anything else is free. "admin" is an operator workspace, ranked enterprise.
+const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
+const FREE_MODEL = "crowelm-mycelium";
+const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
+function planRank(plan) {
+  const key = String(plan || "").trim().toLowerCase();
+  const canonical = PLAN_ALIASES[key] || key;
+  return canonical in PLAN_RANK ? PLAN_RANK[canonical] : -1;
+}
+function tierToPlan(tier) { return TIER_PLAN[String(tier || "").trim().toLowerCase()] || "free"; }
+/* The plan the gateway will resolve for this session, or null when the surface
+   cannot say (no ctx.planTier: headless callers, tests, an older main). Null
+   means "route as before and let the 403 decide", never "assume paid". */
+function sessionPlan(ctx) {
+  if (typeof ctx.planTier !== "function") return null;
+  const tier = ctx.planTier();
+  if (tier === null || tier === undefined) return null;
+  return tierToPlan(tier);
+}
+// The catalog names the free model by its min_plan; the constant is the
+// fallback for a catalog that has not loaded yet.
+function freeModel(catalog) {
+  if (Array.isArray(catalog)) {
+    const m = catalog.find((x) => x && x.model && planRank(x.min_plan) < 0);
+    if (m) return m.model;
+  }
+  return FREE_MODEL;
+}
+function minPlanFor(catalog, model) {
+  if (!Array.isArray(catalog)) return null;
+  const m = catalog.find((x) => x && x.model === model);
+  return m && m.min_plan ? m.min_plan : null;
+}
+/* True when the plan is known and the catalog says it is below the model's
+   floor. Unknown plan or a model the catalog does not list: false, and the
+   gateway's own answer settles it. */
+function planBlocks(ctx, model) {
+  const plan = sessionPlan(ctx);
+  if (plan === null) return false;
+  const floor = minPlanFor(ctx.getCatalog ? ctx.getCatalog() : [], model);
+  if (!floor) return false;
+  return planRank(plan) < planRank(floor);
+}
+function planGateOf(err) {
+  const m = PLAN_GATE_RE.exec(String(err || ""));
+  return m ? { model: m[1], required: m[2] } : null;
+}
+function planNotice(free, required) {
+  return `This Crowe ID has no plan that includes the routed model, so ${free} is answering. The full CroweLM tiers need a ${required || "personal"} plan or higher.`;
+}
 function classifyRole(text) {
   for (const r of ROLE_MATCH) if (r.match.test(text)) return r.role;
   return "default";
@@ -1061,11 +1123,26 @@ function routeTurn(ctx, messages, pin = "") {
   const dflt = cfg.model || "crowelm";
   const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
   const role = pin && pin !== "default" ? pin : classifyRole(String((last && last.content) || ""));
-  if (role === "default") return { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
-  const dynamic = catalogModelForRole(ctx.getCatalog ? ctx.getCatalog() : [], role);
-  const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
-  const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
-  return { expert: role, model, reason: `${role} · ${src}${pin ? " · pinned" : ""}`, fallback: dflt };
+  let route;
+  if (role === "default") route = { expert: "operator", model: dflt, reason: "default operator", fallback: dflt };
+  else {
+    const dynamic = catalogModelForRole(ctx.getCatalog ? ctx.getCatalog() : [], role);
+    const model = dynamic || BRIDGE_ROLE_MODEL[role] || dflt;
+    const src = dynamic ? "catalog" : (BRIDGE_ROLE_MODEL[role] ? "bridge" : "default");
+    route = { expert: role, model, reason: `${role} · ${src}${pin ? " · pinned" : ""}`, fallback: dflt };
+  }
+  // A plan the gateway will refuse is not a route, it is a 403 with extra
+  // steps. Send the turn to the free model up front, and keep the fallback
+  // there too: falling back to the default model would fail the same way.
+  if (planBlocks(ctx, route.model)) {
+    const free = freeModel(ctx.getCatalog ? ctx.getCatalog() : []);
+    route.planLimited = { model: route.model, required: minPlanFor(ctx.getCatalog(), route.model) };
+    route.reason = `${route.reason} · ${route.model} needs a ${route.planLimited.required} plan, using ${free}`;
+    route.model = free; route.fallback = free;
+  } else if (planBlocks(ctx, route.fallback)) {
+    route.fallback = freeModel(ctx.getCatalog ? ctx.getCatalog() : []);
+  }
+  return route;
 }
 // The verifier is a routed role like any other, so a cheap deployment tagged
 // `verifier` in the catalog takes the job with no desktop release. Falls back to
@@ -1210,6 +1287,23 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       opts.silent ? undefined : (chunk) => deps.send({ type: "assistant_delta", text: chunk }));
     if (r && r.aborted) { stop = "aborted"; break; }
     if (r.error) {
+      // Plan gate: the gateway refused the model for this account's plan. The
+      // default model sits behind the same gate, so skip it and go straight to
+      // the free model, once; a second refusal there is the account's answer.
+      const gate = planGateOf(r.error);
+      if (gate) {
+        const free = freeModel(ctx.getCatalog ? ctx.getCatalog() : []);
+        if (!ref.planGated && ref.model !== free) {
+          ref.planGated = true; ref.model = free; route.fallback = free;
+          deps.send({ type: "plan", model: free, blocked: gate.model, required: gate.required, text: planNotice(free, gate.required) });
+          deps.send({ type: "route", expert: opts.stage === "verify" ? "verifier" : "operator", model: free, reason: `${gate.model} needs a ${gate.required} plan, using ${free}` });
+          state.journal({ event_type: "MODEL_FALLBACK", tool_id: free, output_summary: `plan gate: ${summarize(r.error)}` });
+          round -= 1; continue;
+        }
+        const text = `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`;
+        deps.send({ type: "error", text });
+        return { text: "", stop: "error", error: text, msgs };
+      }
       // Fallback-first: a routed expert that errors must never sink the turn.
       // Drop to the default model once and retry this same round.
       if (!ref.fellBack && ref.model !== route.fallback) {
@@ -1391,6 +1485,12 @@ async function runAgent(ctx, messages, deps) {
     route.model = deps.model;
   }
   const state = newState(ctx, cfg, deps, route);
+  // Said once, ahead of the route card, so the operator sees why this turn is
+  // on the free model before the answer starts rather than after a 403.
+  if (route.planLimited) {
+    deps.send({ type: "plan", model: route.model, blocked: route.planLimited.model, required: route.planLimited.required,
+      text: planNotice(route.model, route.planLimited.required) });
+  }
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
   state.journal({ event_type: "TURN_STARTED",
     output_summary: `${route.expert} · ${route.model} · tier ${cfg.autonomy || "edit"}${state.budget ? ` · ceiling $${state.budget.toFixed(2)}` : ""}` });
@@ -1481,6 +1581,7 @@ async function runAgent(ctx, messages, deps) {
 
 module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
+  planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
   BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,

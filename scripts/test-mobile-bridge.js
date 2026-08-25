@@ -208,6 +208,60 @@ function methodPaths(surface) {
      error anyone sees. */
 
   console.log("agent loop");
+  await check("a plan-gate 403 falls to the free model once, with a plain notice and no error", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      const model = JSON.parse(init.body || "{}").model;
+      asked.push(model);
+      if (model !== "crowelm-mycelium") {
+        return new Response(JSON.stringify({ detail: `Model '${model}' requires personal plan or higher` }),
+          { status: 403, headers: { "content-type": "application/json" } });
+      }
+      const body = [{ delta: { content: "Free tier answer." } }, { usage: { prompt_tokens: 20, completion_tokens: 4 } }]
+        .map((d) => `data: ${JSON.stringify(d)}\n`).join("") + "data: [DONE]\n";
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    // Signed in with a tier the mirror accepts, so the 403 path is what gets exercised.
+    await bridge.setConfig({ model: "crowelm", token: "header." + Buffer.from('{"email":"grower@example.com","crowe_tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "what time is it" }]);
+    off();
+    assert(asked.join(",") === "crowelm,crowelm-mycelium", `asked the gateway for: ${asked.join(", ")}`);
+    const types = seen.map((e) => e.type);
+    assert(types.includes("plan"), `no plan notice — the stream was: ${types.join(", ")}`);
+    assert(!types.includes("error"), "the plan gate surfaced as an error instead of a fallback");
+    const plan = seen.find((e) => e.type === "plan");
+    assert(/personal plan or higher/.test(plan.text) && !/—/.test(plan.text), "plan notice wording");
+    assert(result && /Free tier answer/.test(result.text || ""), "the free model's answer did not land");
+  });
+  await check("a token with no tier claim routes to the free model before the first call", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (String(url).includes("/api/gateway/catalog")) {
+        return new Response(JSON.stringify({ models: [
+          { model: "crowelm", name: "CroweLM", min_plan: "personal" },
+          { model: "crowelm-mycelium", name: "CroweLM Mycelium", min_plan: "free-anonymous" },
+        ] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asked.push(JSON.parse(init.body || "{}").model);
+      const body = [{ delta: { content: "ok" } }].map((d) => `data: ${JSON.stringify(d)}\n`).join("") + "data: [DONE]\n";
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    await bridge.setConfig({ model: "crowelm", token: "header." + Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64") + ".sig" });
+    // catalog.get fires the fetch without awaiting it (the panel renders from
+    // cache); give the scripted response a tick to land in the cache.
+    await bridge.catalog.get();
+    await new Promise((r) => setTimeout(r, 50));
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    await bridge.agent.run([{ role: "user", content: "what time is it" }]);
+    off();
+    assert(asked.join(",") === "crowelm-mycelium", `asked the gateway for: ${asked.join(", ")}`);
+    assert(seen.some((e) => e.type === "plan"), "no plan notice ahead of the route");
+  });
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.

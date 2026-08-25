@@ -8,6 +8,15 @@ const path = require("path");
 const fs = require("fs");
 
 const PROFILE = process.env.CROWE_NOTARY_PROFILE || "crowe-notary";
+// Over SSH the login keychain is locked, so the profile cannot be read. The
+// App Store Connect API key on disk works from any session: set all three of
+// CROWE_NOTARY_KEY (path to the .p8), CROWE_NOTARY_KEY_ID, CROWE_NOTARY_ISSUER
+// and the hook passes them instead of the profile.
+function authArgs() {
+  const { CROWE_NOTARY_KEY: key, CROWE_NOTARY_KEY_ID: keyId, CROWE_NOTARY_ISSUER: issuer } = process.env;
+  if (key && keyId && issuer) return { args: ["--key", key, "--key-id", keyId, "--issuer", issuer], label: `api key ${keyId}` };
+  return { args: ["--keychain-profile", PROFILE], label: `profile ${PROFILE}` };
+}
 
 exports.default = async function notarize(context) {
   if (context.electronPlatformName !== "darwin") return;
@@ -19,8 +28,9 @@ exports.default = async function notarize(context) {
   console.log("notarize: zipping", appName);
   execFileSync("ditto", ["-c", "-k", "--keepParent", appPath, zip]);
   try {
-    console.log("notarize: submitting to Apple (profile:", PROFILE + ")");
-    execFileSync("xcrun", ["notarytool", "submit", zip, "--keychain-profile", PROFILE, "--wait"], { stdio: "inherit" });
+    const auth = authArgs();
+    console.log("notarize: submitting to Apple (" + auth.label + ")");
+    execFileSync("xcrun", ["notarytool", "submit", zip, ...auth.args, "--wait"], { stdio: "inherit" });
     execFileSync("xcrun", ["stapler", "staple", appPath], { stdio: "inherit" });
     console.log("notarize: stapled", appName);
   } finally {
