@@ -70,6 +70,10 @@ async function main() {
   }
 
   const profile = process.env.CROWE_NOTARY_PROFILE || 'crowe-notary';
+  // Same escape hatch as build/notarize.js: the App Store Connect API key on
+  // disk works from a session whose login keychain (and profile) is locked.
+  const { CROWE_NOTARY_KEY: key, CROWE_NOTARY_KEY_ID: keyId, CROWE_NOTARY_ISSUER: issuer } = process.env;
+  const auth = key && keyId && issuer ? ['--key', key, '--key-id', keyId, '--issuer', issuer] : ['--keychain-profile', profile];
 
   for (const name of dmgs) {
     const dmg = path.join(dir, name);
@@ -84,7 +88,7 @@ async function main() {
     }
 
     console.log(`staple-dmg: submitting ${name} (profile: ${profile})`);
-    run(['notarytool', 'submit', dmg, '--keychain-profile', profile, '--wait']);
+    run(['notarytool', 'submit', dmg, ...auth, '--wait']);
     run(['stapler', 'staple', dmg]);
 
     const info = await buildBlockMap(dmg, 'gzip', `${dmg}.blockmap`);
