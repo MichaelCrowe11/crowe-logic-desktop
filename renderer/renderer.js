@@ -683,7 +683,7 @@ function refreshSavedLayouts(){const select=$("layout-saved"),layouts=savedLayou
 async function applyPanelState(st){for(const p of [...panels])closePanel(p.id);$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");applyStackVisibility();renderDockTabs();fitTerminals()}
 $("layout-save").onclick=()=>{const name=prompt("Layout name");if(!name||!name.trim())return;const layouts=savedLayouts();layouts[name.trim()]=panelState();localStorage.setItem("crowe-saved-layouts",JSON.stringify(layouts));refreshSavedLayouts()};
 $("layout-saved").onchange=async(e)=>{const st=savedLayouts()[e.target.value];if(st)await applyPanelState(st);e.target.value=""};
-$("layout-reset").onclick=()=>applyPanelState({layout:"stack",panels:[{type:"terminal"},{type:"browser",url:"https://crowelogic.com"},{type:"operator"}]});
+$("layout-reset").onclick=()=>applyPanelState({layout:"stack",panels:[{type:"terminal"},{type:"browser",url:BROWSER_HOME},{type:"operator"}]});
 refreshSavedLayouts();
 function panelShell(p) {
   const el = document.createElement("section"); el.className = "workspace-panel"; el.dataset.id = p.id; el.draggable = true;
@@ -701,10 +701,15 @@ function reorderPanel(from, to) {
   const [p]=panels.splice(a,1); panels.splice(b,0,p); renderPanelOrder(); renderDockTabs(); savePanelState();
 }
 function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySelector(`[data-id="${p.id}"]`); if(el) panelDeck.appendChild(el); }); }
+/* Where a new browser panel opens. crowelogic.com's apex now sends a visitor
+   into the Crowe ID sign-in for the web app, two redirects deep; inside this
+   panel that was a blank pane and then a login form for an app the person is
+   already signed into. /foundry/ is the public page of our own that renders. */
+const BROWSER_HOME = "https://crowelogic.com/foundry/";
 async function addPanel(type, seed={}) {
   hideLegacy();
   const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room"};
-  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || "https://crowelogic.com", history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "" };
+  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
   else if(type === "agent") await mountWorkspaceAgent(p, body, seed);
