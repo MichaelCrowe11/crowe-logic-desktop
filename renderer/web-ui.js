@@ -52,11 +52,12 @@
     Boolean(document.querySelector('#spaces .seg-btn[data-space="cultivation"]:not(.hidden)'));
 
   // Phrased for the pocket once the phone chrome is up (body.mobile), for the
-  // desk otherwise. Both name the Workspace rather than a paired desktop, since
-  // pairing is the iOS app's, not the web's.
+  // desk otherwise. Both name the desktop app rather than a paired desktop,
+  // since pairing is the iOS app's, not the web's, and rather than a Workspace,
+  // since that product went dark with croweos.com.
   const welcomeText = () => (body.classList.contains("mobile")
-    ? "Your operator, in your pocket. Ask it to reason, look things up, and keep track of what you are working on. Terminal, files and git open in your Workspace when a turn needs them."
-    : "Your operator. Ask it to reason, look things up, and keep track of what you are working on. Terminal, files and git open in your Workspace when a turn needs them.");
+    ? "Your operator, in your pocket. Ask it to reason, look things up, and keep track of what you are working on. Terminal, files and git live in the desktop app."
+    : "Your operator. Ask it to reason, look things up, and keep track of what you are working on. Terminal, files and git live in the desktop app.");
 
   const GENERAL_CHIPS = [
     "Explain what this error means and what to try first",
@@ -83,13 +84,13 @@
   }
 
   /* The first-run card is built in renderer.js for anyone not signed in. Two of
-     its three steps are the workspace. Matched on the desktop's own sentences;
-     the test holds the needles. */
+     its three steps assume a local workspace. Matched on the desktop's own
+     sentences; the test holds the needles. */
   const COPY = [
     ["This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
-     "This is the operator over your CroweLM gateway, in your browser: reasoning, routing to the right expert, and rooms of specialists. Terminal, files and git open in your Workspace."],
+     "This is the operator over your CroweLM gateway, in your browser: reasoning, routing to the right expert, and rooms of specialists. Terminal, files and git live in the desktop app."],
     ["Point the workspace at a project folder (Settings or ask the agent).",
-     "Open a Workspace from any terminal, files or git request, and it runs there on a real machine."],
+     "When a turn needs a terminal, files or git, the desktop app runs it on your own machine."],
     ["Give the agent a task - try",
      "Ask it something - try"],
     ["Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).",
@@ -134,6 +135,17 @@
     b.setAttribute("aria-hidden", "true");
     b.tabIndex = -1;
   });
+
+  /* Studio's three cards want a terminal (Parallel Synth), the desktop bridge
+     (Crowe Studio, still pending) or the gateway (Talon). In a browser tab two
+     of the three are dead ends, so the tab goes with them (Michael, 2026-08-28:
+     "take studio away"). The desktop keeps its Studio. */
+  const studioTab = document.querySelector('#spaces .seg-btn[data-space="studio"]');
+  if (studioTab) {
+    studioTab.classList.add("hidden");
+    studioTab.setAttribute("aria-hidden", "true");
+    studioTab.tabIndex = -1;
+  }
 
   // ─── The Workspace, one tap away ───────────────────────────────────────────
   /* The escalation remedy names the Workspace URL when a turn asks for the
