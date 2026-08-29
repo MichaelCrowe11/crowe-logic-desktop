@@ -32,8 +32,19 @@
   const body = document.body;
   body.classList.add("web");
 
+  // Where "the Workspace" lives. croweos.com, the streamed-desktop product this
+  // once named, is dark (a Cloud Domains registration in a billing-dead Google
+  // project), so the default is the web app itself, and a page that IS that URL
+  // shows no link to it. An install can still point somewhere real through
+  // window.CROWE_WORKSPACES_URL.
   const WORKSPACES_URL =
-    (typeof window !== "undefined" && window.CROWE_WORKSPACES_URL) || "https://croweos.com/#/dashboard";
+    (typeof window !== "undefined" && window.CROWE_WORKSPACES_URL) || "https://crowelogic.com/app";
+  const workspaceIsHere = () => {
+    try {
+      const u = new URL(WORKSPACES_URL, location.href);
+      return u.origin === location.origin && location.pathname.startsWith(u.pathname.replace(/\/$/, ""));
+    } catch (_) { return false; }
+  };
 
   // ─── First-run copy ────────────────────────────────────────────────────────
 
@@ -125,13 +136,13 @@
   });
 
   // ─── The Workspace, one tap away ───────────────────────────────────────────
-  /* The escalation remedy names croweos.com when a turn asks for the terminal
-     or files. Where the shell already refuses, the offer should also stand on
-     its own: a small link in the header, so the Workspace is not only reachable
-     from a failure. */
+  /* The escalation remedy names the Workspace URL when a turn asks for the
+     terminal or files. Where the shell already refuses, the offer should also
+     stand on its own: a small link in the header, so the Workspace is not only
+     reachable from a failure. Not when this page is the Workspace. */
   const bar = $("bar");
   const badge = $("userbadge");
-  if (bar && badge && !$("web-workspace")) {
+  if (bar && badge && !$("web-workspace") && !workspaceIsHere()) {
     const a = document.createElement("a");
     a.id = "web-workspace";
     a.className = "ghost sm";
@@ -139,7 +150,7 @@
     a.target = "_blank";
     a.rel = "noopener";
     a.textContent = "Workspace";
-    a.title = "Open a Crowe Workspace: a real Linux desktop, in this browser.";
+    a.title = "Open your Crowe Workspace in a new tab.";
     bar.insertBefore(a, badge);
   }
 

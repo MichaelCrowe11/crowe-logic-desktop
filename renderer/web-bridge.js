@@ -29,6 +29,11 @@
   //      Stamets while 69 of his own videos sat unread.
   const GW = "/app/gw/v1";
   const OWUI = "/app/owui/api";
+  // Open WebUI is retired across the estate (Michael, 2026-08-28). The probes
+  // below are kept for shape but short-circuited: chat, the catalog, and the
+  // session store all go straight to the gateway and localStorage without ever
+  // sending a request to the OWUI paths.
+  const OWUI_RETIRED = true;
 
   // Attached to every turn. Retrieval is scoped to these rather than to
   // everything, so a cultivation question is not answered out of the Peoria Ford
@@ -59,23 +64,37 @@
 
      `remedy` is additive. The desktop never sets it and the renderer only
      reads it when present, so nothing on Electron changes shape. */
+  // croweos.com, which this once pointed at, is dark (see web-ui.js), so the
+  // default is the web app itself. window.CROWE_WORKSPACES_URL still overrides.
   const WORKSPACES_URL =
-    (typeof window !== "undefined" && window.CROWE_WORKSPACES_URL) || "https://croweos.com/#/dashboard";
+    (typeof window !== "undefined" && window.CROWE_WORKSPACES_URL) || "https://crowelogic.com/app";
+
+  // A remedy that opens the page it is shown on is no remedy. When the
+  // Workspace URL is this very app (the default, at crowelogic.com/app) the
+  // refusal carries none and reads like `unsupported` below.
+  const workspaceIsHere = () => {
+    try {
+      const u = new URL(WORKSPACES_URL, location.href);
+      return u.origin === location.origin && location.pathname.startsWith(u.pathname.replace(/\/$/, ""));
+    } catch (_) { return false; }
+  };
 
   const workspaceRemedy = (surface) => ({
     kind: "workspace",
     label: "Open in your Workspace",
     url: WORKSPACES_URL,
-    detail: `${surface} runs in a Crowe Workspace: a real Linux desktop streamed to this browser.`,
+    detail: `${surface} runs in your Crowe Workspace.`,
   });
 
   // A refusal a Workspace can satisfy. `shape` is merged in so each call site
   // gets the fields it reads (entries, cwd, repo, ok) alongside the reason.
-  const escalate = (surface, shape = {}) => async () =>
-    Object.assign({}, shape, {
-      error: `${surface} is not available in the browser build. Open a Workspace to use it.`,
-      remedy: workspaceRemedy(surface),
-    });
+  const escalate = (surface, shape = {}) => async () => {
+    const here = workspaceIsHere();
+    return Object.assign({}, shape, {
+      error: `${surface} is not available in the browser build. ` +
+        (here ? "It needs a local filesystem, shell or OS integration; use the desktop app." : "Open a Workspace to use it."),
+    }, here ? {} : { remedy: workspaceRemedy(surface) });
+  };
 
   // A refusal nothing here can satisfy: no remedy, same resolved shape.
   const unsupported = (surface, shape = {}) => async () =>
@@ -290,6 +309,7 @@
     if (storePromise) return storePromise;
     storePromise = (async () => {
       try {
+        if (OWUI_RETIRED) return localStore;
         const r = await fetch(`${OWUI}/v1/chats/?page=1`, { headers: { accept: "application/json" } });
         if (r.ok && /json/.test(r.headers.get("content-type") || "")) return remoteStore;
       } catch (_) {}
@@ -422,6 +442,7 @@
   async function catalogGet() {
     agentModels.clear();
     try {
+      if (OWUI_RETIRED) throw new Error("owui retired");
       const r = await fetch(`${OWUI}/models`, { headers: { accept: "application/json" } });
       if (r.ok) {
         const body = await r.json();
@@ -472,7 +493,7 @@
      collections. Retrieval is unscoped on that path and it is said so once in
      the console. The moment the edge line lands, the first call succeeds and
      OWUI carries traffic again with no code change here. */
-  let owuiUnopened = false;
+  let owuiUnopened = OWUI_RETIRED;
 
   async function streamCompletion({ model, messages, maxTokens, signal, onDelta }) {
     const body = { model, messages, stream: true, max_tokens: maxTokens || 2048 };

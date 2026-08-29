@@ -303,30 +303,33 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return impl;
   }
 
-  await check("custom models surface as named agents with their brief", async () => {
-    const { crowe: web } = loadWebSurface({ fetchImpl: agentEdge() });
+  await check("OWUI is retired: the catalog never asks it and lists the gateway lanes", async () => {
+    // Open WebUI is retired across the estate (2026-08-28). The custom models it
+    // used to surface as named agents are gone with it; the catalog is the
+    // gateway's lanes, and /app/owui is never requested, not even once to probe.
+    const edge = agentEdge();
+    const calls = [];
+    const counting = async (url, init) => { calls.push(String(url)); return edge(url, init); };
+    const { crowe: web } = loadWebSurface({ fetchImpl: counting });
     const rows = await web.catalog.get();
-    const byId = Object.fromEntries(rows.map((r) => [r[0], r]));
-    assert(byId["toxictee-manager"], "agent missing from catalog");
-    assert.strictEqual(byId["toxictee-manager"][1], "ToxicTee Manager", "agent must show its own name, not a lane label");
-    assert.strictEqual(byId["toxictee-manager"][3], "Runs the ToxicTee brand.", "agent description belongs in the role column");
-    assert(/2 knowledge collections/.test(byId["peoria-ford"][3]), `undescribed agent should say what it knows: ${byId["peoria-ford"][3]}`);
-    assert.strictEqual(byId["crowelm-apex"][1], "CroweLM Apex", "a plain lane keeps the lane label");
-    return `${rows.length} rows, 2 agents`;
+    assert.deepStrictEqual(rows.map((r) => r[0]).sort(), ["crowelm-apex", "crowelm-flash"], `rows: ${rows.map((r) => r[0])}`);
+    assert(!calls.some((u) => u.startsWith("/app/owui/")), `OWUI was asked: ${calls.filter((u) => u.startsWith("/app/owui/"))}`);
+    return "gateway lanes, OWUI untouched";
   });
 
-  await check("a run against a named agent sends no pinned collections", async () => {
-    // The agent's knowledge is its scope. Pinning the SWM collections on top
-    // would answer a Peoria Ford question out of a mushroom transcript.
+  await check("a run on a plain lane still pins the operator's collections", async () => {
+    // Retrieval scope did not leave with OWUI: a lane run carries the three
+    // collections, and nothing about a run touches /app/owui.
     const edge = agentEdge();
-    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const calls = [];
+    const counting = async (url, init) => { calls.push(String(url)); return edge(url, init); };
+    const { crowe: web } = loadWebSurface({ fetchImpl: counting });
     await web.catalog.get();
-    await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "peoria-ford" });
     await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "crowelm-apex" });
-    assert.strictEqual(edge.bodies.length, 2, "expected two runs");
-    assert(!("files" in edge.bodies[0]), "agent run must not carry pinned collections");
-    assert(Array.isArray(edge.bodies[1].files) && edge.bodies[1].files.length === 3, "plain lane must keep the operator's three collections");
-    return "agent unscoped, lane pinned";
+    assert.strictEqual(edge.bodies.length, 1, "expected one run");
+    assert(Array.isArray(edge.bodies[0].files) && edge.bodies[0].files.length === 3, "plain lane must keep the operator's three collections");
+    assert(!calls.some((u) => u.startsWith("/app/owui/")), "a run must not touch OWUI");
+    return "lane pinned, OWUI untouched";
   });
 
   await check("when the edge hides the model list the catalog falls back to the gateway", async () => {
@@ -404,27 +407,21 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     return "titled, persisted, reloads";
   });
 
-  await check("when the edge opens OWUI chats, sessions live on the server", async () => {
+  await check("even where OWUI chats would answer, sessions stay in this browser", async () => {
+    // With OWUI retired the store is never probed: an edge that would happily
+    // serve /app/owui/api/v1/chats is ignored, sessions live in localStorage,
+    // and no chat row is ever created on the server.
     const edge = chatsEdge({ open: true });
     const { crowe: web, store } = loadWebSurface({ fetchImpl: edge });
     await web.sessions.new();
     await web.agent.run([{ role: "user", content: "Sterilize or pasteurize?" }], "main");
     await web.agent.run([{ role: "user", content: "Sterilize or pasteurize?" }, { role: "assistant", content: "answer" }, { role: "user", content: "why?" }], "main");
-    assert.strictEqual(edge.table.size, 1, `expected one server chat, got ${edge.table.size} (a second run must update, not create)`);
-    const [row] = [...edge.table.values()];
-    assert.strictEqual(row.title, "Sterilize or pasteurize?");
-    assert.strictEqual(row.chat.crowe.messages.length, 4, "the second run's transcript did not update the same chat");
-    assert(!store.get("crowe.web.sessions"), "server-side sessions must not also be written to localStorage");
-    // A different browser, same server: the session is there.
-    const other = loadWebSurface({ fetchImpl: edge });
-    const rows = await other.crowe.sessions.list();
-    assert.strictEqual(rows.length, 1);
-    assert(rows[0].updatedAt > 1e12, `updatedAt must be milliseconds for new Date(); got ${rows[0].updatedAt}`);
-    const loaded = await other.crowe.sessions.load(rows[0].id);
-    assert.strictEqual(loaded.messages.length, 4);
-    await other.crowe.sessions.delete(rows[0].id);
-    assert.strictEqual(edge.table.size, 0, "delete did not reach the server");
-    return "server-side, cross-browser, ms timestamps";
+    assert.strictEqual(edge.table.size, 0, `a server chat was created: ${edge.table.size}`);
+    assert(store.get("crowe.web.sessions"), "sessions must be written to localStorage");
+    const rows = await web.sessions.list();
+    assert.strictEqual(rows.length, 1, `expected one local session, got ${rows.length}`);
+    assert.strictEqual(rows[0].title, "Sterilize or pasteurize?");
+    return "local store, no server rows";
   });
 
   await check("the store is chosen once per page and rooms stay on the local record", async () => {
@@ -520,17 +517,14 @@ const okText = (body) => async () => new Response(body, { status: 200 });
 
   // ─── The edge that has not opened OWUI ────────────────────────────────────
 
-  await check("when the edge 404s the OWUI path, chat answers through the gateway", async () => {
-    // Production on 2026-08-15: /app/owui/api/chat/completions is a bare Caddy
-    // 404 for every model; /app/gw/v1/chat/completions is 200. The bridge must
-    // route around that rather than fail every turn until the edge is fixed.
+  await check("chat answers through the gateway and never probes the OWUI path", async () => {
+    // Before retirement the bridge probed /app/owui/api/chat/completions once
+    // per page and fell back on a bare 404. Now the gateway is the only path:
+    // zero OWUI requests, first turn and every turn after.
     const calls = [];
     const fetchImpl = async (url, init = {}) => {
       const u = String(url);
       calls.push(u);
-      // A real Caddy 404: null body (so no content-type is synthesised) and the
-      // server header Caddy sets. new Response("") would add text/plain, which
-      // is not what the edge sends and would mask the case being tested.
       if (u.startsWith("/app/owui/api/chat/completions")) return new Response(null, { status: 404, headers: { server: "Caddy" } });
       if (u.startsWith("/app/gw/v1/chat/completions")) {
         return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "via gateway" } }] })}\ndata: [DONE]\n`, { status: 200 });
@@ -542,28 +536,28 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     assert.strictEqual(first.text, "via gateway", `first run: ${JSON.stringify(first)}`);
     const second = await web.agent.run([{ role: "user", content: "again" }], "main");
     assert.strictEqual(second.text, "via gateway");
-    const owuiCalls = calls.filter((u) => u.startsWith("/app/owui/api/chat/completions")).length;
-    assert.strictEqual(owuiCalls, 1, `OWUI probed ${owuiCalls} times; after one bare 404 it should be remembered for the page`);
-    return "falls back once, remembers";
+    const owuiCalls = calls.filter((u) => u.startsWith("/app/owui/")).length;
+    assert.strictEqual(owuiCalls, 0, `OWUI requested ${owuiCalls} times; it is retired`);
+    return "gateway only";
   });
 
-  await check("a JSON 404 from OWUI is an OWUI error, not an unopened edge", async () => {
-    // OWUI itself answers 404 with a JSON detail for an unknown model. That is
-    // a real error to surface, not a reason to abandon the path.
+  await check("an unknown model is the gateway's error, and OWUI is still never asked", async () => {
+    // The OWUI-shaped JSON 404 used to be surfaced as OWUI's own error. That
+    // path is gone: a model the gateway rejects surfaces the gateway's answer.
     const calls = [];
     const fetchImpl = async (url) => {
       calls.push(String(url));
-      if (String(url).startsWith("/app/owui/api/chat/completions")) {
-        return new Response(JSON.stringify({ detail: "Model not found" }), { status: 404, headers: { "content-type": "application/json" } });
+      if (String(url).startsWith("/app/gw/v1/chat/completions")) {
+        return new Response(JSON.stringify({ error: "Model not found" }), { status: 404, headers: { "content-type": "application/json" } });
       }
       return new Response("{}", { status: 200 });
     };
     const { crowe: web } = loadWebSurface({ fetchImpl });
     let err = null;
     try { await web.agent.run([{ role: "user", content: "hi" }], "main", { model: "nope" }); } catch (e) { err = e; }
-    assert(err && /404/.test(err.message) && /Model not found/.test(err.message), `expected the OWUI detail surfaced, got ${err && err.message}`);
-    assert(!calls.some((u) => u.startsWith("/app/gw/v1/chat/completions")), "must not fall back to the gateway on an OWUI-level 404");
-    return "surfaced, no fallback";
+    assert(err && /404/.test(err.message), `expected the gateway 404 surfaced, got ${err && err.message}`);
+    assert(!calls.some((u) => u.startsWith("/app/owui/")), "must not touch OWUI");
+    return "gateway error, no OWUI";
   });
 
   await check("the update banner stays hidden on the web", async () => {
@@ -629,14 +623,29 @@ const okText = (body) => async () => new Response(body, { status: 200 });
   });
 
   await check("a refusal a Workspace can satisfy carries the offer to open one", async () => {
+    // Elsewhere (the default sandbox location is crowelm.com) the remedy points
+    // at the Workspace URL, which since croweos.com went dark is the web app.
     const { crowe: web } = loadWebSurface();
     for (const [name, p] of [["pty.start", web.pty.start({})], ["fs.list", web.fs.list("/")], ["git.status", web.git.status()]]) {
       const r = await p;
       assert(r.remedy && r.remedy.kind === "workspace", `${name} carries no workspace remedy`);
-      assert(/^https:\/\/croweos\.com\//.test(r.remedy.url), `${name} remedy points at ${r.remedy.url}`);
+      assert.strictEqual(r.remedy.url, "https://crowelogic.com/app", `${name} remedy points at ${r.remedy.url}`);
       assert(r.remedy.label, `${name} remedy has no label`);
     }
-    return "terminal, files, git escalate to croweos.com";
+    return "terminal, files, git escalate to the Workspace URL";
+  });
+
+  await check("on the page that is the Workspace, the refusal offers no link to itself", async () => {
+    // At crowelogic.com/app the Workspace URL is this very page; a remedy that
+    // reloads the page is no remedy, so the refusal names the desktop app instead.
+    const here = { origin: "https://crowelogic.com", pathname: "/app/renderer/app.html", search: "", href: "https://crowelogic.com/app/renderer/app.html" };
+    const { crowe: web } = loadWebSurface({ location: here });
+    for (const [name, p] of [["pty.start", web.pty.start({})], ["fs.list", web.fs.list("/")], ["git.status", web.git.status()]]) {
+      const r = await p;
+      assert(r && r.error && !r.remedy, `${name} should carry no remedy here: ${JSON.stringify(r)}`);
+      assert(/desktop app/.test(r.error), `${name} should name the desktop app: ${r.error}`);
+    }
+    return "no self-link, desktop app named";
   });
 
   await check("a refusal nothing can satisfy carries no remedy", async () => {
