@@ -110,7 +110,6 @@ app.whenReady().then(async () => {
     await js(`setSpace("projects")`); await sleep(900); await shoot(win, "2-projects-home");
     await js(`document.querySelector('[data-lane="deployments"]').click()`); await sleep(900); await shoot(win, "3-projects-deployments");
     await js(`document.querySelector('[data-lane="deepwork"]').click()`); await sleep(600); await shoot(win, "4-projects-deepwork");
-    await js(`setSpace("studio")`); await sleep(400); await shoot(win, "5-studio");
     await js(`setSpace("cultivation")`); await sleep(400); await shoot(win, "6-cultivation");
     await js(`document.body.classList.add("dark"); setSpace("projects")`); await sleep(900); await shoot(win, "7-projects-home-dark");
     await js(`setSpace("chat"); document.body.classList.remove("dark"); localStorage.setItem("crowe-space","chat")`);

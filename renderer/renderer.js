@@ -2147,11 +2147,11 @@ document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListene
   await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
 }));
 
-// ── Spaces: Chat · Projects · Studio · Cultivation ──
+// ── Spaces: Chat · Projects · Cultivation ──
 // One operator thread underneath; a space is how much surface you see. Chat is
 // today's workbench. Projects adds the grouped nav + Home control surface.
-// Studio and Cultivation are launch surfaces that funnel into the same thread.
-const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), studio: $("surface-studio"), cultivation: $("surface-cultivation") };
+// Cultivation is a launch surface that funnels into the same thread.
+const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), cultivation: $("surface-cultivation") };
 let projLane = "home";
 const LANES = {
   sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
@@ -2191,10 +2191,6 @@ const SPACES = {
       else { SURFACES.lane.classList.remove("hidden"); renderLane(projLane); }
     },
   },
-  studio: {
-    label: "Studio",
-    open() { SURFACES.studio.classList.remove("hidden"); },
-  },
   cultivation: {
     label: "Cultivation",
     nav: "cult-nav", laneAttr: "cult",
@@ -2211,9 +2207,12 @@ const SPACES = {
 };
 
 // Which spaces this install shows. Cultivation is a mushroom farm's surface and
-// Studio is a film and music one; neither earns its tab on a machine installed
-// to drive a terminal. Chat is never optional — it is the thread every other
-// space funnels into — so it is added back regardless of what is stored.
+// does not earn its tab on a machine installed to drive a terminal. Chat is
+// never optional — it is the thread every other space funnels into — so it is
+// added back regardless of what is stored.
+//
+// The Studio space (film and music) was removed in 0.24.3: three cards, two of
+// which only handed the work to the terminal, for a surface nobody opened.
 let PROFILE = new Set(Object.keys(SPACES));
 
 // What this install shows before anyone has touched the picker. Normally every
@@ -3244,20 +3243,6 @@ $("cult-composer").addEventListener("submit", (e) => {
   input.value = t;
   send(t, { role: "cultivation" });
   $("cult-input").value = "";
-});
-$("studio-film").addEventListener("click", (e) => {
-  // Never inject keystrokes into the live PTY — a foregrounded vim/REPL would
-  // receive them as commands. Copy instead; the user pastes at their prompt.
-  const btn = e.currentTarget;
-  navigator.clipboard.writeText("psynth").catch(() => {});
-  btn.textContent = "Copied — paste at the prompt";
-  setTimeout(() => { btn.textContent = "Copy psynth · open Terminal"; }, 2400);
-  setSpace("chat"); switchPane("term");
-});
-$("studio-music").addEventListener("click", () => {
-  setSpace("chat");
-  input.value = "Compose with Talon: ";
-  input.focus(); input.setSelectionRange(input.value.length, input.value.length);
 });
 // Delegated, because refreshCult() replaces these chips with ones drawn from the
 // records — a listener bound to the original three would go with them.

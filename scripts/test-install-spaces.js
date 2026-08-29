@@ -61,7 +61,7 @@ app.whenReady().then(async () => {
     check("window.crowe.installSpaces", seen.bridged, NARROWED ? WANT : null);
     // ...and the renderer acted on it. Chat is never optional, so it is present
     // either way; the rail is what someone actually sees.
-    const expected = NARROWED ? ["chat", ...WANT.filter((id) => id !== "chat")] : ["chat", "projects", "studio", "cultivation"];
+    const expected = NARROWED ? ["chat", ...WANT.filter((id) => id !== "chat")] : ["chat", "projects", "cultivation"];
     check("PROFILE", seen.profile, expected);
     check("visible rail buttons", seen.rail, expected);
     // A build default is the build talking, not a choice anyone made. Writing it

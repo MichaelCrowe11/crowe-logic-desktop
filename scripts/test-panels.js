@@ -809,9 +809,9 @@ const tests = [
       setSpace("projects");
       const own = !$("space-nav").classList.contains("hidden") && $("cult-nav").classList.contains("hidden");
       setSpace("chat");
-      return { chat: rails.chat, projects: rails.projects, studio: rails.studio,
+      return { chat: rails.chat, projects: rails.projects,
         cultivation: rails.cultivation, own };`,
-    expect: { chat: 0, projects: 1, studio: 0, cultivation: 1, own: true },
+    expect: { chat: 0, projects: 1, cultivation: 1, own: true },
   },
   {
     name: "a space shows either the workbench or a surface, never both",
@@ -1160,7 +1160,7 @@ const tests = [
       applySpaceProfile();
       const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
       const pal = () => { renderPal("Space:"); return [...palList.querySelectorAll(".pal-row")].map((r) => r.textContent).join("|"); };
-      const hidden = { chat: btn("chat"), projects: btn("projects"), studio: btn("studio"), cultivation: btn("cultivation") };
+      const hidden = { chat: btn("chat"), projects: btn("projects"), cultivation: btn("cultivation") };
       const entries = pal();
       // A space outside the profile is still reachable by name; it must not open.
       setSpace("cultivation");
@@ -1169,8 +1169,8 @@ const tests = [
       applySpaceProfile();
       setSpace("chat");
       return { ...hidden, entries, landed, restored: PROFILE.size };`,
-    expect: { chat: false, projects: false, studio: true, cultivation: true,
-      entries: "Space: Chat|Space: Projects", landed: "chat", restored: 4 },
+    expect: { chat: false, projects: false, cultivation: true,
+      entries: "Space: Chat|Space: Projects", landed: "chat", restored: 3 },
   },
   {
     // The profile above was only ever reachable by hand-editing localStorage.
@@ -1184,12 +1184,12 @@ const tests = [
       // .click() runs the real activation behaviour - it toggles checked and
       // fires input and change itself - so this exercises what a mouse does
       // rather than a change event we handed the element ourselves.
-      cb("studio").click(); cb("cultivation").click();
+      cb("cultivation").click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
-      const hidden = document.querySelector('#spaces .seg-btn[data-space="studio"]').classList.contains("hidden");
+      const hidden = document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden");
       // Re-enabling has to bring the tab back, not just stop hiding new ones.
-      cb("studio").click();
-      const back = !document.querySelector('#spaces .seg-btn[data-space="studio"]').classList.contains("hidden");
+      cb("cultivation").click();
+      const back = !document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden");
       __resetSpaces();
       return { stored, size, hidden, back };`,
     expect: { stored: '["chat","projects"]', size: 2, hidden: true, back: true },
@@ -1204,34 +1204,34 @@ const tests = [
       renderSpacePicker();
       const box = $("cfg-spaces");
       const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
-      for (const id of ["studio", "cultivation"]) cb(id).click();
+      for (const id of ["cultivation"]) cb(id).click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
       __resetSpaces();
       return { stored, size };`,
-    expect: { stored: null, size: 4 },
+    expect: { stored: null, size: 3 },
   },
   {
     // The picker narrows an install someone already has. This is the other half:
     // a build that arrives narrowed, so a terminal-driving install never shows a
-    // mushroom farm and a film studio to be turned off.
+    // mushroom farm to be turned off.
     name: "a build can ship fewer spaces than it has",
     body: `__resetSpaces();
       window.crowe.installSpaces = ["projects"];
       applySpaceProfile();
       const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
-      const hidden = { chat: btn("chat"), projects: btn("projects"), studio: btn("studio"), cultivation: btn("cultivation") };
+      const hidden = { chat: btn("chat"), projects: btn("projects"), cultivation: btn("cultivation") };
       // Nothing is written: this is the build talking, not a choice anyone made,
       // and storing it here would freeze the set against a later version.
       const stored = localStorage.getItem("crowe-spaces");
       __resetSpaces();
       return { ...hidden, stored, restored: PROFILE.size };`,
-    expect: { chat: false, projects: false, studio: true, cultivation: true, stored: null, restored: 4 },
+    expect: { chat: false, projects: false, cultivation: true, stored: null, restored: 3 },
   },
   {
     // The regression the install default introduces, and the reason
     // setSpaceProfile compares against defaultSpaceIds() instead of the registry.
     //
-    // On a build shipping Chat and Projects, ticking all four boxes is a real
+    // On a build shipping Chat and Projects, ticking every box is a real
     // choice - but measured against "is this everything?" it reads as a reset,
     // so the old rule stored nothing, and the next launch fell back to the
     // build's two and threw the choice away. Silently: the tabs appear, and
@@ -1242,14 +1242,14 @@ const tests = [
       applySpaceProfile();
       renderSpacePicker();
       const box = $("cfg-spaces");
-      for (const id of ["studio", "cultivation"]) box.querySelector('input[data-space="' + id + '"]').click();
+      for (const id of ["cultivation"]) box.querySelector('input[data-space="' + id + '"]').click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
       // What the next launch does: re-read storage against the same build.
       applySpaceProfile();
       const afterRelaunch = PROFILE.size;
       __resetSpaces();
       return { stored, size, afterRelaunch };`,
-    expect: { stored: '["chat","projects","studio","cultivation"]', size: 4, afterRelaunch: 4 },
+    expect: { stored: '["chat","projects","cultivation"]', size: 3, afterRelaunch: 3 },
   },
   {
     // main.js ships the configured names through without checking them, so that

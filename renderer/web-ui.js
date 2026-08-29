@@ -136,17 +136,6 @@
     b.tabIndex = -1;
   });
 
-  /* Studio's three cards want a terminal (Parallel Synth), the desktop bridge
-     (Crowe Studio, still pending) or the gateway (Talon). In a browser tab two
-     of the three are dead ends, so the tab goes with them (Michael, 2026-08-28:
-     "take studio away"). The desktop keeps its Studio. */
-  const studioTab = document.querySelector('#spaces .seg-btn[data-space="studio"]');
-  if (studioTab) {
-    studioTab.classList.add("hidden");
-    studioTab.setAttribute("aria-hidden", "true");
-    studioTab.tabIndex = -1;
-  }
-
   // ─── The Workspace, one tap away ───────────────────────────────────────────
   /* The escalation remedy names the Workspace URL when a turn asks for the
      terminal or files. Where the shell already refuses, the offer should also

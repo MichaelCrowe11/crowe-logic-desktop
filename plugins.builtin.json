@@ -6,40 +6,86 @@
       "name": "Crowe Skills",
       "description": "The Crowe skills corpus: search and load playbooks for cultivation, engineering, commerce, and studio work.",
       "category": "knowledge",
-      "spaces": ["chat", "projects", "studio", "cultivation"],
+      "spaces": [
+        "chat",
+        "projects",
+        "cultivation"
+      ],
       "official": true,
       "available": true,
-      "mcp": { "command": "python3", "args": ["~/crowe-skills/mcp_server.py"], "env": {} },
+      "mcp": {
+        "command": "python3",
+        "args": [
+          "~/crowe-skills/mcp_server.py"
+        ],
+        "env": {}
+      },
       "envPrompts": [],
-      "tools": [{ "match": "*", "tier": "readonly" }],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "readonly"
+        }
+      ],
       "glyph": "hexbloom",
-      "chips": ["Find the skill for planning a substrate run"]
+      "chips": [
+        "Find the skill for planning a substrate run"
+      ]
     },
     {
       "id": "crowe-sense",
       "name": "Crowe Sense",
       "description": "Grow-room telemetry and farmlog: sensors, environment history, and outcomes for the Cultivation space.",
       "category": "cultivation",
-      "spaces": ["cultivation"],
+      "spaces": [
+        "cultivation"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
-      "envPrompts": [{ "key": "SENSE_API_KEY", "label": "Crowe Sense API key" }],
-      "tools": [{ "match": "read_*", "tier": "readonly" }, { "match": "log_*", "tier": "edit" }],
+      "envPrompts": [
+        {
+          "key": "SENSE_API_KEY",
+          "label": "Crowe Sense API key"
+        }
+      ],
+      "tools": [
+        {
+          "match": "read_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "log_*",
+          "tier": "edit"
+        }
+      ],
       "glyph": "mycelial",
-      "chips": ["Chart the last 72h of fruiting-room humidity"]
+      "chips": [
+        "Chart the last 72h of fruiting-room humidity"
+      ]
     },
     {
       "id": "parallel-synth",
       "name": "Parallel Synth",
       "description": "Film timeline co-editing: the operator reads and edits psynth project docs alongside you.",
-      "category": "studio",
-      "spaces": ["studio"],
+      "category": "media",
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
       "envPrompts": [],
-      "tools": [{ "match": "read_*", "tier": "readonly" }, { "match": "*", "tier": "edit" }],
+      "tools": [
+        {
+          "match": "read_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "*",
+          "tier": "edit"
+        }
+      ],
       "glyph": "facet",
       "chips": []
     },
@@ -47,13 +93,20 @@
       "id": "talon-music",
       "name": "Talon Music",
       "description": "Crowe Talon composes and produces through the gateway.",
-      "category": "studio",
-      "spaces": ["studio"],
+      "category": "media",
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
       "envPrompts": [],
-      "tools": [{ "match": "*", "tier": "edit" }],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "edit"
+        }
+      ],
       "glyph": "coalesce",
       "chips": []
     },
@@ -62,12 +115,19 @@
       "name": "Gateway Ops",
       "description": "Deployment health and eval runs across the CroweLM fleet.",
       "category": "ops",
-      "spaces": ["projects"],
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
       "envPrompts": [],
-      "tools": [{ "match": "*", "tier": "readonly" }],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "readonly"
+        }
+      ],
       "glyph": "meshwork",
       "chips": []
     },
@@ -76,12 +136,32 @@
       "name": "R2 Storage",
       "description": "Browse releases, datasets, and artifacts in the Crowe R2 buckets.",
       "category": "data",
-      "spaces": ["projects"],
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
-      "envPrompts": [{ "key": "R2_TOKEN", "label": "Cloudflare R2 API token" }],
-      "tools": [{ "match": "list_*", "tier": "readonly" }, { "match": "get_*", "tier": "readonly" }, { "match": "put_*", "tier": "edit" }],
+      "envPrompts": [
+        {
+          "key": "R2_TOKEN",
+          "label": "Cloudflare R2 API token"
+        }
+      ],
+      "tools": [
+        {
+          "match": "list_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "get_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "put_*",
+          "tier": "edit"
+        }
+      ],
       "glyph": "iris",
       "chips": []
     },
@@ -90,12 +170,28 @@
       "name": "SWM Commerce",
       "description": "Southwest Mushrooms storefront analytics: Shopify orders and Stripe revenue, read-only.",
       "category": "commerce",
-      "spaces": ["projects"],
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
-      "envPrompts": [{ "key": "SHOPIFY_TOKEN", "label": "Shopify Admin API token" }, { "key": "STRIPE_KEY", "label": "Stripe restricted key" }],
-      "tools": [{ "match": "*", "tier": "readonly" }],
+      "envPrompts": [
+        {
+          "key": "SHOPIFY_TOKEN",
+          "label": "Shopify Admin API token"
+        },
+        {
+          "key": "STRIPE_KEY",
+          "label": "Stripe restricted key"
+        }
+      ],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "readonly"
+        }
+      ],
       "glyph": "convergent",
       "chips": []
     },
@@ -104,12 +200,24 @@
       "name": "Channel Analytics",
       "description": "Southwest Mushrooms YouTube channel performance.",
       "category": "audience",
-      "spaces": ["projects"],
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
-      "envPrompts": [{ "key": "YT_API_KEY", "label": "YouTube Data API key" }],
-      "tools": [{ "match": "*", "tier": "readonly" }],
+      "envPrompts": [
+        {
+          "key": "YT_API_KEY",
+          "label": "YouTube Data API key"
+        }
+      ],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "readonly"
+        }
+      ],
       "glyph": "meridian",
       "chips": []
     },
@@ -118,34 +226,91 @@
       "name": "GitHub",
       "description": "Repos, pull requests, issues, and checks. Remote-mutating tools require Execute autonomy.",
       "category": "projects",
-      "spaces": ["projects", "chat"],
+      "spaces": [
+        "projects",
+        "chat"
+      ],
       "official": true,
       "available": true,
-      "mcp": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {} },
-      "envPrompts": [{ "key": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub personal access token (repo scope)" }],
+      "mcp": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "env": {}
+      },
+      "envPrompts": [
+        {
+          "key": "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "label": "GitHub personal access token (repo scope)"
+        }
+      ],
       "tools": [
-        { "match": "search_*", "tier": "readonly" },
-        { "match": "get_*", "tier": "readonly" },
-        { "match": "list_*", "tier": "readonly" },
-        { "match": "create_issue", "tier": "edit" },
-        { "match": "update_issue", "tier": "edit" },
-        { "match": "add_issue_comment", "tier": "edit" },
-        { "match": "*", "tier": "execute" }
+        {
+          "match": "search_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "get_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "list_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "create_issue",
+          "tier": "edit"
+        },
+        {
+          "match": "update_issue",
+          "tier": "edit"
+        },
+        {
+          "match": "add_issue_comment",
+          "tier": "edit"
+        },
+        {
+          "match": "*",
+          "tier": "execute"
+        }
       ],
       "glyph": "meshwork",
-      "chips": ["List my open pull requests and summarize the review state"]
+      "chips": [
+        "List my open pull requests and summarize the review state"
+      ]
     },
     {
       "id": "crowe-cli",
       "name": "Crowe CLI",
       "description": "The Crowe agent CLI as a tool server: python execution, file ops, and web search.",
       "category": "projects",
-      "spaces": ["projects"],
+      "spaces": [
+        "projects"
+      ],
       "official": true,
       "available": false,
       "mcp": null,
       "envPrompts": [],
-      "tools": [{ "match": "read_*", "tier": "readonly" }, { "match": "search_*", "tier": "readonly" }, { "match": "web_*", "tier": "readonly" }, { "match": "*", "tier": "execute" }],
+      "tools": [
+        {
+          "match": "read_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "search_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "web_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "*",
+          "tier": "execute"
+        }
+      ],
       "glyph": "meshwork",
       "chips": []
     }

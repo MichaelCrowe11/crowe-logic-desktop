@@ -114,7 +114,7 @@ const tests = [
   {
     name: "the tab bar is built from the rail's spaces, plus Panels",
     body: `return { tabs: __tabs().join(","), current: __current().join(",") };`,
-    expect: { tabs: "Chat,Projects,Studio,Cultivation,Panels", current: "Chat" },
+    expect: { tabs: "Chat,Projects,Cultivation,Panels", current: "Chat" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
