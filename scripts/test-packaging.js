@@ -79,6 +79,25 @@ check("the preload is packaged too", () => {
   return `${reachable.length} modules`;
 });
 
+/* node-pty is not an ordinary dependency: besides its .node binding it ships
+   `spawn-helper`, a separate executable it execs to open the pty. Inside
+   app.asar that file is not a real path on disk, so it cannot be executed, and
+   under the hardened runtime it never receives a signature of its own. Both
+   failures land in the same place - the terminal panel never opens - and
+   neither reproduces from the checkout, where the file is a plain file.
+   electron-builder auto-unpacks *.node but not a bare executable beside it, so
+   the rule has to be written down. */
+check("node-pty is unpacked from the asar", () => {
+  const unpack = pkg.build.asarUnpack || [];
+  const covers = unpack.some((p) => /(^|\/)node_modules\/node-pty(\/|$)/.test(p.replace(/\*\*?/g, "")));
+  assert(covers,
+    "build.asarUnpack does not cover node_modules/node-pty.\n" +
+    "       node-pty's spawn-helper cannot be executed from inside app.asar and is\n" +
+    '       left unsigned under the hardened runtime; the terminal panel dies on\n' +
+    '       start. Add "node_modules/node-pty/**" to build.asarUnpack.');
+  return unpack.join(", ");
+});
+
 check("the mac icon named in the build config exists", () => {
   const icon = pkg.build.mac && pkg.build.mac.icon;
   assert(icon, "build.mac.icon is not set");

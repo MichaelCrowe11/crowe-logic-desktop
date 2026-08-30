@@ -88,6 +88,9 @@
       "!renderer/web-ui.js",
       "!renderer/rooms-web.js"
     ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
     "mac": {
       "icon": "assets/icon.icns",
       "target": [

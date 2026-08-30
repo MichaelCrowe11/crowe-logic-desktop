@@ -735,7 +735,10 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
+  /* The start is awaited inside a try. A rejected invoke - the main process
+     threw rather than answering - used to escape here and leave the panel
+     reading "starting" with an empty terminal and the reason nowhere at all. */
+  const start=async()=>{state.textContent="starting";let r;try{r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows})}catch(err){r={ok:false,error:err?.message||String(err)}}const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
@@ -809,7 +812,7 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   /* This panel is the one place the Crowe Logic CLI is entered for you. When
      the tier withholds the shell the dock still works - the objective runs on
      the gateway - so this is a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  const start=async()=>{let r;try{r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows})}catch(err){r={ok:false,error:err?.message||String(err)}}if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
