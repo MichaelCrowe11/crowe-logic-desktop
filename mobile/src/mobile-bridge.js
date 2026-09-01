@@ -721,7 +721,7 @@
   const PLAN_RANK = { "free-anonymous": -1, free: -1, byok: 0, personal: 1, pro: 2, team: 3, max: 4, scale: 5, studio: 6, business: 7, enterprise: 8 };
   const PLAN_ALIASES = { developer: "personal", lab: "team" };
   const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
-  const FREE_MODEL = "crowelm-mycelium";
+  const FREE_MODEL = "crowelm-flash";
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
     const key = String(plan || "").trim().toLowerCase();
