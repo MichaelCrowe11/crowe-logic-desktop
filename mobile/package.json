@@ -1,7 +1,7 @@
 {
   "name": "crowe-logic-mobile",
   "productName": "Crowe Logic",
-  "version": "0.24.3",
+  "version": "0.24.4",
   "private": true,
   "description": "Crowe Logic for iOS and Android: the same operator UI as the desktop app, over the CroweLM gateway, in a Capacitor shell.",
   "license": "LicenseRef-Proprietary",
