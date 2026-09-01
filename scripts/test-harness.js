@@ -741,6 +741,8 @@ test("plan ranking mirrors the gateway: aliases, unknown fails to free, tier map
   assert.strictEqual(H.tierToPlan("garbage"), "free");
   assert.strictEqual(H.freeModel(PLAN_CATALOG), "crowelm-mycelium");
   assert.strictEqual(H.freeModel([]), H.FREE_MODEL);
+  // The pre-catalog fallback is the gateway's free tier (control_plane CROWE_FREE_MODEL), not Mycelium.
+  assert.strictEqual(H.FREE_MODEL, "crowelm-flash");
   assert.deepStrictEqual(H.planGateOf("HTTP 403: Model 'crowelm' requires personal plan or higher"),
     { model: "crowelm", required: "personal" });
   assert.strictEqual(H.planGateOf("HTTP 403: forbidden"), null);

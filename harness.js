@@ -1057,7 +1057,7 @@ const PLAN_ALIASES = { developer: "personal", lab: "team" };
 // Token tier -> gateway plan, as control_plane/oidc.py tier_to_plan reads it.
 // Anything else is free. "admin" is an operator workspace, ranked enterprise.
 const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
-const FREE_MODEL = "crowelm-mycelium";
+const FREE_MODEL = "crowelm-flash";
 const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
 function planRank(plan) {
   const key = String(plan || "").trim().toLowerCase();

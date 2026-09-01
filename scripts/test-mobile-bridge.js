@@ -214,7 +214,7 @@ function methodPaths(surface) {
       if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
       const model = JSON.parse(init.body || "{}").model;
       asked.push(model);
-      if (model !== "crowelm-mycelium") {
+      if (model !== "crowelm-flash") {
         return new Response(JSON.stringify({ detail: `Model '${model}' requires personal plan or higher` }),
           { status: 403, headers: { "content-type": "application/json" } });
       }
@@ -228,7 +228,7 @@ function methodPaths(surface) {
     const off = await bridge.agent.onEvent((ev) => seen.push(ev));
     const result = await bridge.agent.run([{ role: "user", content: "what time is it" }]);
     off();
-    assert(asked.join(",") === "crowelm,crowelm-mycelium", `asked the gateway for: ${asked.join(", ")}`);
+    assert(asked.join(",") === "crowelm,crowelm-flash", `asked the gateway for: ${asked.join(", ")}`);
     const types = seen.map((e) => e.type);
     assert(types.includes("plan"), `no plan notice — the stream was: ${types.join(", ")}`);
     assert(!types.includes("error"), "the plan gate surfaced as an error instead of a fallback");
