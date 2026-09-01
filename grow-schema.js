@@ -62,6 +62,9 @@ const GROW_SCHEMA = {
       { k: "co2", d: "CO2 in ppm (number)" },
       { k: "fae", d: "fresh air exchange setting" },
       { k: "notes", d: "free text" },
+      // Blank when a person typed the row. Crowe Sense writes "crowe-sense", and
+      // the lane marks those rows measured, so the two are never confused.
+      { k: "source", d: "who wrote it: blank for a person, crowe-sense for the instrument" },
     ],
   },
   strains: {

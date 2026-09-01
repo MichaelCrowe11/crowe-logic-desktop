@@ -1856,9 +1856,20 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-verifier").checked = c.verifier !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion();
+  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion(); renderSense();
   modal.classList.remove("hidden");
 });
+/* Crowe Sense in Settings. The fields are the node's address for a direct
+   read or its id for the relay; the badge is what the last poll found. */
+async function renderSense() {
+  const src = $("cfg-sense-source"), url = $("cfg-sense-url"), node = $("cfg-sense-node"), badge = $("sense-state");
+  if (!src || !url || !node) return;
+  let st = { config: { source: "off" } };
+  try { if (window.crowe.sense) st = (await window.crowe.sense.status()) || st; } catch { /* badge reads down */ }
+  const c = st.config || {};
+  src.value = c.source || "off"; url.value = c.url || ""; node.value = c.node || "";
+  if (badge) badge.textContent = c.source === "off" ? "Off" : st.lastError ? "Down" : st.stale ? "Stale" : (st.health ? "Live" : "Pairing");
+}
 $("cfg-cancel").addEventListener("click", () => modal.classList.add("hidden"));
 $("cfg-save").addEventListener("click", async () => {
   const budget = Number($("cfg-budget").value);
@@ -1869,8 +1880,15 @@ $("cfg-save").addEventListener("click", async () => {
   const mcpRaw = $("cfg-mcp").value.trim();
   if (mcpRaw) { try { patch.mcpServers = JSON.parse(mcpRaw); } catch { $("cfg-status").textContent = "MCP JSON is invalid."; return; } }
   await window.crowe.setConfig(patch);
+  if (window.crowe.sense && $("cfg-sense-source")) {
+    await window.crowe.sense.configure({ source: $("cfg-sense-source").value, url: $("cfg-sense-url").value.trim(), node: $("cfg-sense-node").value.trim() });
+    refreshCultivation();
+  }
   modal.classList.add("hidden"); refreshStatus(); loadTree($("cfg-cwd").value.trim() || undefined);
 });
+// A poll that wrote measured rows, or a node that changed state, redraws the
+// Cultivation space so the grower sees the reading without leaving and coming back.
+if (window.crowe.sense && window.crowe.sense.onChange) window.crowe.sense.onChange(() => refreshCultivation());
 
 // ── Resizable split ──
 const divider = $("divider"), workbench = $("workbench");
@@ -2463,9 +2481,10 @@ const GROW = {
       { k: "co2", label: "CO₂ ppm", type: "number", w: "xs" },
       { k: "fae", label: "FAE", w: "xs" },
       { k: "notes", label: "Notes", w: "lg" },
+      { k: "source", label: "Source", w: "xs" },
     ],
     id: (r) => r.room || "room", name: (r) => fmtDay(r.date),
-    flags: (r) => [r.temp ? r.temp + "°F" : "", r.rh ? r.rh + "% RH" : "", r.co2 ? r.co2 + " ppm" : "", r.fae ? "FAE " + r.fae : ""],
+    flags: (r) => [r.source === "crowe-sense" ? "measured" : "", r.temp ? r.temp + "°F" : "", r.rh ? r.rh + "% RH" : "", r.co2 ? r.co2 + " ppm" : "", r.fae ? "FAE " + r.fae : ""],
   },
   strains: {
     title: "Strains", sub: "The culture library: what you hold and where it came from.", one: "strain", plural: "strains", date: "acquired",
@@ -3105,6 +3124,25 @@ async function refreshCult() {
     [r.temp && r.temp + "°F", r.rh && r.rh + "%", r.co2 && r.co2 + "ppm"].filter(Boolean).join(" · ") || "—"]),
     rooms.size ? "" : "No readings this week."]);
 
+  /* The instrument. Its readings are already in d.env as rows marked
+     source crowe-sense; this card is the node itself: paired or not, alive or
+     not, how old its last reading is. Read through the same seam the settings
+     use, and tolerant of a bridge without it, so a build that has not grown
+     the surface still draws the rest of the overview. */
+  let sense = { config: { source: "off" } };
+  try { if (window.crowe.sense) sense = (await window.crowe.sense.status()) || sense; } catch { /* the card says down */ }
+  const sc = sense.config || {}, sh = sense.health || {};
+  if (sc.source === "off") {
+    cards.push(["env", "Crowe Sense", [["node", "not paired"], ["next", "Pair a node in Settings."]], "Pair a node in Settings."]);
+  } else {
+    const age = Number(sh.age_s);
+    const ageText = Number.isFinite(age) ? (age < 90 ? `${Math.round(age)} s ago` : age < 5400 ? `${Math.round(age / 60)} min ago` : `${Math.round(age / 3600)} h ago`) : "no reading yet";
+    const rows = [["node", sh.node || sc.node || "?"], ["zone", sh.zone || "?"], ["last reading", ageText],
+      ["status", sense.lastError ? "down" : (sh.ok === false || sense.stale) ? "stale" : "ok"]];
+    if (sense.lastError) rows.push(["reason", sense.lastError]);
+    cards.push(["env", "Crowe Sense", rows, ""]);
+  }
+
   host.innerHTML = "";
   for (const [lane, title, rows, empty] of cards) {
     const c = document.createElement("button");
@@ -3120,7 +3158,10 @@ async function refreshCult() {
   // write into the same store, and this line goes when it does.
   const foot = document.createElement("p");
   foot.className = "cult-foot";
-  foot.textContent = "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands. Until then, environment is hand-logged.";
+  const measured = since(d.env, "date", 7).find((r) => r.source === "crowe-sense");
+  foot.textContent = measured
+    ? `Room readings marked measured come from Crowe Sense node ${(measured.notes || "").replace(/^Crowe Sense\s*/, "") || sc.node || "?"}. The rest were entered by hand.`
+    : "Every figure here is what you entered. Crowe Sense will write room readings into this same store when it lands. Until then, environment is hand-logged.";
   host.appendChild(foot);
 
   /* The openers, which shipped as three sentences about a farm that isn't this

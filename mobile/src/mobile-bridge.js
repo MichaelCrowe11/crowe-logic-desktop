@@ -793,6 +793,14 @@
   // refused write rather than a silently dropped field.
   const GROW = window.CROWE_GROW || { GROW_SCHEMA: {}, GROW_TYPES: new Set(), growValidate: () => ({ ok: false, error: "grow schema missing" }) };
   const growKey = (type) => `grow:${type}`;
+  // Crowe Sense config, same closed set as the desktop's sense.js minus direct.
+  const SENSE_RELAY = "https://sense.crowelogic.com";
+  async function senseConfig() {
+    const r = (await store.get("sense")) || {};
+    const node = String(r.node || "").trim().toLowerCase();
+    const paired = r.source !== "off" && /^cs-[0-9a-f]{6}$/.test(node);
+    return { source: paired ? "cloud" : "off", url: "", node, relay: String(r.relay || SENSE_RELAY).replace(/\/+$/, "") || SENSE_RELAY };
+  }
   async function growRead(type) {
     if (!GROW.GROW_TYPES.has(String(type || ""))) return [];
     return (await store.get(growKey(type))) || [];
@@ -1591,6 +1599,34 @@
        a shell to lend, and a phone has no stable address to be found at. So
        these refuse rather than pretend, and point at the half that does exist:
        remote.pair, above, is how this device joins someone else's companion. */
+    /* Crowe Sense from the phone: the relay, read with this device's own Crowe
+       ID. No direct source, since a phone leaves the tailnet the moment it
+       leaves the building; and no writes into the phone's grow log, which
+       stays what the grower typed on it. */
+    sense: {
+      status: async () => {
+        const cfg = await senseConfig();
+        if (cfg.source === "off") return { config: cfg, health: null, lastPoll: 0, lastError: "", stale: false, running: false };
+        try {
+          const headers = { accept: "application/json" };
+          if (config.token) headers.Authorization = `Bearer ${config.token}`;
+          const r = await fetch(`${cfg.relay}/v1/nodes/${encodeURIComponent(cfg.node)}/health`, { headers });
+          if (!r.ok) return { config: cfg, health: null, lastPoll: Date.now(), lastError: `The Crowe Sense relay answered ${r.status}.`, stale: true, running: false };
+          const health = await r.json();
+          const age = Number(health && health.age_s);
+          return { config: cfg, health, lastPoll: Date.now(), lastError: "", stale: !Number.isFinite(age) || age > 180, running: false };
+        } catch (e) {
+          return { config: cfg, health: null, lastPoll: Date.now(), lastError: String((e && e.message) || e), stale: true, running: false };
+        }
+      },
+      configure: async (patch) => {
+        const cur = await senseConfig();
+        const next = { ...cur, ...(patch || {}) };
+        await store.set("sense", { source: next.source === "off" ? "off" : "cloud", node: String(next.node || "").trim().toLowerCase(), relay: String(next.relay || SENSE_RELAY).replace(/\/+$/, "") || SENSE_RELAY });
+        return { config: await senseConfig(), health: null, lastPoll: 0, lastError: "", stale: false, running: false };
+      },
+      onChange: () => () => {},
+    },
     companion: {
       status: async () => ({ running: false, host: null, port: 0, tailscale: null, paired: remoteConfigured(),
                              error: "A phone cannot host the companion. It joins one — Settings → Remote machine." }),

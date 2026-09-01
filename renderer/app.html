@@ -363,6 +363,19 @@
         <label class="chk"><input id="cfg-verifier" type="checkbox" /> Check a mutating turn independently before reporting it done</label>
         <label>Cost ceiling per turn, in dollars (0 for none) <input id="cfg-budget" type="number" min="0" step="0.25" /></label>
       </section>
+      <!-- Crowe Sense. Below Guardrails for the same reason Guardrails is below
+           Spaces: the space checkboxes are hit-tested where they are drawn. -->
+      <section class="key-manager"><div class="settings-section-head"><div><b>Crowe Sense</b><span>Readings from a paired node land in Cultivation as room rows marked measured. Direct reads the node on your own network. Cloud reads it through the relay with your Crowe ID.</span></div><span id="sense-state" class="badge">Off</span></div>
+        <label>Source
+          <select id="cfg-sense-source">
+            <option value="off">Off</option>
+            <option value="direct">Direct (node URL)</option>
+            <option value="cloud">Cloud (node id, Crowe ID)</option>
+          </select>
+        </label>
+        <label>Node URL, for direct <input id="cfg-sense-url" type="text" placeholder="http://100.101.102.103:8078" /></label>
+        <label>Node id, for cloud <input id="cfg-sense-node" type="text" placeholder="cs-a1b2c3" /></label>
+      </section>
       <label>Official plugins</label>
       <div id="cfg-plugins" class="plugs"></div>
       <label>MCP servers — advanced (JSON: {"name":{"command":"...","args":[...]}})

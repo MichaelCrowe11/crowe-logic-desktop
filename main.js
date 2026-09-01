@@ -9,7 +9,8 @@ const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
 const { spawn, exec } = require("child_process");
-const { GROW_TYPES } = require("./grow-schema");
+const { GROW_TYPES, growValidate } = require("./grow-schema");
+const Sense = require("./sense");
 
 let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
@@ -39,6 +40,9 @@ const DEFAULTS = {
   // model whose rate this app does not know would otherwise run uncapped. Tokens
   // are the unit every provider agrees on. 0 = no backstop.
   turnTokenCap: 400000,
+  // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
+  // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
+  sense: { ...Sense.SENSE_DEFAULTS },
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
 
@@ -148,6 +152,7 @@ function loadConfig() {
     cfg.turnBudgetUsd = Number.isFinite(budget) && budget >= 0 ? budget : DEFAULTS.turnBudgetUsd;
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
+    cfg.sense = Sense.normalizeSense(cfg.sense);
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
@@ -1052,7 +1057,7 @@ ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
-    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded),
+    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
@@ -1060,8 +1065,9 @@ ipcMain.handle("crowe:set-config", async (_e, patch) => {
   const c = saveConfig(patch || {});
   if (patch && patch.cwd) CWD = patch.cwd;
   if (patch && patch.mcpServers) await mcpConnectAll();
+  if (patch && patch.sense) sensePoller().start();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
-    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
+    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
@@ -1349,8 +1355,13 @@ function growWrite(type, record) {
   const now = Date.now();
   if (rec.id) {
     const i = rows.findIndex((r) => r && r.id === rec.id);
-    if (i < 0) return { ok: false, error: "no such record" };
-    rows[i] = { ...rows[i], ...rec, updatedAt: now };
+    // A caller-supplied id is a correction of an existing row, with one
+    // exception: Crowe Sense keys its rows to the zone and the hour
+    // (sense:<zone>:<YYYY-MM-DD-HH>) so a poll rewrites the hour instead of
+    // stacking rows. Only that prefix may insert under its own id.
+    if (i < 0 && !String(rec.id).startsWith("sense:")) return { ok: false, error: "no such record" };
+    if (i < 0) { rec.createdAt = now; rec.updatedAt = now; rows.push(rec); }
+    else rows[i] = { ...rows[i], ...rec, updatedAt: now };
   } else {
     rec.id = "g-" + now.toString(36) + "-" + Math.random().toString(36).slice(2, 7);
     rec.createdAt = now; rec.updatedAt = now;
@@ -1445,6 +1456,40 @@ ipcMain.handle("crowe:grow:delete", (_e, { type, id } = {}) => {
   catch (e) { return { ok: false, error: String(e.message || e) }; }
   return { ok: true };
 });
+
+/* ─── Crowe Sense ────────────────────────────────────────────────────────────
+   The node's readings, polled once a minute and written into the env store
+   above through the same validation the form and the log_grow tool go through.
+   One row per room per hour, replaced on every poll, marked source crowe-sense.
+   Off until a node is paired in Settings, and off again the moment it is
+   unpaired: nothing polls anything the grower did not name. */
+let _sensePoller = null;
+function senseUpsert(records) {
+  let wrote = 0;
+  for (const rec of records || []) {
+    const v = growValidate("env", rec);
+    if (!v.ok) continue;
+    const r = growWrite("env", v.record);
+    if (r.ok) wrote++;
+  }
+  if (wrote && mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send("crowe:sense:changed", { type: "env", wrote }); } catch { /* window gone */ }
+  }
+  return wrote;
+}
+function sensePoller() {
+  if (!_sensePoller) {
+    _sensePoller = new Sense.SensePoller({
+      loadConfig, saveConfig,
+      fetchImpl: (url, init) => fetch(url, init),
+      onRecords: senseUpsert,
+      onChange: (s) => { if (mainWindow && !mainWindow.isDestroyed()) { try { mainWindow.webContents.send("crowe:sense:changed", { type: "status", stale: s.stale }); } catch {} } },
+    });
+  }
+  return _sensePoller;
+}
+ipcMain.handle("crowe:sense:status", () => sensePoller().status());
+ipcMain.handle("crowe:sense:configure", (_e, patch) => sensePoller().configure(patch || {}));
 
 // ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
 function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }
@@ -1557,6 +1602,7 @@ app.whenReady().then(async () => {
   pluginsConnectAll();
   pruneArtifacts();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
+  sensePoller().start();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.
   setInterval(() => {
