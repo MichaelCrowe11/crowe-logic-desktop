@@ -1,0 +1,115 @@
+Crowe Logic Proprietary Software License
+Copyright (c) 2026 Crowe Logic, Inc. All rights reserved.
+
+SPDX-License-Identifier: LicenseRef-Proprietary
+
+This software is proprietary and confidential. It is licensed, not sold. Your
+right to use it comes only from this license.
+
+1. DEFINITIONS
+
+   "Software" means the crowe-logic package, its source code, configuration,
+   system prompts, model definitions, documentation, and any updates provided
+   to you.
+
+   "Crowe Logic" means Crowe Logic, Inc.
+
+   "Plan" means a current, paid subscription to a Crowe Logic offering, or the
+   no-cost tier Crowe Logic makes available, each subject to its own posted
+   terms and usage limits.
+
+2. GRANT
+
+   Subject to your compliance with this license, Crowe Logic grants you a
+   limited, non-exclusive, non-transferable, revocable right to download,
+   install, and run the Software on machines you control, for your own internal
+   or business purposes, for as long as you hold an applicable Plan.
+
+3. RESTRICTIONS
+
+   You may not:
+
+   (a) redistribute, publish, sublicense, sell, rent, lease, or lend the
+       Software or any part of it, including its system prompts and model
+       configuration, whether modified or not;
+
+   (b) create or distribute derivative works of the Software;
+
+   (c) reverse engineer, decompile, or disassemble the Software except to the
+       extent applicable law expressly permits despite this restriction;
+
+   (d) remove, obscure, or alter any copyright, license, or attribution notice;
+
+   (e) use the Software to build or operate a product or service that competes
+       with Crowe Logic offerings;
+
+   (f) circumvent, disable, or interfere with any licensing, entitlement,
+       metering, or usage-limit mechanism, or access paid capabilities without
+       an applicable Plan.
+
+4. OWNERSHIP
+
+   Crowe Logic retains all right, title, and interest in the Software,
+   including all intellectual property rights. No rights are granted except
+   those expressly stated here.
+
+5. THIRD-PARTY COMPONENTS
+
+   The Software depends on third-party packages that are not covered by this
+   license and remain governed by their own license terms. This license applies
+   only to material authored by Crowe Logic. Nothing here restricts your rights
+   in those third-party components.
+
+6. FEEDBACK
+
+   If you send Crowe Logic suggestions or feedback about the Software, Crowe
+   Logic may use it without obligation or compensation to you. You retain
+   ownership of anything you author using the Software.
+
+7. TERM AND TERMINATION
+
+   This license takes effect when you first obtain the Software and continues
+   while you hold an applicable Plan. It terminates automatically if you breach
+   any term, or when your Plan lapses. On termination you must stop using the
+   Software and delete all copies. Sections 3 through 10 survive termination.
+
+8. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. The Software
+   orchestrates third-party language models whose outputs may be inaccurate. You are
+   responsible for reviewing and verifying all outputs before relying on them.
+
+9. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, CROWE LOGIC SHALL NOT BE LIABLE FOR
+   ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR EXEMPLARY DAMAGES, OR
+   FOR ANY LOST PROFITS, REVENUE, DATA, OR GOODWILL, ARISING OUT OF OR RELATED
+   TO THE SOFTWARE. CROWE LOGIC'S TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED
+   THE AMOUNTS YOU PAID CROWE LOGIC FOR THE SOFTWARE IN THE TWELVE MONTHS
+   PRECEDING THE CLAIM.
+
+10. GOVERNING LAW
+
+    This license is governed by the laws of the State of Arizona, United States,
+    excluding its conflict-of-laws rules. The state and federal courts located
+    in Maricopa County, Arizona shall have exclusive jurisdiction over any
+    dispute arising out of this license.
+
+11. ENTIRE AGREEMENT
+
+    This license is the entire agreement between you and Crowe Logic regarding
+    the Software and supersedes any prior understanding. If any provision is
+    found unenforceable, the remainder stays in effect.
+
+--------------------------------------------------------------------------------
+
+NOTE ON EARLIER RELEASES
+
+Versions of this package published before 0.7.1 shipped an Apache License 2.0
+text. Those releases were distributed under that license, and this license does
+not, and cannot, retroactively change the terms under which they were
+obtained. This license governs version 0.7.1 and later.
+
+Licensing questions: michael@crowelogic.com
