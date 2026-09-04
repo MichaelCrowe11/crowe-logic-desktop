@@ -950,7 +950,23 @@ ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
   if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
-  const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
+  /* A login shell, with the PATH a login shell builds. Launched from the Dock
+     the app inherits launchd's PATH and nothing else, so a non-login shell here
+     opened a terminal where brew, node and crowe-logic did not exist - the one
+     failure that looked like the app's fault and was not reproducible from a
+     developer's own shell. See harness.shellEnv().
+     The spawn is guarded because it really can throw: node-pty's spawn-helper
+     is a separate executable, and if the packaging or the signature is wrong it
+     fails here. Unguarded, the rejection crossed IPC as a rejected invoke, the
+     renderer's await threw, and the panel sat on "starting" forever with no
+     error anywhere - the least debuggable shape this failure has. */
+  let proc;
+  try {
+    proc = pty.spawn(harness.shellPath(), harness.loginShellArgs(),
+      { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: harness.shellEnv() });
+  } catch (e) {
+    return { ok: false, error: `could not start ${harness.shellPath()}: ${String(e && e.message || e).slice(0, 200)}` };
+  }
   ptyProcs.set(id, proc);
   proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });

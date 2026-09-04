@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
-const { exec, execFile } = require("child_process");
+const { exec, execFile, execFileSync } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
@@ -465,9 +465,62 @@ function resolvePath(ctx, p) {
   p = String(p).replace(/^~(?=$|\/)/, os.homedir());
   return path.isAbsolute(p) ? p : path.join(ctx.getCwd(), p);
 }
+/* The shell, and the environment it should run in.
+
+   $SHELL is unset for a process launched from the Finder or a desktop entry,
+   and the old fallback was a bare "/bin/zsh" - present on every mac, absent on
+   most Linux boxes, so a Linux user without $SHELL got a shell that could not
+   spawn at all. Fall back down a list of shells that actually exist instead.
+
+   The environment is the sharper problem, and it is macOS-shaped. A GUI-
+   launched .app inherits launchd's PATH - /usr/bin:/bin:/usr/sbin:/sbin - not
+   the one the operator's dotfiles build. A shell started without -l reads
+   .zshrc but never .zprofile, and .zprofile is where Homebrew's `brew shellenv`
+   lands on a stock mac. So inside the packaged app `brew`, `node`, `python3`
+   and `crowe-logic` itself were all "command not found", while the identical
+   terminal worked when the app was started from a shell that had already
+   sourced them. Ask a login shell for its PATH once, cache it, and hand that
+   to both this module's exec and the PTY in main.js. Lazy, because the answer
+   costs a shell start and most sessions never open a terminal. */
+const SHELL_CANDIDATES = ["/bin/zsh", "/bin/bash", "/bin/sh"];
+function shellPath() {
+  if (process.env.SHELL) return process.env.SHELL;
+  if (process.platform === "win32") return process.env.COMSPEC || "cmd.exe";
+  return SHELL_CANDIDATES.find((s) => { try { fs.accessSync(s, fs.constants.X_OK); return true; } catch { return false; } }) || "/bin/sh";
+}
+// A login shell reads the profile; cmd.exe has no such flag.
+function loginShellArgs() { return process.platform === "win32" ? [] : ["-l"]; }
+let loginPathCache;
+function loginPath() {
+  if (loginPathCache !== undefined) return loginPathCache;
+  loginPathCache = null;
+  if (process.platform !== "win32") {
+    try {
+      // stdin off a pipe: a login shell that decided to prompt would otherwise
+      // hold the app hostage until the timeout.
+      const out = execFileSync(shellPath(), ["-lc", 'printf %s "$PATH"'],
+        { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      /* Believe the answer only if it is shaped like a PATH: two or more
+         colon-separated absolute entries. fish, which some operators use as a
+         login shell, keeps $PATH as a list and prints it space-separated - one
+         "entry" full of spaces, which would replace a working PATH with a
+         broken one. Anything that fails this leaves the inherited PATH alone,
+         which is the behaviour this function is trying to improve on, never a
+         regression from it. */
+      const parts = out.split(":").filter(Boolean);
+      if (parts.length > 1 && parts.every((d) => d.startsWith("/"))) loginPathCache = out;
+    } catch { /* exotic shell, no profile, or too slow - keep the inherited PATH */ }
+  }
+  return loginPathCache;
+}
+// process.env plus the login PATH, when the login shell had a better one.
+function shellEnv() {
+  const p = loginPath();
+  return p ? { ...process.env, PATH: p } : process.env;
+}
 function runShell(ctx, command, timeoutMs) {
   return new Promise((resolve) => {
-    exec(command, { cwd: ctx.getCwd(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, shell: process.env.SHELL || "/bin/zsh" },
+    exec(command, { cwd: ctx.getCwd(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, shell: shellPath(), env: shellEnv() },
       (err, stdout, stderr) => {
         const out = (stdout || "") + (stderr || "");
         const tail = err ? `\n(exit ${err.killed ? "timeout" : err.code ?? 1})` : "";
@@ -899,7 +952,7 @@ async function buildSystemPrompt(ctx) {
     "You are Crowe Logic, the operator: an agent working inside the user's workspace with real tools. You act, verify, and report; you do not guess.",
     "",
     "## Environment",
-    `- OS: ${process.platform} (${os.release()}), shell: ${process.env.SHELL || "/bin/zsh"}`,
+    `- OS: ${process.platform} (${os.release()}), shell: ${shellPath()}`,
     `- Workspace: ${cwd}`,
     `- Git: ${git}`,
     `- Date: ${new Date().toISOString().slice(0, 10)}`,
@@ -1589,4 +1642,5 @@ module.exports = {
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,
   gateOutsideWorkspace, gateSecretContent,
   spool, writeArtifact, verdictReceipt, rejectionPrompt, isTransient,
+  shellPath, loginShellArgs, loginPath, shellEnv,
 };
