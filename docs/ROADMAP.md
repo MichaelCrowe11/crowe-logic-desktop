@@ -78,12 +78,12 @@ stable; sign-in, routing, plugins, and the workbench all work end to end.
 | Gap | Why it blocks public | State |
 |---|---|---|
 | ~~mac code signing + notarization~~ | app is Notarized Developer ID, auto-notarize hook wired | done (0.9.0) |
-| Auto-update (electron-updater to R2) | can't ship fixes to installed users | mac and linux feeds live on 0.24.3; **win feed frozen at 0.24.0**; the daily `verify-release.yml` proof has not run since CI died |
-| Windows/Linux parity builds + smoke | half the audience | `release.yml` has the matrix, but it needs a runner: **no Windows build exists for 0.24.1-0.24.3** and the download page says "Not in this release" |
+| Auto-update (electron-updater to R2) | can't ship fixes to installed users | mac and linux feeds live on 0.24.4; **win feed frozen at 0.24.0**; the daily `verify-release.yml` proof has not run since CI died |
+| Windows/Linux parity builds + smoke | half the audience | `release.yml` has the matrix, but it needs a runner: **no Windows build exists for 0.24.1-0.24.4** and the download page says "Not in this release" |
 | ~~Crash reporting + minimal telemetry~~ | flying blind post-launch | done, `main.js:59`; network submission opt-out |
 | ~~First-run onboarding (sign-in to first task)~~ | funnel dies without it | done; 3-step card with sign-in and explore |
 | CI (smoke suite on push) | regressions ship silently | **broken since ~2026-08-25**: the workflow is correct and the suite is green locally, but no run starts. Account-level Actions problem, fix at github.com/settings/billing |
-| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | the script works and 0.24.3 resolves; the daily cron re-check is down with CI |
+| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | the script works and 0.24.4 resolves; the daily cron re-check is down with CI |
 | ~~Dependency updates~~ | advisories accumulated with nothing filing fixes | done; dependabot files weekly grouped PRs, audit clean at 0 findings |
 | Windows signing cert | SmartScreen warning kills trust | CI plumbing wired (`release.yml` reads WINDOWS_CERTIFICATE secrets, builds unsigned while unset); the cert itself is a vendor purchase (OV/EV or Azure Trusted Signing) |
 | Gateway hardening: rate limits, plan enforcement, health endpoint | abuse + cost exposure | open, backend (not verifiable here) |
