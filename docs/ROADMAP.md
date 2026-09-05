@@ -1,6 +1,8 @@
 # Crowe Logic desktop — roadmap & ship-readiness
 
-Status: last verified 2026-08-11 at 0.24.0. Companions: HARNESS-ARCHITECTURE.md, PLUGINS.md.
+Status: last verified 2026-08-11 at 0.24.0. Companions: HARNESS-ARCHITECTURE.md,
+PLUGINS.md, RESEARCH-PRODUCTIVITY.md (how we would measure whether any of this
+helps anyone — a design, not a result).
 
 Every "done" below was re-checked against the code on 2026-08-11, with the
 source noted. Rows that cannot be verified from this repo (anything backend or
