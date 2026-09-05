@@ -2347,7 +2347,16 @@ function setSpace(name) {
   });
   const showWb = !!(space.workbench && space.workbench());
   workbench.classList.toggle("hidden", !showWb);
-  for (const [id, sp] of Object.entries(SPACES)) if (sp.nav) $(sp.nav).classList.toggle("hidden", id !== name);
+  for (const [id, sp] of Object.entries(SPACES)) {
+    if (!sp.nav) continue;
+    $(sp.nav).classList.toggle("hidden", id !== name);
+    for (const item of $(sp.nav).querySelectorAll(".sn-item")) {
+      const selected = item.dataset[sp.laneAttr] === sp.lane();
+      item.classList.toggle("active", selected);
+      if (selected) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    }
+  }
   drawer.classList.toggle("hidden", !space.drawer);
   Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
   if (!showWb && space.open) space.open();

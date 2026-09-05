@@ -1177,6 +1177,21 @@ const tests = [
     expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
   },
   {
+    name: "lane navigation exposes the current page and follows programmatic changes",
+    body: `__resetSpaces();
+      projLane = "deployments"; setSpace("projects");
+      const current = () => [...document.querySelectorAll('#space-nav [aria-current="page"]')].map(b => b.dataset.lane).join(",");
+      const direct = current();
+      document.querySelector('#space-nav [data-lane="home"]').click();
+      const clicked = current();
+      const active = document.querySelector('#space-nav .active').dataset.lane;
+      cultLane = "blocks"; setSpace("cultivation");
+      const cult = document.querySelector('#cult-nav [aria-current="page"]').dataset.cult;
+      cultLane = "home"; setSpace("chat");
+      return {direct, clicked, active, cult};`,
+    expect: {direct: "deployments", clicked: "home", active: "home", cult: "blocks"},
+  },
+  {
     name: "a profile hides the spaces it leaves out",
     body: `__resetSpaces();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));

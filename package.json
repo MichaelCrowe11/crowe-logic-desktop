@@ -62,6 +62,7 @@
       "renderer/**",
       "assets/**",
       "plugins.builtin.json",
+      "THIRD_PARTY_NOTICES.md",
       "node_modules/@xterm/**",
       "node_modules/node-pty/**",
       "node_modules/node-gyp-build/**",

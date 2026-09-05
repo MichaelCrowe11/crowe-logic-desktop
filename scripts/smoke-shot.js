@@ -1,10 +1,21 @@
-// Dev-only smoke: boot the real app, flip through the four spaces, capture
-// screenshots to /tmp/crowe-shots. Not packaged (scripts/ is outside build.files).
-// Run: npx electron scripts/smoke-shot.js
+// Dev-only smoke: boot the real app with an isolated profile and workspace.
+// Not packaged (scripts/ is outside build.files). Never uses member credentials.
+// Run: npm run smoke. Prints the unique screenshot/report directory on completion.
 const { app, BrowserWindow } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const OUT = "/tmp/crowe-shots";
+const os = require("os");
+const OUT = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-shots-"));
+const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-smoke-profile-"));
+const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-smoke-workspace-"));
+app.setPath("userData", PROFILE);
+app.setPath("sessionData", PROFILE);
+fs.writeFileSync(path.join(PROFILE, "config.json"), JSON.stringify({
+  cwd: WORKSPACE, telemetry: false, onboarded: true, autonomy: "readonly",
+}), { mode: 0o600 });
+const report = { version: require("../package.json").version, startedAt: new Date().toISOString(),
+  profileIsolated: true, checks: [], screenshots: [], status: "running",
+  scope: "Real Electron shell and local panels; no authenticated provider, billing, microphone, or updater installation claims." };
 
 const { shutdownNativeResources } = require(path.join(__dirname, "..", "main.js"));
 
@@ -12,9 +23,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function shoot(win, name) {
   const img = await win.webContents.capturePage();
   fs.writeFileSync(path.join(OUT, name + ".png"), img.toPNG());
+  report.screenshots.push(name + ".png");
   console.log("shot:", name);
 }
 function assert(condition, message) {
+  report.checks.push({ message, passed: Boolean(condition) });
   if (!condition) throw new Error(message);
 }
 app.whenReady().then(async () => {
@@ -128,10 +141,41 @@ app.whenReady().then(async () => {
     await js(`document.body.classList.add("dark"); setSpace("projects")`); await sleep(900); await shoot(win, "7-projects-home-dark");
     await js(`setSpace("chat"); document.body.classList.remove("dark"); localStorage.setItem("crowe-space","chat")`);
     await sleep(300);
+    // Every shipped lane, in both themes and at the minimum desktop width.
+    // Discover navigation from the registry; removed spaces cannot inflate coverage.
+    await js(`[...panels].forEach((p) => closePanel(p.id)); addPanel("operator")`);
+    const routes = await js(`Object.entries(SPACES).flatMap(([space, spec]) => spec.nav
+      ? [...document.querySelectorAll("#" + spec.nav + " .sn-item")].map(b => ({space, lane:b.dataset[spec.laneAttr], nav:spec.nav, attr:spec.laneAttr}))
+      : [{space, lane:null}])`);
+    for (const width of [1280, 1024]) {
+      win.setContentSize(width, 840);
+      for (const dark of [false, true]) {
+        await js(`document.body.classList.toggle("dark", ${dark})`);
+        for (const route of routes) {
+          await js(`(() => {
+            const r = ${JSON.stringify(route)};
+            if (r.lane) document.querySelector("#" + r.nav + ' [data-' + r.attr + '="' + r.lane + '"]').click();
+            else setSpace(r.space);
+          })()`);
+          await sleep(180);
+          const state = await js(`(() => {
+            const shell = document.getElementById("shell");
+            return {space:document.body.dataset.space, overflow:shell.scrollWidth > shell.clientWidth + 1,
+              surfaces: Object.values(SURFACES).filter(s => !s.classList.contains("hidden")).length + Number(!workbench.classList.contains("hidden")),
+              current: document.querySelectorAll('#spaces [aria-current="true"]').length};
+          })()`);
+          const label = [width, dark ? "dark" : "light", route.space, route.lane || "workspace"].join("-");
+          assert(state.space === route.space && state.current === 1 && state.surfaces === 1 && !state.overflow,
+            "route layout: " + label + " " + JSON.stringify(state));
+          await shoot(win, label);
+        }
+      }
+    }
     console.log("SMOKE-DONE");
     await finish(0);
   } catch (error) {
-    console.error("SMOKE-FAIL:", error && error.stack ? error.stack : error);
+    report.error = String(error && error.stack ? error.stack : error);
+    console.error("SMOKE-FAIL:", report.error);
     await finish(1);
   }
 });
@@ -141,5 +185,13 @@ app.whenReady().then(async () => {
 async function finish(code) {
   shutdownNativeResources();
   await sleep(250);
+  report.status = code === 0 ? "passed" : "failed";
+  report.finishedAt = new Date().toISOString();
+  fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log("SMOKE-REPORT:", path.join(OUT, "report.json"));
+  // Close Chromium before removing its profile so shutdown cannot recreate files.
+  for (const win of BrowserWindow.getAllWindows()) win.destroy();
+  fs.rmSync(PROFILE, { recursive: true, force: true });
+  fs.rmSync(WORKSPACE, { recursive: true, force: true });
   app.exit(code);
 }
