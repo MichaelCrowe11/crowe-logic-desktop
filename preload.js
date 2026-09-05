@@ -36,6 +36,18 @@ contextBridge.exposeInMainWorld("crowe", {
     billing: () => ipcRenderer.invoke("crowe:license:billing"),
     select: (workspaceId) => ipcRenderer.invoke("crowe:license:select", { workspaceId }),
   },
+  /* The member's own plan and the one ladder. `license` above is the
+     workspace a paying account already has; this is how an account that does
+     not pay yet becomes one. Same shape as the web bridge's `billing`, so
+     renderer/plan.js is the same file's worth of logic on both surfaces, but
+     `checkout` here opens the browser in the main process and reports that it
+     opened rather than returning a URL for the renderer to navigate to. */
+  billing: {
+    plan: () => ipcRenderer.invoke("crowe:billing:plan"),
+    catalog: () => ipcRenderer.invoke("crowe:billing:catalog"),
+    checkout: (slug = "pro") => ipcRenderer.invoke("crowe:billing:checkout", { slug }),
+    refresh: () => ipcRenderer.invoke("crowe:billing:refresh"),
+  },
   // Approve/reject a proposed file edit.
   edit: { decide: (id, approved) => ipcRenderer.invoke("crowe:edit:decide", { id, approved }) },
   // Allow or deny an action that cannot be taken back (force-push, recursive

@@ -1,8 +1,19 @@
 # Crowe Logic desktop — roadmap & ship-readiness
 
-Status: last verified 2026-08-11 at 0.24.0. Companions: HARNESS-ARCHITECTURE.md,
+Status: last verified 2026-09-05 while preparing 0.24.5. Companions: HARNESS-ARCHITECTURE.md,
 PLUGINS.md, RESEARCH-PRODUCTIVITY.md (how we would measure whether any of this
 helps anyone — a design, not a result).
+
+**Read the CI and release rows below before trusting anything else here.** Every
+GitHub Actions run in this repository has ended in `startup_failure` at 0s since
+at least 2026-08-25, and so has every run in crowe-logic-foundry, including
+Dependabot's own dynamic workflows (`"path": "BuildFailed"`, empty workflow
+name). The workflow YAML parses and the repository's Actions permissions are
+`enabled`, so this is account-level, not a file in this repo. Everything the
+rail does is therefore not happening: no automatic Windows build, no test gate
+on push, and no daily `verify-release.yml` proof that the live feeds resolve.
+`npm test` is green locally, and the manual mac and linux release path is the
+only verified publish path from this machine.
 
 Every "done" below was re-checked against the code on 2026-08-11, with the
 source noted. Rows that cannot be verified from this repo (anything backend or
@@ -67,21 +78,28 @@ stable; sign-in, routing, plugins, and the workbench all work end to end.
 | Gap | Why it blocks public | State |
 |---|---|---|
 | ~~mac code signing + notarization~~ | app is Notarized Developer ID, auto-notarize hook wired | done (0.9.0) |
-| ~~Auto-update (electron-updater to R2)~~ | can't ship fixes to installed users | done; feeds live and verified daily (`verify-release.yml`) |
-| ~~Windows/Linux parity builds + smoke~~ | half the audience | done, `release.yml` matrix builds win/linux/mac |
+| Auto-update (electron-updater to R2) | can't ship fixes to installed users | mac and linux feeds live on 0.24.3; **win feed frozen at 0.24.0**; the daily `verify-release.yml` proof has not run since CI died |
+| Windows/Linux parity builds + smoke | half the audience | `release.yml` has the matrix, but it needs a runner: **no Windows build exists for 0.24.1-0.24.3** and the download page says "Not in this release" |
 | ~~Crash reporting + minimal telemetry~~ | flying blind post-launch | done, `main.js:59`; network submission opt-out |
 | ~~First-run onboarding (sign-in to first task)~~ | funnel dies without it | done; 3-step card with sign-in and explore |
-| ~~CI (smoke suite on push)~~ | regressions ship silently | done and green, plus the full behavioural suite below |
-| ~~R2 publish + live verification~~ | a release that uploads but does not resolve fails on a user's machine | done; publish ends with `verify-release.js`, daily cron re-checks |
+| CI (smoke suite on push) | regressions ship silently | **broken since ~2026-08-25**: the workflow is correct and the suite is green locally, but no run starts. Account-level Actions problem, fix at github.com/settings/billing |
+| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | the script works and 0.24.3 resolves; the daily cron re-check is down with CI |
 | ~~Dependency updates~~ | advisories accumulated with nothing filing fixes | done; dependabot files weekly grouped PRs, audit clean at 0 findings |
 | Windows signing cert | SmartScreen warning kills trust | CI plumbing wired (`release.yml` reads WINDOWS_CERTIFICATE secrets, builds unsigned while unset); the cert itself is a vendor purchase (OV/EV or Azure Trusted Signing) |
 | Gateway hardening: rate limits, plan enforcement, health endpoint | abuse + cost exposure | open, backend (not verifiable here) |
 | Auth keepalive polish (refresh edge cases seen in testing) | silent sign-outs feel broken | open, refresh exists but edge cases unconfirmed |
 | Legal/support: privacy policy, EULA surfacing, support channel | table stakes | drafts in `docs/legal/` grounded in actual app behaviour; needs counsel review, confirmed contact addresses, and surfacing in the installer/download page |
+| ~~A way to pay from inside the app~~ | the installed app could not sell; every checkout surface was excluded from the package | done, on main and unreleased: `renderer/plan.js`, `crowe:billing:*` in main.js, Stripe opens in the system browser, tier picked up on focus via the refresh token. `scripts/test-plan.js` |
+| One price ladder across Stripe and the catalog | the catalog Worker sells Pro at $99 while Stripe has a live "Crowe Logic Pro Monthly" at $149, among 23 overlapping recurring prices | open, vendor-side: archive the dead prices, one product per tier |
 | Automated test coverage beyond the smoke suite | smoke asserts panels mount, not that they behave | largely closed, see below |
 
 **On CI:** this table previously read "DONE" from the day the workflow file
-landed. The workflow existed but failed on every run for two separate reasons,
+landed, and then read "done and green" for three weeks after the runs had
+stopped starting. Both times the row was describing the workflow file rather
+than a run. The paragraph below is the history of the first version of that
+mistake; the second is in the status note at the top.
+
+The workflow existed but failed on every run for two separate reasons,
 so nothing was actually being verified: Electron's `chrome-sandbox` ships
 without the SUID bit and aborted before the app loaded, and once that was
 fixed the suite passed and then crashed on quit because no one killed the PTYs.

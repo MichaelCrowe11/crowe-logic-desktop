@@ -122,7 +122,10 @@
      edge did not state is "" and is reported as unknown, not as free: the edge
      decides what a turn may do (it answers 402), this only decides what to
      say. Vocabulary per crowe-logic-foundry control_plane/plans.py. */
-  const PAID_TIERS = ["personal", "pro", "team", "max", "enterprise", "byok"];
+  // Every slug the catalog sells, not the subset this file knew about when it
+  // was written: scale, studio and business are live tiers, and leaving them
+  // out told a paying Business account it was free and offered it an upgrade.
+  const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
   async function whoami() {
     try {
       const r = await fetch("/app/whoami", { headers: { accept: "application/json, text/plain" } });
@@ -964,6 +967,19 @@
         try { j = await r.json(); } catch (_) {}
         if (!r.ok || !j.url) return { ok: false, error: j.error || `Checkout unavailable (${r.status}).` };
         return { ok: true, url: j.url };
+      },
+      /* Parity with the desktop's billing.refresh, which spends a refresh
+         token because Stripe ran in a different application there. Here the
+         tier is the edge's answer and the session cookie is already current,
+         so re-asking /app/whoami is the whole of it; `ok` is whether anyone is
+         signed in to re-ask about. Kept so a caller written against one bridge
+         runs on the other, which scripts/test-web-bridge.js enforces. */
+      refresh: async () => {
+        const who = await whoami();
+        return {
+          ok: Boolean(who.email),
+          plan: { email: who.email, tier: who.tier, known: Boolean(who.tier), paid: PAID_TIERS.includes(who.tier) },
+        };
       },
     },
     auth: {

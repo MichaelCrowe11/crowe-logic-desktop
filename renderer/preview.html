@@ -9,7 +9,7 @@
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1787987673641" />
+  <link rel="stylesheet" href="styles.css?v=1788488902333" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -246,10 +246,15 @@
         </form>
       </section>
 
-      <div id="divider"></div>
+      <div id="divider" role="separator" aria-label="Resize chat panel" aria-controls="agent"
+           aria-orientation="vertical" aria-valuemin="0" aria-valuenow="360" tabindex="0"
+           title="Resize chat panel. Double-click to hide or restore it. Cmd+Shift+B toggles it."></div>
 
       <section id="workspace">
         <div class="dock-bar">
+          <button id="chat-restore" class="dock-icon" type="button" title="Show chat panel" aria-label="Show chat panel">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 12h5M16 9l3 3-3 3"/></svg>
+          </button>
           <div id="dock-tabs" class="dock-tabs">
             <button class="dock-tab" data-pane="git" title="Version control">Changes</button>
             <button class="dock-tab" data-pane="files" title="Files">Files</button>
@@ -393,9 +398,10 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1787987673641"></script>
-  <script src="mark-geometry.js?v=1787987673641"></script>
-  <script src="mark.js?v=1787987673641"></script>
-  <script src="renderer.js?v=1787987673641"></script>
+  <script src="preview-shim.js?v=1788488902333"></script>
+  <script src="mark-geometry.js?v=1788488902333"></script>
+  <script src="mark.js?v=1788488902333"></script>
+  <script src="renderer.js?v=1788488902333"></script>
+  <script src="plan.js"></script>
 </body>
 </html>

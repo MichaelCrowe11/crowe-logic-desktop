@@ -1873,25 +1873,56 @@ $("cfg-save").addEventListener("click", async () => {
 });
 
 // ── Resizable split ──
-const divider = $("divider"), workbench = $("workbench");
-const MIN_AGENT_WIDTH = 300, MIN_WORKSPACE_WIDTH = 320;
-function clampSplit(requested) {
+const divider = $("divider"), workbench = $("workbench"), agentPane = $("agent"), chatRestore = $("chat-restore");
+const MIN_AGENT_WIDTH = 300, MIN_WORKSPACE_WIDTH = 320, CHAT_COLLAPSE_AT = 180;
+let lastExpandedSplit = 0;
+function splitBounds() {
   const rect = workbench.getBoundingClientRect();
   const shellRight = workbench.parentElement.getBoundingClientRect().right;
   const availableWidth = Math.max(0, shellRight - rect.left);
   const dividerWidth = divider.getBoundingClientRect().width || 5;
-  const max = Math.max(0, availableWidth - dividerWidth - MIN_WORKSPACE_WIDTH);
+  return { rect, max: Math.max(0, availableWidth - dividerWidth - MIN_WORKSPACE_WIDTH) };
+}
+function clampSplit(requested) {
+  const { max } = splitBounds();
+  if (requested <= CHAT_COLLAPSE_AT) return 0;
   const min = Math.min(MIN_AGENT_WIDTH, max);
   return Math.min(Math.max(requested, min), max);
 }
 function setWorkbenchSplit(requested) {
+  const currentWidth = agentPane.getBoundingClientRect().width;
   const px = clampSplit(requested);
+  if (px === 0 && currentWidth >= MIN_AGENT_WIDTH) lastExpandedSplit = currentWidth;
+  else if (px > 0) lastExpandedSplit = px;
   workbench.style.setProperty("--split", px + "px");
+  const collapsed = px === 0;
+  workbench.classList.toggle("chat-collapsed", collapsed);
+  const max = splitBounds().max;
+  divider.setAttribute("aria-valuenow", String(Math.round(px)));
+  divider.setAttribute("aria-valuemax", String(Math.round(max)));
+  divider.setAttribute("aria-valuetext", collapsed ? "Chat hidden" : `${Math.round(px)} pixels`);
   return px;
+}
+function currentWorkbenchSplit() {
+  const inline = parseFloat(workbench.style.getPropertyValue("--split"));
+  return Number.isFinite(inline) ? inline : agentPane.getBoundingClientRect().width;
+}
+function toggleChatPanel(forceCollapsed) {
+  const collapsed = workbench.classList.contains("chat-collapsed");
+  const shouldCollapse = typeof forceCollapsed === "boolean" ? forceCollapsed : !collapsed;
+  if (shouldCollapse) setWorkbenchSplit(0);
+  else setWorkbenchSplit(lastExpandedSplit || Math.max(MIN_AGENT_WIDTH, workbench.getBoundingClientRect().width * 0.42));
+  requestAnimationFrame(fitTerminals);
 }
 function clampWorkbenchSplit() {
   const current = parseFloat(workbench.style.getPropertyValue("--split"));
   if (Number.isFinite(current)) setWorkbenchSplit(current);
+  else {
+    const px = agentPane.getBoundingClientRect().width;
+    divider.setAttribute("aria-valuenow", String(Math.round(px)));
+    divider.setAttribute("aria-valuemax", String(Math.round(splitBounds().max)));
+    divider.setAttribute("aria-valuetext", `${Math.round(px)} pixels`);
+  }
 }
 divider.addEventListener("mousedown", (e) => {
   e.preventDefault(); divider.classList.add("dragging");
@@ -1902,6 +1933,28 @@ divider.addEventListener("mousedown", (e) => {
   const up = () => { divider.classList.remove("dragging"); fitTerminals();
     window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+});
+divider.addEventListener("dblclick", () => toggleChatPanel());
+divider.addEventListener("keydown", (e) => {
+  const key = e.key;
+  if (!["Enter", " ", "ArrowLeft", "ArrowRight", "Home", "End"].includes(key)) return;
+  e.preventDefault();
+  if (key === "Enter" || key === " ") toggleChatPanel();
+  else if (key === "Home") toggleChatPanel(true);
+  else if (key === "End") setWorkbenchSplit(splitBounds().max);
+  else {
+    const current = currentWorkbenchSplit();
+    const step = e.shiftKey ? 120 : 40;
+    const requested = key === "ArrowLeft"
+      ? (current <= MIN_AGENT_WIDTH ? 0 : current - step)
+      : (current === 0 ? MIN_AGENT_WIDTH : current + step);
+    setWorkbenchSplit(requested);
+  }
+  requestAnimationFrame(fitTerminals);
+});
+chatRestore.addEventListener("click", () => {
+  toggleChatPanel(false);
+  divider.focus();
 });
 
 // ── Dark mode ──
@@ -3397,6 +3450,11 @@ qoInput.addEventListener("keydown", (e) => {
 qopen.addEventListener("click", (e) => { if (e.target === qopen) closeQuickOpen(); });
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p") { e.preventDefault(); openQuickOpen(); }
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    setSpace("chat");
+    toggleChatPanel();
+  }
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "b") {
     e.preventDefault();
     applySidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
@@ -3442,6 +3500,7 @@ const PAL_ACTIONS = [
   { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
   { label: "Files", run: () => { setSpace("chat"); switchPane("files"); } },
   { label: "Version control (git)", run: () => { setSpace("chat"); switchPane("git"); } },
+  { label: "Toggle chat panel", run: () => { setSpace("chat"); toggleChatPanel(); } },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
   { label: "Autonomy: Plan", run: () => selAutonomy("plan") },
   { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
@@ -3500,8 +3559,13 @@ async function refreshAuth() {
     badge.textContent = `${user.email} · ${user.tier || "free tier"}`;
     badge.classList.remove("hidden");
   } else { btn.classList.remove("hidden"); badge.classList.add("hidden"); }
+  // Announce what was just read, so the plan surfaces (plan.js) follow sign-in
+  // and sign-out without polling. One direction: this file only ever sends
+  // `crowe:auth-changed`, and only ever listens for `crowe:auth-recheck`.
+  try { window.dispatchEvent(new CustomEvent("crowe:auth-changed")); } catch (e) { /* noop */ }
   return authed;
 }
+window.addEventListener("crowe:auth-recheck", () => { refreshAuth(); });
 async function doSignIn() {
   const btn = $("signin"); const prev = btn.textContent;
   btn.textContent = "Opening browser..."; btn.disabled = true;
@@ -3650,6 +3714,7 @@ function dismissLaunch() {
   await refreshAuth();
   await maybeShowOnboarding(c);
   applySpaceProfile();
+  clampWorkbenchSplit();
   try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
   statusTick();
   await restorePanels();

@@ -265,10 +265,20 @@ body.dark button.primary:hover { background: var(--gold-soft); }
 
 /* ── Workbench split ── */
 #workbench { flex: 1; display: grid; grid-template-columns: var(--split, minmax(360px, 42%)) 5px 1fr; min-width: 0; min-height: 0; }
-#divider { cursor: col-resize; background: transparent; transition: background 150ms var(--ease); }
-#divider:hover, #divider.dragging { background: var(--gold-soft); }
-#agent { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-width: 0; min-height: 0; }
+#divider { position: relative; z-index: 2; cursor: col-resize; background: transparent;
+  transition: background 120ms var(--ease); outline: none; }
+/* Keep the visual rule narrow while making the splitter easier to catch. */
+#divider::after { content: ""; position: absolute; inset: 0 -3px; }
+#divider:hover, #divider.dragging, #divider:focus-visible { background: var(--gold-soft); }
+#divider:focus-visible { box-shadow: 0 0 0 2px var(--focus-halo); }
+#agent { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-width: 0; min-height: 0; overflow: hidden; }
 #workspace { display: flex; flex-direction: column; position: relative; min-width: 0; min-height: 0; background: var(--panel); }
+/* A focused terminal or browser is a first-class layout, not a squeezed chat.
+   The split snaps directly from the 300px usable minimum to zero. There is no
+   narrow intermediate state whose composer and transcript are unreadable. */
+body:not(.mobile) #workbench.chat-collapsed #agent { visibility: hidden; pointer-events: none; border-right-width: 0; }
+#chat-restore { display: none; }
+body:not(.mobile) #workbench.chat-collapsed #chat-restore { display: grid; }
 
 /* ── Transcript ── */
 #transcript { flex: 1; overflow-y: auto; padding: 20px 22px; }

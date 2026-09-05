@@ -124,6 +124,14 @@ function buildIndex() {
   html = html.replace('<script src="renderer.js"></script>',
     '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>');
 
+  // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
+  // sells a subscription through Stripe, which is the app store's business on
+  // a phone, so mobile-bridge.js answers billing.checkout with a stated refusal
+  // and there is nothing here for this file to drive. Left in, the tag is a 404
+  // in the webview, because plan.js is not in COPY and must not be.
+  must(html, '<script src="plan.js"></script>', "the plan script tag");
+  html = html.replace('  <script src="plan.js"></script>\n', "");
+
   html = html.split("../assets/").join("assets/");
   for (const asset of BUSTED) html = html.split(`"${asset}"`).join(`"${asset}?v=${stamp}"`);
 

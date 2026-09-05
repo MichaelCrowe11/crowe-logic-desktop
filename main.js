@@ -465,6 +465,65 @@ ipcMain.handle("crowe:license:billing", async () => {
     await shell.openExternal(portal.toString()); return { ok: true };
   } catch { return { error: "Billing portal could not be reached" }; }
 });
+
+/* The way up, from inside the app.
+
+   The desktop could already open the workspace billing portal (above), which
+   is where an account that already pays changes what it pays. It had no answer
+   for the account that does not pay yet: the plan card and the Stripe hand-off
+   lived only in renderer/web-ui.js and renderer/web-bridge.js, and
+   package.json build.files excludes both from the package. The app people
+   install was the one surface in the estate that could not sell.
+
+   Same ladder as the web, same Worker, same metadata, so there is still one
+   price list and it is not written here. What differs is where Stripe opens:
+   a browser tab this process launches, because a card field must never render
+   in a window we control. When payment lands the control plane stamps
+   crowe_tier on the Crowe ID, and refresh spends the refresh token for an
+   access token carrying it, so the new tier arrives without a sign-out. */
+const CHECKOUT_URL = process.env.CROWE_CHECKOUT_URL || "https://crowe-checkout.yellow-block-3adc.workers.dev";
+// Every slug the catalog sells. Shorter lists have a specific failure: a
+// paying Business account reads as free and gets told to upgrade.
+const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
+function planOf(user) {
+  const tier = user ? String(user.tier || "") : "";
+  // `known` is "somebody is signed in", so an absent claim reads as free the
+  // way the gateway reads it (harnessCtx.planTier), not as unknown.
+  return { email: user ? user.email : "", tier, known: Boolean(user), paid: PAID_TIERS.includes(tier.toLowerCase()) };
+}
+ipcMain.handle("crowe:billing:plan", () => planOf(currentUser()));
+ipcMain.handle("crowe:billing:catalog", async () => {
+  try {
+    const r = await fetch(`${CHECKOUT_URL}/v1/catalog`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return { error: `Catalog unavailable (${r.status}).` };
+    return await r.json();
+  } catch { return { error: "Catalog could not be reached." }; }
+});
+ipcMain.handle("crowe:billing:checkout", async (_e, { slug = "pro" } = {}) => {
+  if (typeof slug !== "string" || !/^[a-z0-9-]{1,40}$/.test(slug)) return { ok: false, error: "Unknown plan." };
+  const user = currentUser();
+  if (!user || !user.email) return { ok: false, error: "Sign in with Crowe ID first, so the upgrade lands on the right account." };
+  try {
+    const r = await fetch(`${CHECKOUT_URL}/v1/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ slug, email: user.email }),
+      signal: AbortSignal.timeout(15000),
+    });
+    let j = {}; try { j = await r.json(); } catch { j = {}; }
+    if (!r.ok || !j.url) return { ok: false, error: j.error || `Checkout unavailable (${r.status}).` };
+    const url = new URL(j.url);
+    if (url.protocol !== "https:") return { ok: false, error: "Checkout returned an unsafe URL." };
+    await shell.openExternal(url.toString());
+    return { ok: true, opened: true };
+  } catch { return { ok: false, error: "Checkout could not be reached." }; }
+});
+// Null refresh is "not yet", not a failure: the card polls this while Stripe
+// has the browser, and most of those calls land before the webhook does.
+ipcMain.handle("crowe:billing:refresh", async () => {
+  const t = await refreshToken();
+  return { ok: Boolean(t), plan: planOf(currentUser()) };
+});
 async function requireAgentEntitlement(workspaceId) {
   const status = await licenseStatus();
   const id = workspaceId || status.selectedWorkspaceId;

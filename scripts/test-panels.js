@@ -840,6 +840,29 @@ const tests = [
     expect: { wb: true, surf: true },
   },
   {
+    name: "the chat split collapses completely and stays recoverable",
+    body: `__resetSpaces(); setSpace("chat");
+      setWorkbenchSplit(480);
+      toggleChatPanel(true);
+      const collapsed = workbench.classList.contains("chat-collapsed");
+      const zero = agentPane.getBoundingClientRect().width <= 1;
+      const restoreShown = getComputedStyle(chatRestore).display !== "none";
+      const aria = divider.getAttribute("aria-valuetext");
+
+      divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      const keyboardExpanded = agentPane.getBoundingClientRect().width >= MIN_AGENT_WIDTH;
+      const restoreHidden = getComputedStyle(chatRestore).display === "none";
+
+      divider.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const doubleCollapsed = workbench.classList.contains("chat-collapsed") && agentPane.getBoundingClientRect().width <= 1;
+      chatRestore.click();
+      const restored = !workbench.classList.contains("chat-collapsed") && agentPane.getBoundingClientRect().width >= MIN_AGENT_WIDTH;
+      const restoreGone = getComputedStyle(chatRestore).display === "none";
+      return { collapsed, zero, restoreShown, aria, keyboardExpanded, restoreHidden, doubleCollapsed, restored, restoreGone };`,
+    expect: { collapsed: true, zero: true, restoreShown: true, aria: "Chat hidden",
+      keyboardExpanded: true, restoreHidden: true, doubleCollapsed: true, restored: true, restoreGone: true },
+  },
+  {
     // Cultivation carries a watermark of the growers' badge. It is scoped to
     // body[data-space], not to #surface-cultivation, because Cultivation's lanes
     // render into the same #surface-lane element Projects uses - keying on the

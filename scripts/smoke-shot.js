@@ -107,6 +107,20 @@ app.whenReady().then(async () => {
     await js(`setSpace("chat"); fitTerminals()`);
     await sleep(250);
     await shoot(win, "1-chat-light");
+    await js(`toggleChatPanel(true); fitTerminals()`);
+    await sleep(150);
+    const focusedWorkspace = await js(`(() => ({
+      collapsed: document.getElementById("workbench").classList.contains("chat-collapsed"),
+      chatWidth: document.getElementById("agent").getBoundingClientRect().width,
+      restoreVisible: getComputedStyle(document.getElementById("chat-restore")).display !== "none",
+      overflow: document.getElementById("shell").scrollWidth > document.getElementById("shell").clientWidth,
+    }))()`);
+    assert(focusedWorkspace.collapsed && focusedWorkspace.chatWidth <= 1, "chat panel did not collapse completely");
+    assert(focusedWorkspace.restoreVisible, "collapsed chat has no visible restore control");
+    assert(!focusedWorkspace.overflow, "terminal-focused layout overflowed the shell");
+    await shoot(win, "1a-workspace-focus");
+    await js(`document.getElementById("chat-restore").click()`);
+    assert(await js(`document.getElementById("agent").getBoundingClientRect().width >= 300`), "chat panel did not restore");
     await js(`setSpace("projects")`); await sleep(900); await shoot(win, "2-projects-home");
     await js(`document.querySelector('[data-lane="deployments"]').click()`); await sleep(900); await shoot(win, "3-projects-deployments");
     await js(`document.querySelector('[data-lane="deepwork"]').click()`); await sleep(600); await shoot(win, "4-projects-deepwork");

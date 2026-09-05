@@ -424,6 +424,10 @@
       return JSON.parse(decodeURIComponent(escape(atob(part))));
     } catch { return {}; }
   }
+  // Every slug the catalog sells. Same list as main.js and web-bridge.js, and
+  // scripts/test-plan.js compares all three: a shorter list here would tell a
+  // paying account it is free.
+  const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
   function currentUser() {
     if (!config.token) return null;
     const p = decodeJwt(config.token);
@@ -1554,6 +1558,52 @@
         if (Browser) await Browser.open({ url: portal.toString() });
         else window.open(portal.toString(), "_blank", "noopener");
         return { ok: true };
+      },
+    },
+
+    /* The member's own plan, and why the phone cannot sell it.
+
+       Parity with the desktop bridge (scripts/test-mobile-bridge.js requires
+       every desktop method to exist here), but two of the four are stated
+       refusals rather than working calls, for two separate and both real
+       reasons:
+
+         · catalog — the checkout Worker answers with an Access-Control-Allow-
+           Origin allowlist naming crowelogic.com, not a wildcard. A fetch from
+           capacitor://localhost is refused by the browser after the request has
+           already been made. The desktop gets away with it by fetching from the
+           main process, where CORS does not apply, and the web is on the listed
+           origin. The phone is neither, so asking would fail silently and the
+           card would show "price at checkout" forever.
+
+         · checkout — selling a subscription to digital content inside an iOS or
+           Android app is the store's business, through its own purchase API.
+           Sending the buyer out to Stripe from in-app is the thing both review
+           teams reject for. `license.billing` above is a different case and
+           stays: managing a subscription that already exists is account
+           management, which both stores permit.
+
+       plan and refresh are the token's own claim, so they are real here. That
+       means the phone can say what tier this Crowe ID is on, and pick up a tier
+       bought elsewhere on the next refresh, which is the useful half. */
+    billing: {
+      plan: async () => {
+        await ready;
+        const u = currentUser();
+        const tier = u ? String(u.tier || "") : "";
+        return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) };
+      },
+      catalog: async () => ({ error: "The price list is not readable from the phone. Prices and plans are at crowelogic.com." }),
+      checkout: async () => ({
+        ok: false,
+        error: "Subscribing happens on the web or in the desktop app, not in the phone app. Sign in at crowelogic.com with this same Crowe ID and the plan reaches this phone on its next sign-in.",
+      }),
+      refresh: async () => {
+        await ready;
+        const t = await refreshToken();
+        const u = currentUser();
+        const tier = u ? String(u.tier || "") : "";
+        return { ok: Boolean(t), plan: { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) } };
       },
     },
 

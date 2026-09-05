@@ -651,6 +651,27 @@
       async billing() { return { portalUrl: "" }; },
       async select() { return { ok: true }; },
     },
+    /* A paying member, matching the license stub above, which answers with a
+       real workspace and an allowed entitlement. The preview is what the app
+       looks like to somebody who is in, so plan.js draws no Upgrade pill and
+       adds nothing to the transcript here. The catalog stub is still real
+       enough to price the card for anyone who raises crowe:paywall by hand
+       while working on it; prices in it are the preview's own props, not the
+       ladder, and this file never reaches a build. */
+    billing: {
+      async plan() { return { email: "you@crowelogic.com", tier: "pro", known: true, paid: true }; },
+      async catalog() {
+        return { ladder: [
+          { slug: "pro", name: "Crowe Logic Pro", amount: 9900, interval: "month", available: true, contactOnly: false,
+            features: ["Everything in Personal", "CroweLM frontier models", "Crowe Nimbus managed cloud", "DeepParallel reasoning engine"] },
+          { slug: "scale", name: "Crowe Logic Scale", amount: 24900, interval: "month", available: true, contactOnly: false, features: ["API and compute at scale"] },
+          { slug: "studio", name: "Crowe Logic Studio", amount: 29900, interval: "month", available: true, contactOnly: false, features: ["The production surfaces"] },
+          { slug: "business", name: "Crowe Logic Business", amount: 49900, interval: "month", available: true, contactOnly: false, features: ["Seats, SSO and support"] },
+        ] };
+      },
+      async checkout() { return { ok: false, error: "The preview does not sell." }; },
+      async refresh() { return { ok: true, plan: { email: "you@crowelogic.com", tier: "pro", known: true, paid: true } }; },
+    },
     update: {
       async check() { return { status: "dev" }; },
       async download() { return { status: "dev" }; },
