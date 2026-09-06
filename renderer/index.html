@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <title>Crowe Logic</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="theme-veil.js"></script>
 </head>
 <body>
-  <!-- The theme, before anything is drawn: theme-veil.js, loaded first in
-       <head> so nothing can paint ahead of it. See that file for why. -->
+  <!-- The theme, before anything is drawn: external for the strict script CSP,
+       but after <body> exists so it can apply the class synchronously. -->
+  <script src="theme-veil.js"></script>
 
   <!-- The launch veil. In the markup rather than built by renderer.js, because
        a veil that arrives on the first script tick has already let the bare

@@ -118,6 +118,10 @@
     // gate announces when it has run, and the web copy is applied again, in its
     // pocket phrasing, over the top.
     window.addEventListener("crowe:mobile-ui", () => webWelcome(transcript, true));
+    window.addEventListener("crowe:onboarding-shown", (event) => {
+      const root = event.detail && event.detail.root;
+      if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(webCopy);
+    });
     new MutationObserver((records) => {
       webWelcome(transcript);
       if (!records.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1))) return;

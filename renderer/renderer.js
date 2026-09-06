@@ -3589,7 +3589,9 @@ async function maybeShowOnboarding(cfg) {
   laterBtn.className = "ghost"; laterBtn.textContent = "Explore first";
   laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); b.remove(); });
   row.appendChild(signinBtn); row.appendChild(laterBtn);
-  b.appendChild(row); scrollBottom();
+  b.appendChild(row);
+  try { window.dispatchEvent(new CustomEvent("crowe:onboarding-shown", { detail: { root: b } })); } catch (e) { /* noop */ }
+  scrollBottom();
 }
 
 /* Swaps the static masked logotype for the animated one. The motion cut has to

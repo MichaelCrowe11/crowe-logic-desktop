@@ -224,6 +224,7 @@
   const transcript = $("transcript");
   if (transcript) {
     mobiliseWelcome(transcript);
+    transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy);
     // Both the welcome and the first-run card are rebuilt on a new chat, so the
     // swap runs on every change to the transcript rather than once at load.
     // innerHTML rewriting would drop the card's buttons and their handlers, so
@@ -236,6 +237,10 @@
       // which lands inside a message that already exists — never triggers it.
       setTimeout(() => transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy), 0);
     }).observe(transcript, { childList: true });
+    window.addEventListener("crowe:onboarding-shown", (event) => {
+      const root = event.detail && event.detail.root;
+      if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(mobiliseCopy);
+    });
   }
 
   /* The composer's placeholder names what the tier lets the agent do, and every
