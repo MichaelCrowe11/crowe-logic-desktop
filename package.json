@@ -54,6 +54,7 @@
       "main.js",
       "harness.js",
       "grow-schema.js",
+      "sense.js",
       "rooms/**",
       "preload.js",
       "companion.js",
