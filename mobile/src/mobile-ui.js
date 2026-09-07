@@ -224,6 +224,7 @@
   const transcript = $("transcript");
   if (transcript) {
     mobiliseWelcome(transcript);
+    transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy);
     // Both the welcome and the first-run card are rebuilt on a new chat, so the
     // swap runs on every change to the transcript rather than once at load.
     // innerHTML rewriting would drop the card's buttons and their handlers, so
@@ -236,6 +237,13 @@
       // which lands inside a message that already exists — never triggers it.
       setTimeout(() => transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy), 0);
     }).observe(transcript, { childList: true });
+    // The onboarding card is filled after its empty message node is appended.
+    // Listen for the completed card as well as the DOM mutation so the phone
+    // never exposes desktop-only copy because two task queues happened to race.
+    window.addEventListener("crowe:onboarding-shown", (event) => {
+      const root = event.detail && event.detail.root;
+      if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(mobiliseCopy);
+    });
   }
 
   /* The composer's placeholder names what the tier lets the agent do, and every
@@ -286,10 +294,13 @@
      conversation, it is not a file manager. */
   const composerForm = $("composer");
   if (composerForm && window.crowePhone) {
+    const frame = composerForm.querySelector(".composer-frame");
     const foot = composerForm.querySelector(".composer-foot");
+    const actions = composerForm.querySelector(".composer-actions");
     const row = document.createElement("div");
     row.id = "m-attach-row";
-    composerForm.insertBefore(row, composerForm.firstChild);
+    if (frame && foot) frame.insertBefore(row, foot);
+    else composerForm.insertBefore(row, composerForm.firstChild);
     const picker = document.createElement("input");
     picker.type = "file"; picker.multiple = true; picker.hidden = true;
     picker.accept = "text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
@@ -299,7 +310,8 @@
     clipBtn.setAttribute("aria-label", "Attach a file from this phone");
     clipBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.5 12 20a5.2 5.2 0 0 1-7.4-7.4l8.6-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg>';
     clipBtn.addEventListener("click", () => picker.click());
-    if (foot) foot.insertBefore(clipBtn, foot.firstChild);
+    if (actions) actions.insertBefore(clipBtn, actions.firstChild);
+    else if (foot) foot.insertBefore(clipBtn, foot.firstChild);
     composerForm.appendChild(picker);
     picker.addEventListener("change", async () => {
       for (const file of picker.files || []) {

@@ -22,7 +22,7 @@ Generated 2026-09-03 from `package-lock.json` (production dependencies only). Re
 | electron-updater | 6.8.9 | MIT | https://www.npmjs.com/package/electron-updater |
 | fs-extra | 10.1.0 | MIT | https://www.npmjs.com/package/fs-extra |
 | graceful-fs | 4.2.11 | ISC | https://www.npmjs.com/package/graceful-fs |
-| js-yaml | 4.3.1 | MIT | https://www.npmjs.com/package/js-yaml |
+| js-yaml | 4.3.2 | MIT | https://www.npmjs.com/package/js-yaml |
 | jsonfile | 6.2.1 | MIT | https://www.npmjs.com/package/jsonfile |
 | lazy-val | 1.0.5 | MIT | https://www.npmjs.com/package/lazy-val |
 | lodash.escaperegexp | 4.1.2 | MIT | https://www.npmjs.com/package/lodash.escaperegexp |

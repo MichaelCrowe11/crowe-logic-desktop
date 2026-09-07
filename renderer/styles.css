@@ -21,8 +21,8 @@
 
 :root {
   /* paper surfaces (rise = lighter + top light) */
-  --cream: #f6f6f8; --panel: #fafafc; --raised: #ffffff;
-  --ink: #17171a; --muted: #63636c;
+  --cream: #f7f3ea; --panel: #fbf8f1; --raised: #fffdf8;
+  --ink: #1a1714; --muted: #6b6457;
   --gold: #b8893a; --gold-soft: #c9a227; --gold-deep: #8c682c;
   /* Gold as text needs a darker step on paper to clear 4.5:1; as a border or
      fill it does not. --gold-text is the text-safe one, per theme. */
@@ -32,7 +32,7 @@
      on --gold. */
   --focus: var(--gold-deep);
   --blue: #2E5AAD;
-  --line: rgba(23,23,26,0.11); --line-strong: rgba(23,23,26,0.22);
+  --line: rgba(64,52,38,0.12); --line-strong: rgba(64,52,38,0.24);
   --hair-top: rgba(255,255,255,0.65);
   --z1: 0 1px 2px rgba(26,23,20,0.05);
   --z2: 0 1px 2px rgba(26,23,20,0.05), 0 10px 28px -14px rgba(26,23,20,0.18), inset 0 1px 0 var(--hair-top);
@@ -571,21 +571,101 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
 @media (prefers-reduced-motion: reduce) {
   .said.streaming > .md-tail > :last-child::after,
   .said.streaming > :last-child::after { animation: none; }
+  .composer-status[data-state="running"]::before { animation: none; }
 }
 
 /* ── Composer ── */
-#composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel);
-  box-shadow: inset 0 1px 0 var(--hair-top); }
-#input { flex: 1; resize: none; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
-  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 13px; max-height: 160px;
-  transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease); }
-#input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z1); }
-#send { background: var(--ink); color: var(--cream); border: none; border-radius: var(--r-sm); padding: 0 16px;
-  font-weight: 600; letter-spacing: .1px; cursor: pointer; transition: background 120ms var(--ease), transform 80ms var(--ease); }
+/* The composer sizes itself by its own column, not the viewport: the chat pane
+   can be 300px wide inside a 1280px window, and the phone is that wide edge to
+   edge. The footer's container query below keys off this. */
+#composer { display: block; padding: 10px 14px 12px; border-top: 1px solid var(--line); background: var(--panel);
+  box-shadow: inset 0 1px 0 var(--hair-top); container: composer / inline-size; }
+/* One sheet. The text starts at the top of it with nothing labelled above it,
+   the way a page does, and the controls sit under the text on the same surface
+   with no band or rule between. A hairline holds the sheet; on focus the
+   hairline turns gold, and that is where gold appears until the run begins. */
+.composer-frame { overflow: hidden; background: var(--raised); border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl); box-shadow: var(--z1);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.composer-frame:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z1); }
+#input { display: block; width: 100%; min-height: 68px; max-height: 240px; resize: none; border: 0; outline: 0;
+  padding: 13px 15px 4px; background: transparent; color: var(--ink); font-family: var(--body); font-size: 15px;
+  line-height: 1.5; box-shadow: none; }
+/* Mode on the left, actions on the right, and neither may ever shrink: the
+   segmented control clips instead of ellipsizing, and a clipped "Execute" is a
+   mode the operator cannot see or reach. The row wraps instead, so a font that
+   renders wider than measured costs a line, never a button. */
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0;
+  padding: 4px 8px 8px 9px; }
+.composer-mode, .composer-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.composer-actions { margin-left: auto; }
+/* The mode control is a soft track with one raised cell, not a bordered
+   four-cell toolbar. Only the active label carries the tier colour. */
+.composer-mode .seg { border: 0; border-radius: 8px; padding: 2px; gap: 1px; box-shadow: none;
+  background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.composer-mode .seg-btn { border: 0; border-radius: 6px; height: 24px; padding: 0 10px; font-size: var(--fs-cap);
+  font-weight: 500; letter-spacing: .1px; white-space: nowrap; color: var(--muted); }
+.composer-mode .seg-btn:hover { color: var(--ink); }
+.composer-mode .seg-btn.active { color: var(--ink); background: var(--raised); font-weight: 600; box-shadow: var(--z1); }
+/* Below this width the mode row takes the whole line and the buttons share it
+   evenly; the actions sit under it, right-aligned; the keyboard hint goes. The
+   threshold is the composer's own width, so it holds in a dragged-narrow chat
+   pane and on a phone alike. */
+@container composer (max-width: 400px) {
+  .composer-mode { flex: 1 1 100%; }
+  .composer-mode #autonomy { flex: 1; }
+  .composer-mode .seg-btn { flex: 1; padding-inline: 4px; }
+  .composer-actions { width: 100%; justify-content: flex-end; }
+  .composer-help { display: none; }
+}
+.composer-actions .voice-btn { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%;
+  border-color: transparent; background: transparent; color: var(--muted); cursor: pointer; }
+.composer-actions .voice-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.composer-actions .voice-btn.unavailable { opacity: .35; }
+.composer-actions .voice-btn .ic { width: 15px; height: 15px; }
+/* Send is a disc of ink with an arrow going up: the prompt goes up into the run. */
+#send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%;
+  background: var(--ink); color: var(--cream); cursor: pointer;
+  transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease), transform var(--dur-fast) var(--ease); }
+#send .ic { width: 16px; height: 16px; }
 #send:hover { background: var(--gold-deep); }
 #send:active { transform: translateY(1px); }
+/* With nothing to send, Send waits rather than asks. It comes back to full
+   weight the moment there is text, or under the pointer. */
+.composer-frame:not(.has-input) #send { opacity: .45; }
+.composer-frame:not(.has-input) #send:hover, .composer-frame:not(.has-input) #send:focus-visible { opacity: 1; }
 body.dark #send { background: var(--gold); color: var(--on-gold); }
 body.dark #send:hover { background: var(--gold-soft); }
+/* Under the sheet, one caption line in mono: which model answers, whether it
+   is answering now, how to send, and, once the text runs long, how much of the
+   limit is used. At rest it says only the model. The status is a live region
+   at every state; only its visibility changes. */
+.composer-caption { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; padding: 7px 6px 0;
+  color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.4; letter-spacing: .02em; }
+.composer-meta { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; }
+.composer-model { color: var(--muted); }
+.composer-status { display: inline-flex; align-items: center; gap: 6px; }
+.composer-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+/* At rest the status is clipped, not removed: display:none would drop it from
+   the accessibility tree, and the first change to Running would then arrive as
+   a new region rather than an announcement. */
+.composer-status[data-state="ready"], .composer-status:not([data-state]) { position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.composer-status[data-state="running"] { color: var(--gold-text); }
+.composer-status[data-state="running"]::before { background: var(--gold); box-shadow: 0 0 0 3px var(--accent-wash); animation: pulse 1.2s ease-in-out infinite; }
+.composer-status[data-state="error"] { color: var(--err-fg); }
+.composer-status[data-state="error"]::before { background: var(--err-fg); }
+.composer-status[data-state="note"]::before { background: var(--muted); }
+/* The keyboard hint shows while the box is focused and empty, which is the one
+   moment it answers a question; typing puts it away. It leaves the flow rather
+   than fading, so the count on the right never wraps around a blank, and it
+   yields the line whenever the status has something to say. */
+.composer-help { display: none; margin-left: auto; text-align: right; }
+.composer-frame:focus-within:not(.has-input) + .composer-caption .composer-help { display: inline; }
+#composer .composer-caption:has(.composer-status[data-state]:not([data-state="ready"])) .composer-help { display: none; }
+.composer-count { display: none; flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
+.composer-caption.is-long .composer-count { display: inline; }
+.composer-caption.is-near-limit .composer-count { color: var(--err-fg); }
 
 /* ── Workspace tabs + panes ── */
 .tabs { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;
@@ -773,8 +853,12 @@ body.dark .side-new .ic { color: var(--gold); }
 #autonomy[data-tier="plan"] .seg-btn.active, #autonomy[data-tier="edit"] .seg-btn.active, #autonomy[data-tier="execute"] .seg-btn.active { color: var(--tier); }
 
 /* ── Stop button ── */
-#stop { background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line);
-  border-radius: var(--r-lg); padding: 0 16px; font-weight: 600; cursor: pointer; }
+/* Stop stands exactly where Send stood, in Send's geometry, in the error
+   colours: the same control has changed meaning, not moved. */
+#stop { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; box-sizing: border-box; border-radius: 50%;
+  background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line); cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+#stop .ic { width: 12px; height: 12px; }
 #stop:hover { background: var(--err-fg); color: var(--cream); }
 .stopped { font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); border-left: 2px solid var(--muted);
   padding-left: 10px; margin: 6px 0; }
@@ -1235,12 +1319,6 @@ body.dark .modal-card, body.dark .plug-row { border-top-color: rgba(255,255,255,
 .card { box-shadow: var(--z2); }
 .toolcard:hover { transform: translateY(-1px); box-shadow: var(--z2); transition: transform 120ms var(--ease), box-shadow 120ms var(--ease); }
 
-/* Composer is the hero surface: one step lighter, lit bevel, decisive focus. */
-#composer { padding: 14px; }
-#input { background: var(--raised); border-color: var(--line-strong);
-  border-top-color: var(--hair-top); box-shadow: var(--z2); font-size: var(--fs-body); }
-#input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z2); }
-
 /* Welcome reads editorial: larger Fraunces, tighter measure. */
 .welcome h1 { font-size: var(--fs-display); font-weight: 540; }
 .welcome p { font-size: var(--fs-body); }
@@ -1274,9 +1352,6 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .message-copy { position:absolute; right:0; bottom:0; opacity:.5; transition:opacity 120ms var(--ease), border-color 120ms var(--ease); }
 .msg:hover .message-copy, .message-copy:focus-visible { opacity:1; }
 .message-copy.copied, #copy-conversation.copied { color:var(--ok); border-color:var(--ok); }
-
-/* Send button gets the gold hover like primary; send/stop share height with input. */
-#send, #stop { align-self: stretch; }
 
 /* Cards: gentle lift on hover so surfaces feel alive but not bouncy. */
 .card { transition: transform 140ms var(--ease), box-shadow 140ms var(--ease), border-color 140ms var(--ease); }
@@ -1536,22 +1611,12 @@ body.dark .dock-icon:hover { color: var(--gold); }
 #addpanel .pal-row:hover .ic { color: var(--gold-deep); }
 body.dark #addpanel .pal-row:hover .ic { color: var(--gold); }
 
-/* ══ Composer: autonomy and model sit with the input, not in the title bar ══ */
-#composer { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px 11px; }
-#input { width: 100%; }
-.composer-foot { display: flex; align-items: center; gap: 8px; }
-.composer-foot .spacer { flex: 1; }
-.composer-foot .seg { background: transparent; border-color: var(--line); }
-.composer-foot .seg-btn { padding: 3px 11px; font-size: var(--fs-cap); }
-.badge.quiet { color: var(--muted); background: transparent; font-size: var(--fs-cap); }
-body.dark .badge.quiet { color: var(--muted); }
-.composer-foot .voice-btn { height: 26px; font-size: var(--fs-cap); }
-#send, #stop { height: 28px; padding: 0 16px; font-size: var(--fs-sm); align-self: auto; }
-
 /* The conversation toolbar is a hairline affordance, not a bar. */
 .conversation-toolbar { border-bottom: none; background: transparent; padding: 8px 22px 0; }
 .conversation-toolbar .ghost { opacity: .6; transition: opacity var(--dur) var(--ease); }
 .conversation-toolbar .ghost:hover { opacity: 1; }
+.conversation-toolbar #chat-close { margin-right: -6px; }
+body.mobile #chat-close { display: none; }
 
 .side-new:focus-visible, .side-foot-btn:focus-visible, .dock-tab:focus-visible, .dock-icon:focus-visible {
   outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -1971,12 +2036,26 @@ button.primary:active, .rc-open:active, .room-send:active {
 
 /* The composer field is the one recessed surface: it is a place to put
    something into, and the depth says so. */
-#input, .room-input, .rc-name {
+.room-input, .rc-name {
   box-shadow: inset 0 1px 3px var(--glass-edge);
 }
-#input:focus, .room-input:focus, .rc-name:focus {
+.room-input:focus, .rc-name:focus {
   box-shadow: inset 0 1px 3px var(--glass-edge), 0 0 0 3px var(--focus-halo);
 }
+
+/* CSP-safe replacements for small layout attributes used by dynamic settings
+   and first-run content. Keeping them named makes the strict policy auditable. */
+.cult-state { margin-top: 18px; }
+.companion-qr { display: flex; justify-content: center; padding: 10px 0; }
+.companion-actions, .onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.companion-section { margin-top: 12px; }
+.companion-device { display: flex; align-items: center; gap: 10px; }
+.companion-device-copy { flex: 1; }
+.companion-last-used, .companion-empty { opacity: .7; }
+.companion-audit { max-height: 180px; overflow: auto; font-family: var(--mono); font-size: 12px; }
+.signin-prompt-action { margin-top: 8px; }
+.onboarding-steps { margin: 4px 0 0 1.2em; line-height: 1.7; }
+.onboarding-actions { margin-top: 10px; }
 
 /* The launch veil grades with the same two lights, so the app's first frame
    already has the depth the rest of it carries. */
@@ -2004,7 +2083,7 @@ button.primary:active, .rc-open:active, .room-send:active {
 }
 @media (prefers-reduced-motion: reduce) {
   .rc-template:hover, .rc-agent:hover,
-  button.primary:active, .rc-open:active, .room-send:active { transform: none; }
+  button.primary:active, .rc-open:active, .room-send:active, #send:active { transform: none; }
 }
 
 

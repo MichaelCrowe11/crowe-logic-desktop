@@ -52,7 +52,7 @@
     // instead of snapping all twelve arms at once.
     const arm = (a, kind) =>
       `<polygon class="cm-arm cm-${kind}" points="${a.pts}" fill="url(#${id}-${kind === "gold" ? "co" : "hy"})"` +
-      ` style="animation-delay:${(a.deg / 360 * -1.8).toFixed(2)}s"/>`;
+      ` data-animation-delay="${(a.deg / 360 * -1.8).toFixed(2)}s"/>`;
     /* The tonal scale, same construction as scripts/gen-mark.js: one
        user-space radial centred on the spore, so each arm is warm at the root
        and cool at the tip without any per-arm alignment. Stops read CSS
@@ -89,6 +89,10 @@
     opts = opts || {};
     el.classList.add("cl-mark");
     el.innerHTML = svg(opts);
+    el.querySelectorAll("[data-animation-delay]").forEach((arm) => {
+      arm.style.animationDelay = arm.dataset.animationDelay;
+      delete arm.dataset.animationDelay;
+    });
     setState(el, opts.state || "rest");
     return {
       el,

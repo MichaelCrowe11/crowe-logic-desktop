@@ -2,9 +2,15 @@
 # Mirrors scripts/publish-r2.sh key-for-key, but uploads with rclone (swmr2:)
 # because wrangler's sized PUT dies with "fetch failed" on the >100MB artifacts.
 set -euo pipefail
-cd /private/tmp/claude-501/-Users-crowelogic/58717804-8e4d-40b8-bd7e-75c479a036a6/scratchpad/desktop-0.24.4
-root=release
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root=$(cd "${1:-$repo/release}" && pwd)
+cd "$repo"
 version=$(node -p "require('./package.json').version")
+node scripts/preflight-release.js "$root" "$version"
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  echo "publish-rclone: dry run passed; nothing uploaded"
+  exit 0
+fi
 BUCKET=swmr2:crowe-releases
 echo "publish-rclone: publishing $version from $root"
 
@@ -26,7 +32,7 @@ done
 
 wanted=$(mktemp)
 for file in "${feeds[@]}"; do
-  sed -n 's/^[[:space:]]*-[[:space:]]*url:[[:space:]]*//p' "$file" >> "$wanted"
+  node -e 'const fs=require("fs"),yaml=require("js-yaml"); for(const f of yaml.load(fs.readFileSync(process.argv[1],"utf8")).files) console.log(f.url)' "$file" >> "$wanted"
 done
 sort -u -o "$wanted" "$wanted"
 
@@ -68,3 +74,4 @@ for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
   [ -z "$file" ] || put "desktop/channel/$os/$name" "$file"
 done
 echo "PUBLISH_UPLOADS_DONE"
+node scripts/verify-release.js "$version"

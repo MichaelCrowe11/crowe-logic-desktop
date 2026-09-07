@@ -30,6 +30,8 @@ const stamp = dev ? String(Date.now()) : version;
 // because everything else exists to serve them.
 const COPY = [
   ["renderer/styles.css", "styles.css"],
+  ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
+  ["renderer/adopted-styles.js", "adopted-styles.js"],
   ["renderer/mark-geometry.js", "mark-geometry.js"],
   ["renderer/mark.js", "mark.js"],
   ["renderer/renderer.js", "renderer.js"],
@@ -52,7 +54,7 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
-  "styles.css", "mobile.css", "grow-schema.js", "mobile-bridge.js",
+  "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "mobile-bridge.js",
   "mark-geometry.js", "mark.js", "renderer.js", "mobile-ui.js",
 ];
 

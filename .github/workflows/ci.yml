@@ -64,8 +64,14 @@ jobs:
       # and a directory added to the source tree and not to that list is a
       # crash at startup that every other suite here passes straight through:
       # they all run from the source tree, where the file is present.
+      - name: Validate release preflight guardrails
+        run: node scripts/test-preflight-release.js
+
       - name: Run packaging tests
         run: node scripts/test-packaging.js
+
+      - name: Validate Electron security boundaries
+        run: node scripts/test-electron-security.js
 
       - name: Check preview.html is regenerated
         run: npm run preview:check

@@ -17,7 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "test": "node scripts/test-harness.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-electron-security.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-preflight-release.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
     "rooms:web": "node scripts/build-rooms-web.js",
     "rooms:web:check": "node scripts/build-rooms-web.js --check",
@@ -29,7 +29,8 @@
     "icons": "node scripts/gen-mark.js && electron scripts/make-icons.js",
     "icons:check": "node scripts/gen-mark.js --check && electron scripts/make-icons.js --check",
     "mobile:www": "node mobile/scripts/build-www.js",
-    "mobile:test": "node scripts/test-mobile-bridge.js"
+    "mobile:test": "node scripts/test-mobile-bridge.js",
+    "publish:rclone": "bash scripts/publish-rclone.sh"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -39,7 +40,8 @@
   },
   "devDependencies": {
     "electron": "^43.2.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^4.3.2"
   },
   "overrides": {
     "brace-expansion": "^5.0.8"
@@ -52,6 +54,7 @@
     },
     "files": [
       "main.js",
+      "main-security.js",
       "harness.js",
       "grow-schema.js",
       "rooms/**",

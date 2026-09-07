@@ -166,6 +166,197 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "the operator composer exposes state, guidance, and accessible controls",
+    body: `const frame = document.querySelector(".composer-frame");
+      input.value = "check this"; input.dispatchEvent(new Event("input"));
+      const filled = frame.classList.contains("has-input");
+      const count = $("composer-count").textContent;
+      setRunning(true);
+      const busy = $("composer").getAttribute("aria-busy");
+      const runningState = frame.classList.contains("is-running") && $("composer-status").textContent === "Running";
+      setRunning(false); input.value = ""; input.dispatchEvent(new Event("input"));
+      return { filled, count, busy, runningState, ready: $("composer-status").textContent,
+        max: input.maxLength, described: input.getAttribute("aria-describedby"),
+        voiceLabels: [$("voice-input").getAttribute("aria-label"), $("voice-output").getAttribute("aria-label")].join("|") };`,
+    expect: { filled: true, count: "10 / 50k", busy: "true", runningState: true, ready: "Ready",
+      max: 50000, described: "composer-help", voiceLabels: "Dictate with microphone|Read the latest response aloud" },
+  },
+  {
+    // The segmented mode control clips rather than ellipsizes, so a footer that
+    // shrank hid Execute at the default split and Edit too in a dragged-narrow
+    // pane. The row must wrap instead. Measured at the default split and at the
+    // narrowest the chat pane can be dragged.
+    name: "the composer mode row is never clipped: wide it shares a line, narrow it wraps and stretches",
+    body: `const before = currentWorkbenchSplit();
+      const frame = document.querySelector(".composer-frame");
+      const auto = $("autonomy");
+      const within = (a, b) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+      const measure = () => {
+        const a = auto.getBoundingClientRect();
+        const mode = document.querySelector(".composer-mode").getBoundingClientRect();
+        const acts = document.querySelector(".composer-actions").getBoundingClientRect();
+        const btns = [...auto.querySelectorAll(".seg-btn")];
+        const textFits = btns.every((b) => { const r = document.createRange(); r.selectNodeContents(b); return within(r.getBoundingClientRect(), b.getBoundingClientRect()); });
+        return {
+          ok: btns.every((b) => within(b.getBoundingClientRect(), a)) && textFits && auto.scrollWidth <= auto.clientWidth && within(acts, frame.getBoundingClientRect()),
+          sameRow: Math.abs((mode.top + mode.height / 2) - (acts.top + acts.height / 2)) < 2,
+          stretched: Math.abs(a.width - mode.width) < 1,
+        };
+      };
+      setWorkbenchSplit(Math.round(workbench.getBoundingClientRect().width * 0.42));
+      const wide = measure();
+      setWorkbenchSplit(MIN_AGENT_WIDTH);
+      const narrow = measure();
+      setWorkbenchSplit(before);
+      return { wideOk: wide.ok, wideSameRow: wide.sameRow, narrowOk: narrow.ok, narrowSameRow: narrow.sameRow,
+        narrowStretched: narrow.stretched, badgeInCaption: !!$("model-badge").closest(".composer-caption") };`,
+    expect: { wideOk: true, wideSameRow: true, narrowOk: true, narrowSameRow: false, narrowStretched: true, badgeInCaption: true },
+  },
+  {
+    // The label was a painted string for a long time. It must follow the
+    // configured model at rest and the router's choice during a turn, and an id
+    // the catalog does not know must still be shown rather than swallowed.
+    name: "the model label follows the configured model at rest and the routed model during a turn",
+    body: `const badge = $("model-badge");
+      await refreshModelBadge(await window.crowe.getConfig());
+      const rest = badge.textContent;
+      setModelBadge("zz-unknown-model"); const routed = badge.textContent;
+      setModelBadge(""); const back = badge.textContent;
+      return { restNamed: rest.length > 0 && rest === configuredModelLabel, routed, back: back === rest,
+        inCaption: !!badge.closest(".composer-caption"), titled: badge.title.length > 0 };`,
+    expect: { restNamed: true, routed: "zz-unknown-model", back: true, inCaption: true, titled: true },
+  },
+  {
+    // Ready is the resting state and is not drawn; running, error and note are.
+    // The element is the same live region throughout so a reader hears each:
+    // at rest it is clipped to a pixel rather than display:none, which would
+    // take it out of the accessibility tree and swallow the first change.
+    name: "the composer status is a live region that shows running, failure and notes, and rests unseen",
+    body: `const st = $("composer-status");
+      const shown = () => { const r = st.getBoundingClientRect(); return getComputedStyle(st).display !== "none" && r.width > 1 && r.height > 1; };
+      setComposerStatus("Ready"); const idle = { shown: shown(), text: st.textContent, inTree: getComputedStyle(st).display !== "none" && getComputedStyle(st).visibility !== "hidden" };
+      setComposerStatus("Failed", "error"); const err = { shown: shown(), text: st.textContent, state: st.dataset.state, color: getComputedStyle(st).color };
+      setComposerStatus("Running", "running"); const run = { shown: shown(), state: st.dataset.state, color: getComputedStyle(st).color };
+      setComposerStatus("Ready");
+      return { idleShown: idle.shown, idleInTree: idle.inTree, idleText: idle.text, errShown: err.shown, errText: err.text, errState: err.state,
+        runShown: run.shown, runState: run.state, coloursDiffer: err.color !== run.color,
+        role: st.getAttribute("role"), live: st.getAttribute("aria-live") };`,
+    expect: { idleShown: false, idleInTree: true, idleText: "Ready", errShown: true, errText: "Failed", errState: "error",
+      runShown: true, runState: "running", coloursDiffer: true, role: "status", live: "polite" },
+  },
+  {
+    // Enter inside an IME composition commits the candidate, not the message.
+    name: "Enter sends; Shift+Enter and Enter inside an IME composition do not",
+    body: `const orig = send; let calls = 0; send = () => { calls++; };
+      const fire = (init) => input.dispatchEvent(new KeyboardEvent("keydown", Object.assign({ key: "Enter", bubbles: true, cancelable: true }, init)));
+      input.value = "hello"; input.dispatchEvent(new Event("input"));
+      fire({ isComposing: true }); const composing = calls;
+      fire({ shiftKey: true }); const shifted = calls;
+      fire({}); const plain = calls;
+      fire({ metaKey: true }); const meta = calls;
+      send = orig; input.value = ""; input.dispatchEvent(new Event("input"));
+      return { composing, shifted, plain, meta };`,
+    expect: { composing: 0, shifted: 0, plain: 1, meta: 2 },
+  },
+  {
+    // A bridge that rejects (IPC failure, lost network on the web mirror) used
+    // to leave the bubble half-built and the failure in the console only. The
+    // transcript must say it, the caption must say it, and the composer must
+    // come back ready to send again.
+    name: "a run the bridge rejects is said in the transcript and the caption, and the composer recovers",
+    body: `const agent = window.crowe.agent; const origRun = agent.run; const origAuth = refreshAuth;
+      const msgs0 = document.querySelectorAll(".msg").length; const mem0 = messages.length;
+      try { agent.run = async () => { throw new Error("bridge down (harness)"); }; } catch (e) {}
+      if (agent.run === origRun) throw new Error("agent.run could not be stubbed");
+      refreshAuth = async () => true;
+      try {
+        await send("harness: bridge failure");
+      } finally { agent.run = origRun; refreshAuth = origAuth; }
+      const added = [...document.querySelectorAll(".msg")].slice(msgs0);
+      const errText = (added.map((m) => m.querySelector(".err")).find(Boolean) || {}).textContent || "";
+      const st = $("composer-status");
+      const out = { bubbles: added.length, saidInTranscript: errText.includes("bridge down (harness)"),
+        caption: st.textContent, captionState: st.dataset.state, running, busy: $("composer").getAttribute("aria-busy"),
+        sendBack: !$("send").classList.contains("hidden"), stopGone: $("stop").classList.contains("hidden"),
+        memoryKept: messages.length === mem0 + 1 };
+      added.forEach((m) => m.remove()); messages.length = mem0; setComposerStatus("Ready");
+      return out;`,
+    expect: { bubbles: 2, saidInTranscript: true, caption: "Failed", captionState: "error", running: false, busy: "false",
+      sendBack: true, stopGone: true, memoryKept: true },
+  },
+  {
+    // Stop replaces Send in place: same box, same corners, same row as the
+    // voice buttons, a glyph like Send's. Only the colour says the meaning changed.
+    name: "Stop takes Send's place in Send's geometry",
+    body: `const send = $("send"), stop = $("stop");
+      const geo = (el) => { const c = getComputedStyle(el); return [c.display, c.height, c.borderRadius, c.paddingLeft, c.paddingRight, c.columnGap].join("|"); };
+      const sendGeo = geo(send), sendRect = send.getBoundingClientRect();
+      setRunning(true);
+      const stopGeo = geo(stop), stopRect = stop.getBoundingClientRect(), mic = $("voice-input").getBoundingClientRect();
+      const out = { match: sendGeo === stopGeo, stopShown: !stop.classList.contains("hidden") && stopRect.width > 0,
+        sendHidden: send.classList.contains("hidden"), glyph: !!stop.querySelector("svg"),
+        sameHeight: Math.abs(stopRect.height - sendRect.height) < 1,
+        rowWithVoice: Math.abs((stopRect.top + stopRect.height / 2) - (mic.top + mic.height / 2)) < 2 };
+      setRunning(false);
+      return out;`,
+    expect: { match: true, stopShown: true, sendHidden: true, glyph: true, sameHeight: true, rowWithVoice: true },
+  },
+  {
+    // With nothing typed, Send sits back; text brings it to full weight.
+    name: "Send waits at reduced weight until there is something to send",
+    body: `const send = $("send"); send.style.transition = "none";
+      input.value = ""; input.dispatchEvent(new Event("input"));
+      const empty = parseFloat(getComputedStyle(send).opacity);
+      input.value = "go"; input.dispatchEvent(new Event("input"));
+      const filled = getComputedStyle(send).opacity;
+      input.value = ""; input.dispatchEvent(new Event("input")); send.style.transition = "";
+      return { dimmed: empty < 1 && empty > 0.4, filled };`,
+    expect: { dimmed: true, filled: "1" },
+  },
+  {
+    // Typed at the default width, then dragged to the narrowest pane: the text
+    // reflows to more lines, and the textarea must grow with it rather than
+    // keep the height it measured for the wider box.
+    name: "the textarea refits when the pane it sits in changes width",
+    body: `const before = currentWorkbenchSplit();
+      const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const fits = () => input.scrollHeight <= input.clientHeight + 1;
+      setWorkbenchSplit(Math.round(workbench.getBoundingClientRect().width * 0.42));
+      input.value = "Audit the release pipeline for anything that could stop 0.24.6 shipping.\\nList the checks, then run them.";
+      input.dispatchEvent(new Event("input"));
+      await frames();
+      const wideFits = fits(), wideHeight = input.getBoundingClientRect().height;
+      setWorkbenchSplit(MIN_AGENT_WIDTH);
+      await frames();
+      const narrowFits = fits(), narrowHeight = input.getBoundingClientRect().height;
+      setWorkbenchSplit(before);
+      input.value = ""; input.dispatchEvent(new Event("input"));
+      await frames();
+      return { wideFits, narrowFits, grew: narrowHeight > wideHeight + 8 };`,
+    expect: { wideFits: true, narrowFits: true, grew: true },
+  },
+  {
+    // The running pulse and the Send press are motion; both must switch off under
+    // prefers-reduced-motion. Read from the CSSOM, since the harness window
+    // cannot flip the OS preference.
+    name: "the running pulse and the Send press honour prefers-reduced-motion",
+    body: `const hits = { pulse: false, press: false };
+      for (const sheet of document.styleSheets) {
+        let rules; try { rules = sheet.cssRules; } catch { continue; }
+        for (const rule of rules) {
+          if (!(rule instanceof CSSMediaRule) || !rule.conditionText.includes("prefers-reduced-motion: reduce")) continue;
+          for (const r of rule.cssRules) {
+            if (!(r instanceof CSSStyleRule)) continue;
+            const sels = r.selectorText.split(",").map((s) => s.trim());
+            if (sels.includes('.composer-status[data-state="running"]::before') && r.style.animationName === "none") hits.pulse = true;
+            if (sels.includes("#send:active") && r.style.transform === "none") hits.press = true;
+          }
+        }
+      }
+      return hits;`,
+    expect: { pulse: true, press: true },
+  },
+  {
     name: "addPanel appends a panel and makes it active",
     body: `await __reset();
       const a = await addPanel("operator");
@@ -313,10 +504,10 @@ const tests = [
                sub: n("app.localhost:3000"), zero: n("0.0.0.0:5173"), path: n("localhost/health"),
                web: n("example.com"), spoof: n("localhost.evil.com"),
                keptHttp: n("http://example.com/x"), keptHttps: n("https://localhost:8443/"), pad: n("  localhost:8123  ") };`,
-    expect: { bare: "http://localhost:8123/", ip: "http://127.0.0.1:8000", v6: "http://[::1]:8080",
-              sub: "http://app.localhost:3000", zero: "http://0.0.0.0:5173", path: "http://localhost/health",
-              web: "https://example.com", spoof: "https://localhost.evil.com",
-              keptHttp: "http://example.com/x", keptHttps: "https://localhost:8443/", pad: "http://localhost:8123" },
+    expect: { bare: "http://localhost:8123/", ip: "http://127.0.0.1:8000/", v6: "http://[::1]:8080/",
+              sub: "http://app.localhost:3000/", zero: "https://0.0.0.0:5173/", path: "http://localhost/health",
+              web: "https://example.com/", spoof: "https://localhost.evil.com/",
+              keptHttp: "https://example.com/x", keptHttps: "https://localhost:8443/", pad: "http://localhost:8123/" },
   },
   {
     name: "browser webview presents a clean Chrome UA, not an Electron one",
@@ -515,6 +706,36 @@ const tests = [
           darkTheme.foreground === lightTheme.foreground,
       };`,
     expect: { cursorChanged: true, selectionChanged: true, consoleStable: true },
+  },
+  {
+    // style-src forbids inline styles outright, and xterm's DOM renderer writes
+    // its theme, cell geometry and cursor rules into <style> elements it makes
+    // itself. Before adopted-styles.js that left the console unstyled with one
+    // CSP error per rule - and the panel still LOOKED like a terminal in a
+    // screenshot, black box and all. Assert the rules reached the cells, and
+    // that no style element in the document holds any text: the policy is only
+    // as strict as what its one permitted hash lets through, which is nothing.
+    name: "the console is styled under a CSP that forbids inline styles",
+    body: `await __reset();
+      await addPanel("terminal");
+      const t = [...terminalPanels.values()][0].term;
+      const rows = t.element.querySelector(".xterm-rows");
+      // the theme colour, resolved the way the browser would, so the check does
+      // not depend on how the token happens to be written
+      const probe = document.createElement("span");
+      probe.style.color = String(t.options.theme.foreground || "");
+      document.body.appendChild(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      const filled = [...document.querySelectorAll("style")].filter((s) => s.childNodes.length).length;
+      return {
+        active: window.croweAdoptedStylesActive === true,
+        themed: want !== "" && getComputedStyle(rows).color === want,
+        mono: /JetBrains Mono/.test(getComputedStyle(rows).fontFamily),
+        adopted: document.adoptedStyleSheets.length >= 2,
+        filled,
+      };`,
+    expect: { active: true, themed: true, mono: true, adopted: true, filled: 0 },
   },
   {
     name: "shortcut hints match the platform modifier key",
@@ -843,7 +1064,8 @@ const tests = [
     name: "the chat split collapses completely and stays recoverable",
     body: `__resetSpaces(); setSpace("chat");
       setWorkbenchSplit(480);
-      toggleChatPanel(true);
+      const closeShown = getComputedStyle(chatClose).display !== "none";
+      chatClose.click();
       const collapsed = workbench.classList.contains("chat-collapsed");
       const zero = agentPane.getBoundingClientRect().width <= 1;
       const restoreShown = getComputedStyle(chatRestore).display !== "none";
@@ -858,8 +1080,8 @@ const tests = [
       chatRestore.click();
       const restored = !workbench.classList.contains("chat-collapsed") && agentPane.getBoundingClientRect().width >= MIN_AGENT_WIDTH;
       const restoreGone = getComputedStyle(chatRestore).display === "none";
-      return { collapsed, zero, restoreShown, aria, keyboardExpanded, restoreHidden, doubleCollapsed, restored, restoreGone };`,
-    expect: { collapsed: true, zero: true, restoreShown: true, aria: "Chat hidden",
+      return { closeShown, collapsed, zero, restoreShown, aria, keyboardExpanded, restoreHidden, doubleCollapsed, restored, restoreGone };`,
+    expect: { closeShown: true, collapsed: true, zero: true, restoreShown: true, aria: "Chat hidden",
       keyboardExpanded: true, restoreHidden: true, doubleCollapsed: true, restored: true, restoreGone: true },
   },
   {
@@ -1025,6 +1247,29 @@ const tests = [
       extra.remove();
       return { multiple: svgs.length > 1, dupes: dupes.join(",") || "none", bound, doubled };`,
     expect: { multiple: true, dupes: "none", bound: true, doubled: false },
+  },
+  {
+    // The choreography ships inside the SVG as a <style> block, which the CSP
+    // would drop the moment it was inlined. It has to arrive through the CSS
+    // Object Model instead, once for every copy on the page, and the copies
+    // must carry no style element at all - one that still did would be a dead
+    // picture with a console error attached, which is exactly how this broke.
+    name: "the logotype's choreography is adopted, not inlined",
+    body: `await liveLockups();
+      const svgs = [...document.querySelectorAll(".lockup svg")];
+      const keyframes = new Set();
+      for (const sheet of document.adoptedStyleSheets) {
+        for (const rule of sheet.cssRules) if (rule instanceof CSSKeyframesRule) keyframes.add(rule.name);
+      }
+      return {
+        copies: svgs.length > 0,
+        styleBlocks: document.querySelectorAll(".lockup svg style, .th-logotype svg style").length,
+        entrance: ["wordmark-arrive", "blades-arrive", "thinking-mark-arrive"].every((k) => keyframes.has(k)),
+        continuous: ["spore-drift", "blade-turn"].every((k) => keyframes.has(k)),
+        // both cuts carry the same rules, so the text is adopted exactly once
+        once: document.adoptedStyleSheets.filter((s) => [...s.cssRules].some((r) => r.name === "spore-drift")).length,
+      };`,
+    expect: { copies: true, styleBlocks: 0, entrance: true, continuous: true, once: 1 },
   },
   {
     name: "a new chat brings the welcome logotype back alive",

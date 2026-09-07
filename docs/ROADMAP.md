@@ -1,6 +1,6 @@
 # Crowe Logic desktop — roadmap & ship-readiness
 
-Status: last verified 2026-09-05 while preparing 0.24.5. Companions: HARNESS-ARCHITECTURE.md,
+Status: last verified 2026-09-07 while preparing 0.24.6. Companions: HARNESS-ARCHITECTURE.md,
 PLUGINS.md, RESEARCH-PRODUCTIVITY.md (how we would measure whether any of this
 helps anyone — a design, not a result).
 
@@ -83,7 +83,7 @@ stable; sign-in, routing, plugins, and the workbench all work end to end.
 | ~~Crash reporting + minimal telemetry~~ | flying blind post-launch | done, `main.js:59`; network submission opt-out |
 | ~~First-run onboarding (sign-in to first task)~~ | funnel dies without it | done; 3-step card with sign-in and explore |
 | CI (smoke suite on push) | regressions ship silently | **broken since ~2026-08-25**: the workflow is correct and the suite is green locally, but no run starts. Account-level Actions problem, fix at github.com/settings/billing |
-| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | the script works and 0.24.4 resolves; the daily cron re-check is down with CI |
+| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | 0.24.6 preparation fixes a hard-coded temporary checkout in the rclone publisher and adds version/size/SHA-512 preflight before uploads; 0.24.5 is the last published release on the mac and linux channels, the win channel still serves 0.24.0 because CI never built it; the daily cron re-check is down with CI |
 | ~~Dependency updates~~ | advisories accumulated with nothing filing fixes | done; dependabot files weekly grouped PRs, audit clean at 0 findings |
 | Windows signing cert | SmartScreen warning kills trust | CI plumbing wired (`release.yml` reads WINDOWS_CERTIFICATE secrets, builds unsigned while unset); the cert itself is a vendor purchase (OV/EV or Azure Trusted Signing) |
 | Gateway hardening: rate limits, plan enforcement, health endpoint | abuse + cost exposure | open, backend (not verifiable here) |
@@ -114,9 +114,10 @@ DOM (icons, panels: 67 checks, mobile shell: 22 checks, install-time spaces in
 two configurations, live rooms). The panel system and the phone shell, the
 most stateful code in the app, are the best-covered.
 
-**Path to public beta.** The distribution work is done and continuously
-verified; what is left is the vendor cert, the backend limits, and counsel
-sign-off on the legal drafts.
+**Path to public beta.** Distribution is not continuously verified while CI
+is down. Restore working runners and Windows parity, verify the published
+update feeds, reconcile the price catalog, and close the vendor certificate,
+backend limits, and legal review items before claiming public-launch readiness.
 
 ## Horizons
 

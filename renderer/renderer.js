@@ -241,10 +241,36 @@ function wordmarkMotionMarkup(cut = "sm") {
   if (!wordmarkMotionPending[cut]) {
     wordmarkMotionPending[cut] = fetch(cut === "full" ? "../assets/wordmark-motion.svg" : "../assets/wordmark-motion-sm.svg")
       .then((r) => (r.ok ? r.text() : null))
-      .then((t) => (wordmarkMotionHeld[cut] = t ? t.replace(/<\?xml[^>]*\?>/, "").trim() : null))
+      .then((t) => (wordmarkMotionHeld[cut] = t ? liftMotionStyle(t.replace(/<\?xml[^>]*\?>/, "").trim()) : null))
       .catch(() => null);
   }
   return wordmarkMotionPending[cut];
+}
+
+/* The choreography travels inside the SVG as a <style> block, and the page's
+   CSP forbids inline style blocks however they arrive - inlined by script as
+   much as written in the markup (see adopted-styles.js). So the block comes out
+   of the markup before the SVG is inlined and its rules go in through the CSS
+   Object Model, which the policy does not police. Once per distinct text: both
+   cuts carry the same rules, written on classes, so every logotype on the page
+   runs on the one adopted sheet, and the id suffixing below never has to touch
+   a stylesheet. */
+const motionStyleAdopted = new Set();
+function liftMotionStyle(markup) {
+  return markup.replace(/<style\b[^>]*>([\s\S]*?)<\/style>\s*/g, (_, css) => {
+    const text = css.trim();
+    if (text && !motionStyleAdopted.has(text)) {
+      motionStyleAdopted.add(text);
+      if (!(typeof window.croweAdoptStyle === "function" && window.croweAdoptStyle(text))) {
+        // No constructed sheets here, so no policy against inline styles either
+        // (an older WebView): a style element in the head does the same job.
+        const el = document.createElement("style");
+        el.textContent = text;
+        document.head.appendChild(el);
+      }
+    }
+    return "";
+  });
 }
 
 /* A thinking copy keeps the drawing and drops everything that only made sense
@@ -491,11 +517,88 @@ function updateHud(ev) {
   $("hud-tps").textContent = ev.tps ? `${ev.tps} tok/s` : "";
   $("hud-cost").textContent = fmtCost(sessionCost + runCost);
 }
+// The textarea's maxlength and the main process's message cap are both this
+// number; keep them together when it changes.
+const INPUT_MAX_CHARS = 50000;
+const COUNT_SHOWS_AT = 1000;
+function syncComposerInput() {
+  const frame = document.querySelector(".composer-frame");
+  const count = $("composer-count");
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 240) + "px";
+  if (frame) frame.classList.toggle("has-input", Boolean(input.value.trim()));
+  const len = input.value.length;
+  if (count) count.textContent = `${len.toLocaleString()} / ${Math.round(INPUT_MAX_CHARS / 1000)}k`;
+  // The count is a limit gauge, not a word counter: it appears once the text is
+  // long enough for the limit to be a real question, and reddens near it.
+  const caption = document.querySelector(".composer-caption");
+  if (caption) {
+    caption.classList.toggle("is-long", len >= COUNT_SHOWS_AT);
+    caption.classList.toggle("is-near-limit", len >= INPUT_MAX_CHARS * 0.9);
+  }
+}
+/* The caption under the composer says what the composer is doing. Ready is
+   the resting state and is not drawn; Running draws with the gold pulse; an
+   error or a note draws in its own colour and clears itself back to the
+   resting state unless a new state replaced it first. Screen readers hear
+   every change through the live region, Ready included. */
+let composerStatusTimer = 0;
+function setComposerStatus(text, state = "ready") {
+  const status = $("composer-status");
+  if (!status) return;
+  clearTimeout(composerStatusTimer);
+  status.textContent = text;
+  status.dataset.state = state;
+  if (state === "error" || state === "note") {
+    composerStatusTimer = setTimeout(() => {
+      if (status.dataset.state !== state) return;
+      if (running) setComposerStatus("Running", "running"); else setComposerStatus("Ready");
+    }, state === "error" ? 8000 : 4000);
+  }
+}
+/* The model label under the composer is wired, not painted. At rest it names
+   the configured model, resolved through the catalog so an id reads as a name;
+   while a turn runs it follows the router's choice, then returns. */
+let configuredModelLabel = "CroweLM";
+let catalogNames = new Map();
+function modelLabel(id) {
+  if (!id || id === "crowelm") return "CroweLM";
+  return catalogNames.get(id) || id;
+}
+function setModelBadge(id) {
+  const badge = $("model-badge");
+  if (!badge) return;
+  const label = id ? modelLabel(id) : configuredModelLabel;
+  badge.textContent = label;
+  badge.title = id ? `Answering with ${label}` : `Configured model: ${label}. The router may pick a specialist for a turn.`;
+}
+let configuredModelId = "crowelm";
+function refreshModelBadge(config) {
+  configuredModelId = (config && config.model) || "crowelm";
+  configuredModelLabel = modelLabel(configuredModelId);
+  if (!running) setModelBadge("");
+}
+/* Names come from the catalog when a surface that needs the catalog has
+   already fetched it (Home, Deployments). The label never fetches on its own:
+   on the web mirror the catalog is a network call, and a label is not worth
+   one at boot. Until then an id is shown as an id, which is still the truth. */
+function learnCatalogNames(cat) {
+  const models = Array.isArray(cat) ? cat : (cat && cat.models) || [];
+  if (!models.length) return;
+  catalogNames = new Map(models.filter((m) => m && (m.model || m.id))
+    .map((m) => [m.model || m.id, m.display || m.name || m.model || m.id]));
+  configuredModelLabel = modelLabel(configuredModelId);
+  if (!running) setModelBadge("");
+}
 function setRunning(on) {
   running = on;
   $("send").classList.toggle("hidden", on);
   $("stop").classList.toggle("hidden", !on);
   $("hud-status").textContent = on ? "running" : "idle";
+  $("composer").setAttribute("aria-busy", String(on));
+  const frame = document.querySelector(".composer-frame");
+  if (frame) frame.classList.toggle("is-running", on);
+  setComposerStatus(on ? "Running" : "Ready", on ? "running" : "ready");
 }
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
 function addRouteNode(body, ev) {
@@ -507,12 +610,19 @@ function addRouteNode(body, ev) {
 // opts.role pins the expert for this turn. Surfaces built around one specialty
 // pass it so the routing matches what the surface says it does, instead of
 // depending on the operator happening to use the right vocabulary.
+let sendGate = false;
 async function send(text, opts = {}) {
-  if (!text.trim() || running) return;
-  // Re-validate live: a token that expired since launch must not eat the turn.
-  if (!(await refreshAuth())) { showSignInPrompt(); return; }
+  if (!text.trim() || running || sendGate) return;
+  // The gate holds across the sign-in check: `running` is not set until after
+  // it, and two submits in that gap (a double keypress, a click and an Enter)
+  // would both pass the guard above and start two turns from one prompt.
+  sendGate = true;
+  try {
+    // Re-validate live: a token that expired since launch must not eat the turn.
+    if (!(await refreshAuth())) { showSignInPrompt(); setComposerStatus("Sign in to send", "note"); return; }
+  } finally { sendGate = false; }
   addUser(text); messages.push({ role: "user", content: text });
-  input.value = ""; input.style.height = "auto";
+  input.value = ""; syncComposerInput();
   const body = addAssistant(); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
@@ -621,7 +731,7 @@ async function send(text, opts = {}) {
       addNotice(body, `Stopped at this turn's ${ev.limit || "ceiling"}: ${spent}. Raise it in Settings if this turn needed more.`, "budget");
     }
     else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
-    else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) $("hud-model").textContent = ev.model; }
+    else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) { $("hud-model").textContent = ev.model; setModelBadge(ev.model); } }
     // The account's plan does not include the routed model. Said in plain words
     // above the route card, once per turn, instead of the gateway's 403.
     else if (ev.type === "plan") { finishSaid(); addNotice(body, ev.text, "plan"); }
@@ -640,8 +750,26 @@ async function send(text, opts = {}) {
   // The session's standing brief rides every turn of that session.
   if (sessionMeta.brief) runOpts.brief = sessionMeta.brief;
   const gc = await growContext(); if (gc) runOpts.context = gc;
-  try { await window.crowe.agent.run(messages, "main", runOpts); } finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  let result = null;
+  try { result = await window.crowe.agent.run(messages, "main", runOpts); }
+  catch (err) {
+    /* The bridge itself failed: the IPC call rejected, or the web mirror lost
+       the network. No event reached the transcript, so say it here, where a
+       harness error would have landed. */
+    finishSaid(); settleThinking(body, "fail");
+    addError(body, `The run did not complete: ${(err && err.message) || err}`);
+  }
+  finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; setModelBadge(""); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  /* The main process refuses a run without throwing: an empty message set, or
+     an entitlement the gateway would not honour. It answers with done:false and
+     the reason; show the reason instead of an empty settled bubble. */
+  if (result && result.done === false && !body.querySelector(".err, .stopped")) {
+    finishSaid(); settleThinking(body, "fail");
+    addError(body, result.error || result.text || "The run was refused.");
+  }
   finishSaid(); settleThinking(body);
+  if (body.querySelector(".err")) setComposerStatus("Failed", "error");
+  else if (body.querySelector(".stopped")) setComposerStatus("Stopped", "note");
   /* The landing, only when the turn actually landed — an errored or stopped
      turn has nothing to celebrate. Two places, one meaning: the header's
      logotype takes the settle, and the message's own avatar takes the same
@@ -657,10 +785,33 @@ async function send(text, opts = {}) {
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
-$("stop").addEventListener("click", () => window.crowe.agent.stop());
+$("stop").addEventListener("click", () => { setComposerStatus("Stopping", "note"); window.crowe.agent.stop(); });
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
-input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input.value); } });
-input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; });
+// isComposing: Enter inside an IME composition commits the candidate; it must
+// not send half a sentence in another script.
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
+input.addEventListener("input", syncComposerInput);
+/* The fit above runs on keystrokes. The pane can be dragged narrower after
+   the text is typed, and the window can be resized under it; either reflows
+   the text into a height measured for a wider box, and the last line sits
+   half-cut above the hint. Refit whenever the composer's width changes.
+
+   The observed element is the foot, not the form or the textarea: the foot's
+   width is the frame's width, and the refit does not change the foot's size.
+   The refit changes the height of the textarea and so of the form, and a size
+   change caused from inside a ResizeObserver callback is the loop Chromium
+   reports as an error, even when the next callback would have been a no-op. */
+const composerFoot = document.querySelector(".composer-foot");
+if (composerFoot && typeof ResizeObserver === "function") {
+  let composerWidth = -1;
+  new ResizeObserver((entries) => {
+    const width = entries[entries.length - 1].contentRect.width;
+    if (Math.abs(width - composerWidth) < 0.5) return;
+    composerWidth = width;
+    syncComposerInput();
+  }).observe(composerFoot);
+}
+syncComposerInput();
 function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
@@ -851,9 +1002,18 @@ async function mountWorkspaceAgent(p, body, seed={}) {
    because resolvers pin that whole TLD to the loopback interface. */
 function normalizeBrowserUrl(u){
   u=String(u||"").trim();
-  if(/^https?:\/\//i.test(u))return u;
-  const loopback=/^(localhost|[\w-]+(\.[\w-]+)*\.localhost|127(\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(u);
-  return (loopback?"http://":"https://")+u;
+  if(!u)return "";
+  if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)){
+    const loopback=/^(localhost|[\w-]+(\.[\w-]+)*\.localhost|127(\.\d{1,3}){3}|\[::1\])(:\d+)?([/?#]|$)/i.test(u);
+    u=(loopback?"http://":"https://")+u;
+  }
+  try {
+    const parsed=new URL(u);
+    if(!/^https?:$/.test(parsed.protocol))return "";
+    const loopback=["localhost","127.0.0.1","[::1]"].includes(parsed.hostname)||parsed.hostname.endsWith(".localhost");
+    if(parsed.protocol==="http:"&&!loopback)parsed.protocol="https:";
+    return parsed.toString();
+  } catch { return ""; }
 }
 /* The webview announces itself as "CroweLogic/x Chrome/y Electron/z", and
    bot walls (Akamai on microsoft.com, Google sign-in, Cloudflare challenges)
@@ -876,7 +1036,7 @@ function mountBrowser(p, body) {
   const bar=document.createElement("div");bar.className="browser-tools";
   bar.innerHTML='<button class="back ghost sm" title="Back">Back</button><button class="forward ghost sm" title="Forward">Next</button><button class="reload ghost sm" title="Reload">Reload</button><button class="hist ghost sm" title="History">History</button><button class="bookmark ghost sm" title="Bookmark page">Bookmark</button><button class="bookmarks ghost sm" title="Bookmarks">Saved</button><input class="browser-url" spellcheck="false" aria-label="Address"><button class="go ghost sm">Go</button>';
   const hist=document.createElement("div");hist.className="browser-history hidden";
-  const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("allowpopups","");w.setAttribute("useragent",browserUserAgent());host.appendChild(w);body.append(bar,hist,host);
+  const host=document.createElement("div");host.className="browser-host";const w=document.createElement("webview");w.setAttribute("useragent",browserUserAgent());host.appendChild(w);body.append(bar,hist,host);
   const input=bar.querySelector("input");
   const go=(u)=>{u=normalizeBrowserUrl(u);w.src=u;input.value=u};
   const showList=(items,kind)=>{hist.innerHTML="";const head=document.createElement("div");head.className="browser-list-head";head.innerHTML=`<b>${kind}</b><button class="ghost sm">Clear</button>`;head.querySelector("button").onclick=()=>{if(kind==="History")p.history=[];else p.bookmarks=[];savePanelState();hist.classList.add("hidden")};hist.appendChild(head);[...items].reverse().forEach((u)=>{const row=document.createElement("div");row.className="history-row";const b=document.createElement("button");b.textContent=u;b.onclick=()=>{go(u);hist.classList.add("hidden")};row.appendChild(b);if(kind==="Bookmarks"){const del=document.createElement("button");del.textContent="Remove";del.className="ghost sm";del.onclick=()=>{p.bookmarks=p.bookmarks.filter((x)=>x!==u);savePanelState();showList(p.bookmarks,kind)};row.appendChild(del)}hist.appendChild(row)});hist.classList.remove("hidden")};
@@ -1656,7 +1816,10 @@ async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("cr
 
 // ── Voice input and TTS ──
 let recognition=null;
-$("voice-input").onclick=()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){appendOutput("voice: speech recognition is unavailable on this system");return}if(recognition){recognition.stop();return}recognition=new SR();recognition.continuous=true;recognition.interimResults=true;recognition.onstart=()=>$("voice-input").classList.add("active");recognition.onresult=(e)=>{let text="";for(let i=e.resultIndex;i<e.results.length;i++)text+=e.results[i][0].transcript;input.value=(input.value+" "+text).trim();input.dispatchEvent(new Event("input"))};recognition.onend=()=>{$("voice-input").classList.remove("active");recognition=null};recognition.onerror=(e)=>appendOutput("voice: "+e.error);recognition.start()};
+$("voice-input").onclick=()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){setComposerStatus("Dictation is not available on this system","error");return}if(recognition){recognition.stop();return}recognition=new SR();recognition.continuous=true;recognition.interimResults=true;recognition.onstart=()=>$("voice-input").classList.add("active");recognition.onresult=(e)=>{let text="";for(let i=e.resultIndex;i<e.results.length;i++)text+=e.results[i][0].transcript;input.value=(input.value+" "+text).trim();input.dispatchEvent(new Event("input"))};recognition.onend=()=>{$("voice-input").classList.remove("active");recognition=null};recognition.onerror=(e)=>setComposerStatus("Dictation failed: "+(e.error||"unknown"),"error");recognition.start()};
+// Say at boot what the click would only reveal later: on most desktop builds
+// there is no speech engine behind this button.
+if(!(window.SpeechRecognition||window.webkitSpeechRecognition)){const b=$("voice-input");b.classList.add("unavailable");b.setAttribute("aria-disabled","true");b.title="Dictation is not available on this system"}
 $("voice-output").onclick=()=>{if(speechSynthesis.speaking){speechSynthesis.cancel();return}const said=[...document.querySelectorAll(".msg.assistant .said")].pop();if(!said)return;const u=new SpeechSynthesisUtterance(said.textContent);u.onstart=()=>$("voice-output").classList.add("active");u.onend=()=>$("voice-output").classList.remove("active");speechSynthesis.speak(u)};
 window.crowe.onBrowserNavigate((u)=>{navigate(u)});
 
@@ -1701,6 +1864,7 @@ function setCwd(c) { if (c) { $("cwd").textContent = c; const w = $("ws-path"); 
 async function refreshStatus() {
   const c = await window.crowe.getConfig();
   setCwd(c.cwd);
+  refreshModelBadge(c);
   const total = (c.mcp || []).reduce((n, s) => n + s.tools, 0);
   const badge = $("mcp-badge");
   if (total > 0) { badge.textContent = `MCP · ${total} tools`; badge.classList.remove("hidden"); } else badge.classList.add("hidden");
@@ -1728,13 +1892,13 @@ async function renderCompanion(){
       : `<p class="said">No Tailscale address on this machine. The phone reaches this app over the tailnet rather than the open internet, so install Tailscale and sign in, then reopen Settings.</p>`);
     rows.push(`<button id="companion-start" class="primary sm"${s && s.tailscale ? "" : " disabled"}>Start companion</button>`);
   } else {
-    rows.push('<div id="companion-qr" style="display:flex;justify-content:center;padding:10px 0"></div>');
+    rows.push('<div id="companion-qr" class="companion-qr"></div>');
     rows.push(`<p class="said">Open Crowe Logic on your phone and scan this. The code carries the address and a one-machine token; it stops working the moment you press Stop or Rotate.</p>`);
     // Said out loud, because it is a real trade and the user is entitled to
     // know why the battery went down: a phone can only reach a machine that is
     // awake, so the companion holds this one awake while it is listening.
     if (s.keepingAwake) rows.push('<p class="said">This Mac is being kept awake while the companion runs, so the phone can reach it. The display still sleeps.</p>');
-    rows.push('<div style="display:flex;gap:8px;flex-wrap:wrap"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-add" class="ghost sm">Add a device</button><button id="companion-rotate" class="ghost sm">Revoke all</button></div>');
+    rows.push('<div class="companion-actions"><button id="companion-stop" class="ghost sm">Stop</button><button id="companion-add" class="ghost sm">Add a device</button><button id="companion-rotate" class="ghost sm">Revoke all</button></div>');
 
     /* Which devices can drive this machine, and what they have done.
 
@@ -1744,16 +1908,16 @@ async function renderCompanion(){
        who. */
     const devices = s.devices || [];
     if (devices.length) {
-      rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Paired devices</b></div></div>');
+      rows.push('<div class="settings-section-head companion-section"><div><b>Paired devices</b></div></div>');
       rows.push(devices.map((d) => {
         const seen = d.lastSeen ? new Date(d.lastSeen).toLocaleString() : "never used";
-        return `<div class="key-provider" style="display:flex;align-items:center;gap:10px">
-          <div style="flex:1"><b>${esc(d.name)}</b><br><span class="said" style="opacity:.7">last used ${esc(seen)}</span></div>
+        return `<div class="key-provider companion-device">
+          <div class="companion-device-copy"><b>${esc(d.name)}</b><br><span class="said companion-last-used">last used ${esc(seen)}</span></div>
           <button class="ghost sm companion-revoke" data-id="${d.id}">Revoke</button></div>`;
       }).join(""));
     }
-    rows.push('<div class="settings-section-head" style="margin-top:12px"><div><b>Recent activity</b><span>What the paired devices have run on this machine.</span></div></div>');
-    rows.push('<div id="companion-audit" class="said" style="max-height:180px;overflow:auto;font-family:var(--mono);font-size:12px"></div>');
+    rows.push('<div class="settings-section-head companion-section"><div><b>Recent activity</b><span>What the paired devices have run on this machine.</span></div></div>');
+    rows.push('<div id="companion-audit" class="said companion-audit"></div>');
   }
   body.innerHTML = rows.join("");
   const start = $("companion-start");
@@ -1803,7 +1967,7 @@ async function renderCompanion(){
           : `${e.kind} ${e.path || ""}`;
         return `<div>${esc(when)} · ${esc(e.device || "unknown")} · ${esc(String(what).slice(0, 160))}</div>`;
       }).join("")
-      : '<div style="opacity:.7">Nothing yet.</div>';
+      : '<div class="companion-empty">Nothing yet.</div>';
   }
   if (running) {
     const r = await window.crowe.companion.pairSvg();
@@ -1855,6 +2019,9 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-approvals").value = c.approvals || "high-risk";
   $("cfg-verifier").checked = c.verifier !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
+  $("cfg-mcp").value = c.mcpServers && Object.keys(c.mcpServers).length ? JSON.stringify(c.mcpServers, null, 2) : "";
+  const live = (c.mcp || []).map((s) => `${s.name} (${s.tools} tools)`).join(", ");
+  $("cfg-mcp-live").textContent = live ? `Connected: ${live}` : "No MCP servers connected.";
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
   renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion();
   modal.classList.remove("hidden");
@@ -1873,7 +2040,8 @@ $("cfg-save").addEventListener("click", async () => {
 });
 
 // ── Resizable split ──
-const divider = $("divider"), workbench = $("workbench"), agentPane = $("agent"), chatRestore = $("chat-restore");
+const divider = $("divider"), workbench = $("workbench"), agentPane = $("agent"),
+  chatClose = $("chat-close"), chatRestore = $("chat-restore");
 const MIN_AGENT_WIDTH = 300, MIN_WORKSPACE_WIDTH = 320, CHAT_COLLAPSE_AT = 180;
 let lastExpandedSplit = 0;
 function splitBounds() {
@@ -1956,6 +2124,10 @@ chatRestore.addEventListener("click", () => {
   toggleChatPanel(false);
   divider.focus();
 });
+chatClose.addEventListener("click", () => {
+  toggleChatPanel(true);
+  chatRestore.focus();
+});
 
 // ── Dark mode ──
 // The terminal is the one surface xterm paints itself, so it cannot inherit
@@ -1999,10 +2171,8 @@ $("sidebar-toggle").addEventListener("click", () =>
   applySidebarCollapsed(!document.body.classList.contains("sidebar-collapsed")));
 try { applySidebarCollapsed(localStorage.getItem("crowe-sidebar") === "collapsed"); } catch {}
 
-// ── Cmd+Enter to send ──
-input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(input.value); }
-});
+// Cmd+Enter and Ctrl+Enter send through the Enter handler above; a second
+// listener for them here sent every such keypress twice.
 
 // ── Dock tabs ──
 // aria-current marks the one active item in each nav set. The dock tabs stay
@@ -2078,7 +2248,7 @@ async function newChat() {
   sessionMeta = { name: "", brief: "" };
   messages.length = 0;
   resetWelcome();
-  input.value = ""; input.style.height = "auto"; input.focus();
+  input.value = ""; syncComposerInput(); input.focus();
   drawer.classList.remove("hidden");
   renderSessions();
   sessionCost = 0; runCost = 0;
@@ -2190,7 +2360,10 @@ const TIER_HINT = {
   execute: "Ask anything. It can run commands and edit files.",
 };
 function setAutonomyBadge(tier) {
-  document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.tier === tier));
+  document.querySelectorAll("#autonomy .seg-btn").forEach((b) => {
+    const on = b.dataset.tier === tier;
+    b.classList.toggle("active", on); b.setAttribute("aria-pressed", String(on));
+  });
   $("autonomy").dataset.tier = tier;
   document.body.dataset.tier = tier;
   input.placeholder = TIER_HINT[tier] || "Ask Crowe Logic to do something...";
@@ -2383,6 +2556,7 @@ function ago(ts) {
 }
 async function refreshHome() {
   const [cat, sess, cfg] = await Promise.all([window.crowe.catalog.get(), window.crowe.sessions.list(), window.crowe.getConfig()]);
+  learnCatalogNames(cat);
   const hs = $("home-sessions"); hs.innerHTML = "";
   if (!sess.length) hs.innerHTML = '<div class="card-empty">No sessions yet. Start one above.</div>';
   for (const s of sess.slice(0, 4)) {
@@ -2444,6 +2618,7 @@ async function renderLane(lane) {
     }
   } else if (lane === "deployments") {
     const cat = await window.crowe.catalog.get();
+    learnCatalogNames(cat);
     if (gen !== laneGen) return;
     if (!cat.models.length) { body.innerHTML = '<div class="card-empty">Catalog unreachable. Check the gateway URL in Settings.</div>'; return; }
     for (const m of cat.models) {
@@ -3289,6 +3464,7 @@ $("home-composer").addEventListener("submit", (e) => {
   // Seed the chat composer first: send() clears it only after its running/auth
   // guards pass, so an early return leaves the draft visible instead of lost.
   input.value = t;
+  syncComposerInput();
   send(t);
   $("home-input").value = "";
 });
@@ -3303,6 +3479,7 @@ $("cult-composer").addEventListener("submit", (e) => {
   // Seed the chat composer first, same reason as the projects composer above:
   // send() clears it only once its guards pass, so a draft survives a bounce.
   input.value = t;
+  syncComposerInput();
   send(t, { role: "cultivation" });
   $("cult-input").value = "";
 });
@@ -3446,7 +3623,7 @@ function renderQuickOpen(q) {
 }
 async function quickOpenFile(f, toChat) {
   closeQuickOpen();
-  if (toChat) { setSpace("chat"); input.value = (input.value ? input.value + " " : "") + f; input.focus(); return; }
+  if (toChat) { setSpace("chat"); input.value = (input.value ? input.value + " " : "") + f; syncComposerInput(); input.focus(); return; }
   setSpace("chat"); switchPane("files");
   const r = await window.crowe.fs.read(f);
   $("files-view").textContent = r.error ? r.error : r.content;
@@ -3589,7 +3766,7 @@ function showSignInPrompt() {
   const b = addAssistant();
   b.innerHTML = '<p class="said">Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.</p>';
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
-  btn.style.marginTop = "8px"; btn.addEventListener("click", doSignIn);
+  btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
 }
 $("signin").addEventListener("click", doSignIn);
@@ -3606,14 +3783,14 @@ async function maybeShowOnboarding(cfg) {
   b.innerHTML = [
     '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
-    '<ol class="said" style="margin:4px 0 0 1.2em;line-height:1.7">',
+    '<ol class="said onboarding-steps">',
     "<li>Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).</li>",
     "<li>Point the workspace at a project folder (Settings or ask the agent).</li>",
     '<li>Give the agent a task - try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
   ].join("");
   const row = document.createElement("div");
-  row.style.cssText = "display:flex;gap:8px;margin-top:10px";
+  row.className = "onboarding-actions";
   const signinBtn = document.createElement("button");
   signinBtn.className = "primary"; signinBtn.textContent = "Sign in with Crowe ID";
   signinBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await doSignIn(); });
@@ -3621,13 +3798,19 @@ async function maybeShowOnboarding(cfg) {
   laterBtn.className = "ghost"; laterBtn.textContent = "Explore first";
   laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); b.remove(); });
   row.appendChild(signinBtn); row.appendChild(laterBtn);
-  b.appendChild(row); scrollBottom();
+  b.appendChild(row);
+  // Platform shells rewrite promises the local desktop can keep but they
+  // cannot. Announce only after the card is complete so those rewrites do not
+  // depend on observing an empty message node at exactly the right moment.
+  try { window.dispatchEvent(new CustomEvent("crowe:onboarding-shown", { detail: { root: b } })); } catch (e) { /* noop */ }
+  scrollBottom();
 }
 
 /* Swaps the static masked logotype for the animated one. The motion cut has to
-   be INLINE, not an <img> or a background: its choreography is a <style> block
-   that only runs when the SVG is part of this document, and its ink is
-   currentColor, which an <img> would resolve against nothing.
+   be INLINE, not an <img> or a background: its choreography is written against
+   the SVG's own elements and only reaches them when the SVG is part of this
+   document, and its ink is currentColor, which an <img> would resolve against
+   nothing. (The choreography itself is adopted once, by liftMotionStyle.)
 
    Every id in that file is document-global once inlined, so a second copy would
    collide — #rotor-crowe-blades would then animate whichever one the document
@@ -3655,9 +3838,8 @@ async function liveLockups() {
   // The hero and the launch veil are the lockups big enough to resolve the
   // full cut; the header takes the small one, matching the -sm mask it is
   // replacing. Both files carry the same ids, which the suffixing below
-  // already scopes per copy — it rewrites the ids inside each copy's own
-  // <style> too, so a suffixed copy's entrance drives itself rather than
-  // whichever copy loaded first.
+  // scopes per copy. The choreography is on classes and lives in one adopted
+  // sheet, so every copy plays its own entrance whatever its suffix.
   const cutOf = (el) => (el.classList.contains("welcome-logotype") || el.classList.contains("launch-mark") ? "full" : "sm");
   const markups = {};
   for (const cut of new Set(todo.map(cutOf))) markups[cut] = await wordmarkMotionMarkup(cut);

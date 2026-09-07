@@ -41,10 +41,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # Check out the tag being published, not whichever branch dispatched the
+      # run: preflight-release.js refuses a feed whose version differs from the
+      # checked-out package.json, so publishing an older tag from a bumped main
+      # would otherwise fail for the wrong reason.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: npm ci --ignore-scripts
       - name: Download the release's artifacts
         env:
           GH_TOKEN: ${{ github.token }}

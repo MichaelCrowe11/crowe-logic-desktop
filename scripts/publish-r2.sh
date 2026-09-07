@@ -13,6 +13,7 @@ if [ -z "$version" ]; then
   echo "publish-r2: set GITHUB_REF_NAME to a tag such as v0.14.0" >&2
   exit 1
 fi
+node "$(dirname "${BASH_SOURCE[0]}")/preflight-release.js" "$root" "$version"
 echo "publish-r2: publishing $version from $root"
 
 # Uploads to the R2 API fail intermittently regardless of file size, so a single
@@ -77,7 +78,7 @@ fi
 
 wanted=$(mktemp)
 for file in "${feeds[@]}"; do
-  sed -n 's/^[[:space:]]*-[[:space:]]*url:[[:space:]]*//p' "$file" >> "$wanted"
+  node -e 'const fs=require("fs"),yaml=require("js-yaml"); for(const f of yaml.load(fs.readFileSync(process.argv[1],"utf8")).files) console.log(f.url)' "$file" >> "$wanted"
 done
 sort -u -o "$wanted" "$wanted"
 

@@ -12,7 +12,7 @@ KEY="${SSH_KEY:-$HOME/.ssh/google_compute_engine}"
 HOST="${HOST:-crowelogic@crowelm-chat}"
 D=/var/lib/docker/volumes/caddy_config/_data/crowe-app/renderer
 # [local path]=[served name]
-FILES=(renderer/app.html renderer/web-bridge.js renderer/web-ui.js renderer/rooms-web.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
+FILES=(renderer/app.html renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
 
 local_hash() { shasum -a 256 "$1" | cut -c1-16; }
 verify() {

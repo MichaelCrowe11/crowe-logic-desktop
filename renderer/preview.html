@@ -7,9 +7,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <!-- style-src carries no unsafe-inline and no hash of any real rule. The one
+       hash is the SHA-256 of the empty string: it permits a <style> element
+       with nothing in it and nothing else. adopted-styles.js needs that for
+       the placeholders it hands xterm; every rule script writes at runtime goes
+       through the CSS Object Model, which the policy does not police. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1788488902333" />
+  <link rel="stylesheet" href="styles.css?v=1788786789052" />
+  <!-- Before every other script: xterm and the logotype inliner both write
+       styles at runtime, and this is what lets them do it under the policy
+       above. -->
+  <script src="adopted-styles.js"></script>
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -18,7 +28,7 @@
        cover, moved rather than removed. Inline and first, because this is the
        one position nothing can paint ahead of. Idempotent: applyTheme() toggles
        the same class and stays the source of truth. -->
-  <script>try { document.body.classList.toggle("dark", localStorage.getItem("crowe-theme") !== "light"); } catch (e) { document.body.classList.add("dark"); }</script>
+  <script src="theme-bootstrap.js"></script>
 
   <!-- The launch veil. In the markup rather than built by renderer.js, because
        a veil that arrives on the first script tick has already let the bare
@@ -201,7 +211,7 @@
           <button class="chip cult-chip">Diagnose green mold on day-6 rye grain spawn and tell me what to salvage</button>
           <button class="chip cult-chip">Set fruiting conditions for lion's mane in a Martha tent this week</button>
         </div>
-        <div id="cult-state" class="cards" style="margin-top: 18px;"></div>
+        <div id="cult-state" class="cards cult-state"></div>
       </div>
     </section>
 
@@ -209,6 +219,10 @@
       <section id="agent">
         <div class="conversation-toolbar">
           <button id="copy-conversation" type="button" class="ghost sm" title="Copy the complete conversation as Markdown">Copy conversation</button>
+          <div class="spacer"></div>
+          <button id="chat-close" class="dock-icon" type="button" title="Hide chat panel (Cmd+Shift+B)" aria-label="Hide chat panel">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>
         <div id="transcript">
           <div class="welcome">
@@ -227,21 +241,33 @@
             </div>
           </div>
         </div>
-        <form id="composer" autocomplete="off">
-          <textarea id="input" rows="1" placeholder="Ask Crowe Logic to do something..."></textarea>
-          <div class="composer-foot">
-            <div id="autonomy" class="seg" title="Autonomy: what the agent may do without asking">
-              <button type="button" class="seg-btn" data-tier="plan">Plan</button>
-              <button type="button" class="seg-btn" data-tier="readonly">Read</button>
-              <button type="button" class="seg-btn" data-tier="edit">Edit</button>
-              <button type="button" class="seg-btn" data-tier="execute">Execute</button>
+        <form id="composer" autocomplete="off" aria-label="Crowe Logic prompt">
+          <div class="composer-frame">
+            <textarea id="input" rows="2" maxlength="50000" aria-label="Message Crowe Logic" aria-describedby="composer-help" placeholder="Describe the outcome, constraints, and checks..."></textarea>
+            <div class="composer-foot">
+              <div class="composer-mode">
+                <div id="autonomy" class="seg" role="group" aria-label="Autonomy: what the agent may do without asking" title="Autonomy: what the agent may do without asking">
+                  <button type="button" class="seg-btn" data-tier="plan" aria-pressed="false">Plan</button>
+                  <button type="button" class="seg-btn" data-tier="readonly" aria-pressed="false">Read</button>
+                  <button type="button" class="seg-btn" data-tier="edit" aria-pressed="false">Edit</button>
+                  <button type="button" class="seg-btn" data-tier="execute" aria-pressed="false">Execute</button>
+                </div>
+              </div>
+              <div class="composer-actions">
+                <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone" aria-label="Dictate with microphone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></svg></button>
+                <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud" aria-label="Read the latest response aloud"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9v6h4l5 4V5L9 9H5zM18 9a5 5 0 0 1 0 6"/></svg></button>
+                <button id="send" type="submit" title="Send (Enter)" aria-label="Send"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+                <button id="stop" type="button" class="hidden" title="Stop this run" aria-label="Stop this run"><svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+              </div>
             </div>
-            <span id="model-badge" class="badge quiet">CroweLM</span>
-            <div class="spacer"></div>
-            <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone">Mic</button>
-            <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud">Speak</button>
-            <button id="send" type="submit">Send</button>
-            <button id="stop" type="button" class="hidden">Stop</button>
+          </div>
+          <div class="composer-caption">
+            <span class="composer-meta">
+              <span id="model-badge" class="composer-model">CroweLM</span>
+              <span id="composer-status" class="composer-status" role="status" aria-live="polite" data-state="ready">Ready</span>
+            </span>
+            <span id="composer-help" class="composer-help">Enter to send · Shift+Enter for a new line</span>
+            <span id="composer-count" class="composer-count">0 / 50k</span>
           </div>
         </form>
       </section>
@@ -343,9 +369,10 @@
       </section>
       <label>Official plugins</label>
       <div id="cfg-plugins" class="plugs"></div>
-      <label>MCP servers — advanced (JSON: {"name":{"command":"...","args":[...]}})
+      <label>MCP servers, advanced (JSON: {"name":{"command":"...","args":[...]}})
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
+      <p id="cfg-mcp-live" class="hint"></p>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>
@@ -398,10 +425,10 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1788488902333"></script>
-  <script src="mark-geometry.js?v=1788488902333"></script>
-  <script src="mark.js?v=1788488902333"></script>
-  <script src="renderer.js?v=1788488902333"></script>
+  <script src="preview-shim.js?v=1788786789052"></script>
+  <script src="mark-geometry.js?v=1788786789052"></script>
+  <script src="mark.js?v=1788786789052"></script>
+  <script src="renderer.js?v=1788786789052"></script>
   <script src="plan.js"></script>
 </body>
 </html>

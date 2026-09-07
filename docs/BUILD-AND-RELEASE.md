@@ -1,6 +1,6 @@
 # Building, signing, and releasing
 
-Everything here was verified on a machine on 2026-08-05 unless it says otherwise.
+Everything here was verified on a machine on 2026-09-05 unless it says otherwise.
 Where something could not be verified, it says so and says why — a runbook that
 quietly guesses is worse than one with a hole in it, because you find the hole
 during a release.
@@ -80,15 +80,15 @@ Notarization runs from the `afterSign` hook, `build/notarize.js`, which shells o
 to `xcrun notarytool submit --keychain-profile <profile> --wait`. The profile name
 comes from `CROWE_NOTARY_PROFILE` and defaults to **`crowe-notary`**.
 
-**Verified gotcha: no notarytool credential profile is stored on this machine.**
-`crowe-notary` does not exist, and neither does any other. A `build:mac` will get
-through signing and then fail at the hook. Two ways forward:
+The `crowe-notary` credential profile is present on this machine. `notarytool
+history` succeeded on 2026-09-05 and shows accepted 0.24.4 submissions, so the
+normal release build can sign and notarize without an environment override:
 
 ```
-# Store the credential once (needs an App Store Connect API key or an app-specific password)
-xcrun notarytool store-credentials crowe-notary --key ... --key-id ... --issuer ...
+# Normal distribution build
+npm run build:mac
 
-# Or build without notarizing, for a local smoke test only — never for distribution
+# Local packaging diagnosis only — never for distribution
 CROWE_SKIP_NOTARIZE=1 npm run build:mac
 ```
 
@@ -239,8 +239,8 @@ not a version, and it only names a release on a tag-triggered run.
 
 ## Gotchas, collected
 
-- **No notarytool profile on this machine.** `build:mac` fails at the `afterSign`
-  hook. Store credentials or use `CROWE_SKIP_NOTARIZE=1` for local builds only.
+- **Do not bypass notarization for a release.** `CROWE_SKIP_NOTARIZE=1` exists for
+  local packaging diagnosis only; those artifacts are not shippable.
 - **Android is unbuildable here.** No JDK, no SDK; installing them risks filling
   the disk. Use CI.
 - **A stale screenshot is the product.** Store screenshots that show an old version

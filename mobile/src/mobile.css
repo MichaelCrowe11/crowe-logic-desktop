@@ -146,9 +146,9 @@ body.mobile .side-foot-btn,
 body.mobile .sn-item,
 body.mobile .dock-tab,
 body.mobile .pal-row,
-body.mobile #send, body.mobile #stop,
-body.mobile .voice-btn,
 body.mobile #autonomy .seg-btn { min-height: 44px; }
+/* Send, Stop and the voice buttons are discs; at touch size they stay discs. */
+body.mobile #send, body.mobile #stop, body.mobile .composer-actions .voice-btn { width: 44px; height: 44px; min-height: 44px; }
 body.mobile .dock-icon, body.mobile .bar-icon, body.mobile .side-icon { min-width: 40px; min-height: 40px; }
 
 /* iOS zooms the page when a focused field is under 16px. The app cannot zoom

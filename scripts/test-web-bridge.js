@@ -811,10 +811,11 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     assert(/<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/.test(html), "no viewport meta");
     const styles = html.indexOf('href="styles.css'); const mobileCss = html.indexOf('href="mobile.css');
     assert(mobileCss > styles && styles !== -1, "mobile.css must load after styles.css");
-    const renderer = html.indexOf('src="renderer.js'); const ui = html.indexOf('mobile-ui.js');
-    assert(ui > renderer && renderer !== -1, "mobile-ui.js must come after renderer.js");
+    const renderer = html.indexOf('src="renderer.js'); const gateAt = html.indexOf('src="mobile-gate.js');
+    const gateSrc = read("renderer/mobile-gate.js");
+    assert(gateAt > renderer && renderer !== -1, "the mobile gate must come after renderer.js");
     assert(!/<script src="mobile-ui\.js/.test(html), "mobile-ui.js must be gated, not a bare script tag (it would put the tab bar on every desktop)");
-    assert(/pointer: coarse/.test(html) && /max-width: 820px/.test(html), "the phone gate must test a coarse pointer or the one-column width");
+    assert(/pointer: coarse/.test(gateSrc) && /max-width: 820px/.test(gateSrc), "the phone gate must test a coarse pointer or the one-column width");
     // The chrome must run in a plain tab: every native plugin it reaches for is
     // null-guarded. Held on the source so a new plugin use cannot ship unguarded.
     const ui_src = read("mobile/src/mobile-ui.js");
@@ -835,9 +836,10 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     for (const n of needles) assert(rr.includes(n) || ih.includes(n), `web-ui rewrites a sentence the renderer no longer contains: ${n.slice(0, 60)}`);
     assert(/Ask it to reason, run commands, edit files, and browse/.test(ih), "index.html welcome text moved; check webWelcome still targets .welcome p");
     const html = read("renderer/app.html");
-    const r = html.indexOf('src="renderer.js'); const wu = html.indexOf('src="web-ui.js'); const gate = html.indexOf("pointer: coarse");
+    const r = html.indexOf('src="renderer.js'); const wu = html.indexOf('src="web-ui.js'); const gate = html.indexOf('src="mobile-gate.js');
+    const gateSrc = read("renderer/mobile-gate.js");
     assert(wu > r && wu < gate, "web-ui.js must load after renderer.js and before the phone gate");
-    assert(/crowe:mobile-ui/.test(html) && /crowe:mobile-ui/.test(ui), "the phone gate must announce mobile-ui so web-ui can re-apply its copy");
+    assert(/crowe:mobile-ui/.test(gateSrc) && /crowe:mobile-ui/.test(ui), "the phone gate must announce mobile-ui so web-ui can re-apply its copy");
     assert(/data-tier="edit"/.test(ui) && /data-tier="execute"/.test(ui), "web-ui must hide the edit and execute tiers");
     return `${needles.length} needles held; wired`;
   });

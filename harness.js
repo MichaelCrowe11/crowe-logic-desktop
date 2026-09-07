@@ -43,9 +43,31 @@ const RETRY_BASE_MS = 400;
 const CACHE_POINTER_AFTER = 3;         // identical calls before we stop resending the body
 
 // Secrets the agent must never read or edit through its own tools.
-const SECRET_FILE_RE = /(^|\/)\.env($|\.|-)|\.pem$|\.key$|\.p12$|\.keystore$|(^|\/)id_(rsa|ed25519|ecdsa)(\.|$)|(^|\/)auth\.json$|\.keychain(-db)?$/i;
+const SECRET_FILE_RE = /(^|\/)\.env($|\.|-)|\.pem$|\.key$|\.p12$|\.keystore$|(^|\/)id_(rsa|ed25519|ecdsa)(\.|$)|(^|\/)(auth|credentials?|secrets?)\.json$|(^|\/)\.(netrc|npmrc|pypirc)$|(^|\/)\.aws\/credentials$|(^|\/)\.docker\/config\.json$|(^|\/)\.kube\/config$|(^|\/)\.config\/(gcloud|gh)\/|\.keychain(-db)?$/i;
 function isSecretPath(p) { return SECRET_FILE_RE.test(String(p || "")); }
+const COMMAND_SECRET_RE = /(?:^|[\s"'=:@(])(?:[^\s"'|;&()]*\/)?(?:\.env(?:$|[.\s"'|;&)]|-)|[^\s"'|;&()]*\.(?:pem|key|p12|keystore)|id_(?:rsa|ed25519|ecdsa)(?:$|[.\s"'|;&)])|(?:auth|credentials?|secrets?)\.json|\.(?:netrc|npmrc|pypirc)|\.aws\/credentials|\.docker\/config\.json|\.kube\/config|\.config\/(?:gcloud|gh)\/[^\s"'|;&()]*)/i;
+function commandTouchesSecret(command) {
+  const normalized = String(command || "").replace(/\\/g, "/");
+  return isSecretPath(normalized) || COMMAND_SECRET_RE.test(normalized);
+}
 const SECRET_BLOCK = (p) => `blocked: ${p} looks like a credentials/secrets file. The operator does not open those; ask the user to handle it themselves.`;
+
+/* Execute grants a shell, not the app's ambient credentials. Child processes
+   get ordinary runtime variables while tokens, signing material, agent sockets,
+   and shell startup injection hooks stay in the desktop process. */
+const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASS(?:WORD|WD)?|API_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION|AUTH|ACCESS_?KEY|ACCOUNT_?KEY|CONNECTION_?STRING)/i;
+const SHELL_INJECTION_ENV_RE = /^(?:BASH_ENV|ENV|ZDOTDIR|NODE_OPTIONS|NODE_PATH|PYTHONSTARTUP|PERL5OPT|RUBYOPT|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|GPG_AGENT_INFO|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.+)$/i;
+function safeShellEnv(source = process.env) {
+  const clean = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (SENSITIVE_ENV_KEY_RE.test(key) || SHELL_INJECTION_ENV_RE.test(key) || typeof value !== "string") continue;
+    clean[key] = value;
+  }
+  const rcDir = path.join(os.tmpdir(), "crowe-shell-no-rc");
+  try { fs.mkdirSync(rcDir, { recursive: true, mode: 0o700 }); } catch {}
+  clean.ZDOTDIR = rcDir;
+  return clean;
+}
 
 // ─── Output shaping ──────────────────────────────────────────────────────────
 function elide(text, maxChars, label) {
@@ -140,6 +162,8 @@ const RISK_RULES = [
   // sends whatever that file holds, and the harness cannot know what that is.
   { risk: RISK.STRICT, why: "uploads a local file to the network",
     re: /\b(curl|wget|http|httpie)\b[^;\n]*(-d\s*@|--data(-binary|-raw|-urlencode)?[\s=]*@|-F\s+\S*=@|--form\s+\S*=@|--upload-file\b|\s-T\s)/ },
+  { risk: RISK.STRICT, why: "builds network data from a local command substitution",
+    re: /\b(curl|wget|http|httpie|nc|ncat)\b[^;\n]*(\$\(|`|<\()/ },
   { risk: RISK.STRICT, why: "copies files to a remote host",
     re: /\b(scp|rsync|sftp)\b[^;\n]*\s\S+@\S+:/ },
   { risk: RISK.STRICT, why: "makes files world-writable or world-executable",
@@ -467,7 +491,8 @@ function resolvePath(ctx, p) {
 }
 function runShell(ctx, command, timeoutMs) {
   return new Promise((resolve) => {
-    exec(command, { cwd: ctx.getCwd(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, shell: process.env.SHELL || "/bin/zsh" },
+    exec(command, { cwd: ctx.getCwd(), timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024,
+      shell: process.env.SHELL || "/bin/zsh", env: safeShellEnv() },
       (err, stdout, stderr) => {
         const out = (stdout || "") + (stderr || "");
         const tail = err ? `\n(exit ${err.killed ? "timeout" : err.code ?? 1})` : "";
@@ -517,8 +542,8 @@ async function toolEditFile(ctx, args) {
 
 // Exclusion set mirrors SECRET_FILE_RE so search cannot surface secret-file
 // contents that read_file/edit_file/write_file refuse.
-const SECRET_RG_GLOBS = ["!.env*", "!*.pem", "!*.key", "!*.p12", "!*.keystore", "!id_rsa*", "!id_ed25519*", "!id_ecdsa*", "!auth.json", "!*.keychain*", "!node_modules/**"];
-const SECRET_GREP_EXCLUDES = ["--exclude-dir=node_modules", "--exclude-dir=.git", "--exclude=.env*", "--exclude=*.pem", "--exclude=*.key", "--exclude=*.p12", "--exclude=*.keystore", "--exclude=id_rsa*", "--exclude=id_ed25519*", "--exclude=id_ecdsa*", "--exclude=auth.json"];
+const SECRET_RG_GLOBS = ["!.env*", "!*.pem", "!*.key", "!*.p12", "!*.keystore", "!id_rsa*", "!id_ed25519*", "!id_ecdsa*", "!auth.json", "!credentials.json", "!secret.json", "!secrets.json", "!.netrc", "!.npmrc", "!.pypirc", "!**/.aws/credentials", "!**/.docker/config.json", "!**/.kube/config", "!**/.config/gcloud/**", "!**/.config/gh/**", "!*.keychain*", "!node_modules/**"];
+const SECRET_GREP_EXCLUDES = ["--exclude-dir=node_modules", "--exclude-dir=.git", "--exclude-dir=.aws", "--exclude-dir=.docker", "--exclude-dir=.kube", "--exclude-dir=gcloud", "--exclude-dir=gh", "--exclude=.env*", "--exclude=*.pem", "--exclude=*.key", "--exclude=*.p12", "--exclude=*.keystore", "--exclude=id_rsa*", "--exclude=id_ed25519*", "--exclude=id_ecdsa*", "--exclude=auth.json", "--exclude=credentials.json", "--exclude=secret.json", "--exclude=secrets.json", "--exclude=.netrc", "--exclude=.npmrc", "--exclude=.pypirc"];
 function rgArgs(args) {
   // rg auto-skips binary files; no -I here (in rg, -I means --no-filename).
   const out = ["-n", "--no-heading", "--color", "never", "-m", String(Math.max(1, args.max_results || 200))];
@@ -623,6 +648,7 @@ async function execTool(ctx, name, args, route, state) {
     if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
     if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
+      if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
       const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
       if (m) {
         const t = resolvePath(ctx, m[1].trim().replace(/^["']|["']$/g, ""));
@@ -1583,7 +1609,7 @@ module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,

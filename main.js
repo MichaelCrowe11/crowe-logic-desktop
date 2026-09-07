@@ -10,6 +10,25 @@ const http = require("http");
 const crypto = require("crypto");
 const { spawn, exec } = require("child_process");
 const { GROW_TYPES } = require("./grow-schema");
+const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
+  hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
+
+const APP_ENTRY = path.join(__dirname, "renderer", "index.html");
+let mainWindow = null;
+
+/* Every renderer bridge call terminates here. Keep the registration surface
+   familiar to the rest of this file, but refuse calls from a guest webview,
+   subframe, stale window, or any document other than the signed app entry. */
+const registerIpcHandler = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => registerIpcHandler(channel, (event, ...args) => {
+  if (!isTrustedIpcSender(event, mainWindow, APP_ENTRY)) throw new Error("Blocked IPC from an untrusted renderer");
+  return listener(event, ...args);
+});
+const registerIpcListener = ipcMain.on.bind(ipcMain);
+ipcMain.on = (channel, listener) => registerIpcListener(channel, (event, ...args) => {
+  if (!isTrustedIpcSender(event, mainWindow, APP_ENTRY)) return;
+  return listener(event, ...args);
+});
 
 let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
@@ -195,6 +214,9 @@ ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
   return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:remove", (_e, { provider }) => {
+  // Same provider gate as set: the store also carries the plugin secrets
+  // namespace, and an unchecked name could clear it in one call.
+  if (!KEY_PROVIDERS[provider]) return { error: "Invalid provider" };
   const store = readKeyStore(); delete store[provider]; writeKeyStore(store); return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
@@ -212,21 +234,35 @@ ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
     return { ok: false, error: "Provider could not be reached", providers: keyStatus() };
   }
 });
+const contextFileGrants = new Set();
 ipcMain.handle("crowe:files:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openFile", "multiSelections"], title: "Attach context files" });
   if (result.canceled) return [];
   return result.filePaths.map((filePath) => {
-    try { const stat = fs.statSync(filePath); return { path: filePath, name: path.basename(filePath), size: stat.size }; }
+    try {
+      const canonical = fs.realpathSync(filePath);
+      const stat = fs.statSync(canonical);
+      if (!stat.isFile()) return null;
+      contextFileGrants.add(canonical);
+      return { path: canonical, name: path.basename(canonical), size: stat.size };
+    }
     catch { return null; }
   }).filter(Boolean);
 });
 ipcMain.handle("crowe:files:read-context", (_e, filePaths) => (Array.isArray(filePaths) ? filePaths : []).slice(0, 12).map((filePath) => {
-  try { return { path: filePath, content: fs.readFileSync(filePath, "utf8").slice(0, 100000) }; }
-  catch { return { path: filePath, error: "File could not be read as text" }; }
+  try {
+    const canonical = fs.realpathSync(String(filePath || ""));
+    if (!contextFileGrants.has(canonical)) return { path: String(filePath || ""), error: "File access was not granted by the picker" };
+    const fd = fs.openSync(canonical, "r");
+    try {
+      const buffer = Buffer.alloc(100000);
+      const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      return { path: canonical, content: buffer.subarray(0, bytes).toString("utf8") };
+    } finally { fs.closeSync(fd); }
+  } catch { return { path: String(filePath || ""), error: "File could not be read as text" }; }
 }));
 
 let CWD = loadConfig().cwd || os.homedir();
-let mainWindow = null;
 
 /* Which spaces this install ships with.
 
@@ -261,6 +297,7 @@ function installSpaces() {
 
 function createWindow() {
   const spaces = installSpaces();
+  const appEntry = APP_ENTRY;
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
     backgroundColor: "#f7f3ea", title: "Crowe Logic", show: false,
@@ -288,17 +325,36 @@ function createWindow() {
   const reveal = () => { if (shown || !mainWindow) return; shown = true; mainWindow.show(); };
   mainWindow.once("ready-to-show", reveal);
   setTimeout(reveal, 4000);
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.loadFile(appEntry);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
+    if (isSafeGuestUrl(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
     return { action: "deny" };
   });
+  // Only the top-level app document holds a permission: not a subframe of it,
+  // not a guest, and never a caller Electron hands over without contents.
+  // "media" is audio only; nothing in the renderer opens a camera.
+  const PERMITTED = new Set(["media", "microphone", "notifications", "clipboard-sanitized-write"]);
+  const contentsUrl = (wc) => (wc && !wc.isDestroyed() ? wc.getURL() : "");
+  const permissionAllowed = (wc, permission, url, details) => {
+    if (!mainWindow || mainWindow.isDestroyed() || !wc || wc !== mainWindow.webContents) return false;
+    if (details?.isMainFrame === false || !PERMITTED.has(permission) || !isTrustedPermissionUrl(url, appEntry)) return false;
+    if (permission === "media" && Array.isArray(details?.mediaTypes) && details.mediaTypes.some((type) => type !== "audio")) return false;
+    return true;
+  };
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const url = details?.requestingUrl || wc.getURL();
-    const trusted = url.startsWith("file://") || url.startsWith("https://croweagents.com") || url.startsWith("https://crowelogic.com");
-    callback(trusted && ["media", "microphone", "notifications", "clipboard-sanitized-write"].includes(permission));
+    callback(permissionAllowed(wc, permission, details?.requestingUrl || contentsUrl(wc), details));
   });
-  mainWindow.webContents.on("will-navigate", (event, url) => { if (!url.startsWith("file://")) { event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); } });
+  mainWindow.webContents.session.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+    // For a file: document Electron hands over the bare origin "file:///", which
+    // no entry-path comparison can accept, so the full requesting URL comes
+    // first; the origin serves the https allowlist, where it is exact.
+    return permissionAllowed(wc, permission, details?.requestingUrl || requestingOrigin || contentsUrl(wc), details);
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isAppDocument(url, appEntry)) return;
+    event.preventDefault();
+    if (/^https:\/\//i.test(url)) shell.openExternal(url);
+  });
 }
 
 /* The main window's setWindowOpenHandler routes its own popups into the
@@ -317,15 +373,16 @@ function createWindow() {
 app.on("web-contents-created", (_event, contents) => {
   if (contents.getType() === "webview") {
     contents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url) && mainWindow) mainWindow.webContents.send("crowe:browser:navigate", url);
+      if (isSafeGuestUrl(url) && mainWindow) mainWindow.webContents.send("crowe:browser:navigate", url);
       return { action: "deny" };
     });
+    const guardGuestNavigation = (event, url) => { if (!isSafeGuestUrl(url)) event.preventDefault(); };
+    contents.on("will-navigate", guardGuestNavigation);
+    contents.on("will-redirect", guardGuestNavigation);
   }
   contents.on("will-attach-webview", (event, webPreferences, params) => {
-    delete webPreferences.preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    if (!/^https?:\/\//i.test(params.src || "")) event.preventDefault();
+    hardenGuestPreferences(webPreferences);
+    if (!isSafeGuestUrl(params.src)) event.preventDefault();
   });
 });
 
@@ -669,6 +726,36 @@ const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the m
 const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
 const PLUGIN_CONNECTING = new Set();
 function pluginState() { return loadConfig().plugins || {}; }
+function pluginSecretState() { return readKeyStore().__plugins || {}; }
+function pluginEnv(id) { return pluginSecretState()[id] || {}; }
+function persistPluginEnv(id, env) {
+  const store = readKeyStore();
+  const plugins = { ...(store.__plugins || {}) };
+  if (!Object.keys(env).length && !Object.hasOwn(plugins, id)) return;
+  if (Object.keys(env).length) plugins[id] = env;
+  else delete plugins[id];
+  if (Object.keys(plugins).length) store.__plugins = plugins;
+  else delete store.__plugins;
+  writeKeyStore(store);
+}
+function migrateLegacyPluginSecrets() {
+  const state = pluginState();
+  const next = { ...state };
+  let changed = false;
+  for (const p of BUILTIN_PLUGINS) {
+    const saved = state[p.id];
+    if (!saved || !saved.env || typeof saved.env !== "object") continue;
+    const clean = sanitizePluginEnv(p, saved.env);
+    if (Object.keys(clean).length) {
+      if (!safeStorage.isEncryptionAvailable()) continue;
+      persistPluginEnv(p.id, clean);
+    }
+    next[p.id] = { ...saved };
+    delete next[p.id].env;
+    changed = true;
+  }
+  if (changed) saveConfig({ plugins: next });
+}
 function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
 function pluginList() {
   const st = pluginState();
@@ -703,7 +790,7 @@ async function pluginConnect(p, env) {
 }
 async function pluginsConnectAll() {
   const st = pluginState();
-  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled) await pluginConnect(p, s.env); }
+  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled) await pluginConnect(p, pluginEnv(p.id)); }
 }
 ipcMain.handle("crowe:plugins:list", () => pluginList());
 ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
@@ -714,10 +801,13 @@ ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
   if (PLUGIN_CONNECTING.has(id)) return { error: "already connecting" };
   PLUGIN_CONNECTING.add(id);
   try {
-    const r = await pluginConnect(p, env);
+    const cleanEnv = sanitizePluginEnv(p, env);
+    if (Object.keys(cleanEnv).length && !safeStorage.isEncryptionAvailable()) return { error: "OS credential encryption is unavailable" };
+    const r = await pluginConnect(p, cleanEnv);
     if (r && r.error) return { error: `could not start: ${String(r.error).slice(0, 160)}` };
     try {
-      saveConfig({ plugins: { ...pluginState(), [id]: { enabled: true, env: env || {} } } });
+      persistPluginEnv(id, cleanEnv);
+      saveConfig({ plugins: { ...pluginState(), [id]: { enabled: true } } });
     } catch (e) {
       const srv = MCP[id];
       if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
@@ -728,11 +818,12 @@ ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
   } finally { PLUGIN_CONNECTING.delete(id); }
 });
 ipcMain.handle("crowe:plugins:disable", (_e, { id }) => {
+  if (!PLUGIN_IDS.has(id)) return { error: "unknown plugin" };
   PLUGIN_GEN[id] = (PLUGIN_GEN[id] || 0) + 1; // void any in-flight connect
   PLUGIN_MANAGED.delete(id);
   const srv = MCP[id];
   if (srv) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
-  try { saveConfig({ plugins: { ...pluginState(), [id]: { enabled: false } } }); }
+  try { persistPluginEnv(id, {}); saveConfig({ plugins: { ...pluginState(), [id]: { enabled: false } } }); }
   catch (e) { return { error: `could not save config: ${String(e).slice(0, 160)}` }; }
   return { ok: true };
 });
@@ -960,6 +1051,8 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   return { ok: true, stopped: agentRuns.size };
 });
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
+  messages = sanitizeAgentMessages(messages);
+  if (!messages.length) return { done: false, error: "A turn needs a user message", text: "A turn needs a user message" };
   if (licensed) {
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
@@ -993,7 +1086,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
     agentRuns.delete(id);
   }
 });
-ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(messages, null));
+ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(sanitizeAgentMessages(messages), null));
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
 const ptyProcs = new Map();
@@ -1112,11 +1205,13 @@ ipcMain.handle("crowe:get-config", () => {
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded),
+    mcpServers: c.mcpServers || {},
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
-ipcMain.handle("crowe:set-config", async (_e, patch) => {
-  const c = saveConfig(patch || {});
+ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
+  const patch = sanitizeConfigPatch(rawPatch);
+  const c = saveConfig(patch);
   if (patch && patch.cwd) CWD = patch.cwd;
   if (patch && patch.mcpServers) await mcpConnectAll();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
@@ -1129,6 +1224,7 @@ function sessionsDir() { const d = path.join(app.getPath("userData"), "sessions"
 let currentSession = null;
 function newSessionId() { return "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7); }
 function readSession(id) {
+  if (!isSafeRecordId(id)) return null;
   try { return JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); } catch { return null; }
 }
 function persistSession(messages) {
@@ -1166,6 +1262,7 @@ ipcMain.handle("crowe:sessions:list", () => {
   } catch { return []; }
 });
 ipcMain.handle("crowe:sessions:load", (_e, id) => {
+  if (!isSafeRecordId(id)) return { error: "invalid session id" };
   try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "" }; }
   catch (e) { return { error: String(e) }; }
 });
@@ -1175,6 +1272,7 @@ ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); re
 // before its first turn does. The current thread follows the id if it had none.
 ipcMain.handle("crowe:sessions:update", (_e, { id, patch } = {}) => {
   const sid = String(id || currentSession || newSessionId());
+  if (!isSafeRecordId(sid)) return { ok: false, error: "invalid session id" };
   const fields = sessionPatch(patch);
   const prior = readSession(sid) || { id: sid, title: "Untitled", updatedAt: Date.now(), messages: [] };
   const next = { ...prior, ...fields, id: sid, updatedAt: Date.now() };
@@ -1182,7 +1280,12 @@ ipcMain.handle("crowe:sessions:update", (_e, { id, patch } = {}) => {
   if (!currentSession) currentSession = sid;
   return { ok: true, id: sid, name: next.name || "", brief: next.brief || "" };
 });
-ipcMain.handle("crowe:sessions:delete", (_e, id) => { try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {} if (currentSession === id) currentSession = null; return { ok: true }; });
+ipcMain.handle("crowe:sessions:delete", (_e, id) => {
+  if (!isSafeRecordId(id)) return { ok: false, error: "invalid session id" };
+  try { fs.unlinkSync(path.join(sessionsDir(), id + ".json")); } catch {}
+  if (currentSession === id) currentSession = null;
+  return { ok: true };
+});
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────
 /* Several named agents and the operator in one thread.
@@ -1209,7 +1312,10 @@ const roomsRegistry = require("./rooms/registry");
 const roomSeatId = (roomId, agentId) => `room:${roomId}:${agentId}`;
 const liveRooms = new Map();
 
-function roomPath(id) { return path.join(sessionsDir(), id + ".json"); }
+function roomPath(id) {
+  if (!isSafeRecordId(id) || !String(id).startsWith("r-")) throw new Error("invalid room id");
+  return path.join(sessionsDir(), id + ".json");
+}
 function saveRoom(room) {
   try { fs.writeFileSync(roomPath(room.id), JSON.stringify(roomsEngine.toSession(room), null, 2)); } catch {}
 }
@@ -1297,6 +1403,7 @@ ipcMain.handle("crowe:rooms:load", (_e, { id } = {}) => {
 });
 
 ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
+  if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
   liveRooms.delete(id);
   try { fs.unlinkSync(roomPath(id)); } catch {}
   return { ok: true };
@@ -1362,7 +1469,7 @@ async function runRoomTurn(evt, id, fn) {
 }
 
 ipcMain.handle("crowe:rooms:say", (evt, { id, text } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || ""), deps)));
+  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
 
 ipcMain.handle("crowe:rooms:critique", (evt, { id } = {}) =>
   runRoomTurn(evt, id, (room, deps) => roomsEngine.critique(room, deps)));
@@ -1604,6 +1711,7 @@ ipcMain.handle("crowe:update:state", () => updateState);
 
 app.whenReady().then(async () => {
   migrateLegacyAuth();
+  migrateLegacyPluginSecrets();
   initCrashReporting();
   createWindow();
   buildMenu();
