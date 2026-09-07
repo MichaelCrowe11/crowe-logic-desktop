@@ -2,6 +2,7 @@
 
 const path = require("path");
 const { fileURLToPath } = require("url");
+const { normalizeSense } = require("./sense");
 
 const TRUSTED_WEB_ORIGINS = new Set([
   "https://crowelogic.com",
@@ -117,6 +118,7 @@ function sanitizeConfigPatch(raw) {
     if (Number.isFinite(value) && value >= 0) out[key] = Math.min(value, max);
   }
   if (Object.hasOwn(patch, "mcpServers")) out.mcpServers = sanitizeMcpServers(patch.mcpServers);
+  if (patch.sense && typeof patch.sense === "object") out.sense = normalizeSense(patch.sense);
   return out;
 }
 

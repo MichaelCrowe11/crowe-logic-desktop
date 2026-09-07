@@ -589,6 +589,14 @@
       async pairSvg() { return { error: "The companion is not running." }; },
       onEvent() { return () => {}; },
     },
+    // Crowe Sense in the preview: no node, so the card reads "not paired" and
+    // the settings fields round-trip in memory.
+    sense: {
+      _cfg: { source: "off", url: "", node: "", relay: "https://sense.crowelogic.com" },
+      async status() { return { config: { ...this._cfg }, health: null, lastPoll: 0, lastError: "", stale: false, running: false }; },
+      async configure(patch) { Object.assign(this._cfg, patch || {}); return this.status(); },
+      onChange() { return () => {}; },
+    },
     // Cultivation records. In-memory rather than canned returns, so the preview
     // exercises add and delete for real — the list is only half the surface.
     grow: {

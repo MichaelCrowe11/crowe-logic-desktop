@@ -198,6 +198,15 @@
 
   const KEY_SESSIONS = "crowe.web.sessions";
   const KEY_CONFIG = "crowe.web.config";
+  const KEY_SENSE = "crowe.web.sense";
+  // Same closed set as sense.js normalizeSense, minus direct: a browser tab
+  // has no route to a node's own API. No node id, no source.
+  function senseConfig() {
+    const r = readJSON(KEY_SENSE, {});
+    const node = String(r.node || "").trim().toLowerCase();
+    const paired = r.source !== "off" && /^cs-[0-9a-f]{6}$/.test(node);
+    return { source: paired ? "cloud" : "off", url: "", node, relay: "" };
+  }
 
   const readJSON = (k, fallback) => {
     try {
@@ -1076,6 +1085,34 @@
       save: unsupported("Cultivation records"),
       delete: unsupported("Cultivation records"),
       export: unsupported("Export"),
+    },
+
+    /* Crowe Sense from a browser tab. A page served over https cannot read a
+       node's plain-http API on a tailnet, so the only source here is the
+       cloud one: the edge forwards /app/sense/* to the relay with this
+       session's Crowe ID, the way it forwards /app/gw/*. Readings do not land
+       in a store on this build (grow.list is empty above); the status is what
+       the Cultivation card shows. */
+    sense: {
+      status: async () => {
+        const cfg = senseConfig();
+        if (cfg.source === "off") return { config: cfg, health: null, lastPoll: 0, lastError: "", stale: false, running: false };
+        try {
+          const r = await fetch(`/app/sense/v1/nodes/${encodeURIComponent(cfg.node)}/health`, { credentials: "include", headers: { accept: "application/json" } });
+          if (!r.ok) return { config: cfg, health: null, lastPoll: Date.now(), lastError: `The Crowe Sense relay answered ${r.status}.`, stale: true, running: false };
+          const health = await r.json();
+          const age = Number(health && health.age_s);
+          return { config: cfg, health, lastPoll: Date.now(), lastError: "", stale: !Number.isFinite(age) || age > 180, running: false };
+        } catch (e) {
+          return { config: cfg, health: null, lastPoll: Date.now(), lastError: String((e && e.message) || e), stale: true, running: false };
+        }
+      },
+      configure: async (patch) => {
+        const stored = { ...readJSON(KEY_SENSE, {}), ...(patch || {}) };
+        writeJSON(KEY_SENSE, { node: String(stored.node || "").trim().toLowerCase(), source: stored.source === "off" ? "off" : "cloud" });
+        return { config: senseConfig(), health: null, lastPoll: 0, lastError: "", stale: false, running: false };
+      },
+      onChange: () => () => {},
     },
 
     companion: {

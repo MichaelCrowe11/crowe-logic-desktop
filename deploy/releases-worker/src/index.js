@@ -355,6 +355,14 @@ export default {
       });
     }
 
+    // The previous worker published /crowe-logic/<version>/<file> links with
+    // hyphenated installer names that no longer match the R2 keys. Those URLs
+    // are already out in the wild, so send them to the download page rather
+    // than 404 someone holding an old link.
+    if (path.startsWith("/crowe-logic/")) {
+      return Response.redirect(new URL("/", url).toString(), 302);
+    }
+
     if (path.startsWith("/desktop/") || path.startsWith("/brand/")) {
       const key = path.slice(1);
       // electron-updater asks for byte ranges when it applies a blockmap diff,

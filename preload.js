@@ -119,6 +119,14 @@ contextBridge.exposeInMainWorld("crowe", {
     // Writes a lot trace to a file the user picks in the OS save dialog.
     export: (name, text) => ipcRenderer.invoke("crowe:grow:export", { name, text }),
   },
+  // Crowe Sense: the paired node's health and config, and the switch that pairs
+  // or unpairs it. Readings arrive in grow.list("env") as rows marked measured;
+  // onChange fires when a poll wrote some, or when the node's status moved.
+  sense: {
+    status: () => ipcRenderer.invoke("crowe:sense:status"),
+    configure: (patch) => ipcRenderer.invoke("crowe:sense:configure", patch),
+    onChange: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:sense:changed", h); return () => ipcRenderer.removeListener("crowe:sense:changed", h); },
+  },
   // The phone companion: this app lending its shell, files and git to the
   // Crowe Logic app on a phone, over Tailscale. `pairSvg` returns finished
   // markup rather than the pairing URL, so the token is drawn on screen without
