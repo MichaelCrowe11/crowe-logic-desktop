@@ -161,11 +161,15 @@ app.whenReady().then(async () => {
           const state = await js(`(() => {
             const shell = document.getElementById("shell");
             return {space:document.body.dataset.space, overflow:shell.scrollWidth > shell.clientWidth + 1,
+              wbOpacity: getComputedStyle(document.getElementById("workbench")).opacity,
               surfaces: Object.values(SURFACES).filter(s => !s.classList.contains("hidden")).length + Number(!workbench.classList.contains("hidden")),
               current: document.querySelectorAll('#spaces [aria-current="true"]').length};
           })()`);
           const label = [width, dark ? "dark" : "light", route.space, route.lane || "workspace"].join("-");
-          assert(state.space === route.space && state.current === 1 && state.surfaces === 1 && !state.overflow,
+          // A workbench at opacity 0 here is the boot rise replaying on re-show:
+          // the frame the shot would capture is blank, as every dark chat shot was.
+          assert(state.space === route.space && state.current === 1 && state.surfaces === 1 && !state.overflow
+            && (route.space !== "chat" || state.wbOpacity === "1"),
             "route layout: " + label + " " + JSON.stringify(state));
           await shoot(win, label);
         }

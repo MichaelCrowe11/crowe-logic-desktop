@@ -9,7 +9,6 @@
        through the CSS Object Model, which the policy does not police. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
   <!-- Before every other script: xterm and the logotype inliner both write
@@ -250,8 +249,8 @@
                 </div>
               </div>
               <div class="composer-actions">
-                <button id="voice-input" type="button" class="voice-btn" title="Dictate with microphone" aria-label="Dictate with microphone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></svg></button>
-                <button id="voice-output" type="button" class="voice-btn" title="Read the latest response aloud" aria-label="Read the latest response aloud"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9v6h4l5 4V5L9 9H5zM18 9a5 5 0 0 1 0 6"/></svg></button>
+                <button id="voice-input" type="button" class="voice-btn" aria-pressed="false" title="Dictate with microphone" aria-label="Dictate with microphone"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></svg></button>
+                <button id="voice-output" type="button" class="voice-btn" aria-pressed="false" title="Read the latest response aloud" aria-label="Read the latest response aloud"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9v6h4l5 4V5L9 9H5zM18 9a5 5 0 0 1 0 6"/></svg></button>
                 <button id="send" type="submit" title="Send (Enter)" aria-label="Send"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
                 <button id="stop" type="button" class="hidden" title="Stop this run" aria-label="Stop this run"><svg class="ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
               </div>
@@ -262,7 +261,7 @@
               <span id="model-badge" class="composer-model">CroweLM</span>
               <span id="composer-status" class="composer-status" role="status" aria-live="polite" data-state="ready">Ready</span>
             </span>
-            <span id="composer-help" class="composer-help">Enter to send · Shift+Enter for a new line</span>
+            <span id="composer-help" class="composer-help">Enter to send, Shift+Enter for a new line</span>
             <span id="composer-count" class="composer-count">0 / 50k</span>
           </div>
         </form>
@@ -274,7 +273,7 @@
 
       <section id="workspace">
         <div class="dock-bar">
-          <button id="chat-restore" class="dock-icon" type="button" title="Show chat panel" aria-label="Show chat panel">
+          <button id="chat-restore" class="dock-icon" type="button" title="Show chat panel (Cmd+Shift+B)" aria-label="Show chat panel">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 12h5M16 9l3 3-3 3"/></svg>
           </button>
           <div id="dock-tabs" class="dock-tabs">

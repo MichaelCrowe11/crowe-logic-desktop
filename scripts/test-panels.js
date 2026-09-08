@@ -172,14 +172,87 @@ const tests = [
       const filled = frame.classList.contains("has-input");
       const count = $("composer-count").textContent;
       setRunning(true);
-      const busy = $("composer").getAttribute("aria-busy");
+      const busy = frame.getAttribute("aria-busy");
       const runningState = frame.classList.contains("is-running") && $("composer-status").textContent === "Running";
-      setRunning(false); input.value = ""; input.dispatchEvent(new Event("input"));
-      return { filled, count, busy, runningState, ready: $("composer-status").textContent,
+      // Ending a run says nothing by itself: the caller knows whether the turn
+      // landed, failed or was stopped, and says it once. Ready is the caller's.
+      setRunning(false); const held = $("composer-status").textContent; setComposerStatus("Ready");
+      input.value = ""; input.dispatchEvent(new Event("input"));
+      return { filled, count, busy, runningState, held, ready: $("composer-status").textContent,
         max: input.maxLength, described: input.getAttribute("aria-describedby"),
         voiceLabels: [$("voice-input").getAttribute("aria-label"), $("voice-output").getAttribute("aria-label")].join("|") };`,
-    expect: { filled: true, count: "10 / 50k", busy: "true", runningState: true, ready: "Ready",
+    expect: { filled: true, count: "10 / 50k", busy: "true", runningState: true, held: "Running", ready: "Ready",
       max: 50000, described: "composer-help", voiceLabels: "Dictate with microphone|Read the latest response aloud" },
+  },
+  {
+    // The rise on the workbench is boot choreography. Hidden and shown again,
+    // which every space switch does, a CSS animation restarts, and for 860ms of
+    // delay plus 460ms of rise the primary surface was blank. Measured in the
+    // packaged app before the fix; it must never come back.
+    name: "returning to Chat shows the workbench at once; the launch rise plays once per boot",
+    body: `const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+      const booted = document.body.classList.contains("booted");
+      setSpace("projects"); await frame();
+      setSpace("chat"); await frame();
+      const out = { booted, opacity: getComputedStyle(workbench).opacity, animating: workbench.getAnimations().length,
+        visible: !workbench.classList.contains("hidden") && getComputedStyle(workbench).display !== "none" };
+      __resetSpaces();
+      return out;`,
+    expect: { booted: true, opacity: "1", animating: 0, visible: true },
+  },
+  {
+    // maxlength only governs typing. Dictation and the Home and Cultivation
+    // composers append past it, and main used to cut the text at the cap with
+    // no word to the operator. The composer must refuse and keep the draft.
+    name: "a prompt over the character limit is refused with a reason and the draft is kept",
+    body: `const origAuth = refreshAuth; refreshAuth = async () => true;
+      const agent = window.crowe.agent; const origRun = agent.run; let ran = 0; agent.run = async () => { ran++; return { done: true }; };
+      const msgs0 = document.querySelectorAll(".msg").length;
+      input.value = "x".repeat(INPUT_MAX_CHARS + 1); input.dispatchEvent(new Event("input"));
+      const over = document.querySelector(".composer-caption").classList.contains("is-over");
+      const countShown = getComputedStyle($("composer-count")).display !== "none";
+      try { await send(input.value); } finally { agent.run = origRun; refreshAuth = origAuth; }
+      const st = $("composer-status");
+      const out = { over, countShown, ran, kept: input.value.length === INPUT_MAX_CHARS + 1,
+        bubbles: document.querySelectorAll(".msg").length - msgs0, caption: st.textContent, state: st.dataset.state };
+      input.value = ""; input.dispatchEvent(new Event("input")); setComposerStatus("Ready");
+      return out;`,
+    expect: { over: true, countShown: true, ran: 0, kept: true, bubbles: 0, caption: "Over the 50,000 character limit", state: "error" },
+  },
+  {
+    // Listening and speaking are states, and a toggle says its state through
+    // aria-pressed, not a class. Dictation is stubbed: most desktop builds have
+    // no speech engine, and the test is about the button and the caption.
+    name: "voice controls carry aria-pressed and announce listening; Escape clears a caption note",
+    body: `const mic = $("voice-input");
+      class FakeSR { start() { this.onstart && this.onstart(); } stop() { this.onend && this.onend(); } }
+      const orig = window.SpeechRecognition; window.SpeechRecognition = FakeSR;
+      const before = [mic.getAttribute("aria-pressed"), $("voice-output").getAttribute("aria-pressed")].join("|");
+      mic.click();
+      const on = { pressed: mic.getAttribute("aria-pressed"), active: mic.classList.contains("active"), caption: $("composer-status").textContent, state: $("composer-status").dataset.state };
+      mic.click();
+      const off = { pressed: mic.getAttribute("aria-pressed"), caption: $("composer-status").textContent };
+      window.SpeechRecognition = orig;
+      setComposerStatus("Heads up", "note");
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      const cleared = $("composer-status").textContent;
+      return { before, onPressed: on.pressed, onActive: on.active, onCaption: on.caption, onState: on.state, offPressed: off.pressed, offCaption: off.caption, cleared };`,
+    expect: { before: "false|false", onPressed: "true", onActive: true, onCaption: "Listening", onState: "listening", offPressed: "false", offCaption: "Ready", cleared: "Ready" },
+  },
+  {
+    // Rings have to clear 3:1 on the paper theme, which the mid gold does not,
+    // so every focus-visible ring resolves to --focus. And the two chat controls
+    // are 32px targets, not 26px dock chrome.
+    name: "focus rings draw from --focus and the chat close and restore controls are 32px targets",
+    body: `const rules = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } })
+        .filter((r) => r.selectorText && /focus-visible/.test(r.selectorText) && r.style && (r.style.outline || r.style.outlineColor));
+      const offToken = rules.filter((r) => /--gold\\b/.test(r.style.outline + r.style.outlineColor)).map((r) => r.selectorText).join(",");
+      const size = (id) => { const b = $(id).getBoundingClientRect(); return Math.round(b.width) + "x" + Math.round(b.height); };
+      const wasCollapsed = workbench.classList.contains("chat-collapsed");
+      toggleChatPanel(true); const restore = size("chat-restore"); toggleChatPanel(false);
+      if (wasCollapsed) toggleChatPanel(true);
+      return { ringRules: rules.length > 0, offToken, close: size("chat-close"), restore };`,
+    expect: { ringRules: true, offToken: "", close: "32x32", restore: "32x32" },
   },
   {
     // The segmented mode control clips rather than ellipsizes, so a footer that
@@ -276,7 +349,7 @@ const tests = [
       const errText = (added.map((m) => m.querySelector(".err")).find(Boolean) || {}).textContent || "";
       const st = $("composer-status");
       const out = { bubbles: added.length, saidInTranscript: errText.includes("bridge down (harness)"),
-        caption: st.textContent, captionState: st.dataset.state, running, busy: $("composer").getAttribute("aria-busy"),
+        caption: st.textContent, captionState: st.dataset.state, running, busy: document.querySelector(".composer-frame").getAttribute("aria-busy"),
         sendBack: !$("send").classList.contains("hidden"), stopGone: $("stop").classList.contains("hidden"),
         memoryKept: messages.length === mem0 + 1 };
       added.forEach((m) => m.remove()); messages.length = mem0; setComposerStatus("Ready");

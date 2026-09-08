@@ -7,7 +7,7 @@ const transcript = $("transcript");
 const input = $("input");
 const messages = [];
 
-function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 // Markdown for the operator's replies. Escape-first, then structure: the input
 // is untrusted model output, so every character passes esc() before any HTML
 // is assembled, and links only ever carry http(s) hrefs.
@@ -521,6 +521,7 @@ function updateHud(ev) {
 // number; keep them together when it changes.
 const INPUT_MAX_CHARS = 50000;
 const COUNT_SHOWS_AT = 1000;
+let nearLimitSaid = false;
 function syncComposerInput() {
   const frame = document.querySelector(".composer-frame");
   const count = $("composer-count");
@@ -533,8 +534,14 @@ function syncComposerInput() {
   // long enough for the limit to be a real question, and reddens near it.
   const caption = document.querySelector(".composer-caption");
   if (caption) {
+    const near = len >= INPUT_MAX_CHARS * 0.9;
     caption.classList.toggle("is-long", len >= COUNT_SHOWS_AT);
-    caption.classList.toggle("is-near-limit", len >= INPUT_MAX_CHARS * 0.9);
+    caption.classList.toggle("is-near-limit", near);
+    caption.classList.toggle("is-over", len > INPUT_MAX_CHARS);
+    // Said once, on crossing. The count itself is not a live region, or every
+    // keystroke past a thousand characters would be read out.
+    if (near && !nearLimitSaid && !running) setComposerStatus(`${len.toLocaleString()} of ${INPUT_MAX_CHARS.toLocaleString()} characters`, "note");
+    nearLimitSaid = near;
   }
 }
 /* The caption under the composer says what the composer is doing. Ready is
@@ -595,10 +602,15 @@ function setRunning(on) {
   $("send").classList.toggle("hidden", on);
   $("stop").classList.toggle("hidden", !on);
   $("hud-status").textContent = on ? "running" : "idle";
-  $("composer").setAttribute("aria-busy", String(on));
+  // aria-busy goes on the frame, not the form: the status live region sits in
+  // the form's caption, and assistive tech may hold changes inside a busy
+  // subtree until it clears, which is exactly when Running stops mattering.
   const frame = document.querySelector(".composer-frame");
-  if (frame) frame.classList.toggle("is-running", on);
-  setComposerStatus(on ? "Running" : "Ready", on ? "running" : "ready");
+  if (frame) { frame.setAttribute("aria-busy", String(on)); frame.classList.toggle("is-running", on); }
+  // Running is announced here. The resting state is the caller's to say, once
+  // it knows whether the turn landed, failed or was stopped; writing Ready
+  // here first made every ending two announcements.
+  if (on) setComposerStatus("Running", "running");
 }
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
 function addRouteNode(body, ev) {
@@ -621,6 +633,10 @@ async function send(text, opts = {}) {
     // Re-validate live: a token that expired since launch must not eat the turn.
     if (!(await refreshAuth())) { showSignInPrompt(); setComposerStatus("Sign in to send", "note"); return; }
   } finally { sendGate = false; }
+  // maxlength only governs typing. Dictation, quick-open and the Home and
+  // Cultivation composers all append past it, and main would then cut the text
+  // at the cap without a word. Refuse here, keep the draft, say why.
+  if (text.length > INPUT_MAX_CHARS) { setComposerStatus(`Over the ${INPUT_MAX_CHARS.toLocaleString()} character limit`, "error"); return; }
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; syncComposerInput();
   const body = addAssistant(); let runText = "";
@@ -770,6 +786,7 @@ async function send(text, opts = {}) {
   finishSaid(); settleThinking(body);
   if (body.querySelector(".err")) setComposerStatus("Failed", "error");
   else if (body.querySelector(".stopped")) setComposerStatus("Stopped", "note");
+  else setComposerStatus("Ready");
   /* The landing, only when the turn actually landed — an errored or stopped
      turn has nothing to celebrate. Two places, one meaning: the header's
      logotype takes the settle, and the message's own avatar takes the same
@@ -789,7 +806,15 @@ $("stop").addEventListener("click", () => { setComposerStatus("Stopping", "note"
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 // isComposing: Enter inside an IME composition commits the candidate; it must
 // not send half a sentence in another script.
-input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); } });
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); }
+  // Escape stops a run; at rest it clears an error or a note from the caption.
+  else if (e.key === "Escape") {
+    const state = $("composer-status").dataset.state;
+    if (running) { e.preventDefault(); $("stop").click(); }
+    else if (state === "error" || state === "note") { e.preventDefault(); setComposerStatus("Ready"); }
+  }
+});
 input.addEventListener("input", syncComposerInput);
 /* The fit above runs on keystrokes. The pane can be dragged narrower after
    the text is typed, and the window can be resized under it; either reflows
@@ -1121,11 +1146,11 @@ function mountWorkflow(p, body) {
   body.classList.add("workflow-surface");
   let workflows=workflowStore(), active=workflows[0]||{id:`wf-${Date.now().toString(36)}`,name:"New agent workflow",nodes:[],runs:[]};
   if(!workflows.length){workflows=[active];saveWorkflowStore(workflows)}
-  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Workflow name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run workflow</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation — the Crowe agents design the workflow" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
+  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Workflow name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run workflow</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation. The Crowe agents design the workflow" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
   let aborted=false;
   const persist=()=>{const i=workflows.findIndex(x=>x.id===active.id);if(i<0)workflows.unshift(active);else workflows[i]=active;saveWorkflowStore(workflows)};
   const renderList=()=>{body.querySelector(".wf-list").innerHTML=workflows.map(w=>`<button data-id="${esc(w.id)}" class="${w.id===active.id?"active":""}"><b>${esc(w.name)}</b><small>${w.nodes.length} agents · ${(w.runs||[]).length} runs</small></button>`).join("");body.querySelectorAll(".wf-list button").forEach(b=>b.onclick=()=>{active=workflows.find(w=>w.id===b.dataset.id);render()})};
-  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the workflow — or add nodes by hand.</span></div>';
+  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the workflow, or add nodes by hand.</span></div>';
     canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};const t=card.querySelector(".wf-node-prompt");t.onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};
       // The instructions are prose on a page, not a box in a form: the field
       // grows to hold what the agents wrote, because clipped instructions read
@@ -1278,7 +1303,7 @@ function mountAgentFleet(p, body) {
 const SYNTH_LENSES=[
   {name:"Conventional",brief:"Take the most direct, conventional approach. Prioritize correctness and completeness."},
   {name:"Contrarian",brief:"Take a contrarian angle: challenge the assumptions in the task and surface the risks and failure modes a conventional answer would miss."},
-  {name:"Pragmatic",brief:"Optimize for practical constraints — cost, time, and what can ship soonest. Be concrete about the tradeoffs you accept."},
+  {name:"Pragmatic",brief:"Optimize for practical constraints: cost, time, and what can ship soonest. Be concrete about the tradeoffs you accept."},
   {name:"First principles",brief:"Reason from first principles. Ignore convention and work forward from the underlying goal."},
 ];
 function workbenchPresets(){try{return JSON.parse(localStorage.getItem("crowe-workbench-presets")||"[]")}catch{return []}}
@@ -1323,8 +1348,8 @@ function mountWorkbench(p, body) {
         if(cancelled)outputs[0].textContent="Cancelled before synthesis.";
         else{
           outputs[0].textContent="Synthesizing branches...";
-          const brief=drafts.map((d,i)=>`### Branch ${i+1} — ${SYNTH_LENSES[i%SYNTH_LENSES.length].name}\n\n${d}`).join("\n\n");
-          const synth=await runAgent(synthId,[head,`Task:\n\n${task}`,`${count} agents answered that task independently, each from a different angle. Their drafts:`,brief,"Merge the drafts into one answer. Keep the strongest reasoning from each branch, state plainly where the branches disagree and which side is right, and drop any claim no branch supports. Return the merged answer only — do not narrate the merge."].join("\n\n"));
+          const brief=drafts.map((d,i)=>`### Branch ${i+1}: ${SYNTH_LENSES[i%SYNTH_LENSES.length].name}\n\n${d}`).join("\n\n");
+          const synth=await runAgent(synthId,[head,`Task:\n\n${task}`,`${count} agents answered that task independently, each from a different angle. Their drafts:`,brief,"Merge the drafts into one answer. Keep the strongest reasoning from each branch, state plainly where the branches disagree and which side is right, and drop any claim no branch supports. Return the merged answer only. Do not narrate the merge."].join("\n\n"));
           outputs[0].innerHTML=md(synth);stored=[synth,...drafts];
         }
       }
@@ -1689,7 +1714,7 @@ async function mountRoom(p, body, seed = {}) {
 
   const syncPick = () => {
     countEl.textContent = picked.size
-      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? " — a room of one behaves like an ordinary thread" : ""}`
+      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? ": a room of one behaves like an ordinary thread" : ""}`
       : "";
     openBtn.disabled = picked.size === 0;
   };
@@ -1816,11 +1841,11 @@ async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("cr
 
 // ── Voice input and TTS ──
 let recognition=null;
-$("voice-input").onclick=()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){setComposerStatus("Dictation is not available on this system","error");return}if(recognition){recognition.stop();return}recognition=new SR();recognition.continuous=true;recognition.interimResults=true;recognition.onstart=()=>$("voice-input").classList.add("active");recognition.onresult=(e)=>{let text="";for(let i=e.resultIndex;i<e.results.length;i++)text+=e.results[i][0].transcript;input.value=(input.value+" "+text).trim();input.dispatchEvent(new Event("input"))};recognition.onend=()=>{$("voice-input").classList.remove("active");recognition=null};recognition.onerror=(e)=>setComposerStatus("Dictation failed: "+(e.error||"unknown"),"error");recognition.start()};
+$("voice-input").onclick=()=>{const btn=$("voice-input");const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){setComposerStatus("Dictation is not available on this system","error");return}if(recognition){recognition.stop();return}recognition=new SR();recognition.continuous=true;recognition.interimResults=true;recognition.onstart=()=>{btn.classList.add("active");btn.setAttribute("aria-pressed","true");if(!running)setComposerStatus("Listening","listening")};recognition.onresult=(e)=>{let text="";for(let i=e.resultIndex;i<e.results.length;i++)text+=e.results[i][0].transcript;input.value=(input.value+" "+text).trim();input.dispatchEvent(new Event("input"))};recognition.onend=()=>{btn.classList.remove("active");btn.setAttribute("aria-pressed","false");recognition=null;if($("composer-status").dataset.state==="listening")setComposerStatus("Ready")};recognition.onerror=(e)=>setComposerStatus("Dictation failed: "+(e.error||"unknown"),"error");recognition.start()};
 // Say at boot what the click would only reveal later: on most desktop builds
 // there is no speech engine behind this button.
 if(!(window.SpeechRecognition||window.webkitSpeechRecognition)){const b=$("voice-input");b.classList.add("unavailable");b.setAttribute("aria-disabled","true");b.title="Dictation is not available on this system"}
-$("voice-output").onclick=()=>{if(speechSynthesis.speaking){speechSynthesis.cancel();return}const said=[...document.querySelectorAll(".msg.assistant .said")].pop();if(!said)return;const u=new SpeechSynthesisUtterance(said.textContent);u.onstart=()=>$("voice-output").classList.add("active");u.onend=()=>$("voice-output").classList.remove("active");speechSynthesis.speak(u)};
+$("voice-output").onclick=()=>{const btn=$("voice-output");if(speechSynthesis.speaking){speechSynthesis.cancel();return}const said=[...document.querySelectorAll(".msg.assistant .said")].pop();if(!said){setComposerStatus("Nothing to read yet","note");return}const u=new SpeechSynthesisUtterance(said.textContent);u.onstart=()=>{btn.classList.add("active");btn.setAttribute("aria-pressed","true")};u.onend=()=>{btn.classList.remove("active");btn.setAttribute("aria-pressed","false")};u.onerror=u.onend;speechSynthesis.speak(u)};
 window.crowe.onBrowserNavigate((u)=>{navigate(u)});
 
 // ── Files ──
@@ -1924,7 +1949,7 @@ async function renderCompanion(){
   if (start) start.onclick = async () => {
     start.disabled = true; start.textContent = "Starting";
     const r = await window.crowe.companion.start();
-    if (r && r.error) { body.innerHTML = `<p class="said">${r.error}</p>`; return; }
+    if (r && r.error) { body.innerHTML = `<p class="said">${esc(r.error)}</p>`; return; }
     renderCompanion();
   };
   const stop = $("companion-stop");
@@ -1972,7 +1997,7 @@ async function renderCompanion(){
   if (running) {
     const r = await window.crowe.companion.pairSvg();
     const host = $("companion-qr");
-    if (host) host.innerHTML = r && r.svg ? r.svg : `<p class="said">${(r && r.error) || "could not draw the code"}</p>`;
+    if (host) host.innerHTML = r && r.svg ? r.svg : `<p class="said">${esc((r && r.error) || "could not draw the code")}</p>`;
   }
 }
 
@@ -2140,7 +2165,8 @@ divider.addEventListener("keydown", (e) => {
 });
 chatRestore.addEventListener("click", () => {
   toggleChatPanel(false);
-  divider.focus();
+  // Back into the conversation, not onto the splitter it came from.
+  input.focus();
 });
 chatClose.addEventListener("click", () => {
   toggleChatPanel(true);
@@ -2384,7 +2410,7 @@ function setAutonomyBadge(tier) {
   });
   $("autonomy").dataset.tier = tier;
   document.body.dataset.tier = tier;
-  input.placeholder = TIER_HINT[tier] || "Ask Crowe Logic to do something...";
+  input.placeholder = TIER_HINT[tier] || "Describe the outcome, constraints, and checks...";
   try { localStorage.setItem("crowe-tier", tier); } catch {}
 }
 document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListener("click", async () => {
@@ -2861,7 +2887,7 @@ function growForm(lane, def, rows, refs, editing) {
     // prefill to discount, but a record emptied of every field is still not one.
     if (!def.fields.some((fd) => !prefilled.has(fd.k) && rec[fd.k])) { f.elements[def.fields[0].k].focus(); return; }
     const res = await window.crowe.grow.save(lane, rec);
-    if (!res || !res.ok) { btn.textContent = "Failed — " + ((res && res.error) || "unknown"); return; }
+    if (!res || !res.ok) { btn.textContent = "Failed: " + ((res && res.error) || "unknown"); return; }
     cultEdit = null;
     if (cultLane === lane) renderGrowLane(lane);
   });
@@ -2894,7 +2920,7 @@ async function renderGrowLane(lane) {
     const empty = document.createElement("div"); empty.className = "card-empty";
     empty.textContent = q
       ? `Nothing here matches "${q}".`
-      : `No ${def.plural} yet — the first one goes in above.`;
+      : `No ${def.plural} yet. The first one goes in above.`;
     body.appendChild(empty);
     return;
   }
@@ -3185,7 +3211,7 @@ function growTrace(code, d) {
   // farm cannot produce from these records — better said out loud here than
   // discovered during the exercise.
   const gaps = [];
-  if (!block) gaps.push("No block record for this lot code — everything below is orphaned.");
+  if (!block) gaps.push("No block record for this lot code, so everything below is orphaned.");
   else {
     if (!block.spawned) gaps.push("Spawn date not recorded, so the lot has no start.");
     if (!block.room) gaps.push("No room on the block, so no environment history can be tied to it (MGAP 12.1a wants location).");
@@ -3265,7 +3291,7 @@ async function renderTrace() {
       tr.flushes.map((r) => line(fmtDay(r.date),
         `flush ${r.n || "?"}${r.weight ? " · " + r.weight + " lb" : " · unweighed"}${r.grade ? " · grade " + r.grade : ""}${r.notes ? " · " + r.notes : ""}`)).join("")) : "") +
     (tr.contam.length ? sec("Contamination", "", tr.contam.map((r) => line(fmtDay(r.date),
-      `${r.organism || "unidentified"} at ${r.stage || "unrecorded stage"} — ${r.action || "no action recorded"}${r.notes ? " · " + r.notes : ""}`)).join("")) : "") +
+      `${r.organism || "unidentified"} at ${r.stage || "unrecorded stage"}: ${r.action || "no action recorded"}${r.notes ? " · " + r.notes : ""}`)).join("")) : "") +
     (tr.env.length ? sec("Room history", `${esc(b.room)}, spawn to last harvest`, tr.env.map((r) => line(fmtDay(r.date),
       [r.temp && r.temp + "°F", r.rh && r.rh + "% RH", r.co2 && r.co2 + " ppm CO₂", r.fae && "FAE " + r.fae].filter(Boolean).join(" · ") || "no values")).join("")) : "") +
     (tr.notes.length ? sec("Journal", "mentions this lot code", tr.notes.map((r) => line(fmtDay(r.date),
@@ -3280,7 +3306,7 @@ async function renderTrace() {
 function traceText(tr) {
   const L = [];
   const b = tr.block;
-  L.push(`LOT TRACE — ${tr.code}`, `Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} from Crowe Logic cultivation records.`, "");
+  L.push(`LOT TRACE: ${tr.code}`, `Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} from Crowe Logic cultivation records.`, "");
   if (b) {
     L.push("BLOCK", ...[["Species", b.species], ["Strain", b.strain], ["Substrate", b.substrate], ["Blocks in lot", b.count],
       ["Room", b.room], ["Spawned", b.spawned], ["Stage now", b.stage], ["Notes", b.notes]]
@@ -3295,7 +3321,7 @@ function traceText(tr) {
     `  ${r.date || "date?"}  flush ${r.n || "?"}  ${r.weight ? r.weight + " lb" : "unweighed"}${r.grade ? "  grade " + r.grade : ""}${r.notes ? "  " + r.notes : ""}`)
     : ["  none recorded"]), "");
   if (tr.contam.length) L.push("CONTAMINATION", ...tr.contam.map((r) =>
-    `  ${r.date || "date?"}  ${r.organism || "unidentified"} at ${r.stage || "stage?"} — ${r.action || "no action recorded"}${r.notes ? "  " + r.notes : ""}`), "");
+    `  ${r.date || "date?"}  ${r.organism || "unidentified"} at ${r.stage || "stage?"}: ${r.action || "no action recorded"}${r.notes ? "  " + r.notes : ""}`), "");
   if (tr.env.length) L.push(`ROOM HISTORY (${b.room}, spawn to last harvest)`, ...tr.env.map((r) =>
     `  ${r.date}  ${[r.temp && r.temp + "F", r.rh && r.rh + "% RH", r.co2 && r.co2 + " ppm CO2", r.fae && "FAE " + r.fae].filter(Boolean).join("  ") || "no values"}`), "");
   if (tr.notes.length) L.push("JOURNAL MENTIONS", ...tr.notes.map((r) => `  ${r.date || "date?"}  ${r.subject || ""}${r.entry ? ": " + r.entry : ""}`), "");
@@ -3419,13 +3445,13 @@ async function refreshCult() {
   const c0 = open[0];
   if (c0 && (c0.organism || c0.block)) q.push(
     `${c0.organism || "Contamination"} found ${fmtDay(c0.date)}${c0.block ? " on " + c0.block : ""}` +
-    `${c0.stage ? " at " + c0.stage : ""} and still open — what do I do with it, and with the rest of the room?`);
+    `${c0.stage ? " at " + c0.stage : ""} and still open. What do I do with it, and with the rest of the room?`);
   const pre = new Set(["spawned", "colonizing", "consolidating"]);
   const oldest = live.filter((r) => pre.has(r.stage) && !Number.isNaN(growStamp(r.spawned)))
     .sort((a, b) => growStamp(a.spawned) - growStamp(b.spawned))[0];
   if (oldest) q.push(
     `${oldest.code || "A lot"} is ${oldest.stage}, ${growAge(oldest.spawned)} since spawn` +
-    `${oldest.species || oldest.strain ? " — " + [oldest.species, oldest.strain].filter(Boolean).join(" ") : ""}` +
+    `${oldest.species || oldest.strain ? ": " + [oldest.species, oldest.strain].filter(Boolean).join(" ") : ""}` +
     `${oldest.substrate ? " on " + oldest.substrate : ""}. Is that on track, and what comes next?`);
   const room = [...rooms.values()][0];
   if (room && (room.temp || room.rh || room.co2)) q.push(
@@ -3467,7 +3493,7 @@ async function growContext() {
   const live = by(d.blocks.filter((r) => r.stage !== "spent" && r.stage !== "discarded"), "spawned").slice(0, 14);
   if (live.length) out.push("Blocks in play:\n" + live.map((r) =>
     `- ${r.code || "?"} ${[r.species, r.strain].filter(Boolean).join(" ")}${r.substrate ? " on " + r.substrate : ""}` +
-    `${r.count ? ", " + r.count + " blocks" : ""} — ${r.stage || "stage unrecorded"}, ${growAge(r.spawned) || "spawn date unrecorded"}` +
+    `${r.count ? ", " + r.count + " blocks" : ""}: ${r.stage || "stage unrecorded"}, ${growAge(r.spawned) || "spawn date unrecorded"}` +
     `${r.notes ? ". " + r.notes : ""}`).join("\n"));
   const fl = by(recent(d.flushes, "date", 60), "date").slice(0, 10);
   if (fl.length) out.push("Recent harvests:\n" + fl.map((r) =>
@@ -3488,7 +3514,7 @@ async function growContext() {
     d.strains.length && "strains held: " + d.strains.map((r) => r.name).filter(Boolean).join(", "),
     d.recipes.length && "substrate recipes: " + d.recipes.map((r) => r.name).filter(Boolean).join(", "),
   ].filter(Boolean);
-  if (lib.length) out.push("Library — " + lib.join("; ") + ".");
+  if (lib.length) out.push("Library: " + lib.join("; ") + ".");
   if (!out.length) return "";
   // Say where this came from and how far to trust it. Environment rows are typed
   // by a person, not measured by Crowe Sense, and an expert that treats a
@@ -3681,6 +3707,9 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     setSpace("chat");
     toggleChatPanel();
+    // Focus follows the panel: onto the restore control when it collapses, back
+    // into the composer when it returns, so the shortcut never strands a keyboard.
+    requestAnimationFrame(() => (workbench.classList.contains("chat-collapsed") ? chatRestore : input).focus());
   }
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "b") {
     e.preventDefault();
@@ -3738,7 +3767,7 @@ const PAL_ACTIONS = [
   { label: "Output (agent events)", run: () => { setSpace("chat"); switchPane("output"); } },
   { label: "Git: pull", run: async () => { const r = await window.crowe.git.pull(); appendOutput("git pull: " + ((r && (r.out || r.error)) || "").slice(0, 200)); loadGit(); statusTick(); } },
   { label: "Git: push", run: async () => { const r = await window.crowe.git.push(); appendOutput("git push: " + ((r && (r.out || r.error)) || "").slice(0, 200)); statusTick(); } },
-  { label: "Check for updates", run: async () => { const s = await window.crowe.update.check(); if (s && (s.status === "current" || s.status === "dev")) appendOutput("update: " + (s.status === "dev" ? "dev build — updates only in packaged app" : "you're on the latest version")); } },
+  { label: "Check for updates", run: async () => { const s = await window.crowe.update.check(); if (s && (s.status === "current" || s.status === "dev")) appendOutput("update: " + (s.status === "dev" ? "dev build: updates only in packaged app" : "you're on the latest version")); } },
   { label: "Plugins", run: () => $("settings-btn").click() },
   { label: "Settings", run: () => $("settings-btn").click() },
 ];
@@ -3822,12 +3851,12 @@ async function maybeShowOnboarding(cfg) {
   clearWelcome();
   const b = addAssistant();
   b.innerHTML = [
-    '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
+    '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
     "<li>Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).</li>",
     "<li>Point the workspace at a project folder (Settings or ask the agent).</li>",
-    '<li>Give the agent a task - try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
+    '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
   ].join("");
   const row = document.createElement("div");
@@ -3908,6 +3937,16 @@ async function liveLockups() {
    is hidden or occluded at launch may never fire the event at all, and a veil
    that outlives its animation is invisible but still in the layer tree. */
 function dismissLaunch() {
+  /* And it closes the boot. The rise on #bar, #sidebar, #workbench and #hud is
+     scoped in CSS to body:not(.booted), because a CSS animation restarts every
+     time its element returns from display:none, and the workbench does exactly
+     that on every switch back to Chat. `booted` goes on once the four have
+     finished, so the choreography plays once and a returning pane is simply
+     there. Under reduced motion there is nothing to wait for. */
+  const rises = [...document.querySelectorAll("#bar, #sidebar, #workbench, #hud")].flatMap((el) => el.getAnimations());
+  const booted = () => document.body.classList.add("booted");
+  Promise.all(rises.map((a) => a.finished.catch(() => {}))).then(booted);
+  setTimeout(booted, 3000);
   const veil = document.getElementById("launch");
   if (!veil) return;
   const done = () => { if (veil.isConnected) veil.remove(); };

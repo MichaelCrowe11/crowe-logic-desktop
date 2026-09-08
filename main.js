@@ -8,7 +8,7 @@ const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
-const { spawn, exec } = require("child_process");
+const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
@@ -343,7 +343,10 @@ function createWindow() {
   const permissionAllowed = (wc, permission, url, details) => {
     if (!mainWindow || mainWindow.isDestroyed() || !wc || wc !== mainWindow.webContents) return false;
     if (details?.isMainFrame === false || !PERMITTED.has(permission) || !isTrustedPermissionUrl(url, appEntry)) return false;
-    if (permission === "media" && Array.isArray(details?.mediaTypes) && details.mediaTypes.some((type) => type !== "audio")) return false;
+    // The request handler is given mediaTypes (an array); the check handler is
+    // given mediaType (one string). Read both, and refuse anything but audio.
+    const media = Array.isArray(details?.mediaTypes) ? details.mediaTypes : details?.mediaType ? [details.mediaType] : [];
+    if (permission === "media" && media.some((type) => type !== "audio")) return false;
     return true;
   };
   mainWindow.webContents.session.setPermissionRequestHandler((wc, permission, callback, details) => {
@@ -354,6 +357,16 @@ function createWindow() {
     // no entry-path comparison can accept, so the full requesting URL comes
     // first; the origin serves the https allowlist, where it is exact.
     return permissionAllowed(wc, permission, details?.requestingUrl || requestingOrigin || contentsUrl(wc), details);
+  });
+  /* The webview guards above see attach and in-page navigation. A script that
+     assigns webview.src is a loadURL, which fires neither, so the policy is
+     enforced once more where every guest request has to pass: the session.
+     Guests have their own webContents ids; the app's own document never
+     requests http(s) main frames, so nothing of its own is in this path. */
+  mainWindow.webContents.session.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
+    const guest = details.webContentsId !== undefined && details.webContentsId !== mainWindow.webContents.id;
+    if (guest && details.resourceType === "mainFrame" && !isSafeGuestUrl(details.url)) return callback({ cancel: true });
+    callback({});
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (isAppDocument(url, appEntry)) return;
@@ -443,10 +456,13 @@ function signIn() {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const code = u.searchParams.get("code"), st = u.searchParams.get("state");
+      // A hit that does not carry this sign-in's state is not this sign-in. Say
+      // so and keep listening: a page in the browser panel can reach 127.0.0.1
+      // too, and one stray request must not cancel the user's real callback.
+      if (!code || st !== state) { res.writeHead(400, { "Content-Type": "text/plain" }); res.end("not this sign-in"); return; }
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f7f3ea;color:#1a1714;text-align:center;padding-top:14vh"><h2 style="color:#96702c;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
       try { server.close(); } catch {}
-      if (!code || st !== state) return finish({ error: "sign-in was cancelled" });
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
         const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
@@ -543,7 +559,9 @@ ipcMain.handle("crowe:license:billing", async () => {
    in a window we control. When payment lands the control plane stamps
    crowe_tier on the Crowe ID, and refresh spends the refresh token for an
    access token carrying it, so the new tier arrives without a sign-out. */
-const CHECKOUT_URL = process.env.CROWE_CHECKOUT_URL || "https://crowe-checkout.yellow-block-3adc.workers.dev";
+// The override is a development aid. A packaged app posting the user's email
+// wherever an environment variable points is not one.
+const CHECKOUT_URL = (!app.isPackaged && process.env.CROWE_CHECKOUT_URL) || "https://crowe-checkout.yellow-block-3adc.workers.dev";
 // Every slug the catalog sells. Shorter lists have a specific failure: a
 // paying Business account reads as free and gets told to upgrade.
 const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
@@ -659,7 +677,9 @@ const MCP = {}; // name -> { proc, tools, send, pending, nextId }
 function mcpConnect(name, spec) {
   return new Promise((resolve) => {
     let proc;
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...process.env, ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
+    // The same filtered environment the agent shell gets: a plugin server is a
+    // process the user did not write, and it does not need the app's tokens.
+    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { return resolve({ error: String(e) }); }
     const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
     const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
@@ -1160,19 +1180,22 @@ ipcMain.handle("crowe:fs:walk", () => {
 });
 
 // ─── Git (version control) ───────────────────────────────────────────────────
-function gitRun(argStr) {
+/* No shell. Paths and branch names come from the repo the user opened, and a
+   repo can be anyone's: a file called `x & evil.cmd & y` is a legal name, and
+   through cmd.exe a single-quoted argument is not a quoted argument at all.
+   execFile hands git an argv and nothing interprets it on the way. */
+function gitRun(args) {
   return new Promise((resolve) => {
-    exec(`git ${argStr}`, { cwd: CWD, timeout: 20000, maxBuffer: 8 * 1024 * 1024 },
+    execFile("git", args.map(String), { cwd: CWD, timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
       (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
   });
 }
 function gitWritesBlocked() { const t = loadConfig().autonomy || "edit"; return t === "readonly" || t === "plan"; }
-function shq(p) { return "'" + String(p == null ? "" : p).replace(/'/g, "'\\''") + "'"; }
 ipcMain.handle("crowe:git:status", async () => {
-  const probe = await gitRun("rev-parse --is-inside-work-tree");
+  const probe = await gitRun(["rev-parse", "--is-inside-work-tree"]);
   if (!probe.ok) return { repo: false, cwd: CWD };
-  const branch = (await gitRun("rev-parse --abbrev-ref HEAD")).out.trim() || "(detached)";
-  const raw = await gitRun("status --porcelain=v1");
+  const branch = (await gitRun(["rev-parse", "--abbrev-ref", "HEAD"])).out.trim() || "(detached)";
+  const raw = await gitRun(["status", "--porcelain=v1"]);
   const files = raw.out.split("\n").filter(Boolean).map((l) => ({
     index: l[0], work: l[1], path: l.slice(3),
     staged: l[0] !== " " && l[0] !== "?", untracked: l[0] === "?",
@@ -1180,29 +1203,29 @@ ipcMain.handle("crowe:git:status", async () => {
   return { repo: true, branch, files, cwd: CWD };
 });
 ipcMain.handle("crowe:git:diff", async (_e, { path: p, staged }) => {
-  const r = await gitRun(`diff ${staged ? "--staged " : ""}-- ${shq(p || ".")}`);
+  const r = await gitRun(["diff", ...(staged ? ["--staged"] : []), "--", p || "."]);
   return r.out || r.err || "(no textual diff)";
 });
-ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`add -- ${shq(p)}`); });
-ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`restore --staged -- ${shq(p)}`); });
+ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["add", "--", p]); });
+ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["restore", "--staged", "--", p]); });
 ipcMain.handle("crowe:git:commit", async (_e, { message }) => {
   if (gitWritesBlocked()) return { error: "read-only autonomy" };
   if (!message || !message.trim()) return { error: "empty commit message" };
-  const r = await gitRun(`commit -m ${shq(message)}`);
+  const r = await gitRun(["commit", "-m", message]);
   return { ok: r.ok, out: (r.out || "") + (r.err || "") };
 });
 ipcMain.handle("crowe:git:log", async () => {
-  const r = await gitRun('log -20 --pretty=format:"%h%x1f%an%x1f%ar%x1f%s"');
+  const r = await gitRun(["log", "-20", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s"]);
   return r.out.split("\n").filter(Boolean).map((l) => { const [hash, author, when, subject] = l.split(""); return { hash, author, when, subject }; });
 });
 ipcMain.handle("crowe:git:branches", async () => {
-  const cur = (await gitRun("rev-parse --abbrev-ref HEAD")).out.trim();
-  const r = await gitRun("branch --format=%(refname:short)");
+  const cur = (await gitRun(["rev-parse", "--abbrev-ref", "HEAD"])).out.trim();
+  const r = await gitRun(["branch", "--format=%(refname:short)"]);
   return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
 });
-ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(`checkout ${shq(branch)}`); });
-ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("pull --ff-only"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
-ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun("push"); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["checkout", "--end-of-options", branch]); });
+ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
@@ -1562,6 +1585,14 @@ function companionInstance() {
       // Every command the phone runs is announced to the window, so a shell
       // being driven remotely is never a silent one.
       onEvent: (e) => { try { mainWindow && mainWindow.webContents.send("crowe:companion:event", e); } catch { /* window gone */ } },
+      // The phone drives this machine under the same tier the composer shows.
+      // "Read-only (no shell, no writes)" has to be true of a paired phone too.
+      tierAllows: (kind) => {
+        const tier = loadConfig().autonomy || "edit";
+        if (kind === "run") return tier === "execute";
+        if (kind === "write") return tier === "edit" || tier === "execute";
+        return true;
+      },
     });
   }
   return companion;

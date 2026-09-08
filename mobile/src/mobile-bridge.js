@@ -836,7 +836,7 @@
      system prompt says so in the first line. */
   function growToolSpec() {
     const types = Object.entries(GROW.GROW_SCHEMA).map(([t, def]) =>
-      `${t} (${def.what}): ${def.fields.map((f) => `${f.k} — ${f.d}`).join("; ")}`).join("\n");
+      `${t} (${def.what}): ${def.fields.map((f) => `${f.k}: ${f.d}`).join("; ")}`).join("\n");
     return {
       type: "function",
       function: {
@@ -885,7 +885,7 @@
     type: "function",
     function: {
       name: "run_command",
-      description: "Run a shell command on the paired desktop machine and return its exit code, stdout and stderr. This is a real shell on a real machine — prefer reading over writing, and say what you are about to run.",
+      description: "Run a shell command on the paired desktop machine and return its exit code, stdout and stderr. This is a real shell on a real machine, so prefer reading over writing, and say what you are about to run.",
       parameters: {
         type: "object",
         properties: {
@@ -936,10 +936,10 @@
     if (mayWrite() && Object.keys(GROW.GROW_SCHEMA).length) tools.push(growToolSpec());
     /* The tier ladder means the same thing here as it does on the desktop, and
        it is the whole safety story for a shell you are carrying in a pocket:
-         plan     — nothing on the machine, not even a read
-         readonly — read files
-         edit     — read and write files
-         execute  — and run commands
+         plan:     nothing on the machine, not even a read
+         readonly: read files
+         edit:     read and write files
+         execute:  and run commands
        Running a command is last on purpose. `write_file` can ruin a file;
        `run_command` can ruin a machine, and neither this app nor the server
        can tell a build from an `rm -rf` by reading the string. */
@@ -1017,14 +1017,14 @@
         if (!tierOk) return { text: `refused: ${name} needs a higher tier than ${config.autonomy}`, status: "error" };
         if (name === "read_file") {
           const f = phoneFiles.get(key);
-          if (!f) return { text: `refused: no attached file named ${key} — the user attaches phone files with the paperclip in the composer`, status: "error" };
+          if (!f) return { text: `refused: no attached file named ${key}. The user attaches phone files with the paperclip in the composer`, status: "error" };
           return { text: `phone:${key}:\n${clip(f.content, TOOL_RESULT_MAX - 200)}`, status: "ok" };
         }
         const content = String(args.content ?? "");
         if (content.length > PHONE_FILE_MAX) return { text: `refused: over the ${Math.round(PHONE_FILE_MAX / 1024)} KB cap for phone files`, status: "error" };
         phoneFiles.set(key, { content, at: Date.now() });
         phoneNotify();
-        return { text: `updated phone:${key} (${content.length} bytes). The user can send it anywhere from the paperclip row — tapping the file opens the share sheet.`, status: "ok" };
+        return { text: `updated phone:${key} (${content.length} bytes). The user can send it anywhere from the paperclip row. Tapping the file opens the share sheet.`, status: "ok" };
       }
       if (!remoteConfigured()) {
         if (phoneFiles.size) return { text: `refused: no machine is paired with this phone (Settings → Remote machine). The files the user attached are readable as ${[...phoneFiles.keys()].map((n) => `phone:${n}`).join(", ")}`, status: "error" };
@@ -1088,20 +1088,20 @@
        run_command. A prompt that contradicts the tool list wins, every time. */
     const machine = remoteConfigured() ? [
       `This phone is paired with a machine at ${remoteBase()}, reached privately over Tailscale. It is the`,
-      "user's own desktop, and it is a real one — the same files and the same shell they would sit down to.",
+      "user's own desktop, and it is a real one: the same files and the same shell they would sit down to.",
       config.autonomy === "plan"
         ? "The tier is Plan, so you may not touch that machine at all this turn. Say so if asked, and plan instead."
         : [
           "You reach it with these tools, and the tier decides which you were given:",
-          "  read_file  — read a file there (Read tier and above)",
-          config.autonomy === "readonly" ? "" : "  write_file — replace a file there (Edit and above)",
-          config.autonomy === "execute" ? "  run_command — run a shell command there" : "  run_command is NOT available at this tier; say the user can switch to Execute",
+          "  read_file:  read a file there (Read tier and above)",
+          config.autonomy === "readonly" ? "" : "  write_file: replace a file there (Edit and above)",
+          config.autonomy === "execute" ? "  run_command: run a shell command there" : "  run_command is NOT available at this tier; say the user can switch to Execute",
         ].filter(Boolean).join("\n"),
       "Never claim you cannot reach the user's computer while you hold these tools. Prefer reading before",
       "writing, say what you are about to run before you run it, and quote the exit code when it is not 0.",
     ].join("\n") : [
       "No machine is paired with this phone, and a phone cannot run a shell of its own. You genuinely cannot",
-      "run commands or touch files on a computer right now — say so plainly, and add that pairing a machine in",
+      "run commands or touch files on a computer right now, say so plainly, and add that pairing a machine in",
       "Settings under Remote machine gives you all three against their desktop.",
     ].join("\n");
     /* Same contract as `machine` above: this paragraph must track what the
@@ -1113,7 +1113,7 @@
         "",
         `The user attached ${phoneFiles.size === 1 ? "a file" : phoneFiles.size + " files"} from this phone: ${[...phoneFiles.keys()].map((n) => `phone:${n}`).join(", ")}.`,
         "Read them with read_file on the phone: path (any tier above Plan). write_file to a phone: path updates",
-        "the app's copy (Edit tier and above) — the phone cannot overwrite the original where it lives, so tell",
+        "the app's copy (Edit tier and above). The phone cannot overwrite the original where it lives, so tell",
         "the user the updated copy is in the paperclip row, and tapping it opens the share sheet to send or save it.",
       ].join("\n")
       : "";
@@ -1297,10 +1297,10 @@
      will, so the unpaired copy names the way out instead of ending the
      conversation at "use the desktop". */
   const NO_WORKSPACE = () => (remoteConfigured()
-    ? `No workspace runs on the phone itself. Ask the agent instead — it reaches ${remoteBase()} and can read, write and run there.`
+    ? `No workspace runs on the phone itself. Ask the agent instead. It reaches ${remoteBase()} and can read, write and run there.`
     : "There is no workspace on the phone. Pair a machine in Settings → Remote machine and the agent can work on it from here.");
   const NO_SHELL = () => (remoteConfigured()
-    ? `iOS will not let an app run its own shell. This phone drives ${remoteBase()} instead — set the tier to Execute and ask the agent to run the command.`
+    ? `iOS will not let an app run its own shell. This phone drives ${remoteBase()} instead. Set the tier to Execute and ask the agent to run the command.`
     : "iOS will not let an app run its own shell. Pair a machine in Settings → Remote machine to run commands on it from here.");
   // Built per call, not once: BUILD is filled in by the async boot, and a
   // literal captured at load would report 0.0.0 forever.
@@ -1355,7 +1355,7 @@
     };
     paint();
     write(`Connected to ${remoteBase()}.`, "term-console-note");
-    write("One command, one result — no interactive programs.", "term-console-note");
+    write("One command, one result. No interactive programs.", "term-console-note");
 
     /* Programs that wait for a keyboard.
 
@@ -1374,7 +1374,7 @@
     async function run(command) {
       write(`${cwd} $ ${command}`, "term-console-echo");
       if (config.autonomy !== "execute") {
-        write("Execute tier required. Change it in the composer — the tier gates the machine, not just the agent.", "term-console-err");
+        write("Execute tier required. Change it in the composer. The tier gates the machine, not just the agent.", "term-console-err");
         return;
       }
       const risky = persistenceRisk(command);
@@ -1384,7 +1384,7 @@
       const head = needsKeyboard(command);
       if (head) {
         write(`${head} waits for a keyboard, and this console cannot give it one.`, "term-console-err");
-        write("Each command runs on its own and this shows you the result. Try a one-shot form instead — for example `claude -p \"...\"` rather than `claude`.", "term-console-note");
+        write("Each command runs on its own and this shows you the result. Try a one-shot form instead, for example `claude -p \"...\"` rather than `claude`.", "term-console-note");
         return;
       }
       // `cd` alone means home, and `cd -` is not tracked: without a session on
@@ -1421,7 +1421,7 @@
       if (r.error) return write(r.error, "term-console-err");
       const d = r.data || {};
       if (d.exit_code === 124) {
-        write(`no result after 45s — the machine killed it.`, "term-console-err");
+        write(`no result after 45s. The machine killed it.`, "term-console-err");
         write("If it was meant to keep running, start it detached and read its log: `nohup <command> > /tmp/out.log 2>&1 &` then `tail -50 /tmp/out.log`.", "term-console-note");
         return;
       }
@@ -1679,7 +1679,7 @@
     },
     companion: {
       status: async () => ({ running: false, host: null, port: 0, tailscale: null, paired: remoteConfigured(),
-                             error: "A phone cannot host the companion. It joins one — Settings → Remote machine." }),
+                             error: "A phone cannot host the companion. It joins one: Settings → Remote machine." }),
       start: async () => ({ error: "A phone cannot host a shell for another device. Run the companion on the desktop app and scan its code from here." }),
       stop: async () => ({ running: false }),
       rotate: async () => ({ error: "There is no companion token on this device; the machine you paired with owns it." }),
@@ -1896,7 +1896,7 @@
         const host = remoteBase().replace(/^https?:\/\//, "").replace(/:\d+$/, "");
         return {
           app: "running", agents: runs.size, agentIds: [...runs.keys()], terminalIds: [],
-          "paired machine": remoteConfigured() ? host : "none — pair in Settings",
+          "paired machine": remoteConfigured() ? host : "none. Pair in Settings",
           autonomy: config.autonomy || "edit", version: BUILD.version,
           platform: PLATFORM === "ios" ? "iOS" : PLATFORM === "android" ? "Android" : "browser",
         };

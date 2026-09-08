@@ -160,7 +160,7 @@
   const isPaired = () => body.classList.contains("m-paired");
 
   const welcomeText = () => (isPaired()
-    ? "Your operator, in your pocket — and it reaches your desktop. Ask it to reason, look things up, read and change files on the paired machine, or run a command there."
+    ? "Your operator, in your pocket, and it reaches your desktop. Ask it to reason, look things up, read and change files on the paired machine, or run a command there."
     : "Your operator, in your pocket. Ask it to reason, look things up, and keep track of what you are working on. Pair a desktop in Settings and it can work on that machine from here.");
 
   const GENERAL_CHIPS = [
@@ -203,12 +203,12 @@
      renderer.js. Reword one over there without rewording it here and the build
      fails, rather than the phone quietly going back to promising a terminal. */
   const COPY = [
-    ["This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
-     "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and — once you pair a desktop — its shell, files and git."],
+    ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
+     "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and once you pair a desktop, its shell, files and git."],
     ["Point the workspace at a project folder (Settings or ask the agent).",
      "Pair a desktop in Settings under Remote machine, and it can work on that machine from here."],
-    ["Give the agent a task - try",
-     "Ask it something — try"],
+    ["Give the agent a task. Try",
+     "Ask it something. Try"],
     ["summarize this repo", "what changed on my Mac today"],
     ["run the tests and fix what fails", "run the tests on my Mac and tell me what failed"],
   ];
@@ -318,7 +318,7 @@
         if (file.size > window.crowePhone.max) { alert(`${file.name} is over the ${Math.round(window.crowePhone.max / 1024)} KB cap for attached files.`); continue; }
         const text = await file.text();
         // A null byte means this is not text; the tools would hand the model gibberish.
-        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file — the operator can only read text for now.`); continue; }
+        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file. The operator can only read text for now.`); continue; }
         const r = window.crowePhone.add(file.name, text);
         if (r.error) alert(`${file.name}: ${r.error}`);
       }
@@ -345,7 +345,7 @@
      input. At 390px, minus the send button, they clip mid-word — Projects
      opened on "routed to the right expert" cut at "routec", which reads as a
      rendering fault rather than as elision. Static text, so set once. */
-  const SURFACE_HINTS = { "home-input": "Start a task — it opens in Chat.", "cult-input": "Ask the grower anything." };
+  const SURFACE_HINTS = { "home-input": "Start a task. It opens in Chat.", "cult-input": "Ask the grower anything." };
   for (const [id, text] of Object.entries(SURFACE_HINTS)) {
     const field = $(id);
     if (field) field.placeholder = text;
@@ -380,7 +380,7 @@
   remoteSection.className = "key-manager";
   remoteSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Remote machine</b>',
-    "<span>A machine this phone may drive. On your desktop, open Crowe Logic → Settings → Phone companion and scan the code — or enter its tailnet address by hand. ",
+    "<span>A machine this phone may drive. On your desktop, open Crowe Logic → Settings → Phone companion and scan the code, or enter its tailnet address by hand. ",
     "Traffic stays inside your own Tailscale network, and the tier in the composer still decides: Read reads files, Edit writes them, Execute runs commands.</span></div>",
     '<span id="m-remote-state" class="badge">Not paired</span></div>',
     // The example is a MagicDNS name on the companion's port, deliberately:
@@ -502,7 +502,7 @@
     const dark = body.classList.contains("dark");
     StatusBar.setStyle({ style: dark ? "DARK" : "LIGHT" }).catch(() => {});
     // Android draws a solid bar behind the status area; iOS ignores this call.
-    StatusBar.setBackgroundColor({ color: dark ? "#16130f" : "#f7f3ea" }).catch(() => {});
+    StatusBar.setBackgroundColor({ color: dark ? "#0a0a0b" : "#f7f3ea" }).catch(() => {});
   }
   paintStatusBar();
   new MutationObserver(paintStatusBar).observe(body, { attributes: true, attributeFilter: ["class"] });

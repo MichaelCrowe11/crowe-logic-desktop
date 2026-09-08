@@ -107,7 +107,8 @@ function sanitizeConfigPatch(raw) {
   for (const key of ["cwd", "model", "licenseWorkspaceId"]) {
     if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" ? 4096 : 256);
   }
-  if (typeof patch.token === "string") out.token = patch.token.slice(0, 65536);
+  // No token. Sign-in writes it in main; nothing in the renderer has a reason
+  // to, and a document that could would be choosing where the bearer goes.
   for (const key of ["autoApprove", "telemetry", "onboarded", "verifier"]) {
     if (typeof patch[key] === "boolean") out[key] = patch[key];
   }

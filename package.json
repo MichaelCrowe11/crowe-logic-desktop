@@ -17,7 +17,7 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-sense.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-electron-security.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-preflight-release.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "test": "node scripts/test-harness.js && node scripts/test-sense.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-electron-security.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/test-brand-copy.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-preflight-release.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
     "rooms:web": "node scripts/build-rooms-web.js",
     "rooms:web:check": "node scripts/build-rooms-web.js --check",
@@ -39,6 +39,7 @@
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.1.3",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "js-yaml": "^4.3.2"
@@ -148,6 +149,7 @@
         "libasound2 (>= 1.0.16)"
       ]
     },
+    "afterPack": "build/fuses.js",
     "afterSign": "build/notarize.js",
     "publish": [
       {

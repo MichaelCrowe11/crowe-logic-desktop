@@ -186,6 +186,25 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     return `${before} devices, still authorised`;
   });
 
+  await check("a paired phone gets no more than the composer's tier allows", async () => {
+    // Read-only on the desktop has to mean read-only from the phone. The
+    // companion asks main before every run and write; here main says no.
+    const gated = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0,
+      tierAllows: (kind) => kind !== "run" && kind !== "write" });
+    const s = await gated.start();
+    const hit = (route, body) => fetch(`http://127.0.0.1:${s.port}${route}`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ipad.token}` }, body: JSON.stringify(body) });
+    const run = await hit("/run", { command: "echo should-not-run" });
+    const write = await hit("/write_file", { path: path.join(dir, "no.txt"), content: "no" });
+    await gated.stop();
+    assert(run.status === 403, `/run under a read-only tier got ${run.status}`);
+    assert(write.status === 403, `/write_file under a read-only tier got ${write.status}`);
+    assert(!fs.existsSync(path.join(dir, "no.txt")), "the refused write still landed");
+    const detail = (await run.json()).detail || "";
+    assert(/Execute/.test(detail), `the refusal must say which tier: ${detail}`);
+    return "run and write refused with the tier named";
+  });
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(failures ? `\n${failures} check(s) failed` : "\nall companion checks passed");
   process.exit(failures ? 1 : 0);

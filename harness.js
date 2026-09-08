@@ -55,7 +55,7 @@ const SECRET_BLOCK = (p) => `blocked: ${p} looks like a credentials/secrets file
 /* Execute grants a shell, not the app's ambient credentials. Child processes
    get ordinary runtime variables while tokens, signing material, agent sockets,
    and shell startup injection hooks stay in the desktop process. */
-const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASS(?:WORD|WD)?|API_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION|AUTH|ACCESS_?KEY|ACCOUNT_?KEY|CONNECTION_?STRING)/i;
+const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASS(?:WORD|WD)?|API_?KEY|PRIVATE_?KEY|CREDENTIAL|COOKIE|SESSION|AUTH|ACCESS_?KEY|ACCOUNT_?KEY|CONNECTION_?STRING|_URL$|_URI$|_DSN$|_KEY$|_PAT$|^GH_|KUBECONFIG)/i;
 const SHELL_INJECTION_ENV_RE = /^(?:BASH_ENV|ENV|ZDOTDIR|NODE_OPTIONS|NODE_PATH|PYTHONSTARTUP|PERL5OPT|RUBYOPT|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|GPG_AGENT_INFO|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.+)$/i;
 function safeShellEnv(source = process.env) {
   const clean = {};
@@ -703,7 +703,25 @@ async function execTool(ctx, name, args, route, state) {
     }
     if (name === "search") return await toolSearch(ctx, args);
     if (name === "list_dir") return toolListDir(ctx, args);
-    if (name === "open_url") { let u = args.url; if (!/^https?:\/\//.test(u)) u = "https://" + u; ctx.openUrl(u); return `opened ${u}`; }
+    if (name === "open_url") {
+      let u = String(args.url || ""); if (!/^https?:\/\//.test(u)) u = "https://" + u;
+      /* A GET the model composes is a channel out: anything it has read can ride
+         in the query string, and open_url is allowed in the read-only tiers. The
+         phone bridge asks first, naming the host; the desktop does the same. A
+         bare page address is Review, which the default approval mode lets
+         through; a URL carrying a query, a fragment, credentials, or a long
+         path is asked about in every mode, because that is where data goes. */
+      let parsed = null; try { parsed = new URL(u); } catch {}
+      if (!parsed) return `blocked: ${u} is not a URL.`;
+      const carries = Boolean(parsed.search || parsed.hash || parsed.username || parsed.password || parsed.pathname.length > 120);
+      const gate = await gateAction(ctx, state, {
+        risk: RISK.REVIEW, floorReview: carries, kind: "open_url", title: "Open a URL",
+        why: carries ? "opens a URL that carries data the model composed" : "opens a page the model chose",
+        detail: u.slice(0, 600), hash: inputHash("open_url", args),
+      });
+      if (!gate.ok) return gate.text;
+      ctx.openUrl(u); return `opened ${u}`;
+    }
     /* No tier gate: authoring writes a draft into the Runbook and nothing runs
        until the operator presses Run, so even Plan mode may hand its plan back
        shaped as a runnable artifact. Validated like the canvas's own compose -

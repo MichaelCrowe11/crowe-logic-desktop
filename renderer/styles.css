@@ -31,6 +31,7 @@
      mid gold does not manage on paper. Hover borders are decorative and stay
      on --gold. */
   --focus: var(--gold-deep);
+  --tier-execute: #a3501f;
   --blue: #2E5AAD;
   --line: rgba(64,52,38,0.12); --line-strong: rgba(64,52,38,0.24);
   --hair-top: rgba(255,255,255,0.65);
@@ -101,6 +102,7 @@ body.dark {
   --gold: #d2ad62; --gold-soft: #e7c984; --gold-deep: #9a7e44;
   --gold-text: var(--gold);
   --focus: var(--gold);
+  --tier-execute: #d98a4a;
   --blue: #6b9be0;
   --line: rgba(255,255,255,0.08); --line-strong: rgba(255,255,255,0.16);
   --hair-top: rgba(255,255,255,0.13);
@@ -127,7 +129,7 @@ body.dark {
 html, body { height: 100%; margin: 0; }
 body { display: flex; flex-direction: column; background: var(--cream); color: var(--ink);
   font-family: var(--body); font-size: var(--fs-body); line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden; }
-:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: var(--r-xs); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-xs); }
 button { font-family: var(--body); }
 
 /* ── Header ── */
@@ -200,7 +202,14 @@ button { font-family: var(--body); }
    natural state, so forwards fill bought nothing on desktop and broke the
    drawer on mobile. backwards keeps the pre-start hold (no flash before the
    delay) and releases the cascade the moment the rise lands. */
-#bar, #sidebar, #workbench, #hud { animation: boot-rise 460ms cubic-bezier(.16, 1, .3, 1) backwards; }
+/* Scoped to the boot. A CSS animation restarts whenever its element comes back
+   from display:none, and the workbench is display:none in every space but
+   Chat, so without the scope every return to Chat replayed the rise: 860ms of
+   blank pane, measured in the packaged app, on the primary surface.
+   renderer.js adds `booted` once the four have landed. Until then, and if the
+   script never runs, this is the launch choreography it always was. */
+body:not(.booted) #bar, body:not(.booted) #sidebar, body:not(.booted) #workbench, body:not(.booted) #hud {
+  animation: boot-rise 460ms cubic-bezier(.16, 1, .3, 1) backwards; }
 #bar      { animation-delay: 700ms; }
 #sidebar  { animation-delay: 790ms; }
 #workbench{ animation-delay: 860ms; }
@@ -208,7 +217,7 @@ button { font-family: var(--body); }
 @keyframes boot-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   #launch { display: none; animation: none; }
-  #bar, #sidebar, #workbench, #hud { animation: none; }
+  body:not(.booted) #bar, body:not(.booted) #sidebar, body:not(.booted) #workbench, body:not(.booted) #hud { animation: none; }
 }
 /* The -sm cut, not the full one: at 22px the full cut's o-blades average a
    quarter-pixel and the tittle's gold hex is a 3px speck, so the header wore a
@@ -269,8 +278,9 @@ body.dark button.primary:hover { background: var(--gold-soft); }
   transition: background 120ms var(--ease); outline: none; }
 /* Keep the visual rule narrow while making the splitter easier to catch. */
 #divider::after { content: ""; position: absolute; inset: 0 -3px; }
-#divider:hover, #divider.dragging, #divider:focus-visible { background: var(--gold-soft); }
-#divider:focus-visible { box-shadow: 0 0 0 2px var(--focus-halo); }
+#divider:hover, #divider.dragging { background: var(--gold-soft); }
+/* The ring is the cue and has to clear 3:1: --focus, not the soft gold. */
+#divider:focus-visible { background: var(--focus); box-shadow: 0 0 0 2px var(--focus-halo); }
 #agent { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-width: 0; min-height: 0; overflow: hidden; }
 #workspace { display: flex; flex-direction: column; position: relative; min-width: 0; min-height: 0; background: var(--panel); }
 /* A focused terminal or browser is a first-class layout, not a squeezed chat.
@@ -478,8 +488,7 @@ body.dark .cl-mark {
 body { --tier: var(--gold); }
 body[data-tier="plan"] { --tier: var(--blue); }
 body[data-tier="readonly"] { --tier: var(--muted); }
-body[data-tier="execute"] { --tier: #a3501f; }
-body.dark[data-tier="execute"] { --tier: #d98a4a; }
+body[data-tier="execute"] { --tier: var(--tier-execute); }
 
 .toolcard { border: 1px solid var(--line); border-radius: var(--r-md); margin: 8px 0; background: var(--panel);
   box-shadow: var(--z1); animation: rise 180ms var(--ease); position: relative; }
@@ -571,7 +580,7 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
 @media (prefers-reduced-motion: reduce) {
   .said.streaming > .md-tail > :last-child::after,
   .said.streaming > :last-child::after { animation: none; }
-  .composer-status[data-state="running"]::before { animation: none; }
+  .composer-status[data-state="running"]::before, .composer-status[data-state="listening"]::before { animation: none; }
 }
 
 /* ── Composer ── */
@@ -584,10 +593,13 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
    the way a page does, and the controls sit under the text on the same surface
    with no band or rule between. A hairline holds the sheet; on focus the
    hairline turns gold, and that is where gold appears until the run begins. */
-.composer-frame { overflow: hidden; background: var(--raised); border: 1px solid var(--line-strong);
-  border-radius: var(--r-xl); box-shadow: var(--z1);
+.composer-frame { overflow: hidden; background: var(--raised); border: 1px solid var(--line-strong); border-top-color: var(--hair-top);
+  border-radius: var(--r-xl); box-shadow: var(--z2);
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
-.composer-frame:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z1); }
+.composer-frame:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo), var(--z2); }
+/* While a run is on, gold belongs to the status dot, so the frame recedes to
+   its resting hairline even with the caret still in it. */
+.composer-frame.is-running, .composer-frame.is-running:focus-within { border-color: var(--line-strong); border-top-color: var(--hair-top); box-shadow: var(--z2); }
 #input { display: block; width: 100%; min-height: 68px; max-height: 240px; resize: none; border: 0; outline: 0;
   padding: 13px 15px 4px; background: transparent; color: var(--ink); font-family: var(--body); font-size: 15px;
   line-height: 1.5; box-shadow: none; }
@@ -616,9 +628,8 @@ body.dark .tc-result.collapsed::after { color: var(--gold); }
   .composer-mode #autonomy { flex: 1; }
   .composer-mode .seg-btn { flex: 1; padding-inline: 4px; }
   .composer-actions { width: 100%; justify-content: flex-end; }
-  .composer-help { display: none; }
 }
-.composer-actions .voice-btn { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%;
+.composer-actions .voice-btn { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%;
   border-color: transparent; background: transparent; color: var(--muted); cursor: pointer; }
 .composer-actions .voice-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .composer-actions .voice-btn.unavailable { opacity: .35; }
@@ -656,16 +667,26 @@ body.dark #send:hover { background: var(--gold-soft); }
 .composer-status[data-state="error"] { color: var(--err-fg); }
 .composer-status[data-state="error"]::before { background: var(--err-fg); }
 .composer-status[data-state="note"]::before { background: var(--muted); }
+/* Listening holds while dictation runs; unlike a note it does not clear itself. */
+.composer-status[data-state="listening"] { color: var(--gold-text); }
+.composer-status[data-state="listening"]::before { background: var(--gold); animation: pulse 1.2s ease-in-out infinite; }
 /* The keyboard hint shows while the box is focused and empty, which is the one
    moment it answers a question; typing puts it away. It leaves the flow rather
    than fading, so the count on the right never wraps around a blank, and it
    yields the line whenever the status has something to say. */
 .composer-help { display: none; margin-left: auto; text-align: right; }
 .composer-frame:focus-within:not(.has-input) + .composer-caption .composer-help { display: inline; }
+/* Narrow, the hint goes. Written after the show rule on purpose: a container
+   query adds no specificity, so the same selector inside one only wins by
+   coming later. */
+@container composer (max-width: 400px) {
+  .composer-frame:focus-within:not(.has-input) + .composer-caption .composer-help { display: none; }
+}
 #composer .composer-caption:has(.composer-status[data-state]:not([data-state="ready"])) .composer-help { display: none; }
 .composer-count { display: none; flex: none; margin-left: auto; font-variant-numeric: tabular-nums; }
 .composer-caption.is-long .composer-count { display: inline; }
 .composer-caption.is-near-limit .composer-count { color: var(--err-fg); }
+.composer-caption.is-over .composer-count { display: inline; color: var(--err-fg); font-weight: 600; }
 
 /* ── Workspace tabs + panes ── */
 .tabs { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;
@@ -1360,13 +1381,14 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 
 /* Chips: keyboard focus ring parity with :focus-visible elsewhere. */
 .chip:focus-visible, .krow:focus-visible, .sn-item:focus-visible {
-  outline: 2px solid var(--gold); outline-offset: 2px; }
+  outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* HUD: live numbers get tabular figures so cost/tokens don't jitter. */
 #hud-tok, #hud-cost, #hud-tps { font-variant-numeric: tabular-nums; }
 
-/* Composer hint: placeholder softer, less shouty. */
-#input::placeholder, .surface-composer input::placeholder { color: var(--muted); opacity: .72; }
+/* Composer hint: --muted at full opacity, the text-safe step. At .72 it fell
+   under 4.5:1 while carrying the tier sentence. */
+#input::placeholder, .surface-composer input::placeholder { color: var(--muted); opacity: 1; }
 
 /* Modal: dim the rest of the UI harder in dark mode for real separation. */
 
@@ -1429,8 +1451,8 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .operator-lists section div { margin-top:5px; color:var(--muted); font:11px var(--mono); }
 .danger { border:1px solid var(--danger); background:var(--danger); color:var(--on-danger); border-radius:6px; }
 .operator-grid { display:grid; grid-template-columns:repeat(2,minmax(100px,1fr)); gap:8px; padding:12px; overflow:auto; }
-.operator-stat { border:1px solid var(--line); border-radius:7px; padding:9px; background:var(--raised); }
-.operator-stat b { display:block; color:var(--gold-text); margin-top:3px; }
+.operator-stat { border:1px solid var(--line); border-radius:7px; padding:9px; background:var(--raised); min-width:0; }
+.operator-stat b { display:block; color:var(--gold-text); margin-top:3px; overflow-wrap:anywhere; }
 .operator-actions { display:flex; gap:7px; padding:0 12px 12px; }
 .voice-btn { border:1px solid var(--line); background:var(--raised); color:var(--ink); border-radius:7px; padding:0 10px; }
 .voice-btn.active { border-color:var(--gold); color:var(--gold-text); }
@@ -1578,6 +1600,8 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .dock-icon { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; padding: 0;
   border: 1px solid transparent; border-radius: var(--r-md); background: transparent; color: var(--muted);
   cursor: pointer; transition: color var(--dur) var(--ease), background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+/* The two chat controls are primary, not dock chrome: 32px targets. */
+#chat-close, #chat-restore { width: 32px; height: 32px; flex-basis: 32px; }
 .dock-icon:hover { color: var(--gold-deep); background: var(--panel); border-color: var(--line); }
 body.dark .dock-icon:hover { color: var(--gold); }
 .dock-icon .ic { width: 15px; height: 15px; }
@@ -1619,7 +1643,7 @@ body.dark #addpanel .pal-row:hover .ic { color: var(--gold); }
 body.mobile #chat-close { display: none; }
 
 .side-new:focus-visible, .side-foot-btn:focus-visible, .dock-tab:focus-visible, .dock-icon:focus-visible {
-  outline: 2px solid var(--gold); outline-offset: 2px; }
+  outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* The dock tab carries the panel's title and close, so the panel head is only
    a quiet drag handle. It used to render a full-width unstyled input. */
@@ -1666,7 +1690,7 @@ body.mobile #chat-close { display: none; }
   cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .bar-icon:hover { background: var(--raised); color: var(--ink); border-color: var(--line); }
 .bar-icon .ic { width: 16px; height: 16px; }
-.bar-icon:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.bar-icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 #sidebar { overflow: hidden; transition: flex-basis var(--dur-slow) var(--ease), padding var(--dur-slow) var(--ease); }
 body.sidebar-collapsed #sidebar { flex-basis: 0; padding-left: 0; padding-right: 0; border-right-width: 0; }

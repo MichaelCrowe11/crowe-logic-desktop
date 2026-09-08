@@ -32,11 +32,18 @@ function resolve(set) {
   return set;
 }
 
-const rootBlock = css.slice(css.indexOf(":root {"), css.indexOf("body.dark {"));
-const darkBlock = css.slice(css.indexOf("body.dark {"), css.indexOf("* { box-sizing"));
-const rootRaw = tokensIn(rootBlock);
+// Every top-level `:root {}` and `body.dark {}` block, in order, later wins.
+// The sheet defines its glass tokens in a second :root far below the first,
+// and a slice to the first block measured a token the page no longer uses.
+const blocksOf = (selector) => {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...css.matchAll(new RegExp(`(?:^|\\n)${esc}\\s*\\{([^}]*)\\}`, "g"))].map((m) => m[1]);
+};
+const rootRaw = Object.assign({}, ...blocksOf(":root").map(tokensIn));
+const darkRaw = Object.assign({}, ...blocksOf("body.dark").map(tokensIn));
+if (!Object.keys(rootRaw).length || !Object.keys(darkRaw).length) throw new Error("styles.css: token blocks not found");
 const light = resolve({ ...rootRaw });
-const dark = resolve({ ...rootRaw, ...tokensIn(darkBlock) });
+const dark = resolve({ ...rootRaw, ...darkRaw });
 
 function parse(color) {
   if (!color) return null;

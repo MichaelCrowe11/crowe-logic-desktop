@@ -93,8 +93,12 @@ const EMPTY_STYLE_HASH = "'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='"
 for (const file of [entry, path.join(root, "renderer", "app.html")]) {
   const html = fs.readFileSync(file, "utf8");
   const name = path.basename(file);
-  const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html);
-  check(meta, `${name} must declare a CSP`);
+  // Every policy on a page is enforced, so a second, looser meta does not relax
+  // the first: it silently narrows it. index.html shipped two through 0.24.6,
+  // and a single .exec here never saw the one carrying unsafe-inline.
+  const metas = [...html.matchAll(/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/g)];
+  check(metas.length === 1, `${name} must declare exactly one CSP, found ${metas.length}`);
+  const meta = metas[0] || ["", ""];
   const directives = new Map(meta[1].split(";").map((d) => d.trim()).filter(Boolean).map((d) => [d.split(/\s+/)[0], d.split(/\s+/).slice(1)]));
   check(!/unsafe-inline|unsafe-eval|'nonce-/.test(meta[1]), `${name} must not relax scripts or styles with unsafe-inline, unsafe-eval or nonces`);
   check((directives.get("script-src") || []).join(" ") === "'self'", `${name} must run only its own scripts`);
@@ -149,7 +153,7 @@ check(/isTrustedIpcSender/.test(main) && /Blocked IPC from an untrusted renderer
   check(/setPermissionRequestHandler\(/.test(main) && /setPermissionCheckHandler\(/.test(main), "both permission handlers must be registered on the session");
   check(/setPermissionCheckHandler\([\s\S]*?details\?\.requestingUrl \|\| requestingOrigin/.test(main),
     "the permission check must read the requesting URL before the bare origin, or file: documents are always denied");
-  check(/const permissionAllowed = [\s\S]*?details\?\.isMainFrame === false[\s\S]*?mediaTypes\.some\(\(type\) => type !== "audio"\)/.test(main)
+  check(/const permissionAllowed = [\s\S]*?details\?\.isMainFrame === false[\s\S]*?details\?\.mediaType \? \[details\.mediaType\][\s\S]*?media\.some\(\(type\) => type !== "audio"\)/.test(main)
     && /setPermissionRequestHandler\([\s\S]{0,200}permissionAllowed\(/.test(main) && /setPermissionCheckHandler\([\s\S]{0,400}permissionAllowed\(/.test(main),
     "both permission handlers must share the gate that refuses subframes, missing contents and camera media");
   check(!/ipcMain\.(?:addListener|once|handleOnce|prependListener|prependOnceListener)\(/.test(main),
@@ -158,6 +162,27 @@ check(/isTrustedIpcSender/.test(main) && /Blocked IPC from an untrusted renderer
   check(/crowe:keys:remove[\s\S]{0,300}if \(!KEY_PROVIDERS\[provider\]\)/.test(main), "key removal must validate the provider like key storage does");
 }
 check(/contextFileGrants/.test(main) && /File access was not granted by the picker/.test(main), "context reads must require a picker grant");
+// Git runs without a shell. On Windows exec() means cmd.exe, where a
+// single-quoted argument is not quoted at all and a file name is a command.
+check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
+check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
+check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
+check(/spawn\(spec\.command, spec\.args \|\| \[\], \{ env: \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\)/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame" && !isSafeGuestUrl\(details\.url\)/.test(main), "guest main-frame requests must be checked at the session, since webview.src is a loadURL");
+check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
+check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
+check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "the renderer must not be able to write a bearer token through set-config");
+{
+  const companion = fs.readFileSync(path.join(root, "companion.js"), "utf8");
+  check(/this\.tierAllows\("run"\)/.test(companion) && /this\.tierAllows\("write"\)/.test(companion), "the companion must refuse runs and writes the tier does not allow");
+  const pkg = require(path.join(root, "package.json"));
+  check(pkg.build && pkg.build.afterPack === "build/fuses.js", "the build must flip Electron's fuses after packing");
+  const fuses = fs.readFileSync(path.join(root, "build", "fuses.js"), "utf8");
+  for (const f of ["RunAsNode]: false", "EnableNodeOptionsEnvironmentVariable]: false", "EnableNodeCliInspectArguments]: false", "OnlyLoadAppFromAsar]: true", "EnableEmbeddedAsarIntegrityValidation]: true"])
+    check(fuses.includes(f), `fuses.js must set ${f}`);
+  const plist = fs.readFileSync(path.join(root, "build", "entitlements.mac.plist"), "utf8");
+  check(!/allow-dyld-environment-variables/.test(plist), "the hardened runtime must not honour DYLD_* variables");
+}
 check(/will-redirect/.test(main) && /guardGuestNavigation/.test(main), "guest redirects must remain under the navigation policy");
 const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "utf8");
 check(!/setAttribute\(["']allowpopups/.test(renderer), "the browser guest must not opt into popups");

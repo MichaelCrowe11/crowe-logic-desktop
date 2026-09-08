@@ -87,12 +87,12 @@
      its three steps assume a local workspace. Matched on the desktop's own
      sentences; the test holds the needles. */
   const COPY = [
-    ["This is the operator over your CroweLM gateway - chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
+    ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
      "This is the operator over your CroweLM gateway, in your browser: reasoning, routing to the right expert, and rooms of specialists. Terminal, files and git live in the desktop app."],
     ["Point the workspace at a project folder (Settings or ask the agent).",
      "When a turn needs a terminal, files or git, the desktop app runs it on your own machine."],
-    ["Give the agent a task - try",
-     "Ask it something - try"],
+    ["Give the agent a task. Try",
+     "Ask it something. Try"],
     ["Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).",
      "Sign in with your Crowe ID. Pro unlocks the operator, the rooms and the named agents; the free plan can look around."],
     ["Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.",

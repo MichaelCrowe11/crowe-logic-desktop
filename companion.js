@@ -121,8 +121,11 @@ class Companion {
      safe to bind unconditionally — it is not reachable from another machine at
      all — and port 0 lets the OS pick a free one so a test never collides with
      a companion the user has actually started. */
-  constructor({ tokenFile, onEvent, loopback = false, port = PORT, keepAwake = null } = {}) {
+  constructor({ tokenFile, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true } = {}) {
     this.tokenFile = tokenFile;
+    // Asked before every run and write with "run" or "write". Main answers from
+    // the autonomy tier; a phone gets no more than the composer would.
+    this.tierAllows = typeof tierAllows === "function" ? tierAllows : () => true;
     /* A phone can only reach a machine that is awake. A closed laptop answers
        nothing, and the phone's only clue is a timeout — which is the feature's
        most ordinary failure and looked, all night, exactly like a bug.
@@ -372,6 +375,10 @@ class Companion {
 
     try {
       if (url.pathname === "/run") {
+        if (!this.tierAllows("run")) {
+          this.audit({ kind: "denied", device: device.name, path: url.pathname, reason: "autonomy tier" });
+          return this.send(res, 403, { detail: "the desktop's autonomy tier does not allow a shell; set it to Execute in the composer" });
+        }
         const result = await this.run(body);
         this.audit({ kind: "run", device: device.name, deviceId: device.id,
                      command: String(body.command || "").slice(0, 500), exit: result.exit_code });
@@ -383,6 +390,10 @@ class Companion {
         return this.send(res, 200, result);
       }
       if (url.pathname === "/write_file") {
+        if (!this.tierAllows("write")) {
+          this.audit({ kind: "denied", device: device.name, path: url.pathname, reason: "autonomy tier" });
+          return this.send(res, 403, { detail: "the desktop's autonomy tier does not allow writes; set it to Edit or Execute in the composer" });
+        }
         const result = this.writeFile(body);
         this.audit({ kind: "write", device: device.name, deviceId: device.id,
                      path: result.path, bytes: result.bytes_written });
