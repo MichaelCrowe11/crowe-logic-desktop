@@ -98,7 +98,9 @@ function buildIndex() {
   // keep connect-src at 'self'. The phone talks from the page: fetch must reach
   // api.crowelogic.com (the reply streams), id.crowelogic.com (token refresh)
   // and sense.crowelogic.com. Without this every reply falls back to the
-  // native, whole-body request and arrives in one piece.
+  // native, whole-body request and arrives in one piece. The other half of
+  // that fix lives on the gateway: its CORS allowlist carries the phone's
+  // capacitor:// and https://localhost origins (control plane 0.2.18).
   const csp = "connect-src 'self';";
   if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
   html = html.replace(csp, "connect-src 'self' https://*.crowelogic.com;");
