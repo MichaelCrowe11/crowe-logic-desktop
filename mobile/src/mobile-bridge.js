@@ -619,6 +619,39 @@
   }
 
   // ─── Gateway ───────────────────────────────────────────────────────────────
+  /* One place that turns OpenAI chunk frames into a finished reply. The
+     streamed fetch path feeds it line by line; the native fallback feeds it a
+     whole body when the gateway streamed at a transport that cannot. An
+     `error` object on a frame is the gateway saying the upstream failed after
+     the headers were out, and it is surfaced as an error, not as an answer. */
+  function sseAccumulator(useModel, onDelta) {
+    let content = "", usage = {}, gotModel = useModel, gatewayError = null;
+    const toolCalls = [];
+    const handle = (payload) => {
+      if (payload === "[DONE]") return;
+      let d; try { d = JSON.parse(payload); } catch { return; }
+      if (d && d.error) { gatewayError = String(d.error.message || d.error); return; }
+      const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
+      const chunk = typeof delta.content === "string" ? delta.content : "";
+      if (chunk) { content += chunk; if (onDelta) onDelta(chunk); }
+      for (const t of delta.tool_calls || []) {
+        const i = Number.isInteger(t.index) ? t.index : toolCalls.length;
+        const cur = toolCalls[i] || (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
+        if (t.id) cur.id = t.id;
+        if (t.function?.name) cur.function.name = t.function.name;
+        if (t.function?.arguments) cur.function.arguments += t.function.arguments;
+      }
+      if (d.usage) usage = d.usage;
+      if (d.model) gotModel = d.model;
+    };
+    return {
+      handle,
+      feedText(text) { for (const raw of String(text || "").split("\n")) { const line = raw.trim(); if (line.startsWith("data:")) handle(line.slice(5).trim()); } },
+      get content() { return content; },
+      get error() { return gatewayError; },
+      result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage }; },
+    };
+  }
   async function gatewayChat(messages, tools, signal, model, onDelta, _retried) {
     await ready;
     if (!config.token) return { error: 'Not signed in. Tap "Sign in with Crowe ID" to continue.' };
@@ -638,10 +671,22 @@
     } catch (e) {
       if (e && e.name === "AbortError") return { error: "stopped", aborted: true };
       if (!corsBlocked(e)) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
-      const r = await nativePost(url, headers, JSON.parse(body));
+      // The native transport hands back one finished body, so it must not ask
+      // the gateway to stream: since control plane 0.2.17 the gateway honours
+      // stream:true, and an event stream read as JSON is an empty answer.
+      const nativeBody = JSON.parse(body); delete nativeBody.stream;
+      const r = await nativePost(url, headers, nativeBody);
       if (!r) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
-      let data; try { data = JSON.parse(r.text); } catch { data = { detail: r.text }; }
+      let data;
+      try { data = JSON.parse(r.text); }
+      catch {
+        if (/^\s*data:/m.test(String(r.text || ""))) {
+          const acc = sseAccumulator(useModel, null); acc.feedText(r.text);
+          if (acc.error) return { error: `HTTP ${r.status}: ${acc.error}`.slice(0, 400), content: acc.content };
+          data = acc.result();
+        } else data = { detail: r.text };
+      }
       if (!r.ok) return { error: `HTTP ${r.status}: ${data.detail || r.text}`.slice(0, 400) };
       return done(data, 0);
     }
@@ -651,24 +696,8 @@
     // Streaming is decided by the response, not the request — same contract as
     // main.js, so a gateway build that answers JSON to stream:true still works.
     if (resp.ok && onDelta && String(resp.headers.get("content-type") || "").includes("text/event-stream") && resp.body) {
-      let content = "", usage = {}, gotModel = useModel, buf = "";
-      const toolCalls = [];
-      const handle = (payload) => {
-        if (payload === "[DONE]") return;
-        let d; try { d = JSON.parse(payload); } catch { return; }
-        const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
-        const chunk = typeof delta.content === "string" ? delta.content : "";
-        if (chunk) { content += chunk; onDelta(chunk); }
-        for (const t of delta.tool_calls || []) {
-          const i = Number.isInteger(t.index) ? t.index : toolCalls.length;
-          const cur = toolCalls[i] || (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
-          if (t.id) cur.id = t.id;
-          if (t.function?.name) cur.function.name = t.function.name;
-          if (t.function?.arguments) cur.function.arguments += t.function.arguments;
-        }
-        if (d.usage) usage = d.usage;
-        if (d.model) gotModel = d.model;
-      };
+      const acc = sseAccumulator(useModel, onDelta);
+      let buf = "";
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
       try {
@@ -679,15 +708,15 @@
           let i;
           while ((i = buf.indexOf("\n")) >= 0) {
             const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-            if (line.startsWith("data:")) handle(line.slice(5).trim());
+            if (line.startsWith("data:")) acc.handle(line.slice(5).trim());
           }
         }
       } catch (e) {
-        if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content, streamed: content.length };
-        return { error: `stream broke: ${String(e).slice(0, 160)}`, content, streamed: content.length };
+        if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content: acc.content, streamed: acc.content.length };
+        return { error: `stream broke: ${String(e).slice(0, 160)}`, content: acc.content, streamed: acc.content.length };
       }
-      return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage,
-               elapsedMs: Date.now() - t0, streamed: content.length };
+      if (acc.error) return { error: `gateway: ${acc.error}`.slice(0, 400), content: acc.content, streamed: acc.content.length };
+      return { ...acc.result(), elapsedMs: Date.now() - t0, streamed: acc.content.length };
     }
 
     const text = await resp.text();

@@ -60,10 +60,10 @@ function loadPreloadSurface() {
 // mobile-bridge.js runs in a webview. Give it the smallest globals it touches
 // at load: storage it can write to, a fetch that fails the way an offline
 // device does, and no Capacitor, which is the browser-preview path.
-function loadMobileSurface(fetchImpl) {
+function loadMobileSurface(fetchImpl, capacitor) {
   const store = new Map();
   const win = {
-    Capacitor: null,
+    Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
     CROWE_GROW: require(path.join(root, "grow-schema.js")),
     open: () => {},
@@ -418,6 +418,33 @@ function methodPaths(surface) {
     assert(err && /Crowe Vision reads photos on the personal plan/.test(err.text), `the refusal was ${JSON.stringify(err)}`);
     assert(!result.done && win.crowePhone.images().length === 0, "the photo should be cleared and the turn not done");
     return "refused in words, nothing sent";
+  });
+
+  await check("the native fallback never asks the gateway to stream, and still reads a stream if handed one", async () => {
+    // Since control plane 0.2.17 the gateway honours stream:true. CapacitorHttp
+    // hands back one finished body, so a fallback that forwards the fetch body
+    // unchanged gets an event stream, fails to parse it as JSON, and shows the
+    // user an empty answer ("Done. See the workspace."). This was every phone
+    // reply on 2026-09-09 until it was fixed.
+    const prefs = new Map();
+    const seen = [];
+    const capacitor = { Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      CapacitorHttp: { request: async (opts) => { seen.push(opts); return { status: 200, data:
+        'data: {"choices":[{"delta":{"content":"Whole "}}]}\ndata: {"choices":[{"delta":{"content":"answer."}}]}\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\ndata: [DONE]\n' }; } },
+    } };
+    const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
+    await bridge.setConfig({ token: "a.b.c" });
+    const result = await bridge.agent.run([{ role: "user", content: "hi" }]);
+    const chat = seen.find((o) => String(o.url).includes("/api/gateway/chat"));
+    assert(chat, "the fallback never reached the gateway");
+    assert(chat.data && chat.data.stream === undefined, `the native body still asked to stream: ${JSON.stringify(chat.data.stream)}`);
+    assert(result.done && result.text === "Whole answer.", `the fallback returned ${JSON.stringify(result)}`);
+    return "stream stripped from the native body; an SSE body is still read";
   });
 
   await check("a write to a phone: path updates the app's copy and only that", async () => {
