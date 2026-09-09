@@ -173,13 +173,14 @@
     "Show me the last 30 lines of the log and tell me what went wrong",
   ];
   const CULTIVATION_CHIP = "What did I log about contamination this month, and what should I change?";
+  const CULTIVATION_PHOTO_CHIP = "Photograph this block and tell me if that is contamination";
 
   // Three, in the order they earn their place: the machine when there is one,
   // the farm when that space is on, then general reasoning to fill the rest.
   const welcomeChips = () => {
     const chips = [];
     if (isPaired()) chips.push(...MACHINE_CHIPS);
-    if (cultivationOn()) chips.push(CULTIVATION_CHIP);
+    if (cultivationOn()) chips.push(CULTIVATION_PHOTO_CHIP, CULTIVATION_CHIP);
     chips.push(...GENERAL_CHIPS);
     return chips.slice(0, 3);
   };
@@ -303,7 +304,7 @@
     else composerForm.insertBefore(row, composerForm.firstChild);
     const picker = document.createElement("input");
     picker.type = "file"; picker.multiple = true; picker.hidden = true;
-    picker.accept = "text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
+    picker.accept = "image/*,text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
     const clipBtn = document.createElement("button");
     clipBtn.type = "button"; clipBtn.id = "m-attach"; clipBtn.className = "bar-icon";
     clipBtn.title = "Attach a file from this phone";
@@ -313,17 +314,53 @@
     if (actions) actions.insertBefore(clipBtn, actions.firstChild);
     else if (foot) foot.insertBefore(clipBtn, foot.firstChild);
     composerForm.appendChild(picker);
-    picker.addEventListener("change", async () => {
-      for (const file of picker.files || []) {
+    /* Photos. The same picker accepts them (the Photos library on iOS), and a
+       second input with `capture` opens the camera straight away, which is the
+       gesture at the rack: point at the block, ask what that is. Either way
+       the file is downsized here before it becomes a data URL, so a 4 MB HEIC
+       leaves the phone as a JPEG a few hundred KB wide that the vision tier
+       reads just as well. */
+    const cam = document.createElement("input");
+    cam.type = "file"; cam.accept = "image/*"; cam.hidden = true; cam.setAttribute("capture", "environment");
+    const camBtn = document.createElement("button");
+    camBtn.type = "button"; camBtn.id = "m-camera"; camBtn.className = "bar-icon";
+    camBtn.title = "Photograph a block, bag or plate";
+    camBtn.setAttribute("aria-label", "Photograph a block, bag or plate");
+    camBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+    camBtn.addEventListener("click", () => cam.click());
+    clipBtn.insertAdjacentElement("afterend", camBtn);
+    composerForm.appendChild(cam);
+
+    const PHOTO_EDGE = 1280;
+    async function shrinkPhoto(file) {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close && bitmap.close();
+      return canvas.toDataURL("image/jpeg", 0.82);
+    }
+    async function takeIn(files) {
+      for (const file of files || []) {
+        if (/^image\//.test(file.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name)) {
+          try {
+            const r = window.crowePhone.addImage(file.name || "photo.jpg", await shrinkPhoto(file));
+            if (r.error) alert(`${file.name}: ${r.error}`);
+          } catch (e) { alert(`${file.name}: this photo could not be read (${String(e && e.message || e).slice(0, 80)})`); }
+          continue;
+        }
         if (file.size > window.crowePhone.max) { alert(`${file.name} is over the ${Math.round(window.crowePhone.max / 1024)} KB cap for attached files.`); continue; }
         const text = await file.text();
         // A null byte means this is not text; the tools would hand the model gibberish.
-        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file. The operator can only read text for now.`); continue; }
+        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file. The operator reads text files and photos.`); continue; }
         const r = window.crowePhone.add(file.name, text);
         if (r.error) alert(`${file.name}: ${r.error}`);
       }
-      picker.value = "";
-    });
+    }
+    picker.addEventListener("change", async () => { await takeIn(picker.files); picker.value = ""; });
+    cam.addEventListener("change", async () => { await takeIn(cam.files); cam.value = ""; });
     const renderRow = () => {
       const files = window.crowePhone.list();
       row.innerHTML = "";
@@ -335,10 +372,36 @@
         chip.querySelector(".m-attach-x").addEventListener("click", () => window.crowePhone.remove(f.name));
         row.appendChild(chip);
       }
-      row.classList.toggle("has-files", files.length > 0);
+      const photos = window.crowePhone.images ? window.crowePhone.images() : [];
+      for (const ph of photos) {
+        const chip = document.createElement("span");
+        chip.className = "m-attach-chip is-photo";
+        chip.innerHTML = `<span class="m-attach-name" title="Goes to CroweLM Vision with your next message">${esc(ph.name)}</span><button type="button" class="m-attach-x" title="Remove ${esc(ph.name)}" aria-label="Remove ${esc(ph.name)}">×</button>`;
+        chip.querySelector(".m-attach-x").addEventListener("click", () => window.crowePhone.remove(ph.name));
+        row.appendChild(chip);
+      }
+      row.classList.toggle("has-files", files.length + photos.length > 0);
     };
     renderRow();
     window.crowePhone.onChange(renderRow);
+    /* The photo leaves the chip row the moment the turn starts; show it in the
+       bubble that asked, so the transcript reads as what was actually sent. */
+    if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+      window.crowe.agent.onEvent((ev) => {
+        if (!ev || ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
+        const bodies = document.querySelectorAll(".msg.user .body");
+        const body = bodies[bodies.length - 1];
+        if (!body) return;
+        const strip = document.createElement("div");
+        strip.className = "m-sent-photos";
+        for (const src of ev.thumbs) {
+          const img = document.createElement("img");
+          img.className = "m-sent-photo"; img.src = src; img.alt = "photo sent to CroweLM Vision";
+          strip.appendChild(img);
+        }
+        body.appendChild(strip);
+      });
+    }
   }
 
   /* The surface composers' placeholders were written for a desktop-width

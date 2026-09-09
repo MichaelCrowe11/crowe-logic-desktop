@@ -213,6 +213,14 @@
      Session-scoped on purpose: holding a user's document contents in
      localStorage would outlive the conversation the grant was made for. */
   const phoneFiles = new Map();               // name -> { content, at }
+  /* Photos are a second grant, kept apart from text files because they travel
+     differently. A text file waits at a phone: path for a tool to read it. A
+     photo rides inside the next turn itself, as an image part on the user's
+     message, and that turn goes to CroweLM Vision whatever the words would
+     have routed to. Pending until sent, then cleared: a photo is looked at
+     once, on purpose, and never lands in the saved session. */
+  const phoneImages = new Map();              // name -> { dataUrl, at }
+  const PHONE_IMAGE_MAX = 4 * 1024 * 1024;    // data URL length; the composer downsizes to ~1280px first
   const PHONE_FILE_MAX = 512 * 1024;
   const phoneListeners = new Set();
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
@@ -227,10 +235,22 @@
       phoneNotify();
       return { ok: true, name };
     },
-    remove(name) { phoneFiles.delete(String(name || "")); phoneNotify(); },
+    remove(name) { phoneFiles.delete(String(name || "")); phoneImages.delete(String(name || "")); phoneNotify(); },
     list() { return [...phoneFiles.entries()].map(([name, f]) => ({ name, size: f.content.length, at: f.at })); },
     get(name) { const f = phoneFiles.get(String(name || "")); return f ? f.content : null; },
     onChange(fn) { phoneListeners.add(fn); return () => phoneListeners.delete(fn); },
+    addImage(name, dataUrl) {
+      name = String(name || "photo.jpg").replace(/[/\\]/g, "_").trim() || "photo.jpg";
+      dataUrl = String(dataUrl || "");
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return { error: "not an image" };
+      if (dataUrl.length > PHONE_IMAGE_MAX) return { error: "photo too large even after downsizing" };
+      let key = name, n = 2;
+      while (phoneImages.has(key)) key = name.replace(/(\.[^.]+)?$/, ` ${n++}$1`);
+      phoneImages.set(key, { dataUrl, at: Date.now() });
+      phoneNotify();
+      return { ok: true, name: key };
+    },
+    images() { return [...phoneImages.entries()].map(([name, p]) => ({ name, size: p.dataUrl.length, at: p.at })); },
     async share(name) {
       const f = phoneFiles.get(String(name || ""));
       if (!f) return { error: "no such file" };
@@ -726,6 +746,18 @@
   const PLAN_ALIASES = { developer: "personal", lab: "team" };
   const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
   const FREE_MODEL = "crowelm-flash";
+  // Photos go here, whatever the words routed to. Same id the catalog serves.
+  const VISION_MODEL = "crowelm-vision";
+  const PHOTO_DEFAULT_ASK = "Look at this photo. Is this contamination, and what should I do?";
+  const VISION_BRIEF = [
+    "A photo taken on this phone is attached to the user's message. Describe what is actually visible first:",
+    "the substrate or agar, the mycelium's color and texture, any discoloration, wet or slimy patches, pins or",
+    "fruit bodies. Then assess: healthy, or contamination and which kind (green Trichoderma, cobweb mold,",
+    "bacterial blotch or wet spot, black pin mold, yellow metabolite staining), where on the block or plate,",
+    "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
+    "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
+    "Offer to log the finding with log_grow when the tier allows it.",
+  ].join("\n");
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
     const key = String(plan || "").trim().toLowerCase();
@@ -1121,6 +1153,7 @@
       "You are Crowe Logic, running on the user's phone.",
       machine,
       attached,
+      route.vision ? "\n" + VISION_BRIEF : "",
       "",
       "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
       "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
@@ -1166,6 +1199,31 @@
 
     try {
       const route = routeTurn(messages, String(opts.role || ""));
+      /* A photo changes the turn: it rides inside the user message as an image
+         part and the turn goes to CroweLM Vision, whatever the words would have
+         routed to. Decided here, before the route is announced, so the rail
+         shows where the photo actually went. A free account hears the truth up
+         front instead of being handed to a text model that cannot see. */
+      let msgs = messages;
+      const photos = [...phoneImages.entries()];
+      if (photos.length) {
+        phoneImages.clear(); phoneNotify();
+        if (planBlocks(VISION_MODEL)) {
+          const need = minPlanFor(VISION_MODEL) || "personal";
+          const err = `Crowe Vision reads photos on the ${need} plan and higher. This Crowe ID is on the ${sessionPlan() || "free"} plan, so the photo was not sent. Sign in with an account that has a plan.`;
+          send({ type: "error", text: err }); send({ type: "final", note: "vision needs a plan" });
+          return { done: false, error: err, text };
+        }
+        msgs = messages.slice();
+        const i = msgs.map((m) => m && m.role).lastIndexOf("user");
+        const ask = String((i >= 0 && msgs[i].content) || "").trim() || PHOTO_DEFAULT_ASK;
+        const parts = [{ type: "text", text: ask }, ...photos.map(([, p]) => ({ type: "image_url", image_url: { url: p.dataUrl } }))];
+        if (i >= 0) msgs[i] = { ...msgs[i], content: parts }; else msgs.push({ role: "user", content: parts });
+        Object.assign(route, { expert: "vision", model: VISION_MODEL, vision: true,
+          reason: `vision · ${photos.length === 1 ? "a photo" : photos.length + " photos"} attached` });
+        delete route.planLimited;
+        send({ type: "photos", names: photos.map(([n]) => n), thumbs: photos.map(([, p]) => p.dataUrl) });
+      }
       if (route.planLimited) {
         send({ type: "plan", model: route.model, blocked: route.planLimited.model, required: route.planLimited.required,
                text: planNotice(route.model, route.planLimited.required) });
@@ -1179,7 +1237,7 @@
       // context.
       if (opts.brief) convo.push({ role: "system", content: String(opts.brief).slice(0, 4000) });
       if (opts.context) convo.push({ role: "system", content: `Situation on this device:\n${String(opts.context).slice(0, 8000)}` });
-      convo.push(...compact(messages));
+      convo.push(...compact(msgs));
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
@@ -1207,7 +1265,7 @@
           // Plan gate: refused for this account's plan. Once, to the free
           // model; a second refusal there is the account's answer.
           const gate = planGateOf(r.error);
-          if (gate && !planGated && route.model !== freeModel()) {
+          if (gate && !planGated && route.model !== freeModel() && !route.vision) {
             planGated = true; route.model = freeModel();
             send({ type: "plan", model: route.model, blocked: gate.model, required: gate.required, text: planNotice(route.model, gate.required) });
             send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });

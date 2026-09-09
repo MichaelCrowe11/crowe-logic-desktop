@@ -356,6 +356,70 @@ function methodPaths(surface) {
     assert(result.done, "the turn did not finish");
   });
 
+  await check("a photo rides inside the turn as an image part and goes to Crowe Vision", async () => {
+    // The camera grant: mobile-ui.js downsizes the picture and hands it over
+    // as a data URL; the bridge puts it on the user's message as an image_url
+    // part, routes that turn to crowelm-vision, announces it, and clears it.
+    const asked = [], bodies = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      const body = JSON.parse(init.body || "{}"); asked.push(body.model); bodies.push(body);
+      return new Response(`data: ${JSON.stringify({ delta: { content: "Green Trichoderma, lower left corner. Isolate it." } })}\ndata: [DONE]\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    assert(win.crowePhone.addImage("block.txt", "not an image").error, "a non-image was accepted as a photo");
+    const r = win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    assert(r.ok && win.crowePhone.images().length === 1, `the photo was not held: ${JSON.stringify(r)}`);
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "Is this contamination?" }]);
+    off();
+    assert(asked.join(",") === "crowelm-vision", `asked the gateway for: ${asked.join(", ")}`);
+    const last = bodies[0].messages.filter((m) => m.role === "user").pop();
+    assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
+      && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
+      `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
+    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    const route = seen.find((e) => e.type === "route");
+    assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
+    const photos = seen.find((e) => e.type === "photos");
+    assert(photos && photos.names[0] === "block.jpg" && photos.thumbs[0].startsWith("data:image/jpeg"), "no photos event for the transcript thumbnail");
+    assert(win.crowePhone.images().length === 0, "the photo was not cleared after the turn");
+    assert(result.done && /Trichoderma/.test(result.text), `the turn returned ${JSON.stringify(result)}`);
+    return "image part sent, vision routed, photo cleared";
+  });
+
+  await check("a free account is told Crowe Vision needs a plan, and no text model is asked to see", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (String(url).includes("/api/gateway/catalog")) {
+        return new Response(JSON.stringify({ models: [
+          { model: "crowelm-flash", name: "CroweLM Flash", min_plan: "free" },
+          { model: "crowelm-vision", name: "CroweLM Vision", min_plan: "personal" },
+        ] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asked.push(JSON.parse(init.body || "{}").model);
+      return new Response("data: [DONE]\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.addImage("plate.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64") + ".sig" });
+    await bridge.catalog.get();
+    await new Promise((r) => setTimeout(r, 50));
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "what is this" }]);
+    off();
+    assert(asked.length === 0, `the gateway was asked anyway: ${asked.join(", ")}`);
+    const err = seen.find((e) => e.type === "error");
+    assert(err && /Crowe Vision reads photos on the personal plan/.test(err.text), `the refusal was ${JSON.stringify(err)}`);
+    assert(!result.done && win.crowePhone.images().length === 0, "the photo should be cleared and the turn not done");
+    return "refused in words, nothing sent";
+  });
+
   await check("a write to a phone: path updates the app's copy and only that", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "write_file", arguments: '{"path":"phone:notes.md","content":"rewritten"}' } }] } }],
