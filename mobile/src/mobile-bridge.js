@@ -63,6 +63,8 @@
   const store = {
     async get(key) {
       try {
+        // Secrets live in the Keychain when vault.js is present (see mobile/src/vault.js).
+        if (window.croweVault && window.croweVault.handles(key)) { const v = await window.croweVault.get(key); return v ? JSON.parse(v) : null; }
         if (Preferences) { const { value } = await Preferences.get({ key }); return value ? JSON.parse(value) : null; }
         const raw = localStorage.getItem("crowe:" + key);
         return raw ? JSON.parse(raw) : null;
@@ -71,6 +73,7 @@
     async set(key, value) {
       const json = JSON.stringify(value);
       try {
+        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.set(key, json); return true; }
         if (Preferences) await Preferences.set({ key, value: json });
         else localStorage.setItem("crowe:" + key, json);
         return true;
@@ -78,6 +81,7 @@
     },
     async remove(key) {
       try {
+        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.remove(key); return; }
         if (Preferences) await Preferences.remove({ key });
         else localStorage.removeItem("crowe:" + key);
       } catch { /* nothing to remove is not a failure */ }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0887151B7A82FD41D8F4873A /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17426A05D9366BBE764FBE65 /* ShareViewController.swift */; };
 		119EB8316A3CF3C43DBA7597 /* CroweIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
@@ -19,9 +20,37 @@
 		6A4A72741514347C5135A79B /* CroweBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE3236F49AA5510E801D035 /* CroweBridgeViewController.swift */; };
 		C7F1BC2ACFE2CDD033DA4A23 /* CroweSpeech.swift in Sources */ = {isa = PBXBuildFile; fileRef = B64A6164660BF5854AA86E3F /* CroweSpeech.swift */; };
 		CE0000000000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* PrivacyInfo.xcprivacy */; };
+		D9152EC5AAD677F249700132 /* CroweVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5505C68BB36F661E12A22584 /* CroweVault.swift */; };
+		F962F08575D0BECA5702DE2C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C69DDDA527351AAA3C9F4D6B /* Foundation.framework */; };
+		FAE554F7A5CF8401FE850FB5 /* CroweShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		914A1F703302D2DEB1F230C0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 619344F5C485EDD669B9D190;
+			remoteInfo = CroweShare;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		72B1D181E9454A29D951106B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				FAE554F7A5CF8401FE850FB5 /* CroweShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		17426A05D9366BBE764FBE65 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -31,14 +60,28 @@
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
+		5505C68BB36F661E12A22584 /* CroweVault.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweVault.swift; sourceTree = "<group>"; };
 		7EE3236F49AA5510E801D035 /* CroweBridgeViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweBridgeViewController.swift; sourceTree = "<group>"; };
+		7F3C599222720C0B7D0CB8E7 /* CroweShare.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = CroweShare.entitlements; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		B64A6164660BF5854AA86E3F /* CroweSpeech.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweSpeech.swift; sourceTree = "<group>"; };
+		C69DDDA527351AAA3C9F4D6B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CroweShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		CE0000000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweIntents.swift; sourceTree = "<group>"; };
+		E7A6B88648052CC71E8657BD /* App.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		EE47028C44CCF129170B3EDA /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		43FD5E3EEC24AC7740B5E5AB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F962F08575D0BECA5702DE2C /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		504EC3011FED79650016851F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -50,12 +93,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1FC3785F3703965962F37B46 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				C69DDDA527351AAA3C9F4D6B /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		504EC2FB1FED79650016851F = {
 			isa = PBXGroup;
 			children = (
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				504EC3051FED79650016851F /* Products */,
+				EA845F2D5CEE5EC1E1E2E607 /* Frameworks */,
+				9554D6EF1AD519641183A672 /* CroweShare */,
 			);
 			sourceTree = "<group>";
 		};
@@ -63,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -82,8 +136,29 @@
 				B64A6164660BF5854AA86E3F /* CroweSpeech.swift */,
 				7EE3236F49AA5510E801D035 /* CroweBridgeViewController.swift */,
 				DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */,
+				E7A6B88648052CC71E8657BD /* App.entitlements */,
+				5505C68BB36F661E12A22584 /* CroweVault.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		9554D6EF1AD519641183A672 /* CroweShare */ = {
+			isa = PBXGroup;
+			children = (
+				17426A05D9366BBE764FBE65 /* ShareViewController.swift */,
+				EE47028C44CCF129170B3EDA /* Info.plist */,
+				7F3C599222720C0B7D0CB8E7 /* CroweShare.entitlements */,
+			);
+			name = CroweShare;
+			path = CroweShare;
+			sourceTree = "<group>";
+		};
+		EA845F2D5CEE5EC1E1E2E607 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1FC3785F3703965962F37B46 /* iOS */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -96,10 +171,12 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				72B1D181E9454A29D951106B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				88C33B8815D3C3D7ACBD36E3 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -108,6 +185,23 @@
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		619344F5C485EDD669B9D190 /* CroweShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8256C7A149FF8938BA3F9272 /* Build configuration list for PBXNativeTarget "CroweShare" */;
+			buildPhases = (
+				3F3BEF38918199C445895D83 /* Sources */,
+				43FD5E3EEC24AC7740B5E5AB /* Frameworks */,
+				B101BA27B5A53C46D60D6830 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CroweShare;
+			productName = CroweShare;
+			productReference = CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -142,6 +236,7 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				619344F5C485EDD669B9D190 /* CroweShare */,
 			);
 		};
 /* End PBXProject section */
@@ -161,9 +256,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B101BA27B5A53C46D60D6830 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		3F3BEF38918199C445895D83 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0887151B7A82FD41D8F4873A /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		504EC3001FED79650016851F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -172,10 +282,20 @@
 				C7F1BC2ACFE2CDD033DA4A23 /* CroweSpeech.swift in Sources */,
 				6A4A72741514347C5135A79B /* CroweBridgeViewController.swift in Sources */,
 				119EB8316A3CF3C43DBA7597 /* CroweIntents.swift in Sources */,
+				D9152EC5AAD677F249700132 /* CroweVault.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		88C33B8815D3C3D7ACBD36E3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = CroweShare;
+			target = 619344F5C485EDD669B9D190 /* CroweShare */;
+			targetProxy = 914A1F703302D2DEB1F230C0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -311,6 +431,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2504;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
@@ -334,6 +455,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2504;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
@@ -349,6 +471,59 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		BE4E34C35165A763F83FA63C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2504;
+				DEVELOPMENT_TEAM = 6QLMV9UCPP;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = CroweShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.25.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		F6DA35F89D0A38FA62C189FB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2504;
+				DEVELOPMENT_TEAM = 6QLMV9UCPP;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = CroweShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.25.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
@@ -369,6 +544,15 @@
 			buildConfigurations = (
 				504EC3171FED79650016851F /* Debug */,
 				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8256C7A149FF8938BA3F9272 /* Build configuration list for PBXNativeTarget "CroweShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F6DA35F89D0A38FA62C189FB /* Release */,
+				BE4E34C35165A763F83FA63C /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
