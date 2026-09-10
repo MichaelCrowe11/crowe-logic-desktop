@@ -2856,6 +2856,16 @@ function growForm(lane, def, rows, refs, editing) {
     // next record has no business overwriting the one this record already has.
     for (const fd of def.fields) if (editing[fd.k] != null) f.elements[fd.k].value = String(editing[fd.k]);
     prefilled.clear(); // nothing here is a guess any more
+    /* A new block's lot code is a default the grower may overwrite (the farm's
+       traceability SOP owns the format). An existing block's lot code is its
+       identity: flushes, readings and journal lines point at it by this string,
+       and a trace joins them on it. Retyping it here would orphan all of them
+       while the record itself lived on, so while editing it is read-only. */
+    if (lane === "blocks" && f.elements.code) {
+      f.elements.code.readOnly = true;
+      f.elements.code.title = "Lot code is this block's identity; flushes and readings point at it. To change it, add the block again under the new code.";
+      f.elements.code.classList.add("locked");
+    }
   } else if (lane === "blocks") { f.elements.code.value = nextLot(rows); prefilled.add("code"); }
   // The button gets its own row rather than trailing whichever field happened to
   // wrap last, so the panel keeps one shape across all seven lanes. The caption
@@ -3866,7 +3876,10 @@ async function maybeShowOnboarding(cfg) {
   signinBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await doSignIn(); });
   const laterBtn = document.createElement("button");
   laterBtn.className = "ghost"; laterBtn.textContent = "Explore first";
-  laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); b.remove(); });
+  // The card is the .body of a message; removing only that left the message's
+  // shell (the mark and an empty body) standing in the transcript as a blank
+  // operator bubble. Remove the message.
+  laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); (b.closest(".msg") || b).remove(); });
   row.appendChild(signinBtn); row.appendChild(laterBtn);
   b.appendChild(row);
   // Platform shells rewrite promises the local desktop can keep but they

@@ -428,6 +428,13 @@
     const row = field && field.closest("label");
     if (row) row.classList.add("m-desktop-only");
   }
+  /* The Phone companion section is the desktop's half of pairing: it starts a
+     listener on this machine and draws the QR the phone scans. On the phone it
+     described a Tailscale it could not find, under a heading about a phone it
+     already was. The Remote machine section below is the phone's half. */
+  const companion = $("companion-body") || $("companion-state");
+  const companionSection = companion && companion.closest("section");
+  if (companionSection) companionSection.classList.add("m-desktop-only");
 
   /* Remote machine.
      "Workspace folder" is hidden just above because a phone has no folder. What

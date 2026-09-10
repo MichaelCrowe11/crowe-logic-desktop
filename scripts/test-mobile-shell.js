@@ -396,6 +396,64 @@ const tests = [
     body: `return { hidden: document.getElementById("update-banner").classList.contains("hidden") };`,
     expect: { hidden: true },
   },
+  {
+    name: "the desktop's Phone companion section is hidden on the phone",
+    // That section starts the desktop's pairing listener and draws the QR the
+    // phone scans; on the phone it described a Tailscale it could not find,
+    // under a heading about a phone it already was. Remote machine is the
+    // phone's half of pairing and stays, as does Delete account; both are the
+    // control that this check can still see a section that is meant to show.
+    body: `document.getElementById("settings-btn").click();
+      await __settle();
+      const inner = document.getElementById("companion-body") || document.getElementById("companion-state");
+      const section = inner && inner.closest("section");
+      const out = { present: Boolean(section), companionShown: section ? section.checkVisibility() : null,
+                    remoteShown: __shown("#m-remote-url"), deleteShown: __shown("#m-delete-account") };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return out;`,
+    expect: { present: true, companionShown: false, remoteShown: true, deleteShown: true },
+  },
+  {
+    name: "Explore first takes the whole onboarding message away, not just its body",
+    // Removing only the card's .body left the message shell (the mark and an
+    // empty body) standing in the transcript as a blank operator bubble.
+    body: `const btn = [...document.querySelectorAll("#transcript .onboarding-actions button")]
+        .find((b) => b.textContent.trim() === "Explore first");
+      if (!btn) return { hadCard: false };
+      const before = document.querySelectorAll("#transcript .msg.assistant").length;
+      btn.click();
+      await __settle(200);
+      const empty = [...document.querySelectorAll("#transcript .msg.assistant")]
+        .filter((m) => { const b = m.querySelector(".body"); return !b || !b.textContent.trim(); }).length;
+      return { hadCard: true, removed: document.querySelectorAll("#transcript .msg.assistant").length === before - 1, emptyBubbles: empty };`,
+    expect: { hadCard: true, removed: true, emptyBubbles: 0 },
+  },
+  {
+    name: "an existing block's lot code is read-only while editing; a new block's is not",
+    // Flushes, readings and journal lines point at a block by its lot code, so
+    // retyping it on an existing record would orphan them. A new block's code
+    // is only a default the farm's traceability SOP may overwrite.
+    body: `__tap("Cultivation");
+      await __settle();
+      // The space opens on its Overview; the Blocks lane is a section of it.
+      document.querySelector('#cult-nav .sn-item[data-cult="blocks"]').click();
+      await __settle(500);
+      let form = document.querySelector("#lane-body form.grow-add");
+      if (!form) return { form: false };
+      const newEditable = !form.elements.code.readOnly;
+      form.elements.species.value = "Oyster"; form.elements.count.value = "4";
+      form.requestSubmit();
+      await __settle(400);
+      const open = document.querySelector(".growrow .gr-open");
+      if (!open) return { form: true, newEditable, saved: false };
+      open.click();
+      await __settle(400);
+      form = document.querySelector("#lane-body form.grow-add");
+      return { form: true, newEditable, saved: true, editing: Boolean(form && form.classList.contains("editing")),
+               lockedWhileEditing: Boolean(form && form.elements.code.readOnly) };`,
+    expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
+  },
 ];
 
 function compare(actual, expected) {
