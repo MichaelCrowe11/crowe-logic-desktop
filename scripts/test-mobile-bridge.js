@@ -151,7 +151,7 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount"];
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount", "intents.take"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -491,6 +491,31 @@ function methodPaths(surface) {
     assert(r.deleted === false, `expected deleted:false, got ${JSON.stringify(r)}`);
     assert((await bridge.getConfig()).hasToken, "a look at the account page signed the phone out");
     return "deleted -> signed out; looked -> still signed in";
+  });
+
+  await check("a Shortcut's note is taken once, dispatched as crowe:intent, and stale notes are dropped", async () => {
+    // CroweIntents.swift writes {kind, text, at} under the Preferences key
+    // `intent`; the bridge reads it on launch and on foreground, clears it, and
+    // hands it to the UI. A second read must find nothing.
+    const prefs = new Map([["intent", JSON.stringify({ kind: "ask", text: "how wet should the substrate be", at: Date.now() })]]);
+    const capacitor = { Plugins: { Preferences: {
+      get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+      set: async ({ key, value }) => { prefs.set(key, value); },
+      remove: async ({ key }) => { prefs.delete(key); },
+    } } };
+    const bridge = loadMobileSurface(fakeGateway([]), capacitor);
+    const win = loadMobileSurface.lastWindow;
+    const seen = [];
+    if (typeof win.addEventListener === "function") win.addEventListener("crowe:intent", (e) => seen.push(e.detail));
+    await new Promise((r) => setTimeout(r, 30));      // the boot read
+    let note = await bridge.intents.take();            // already taken at boot, or taken now
+    assert(!prefs.has("intent"), "the note was not cleared after being taken");
+    assert(seen.length === 1 || note, `expected one crowe:intent (saw ${seen.length}) or a direct note`);
+    if (seen.length) assert(seen[0].kind === "ask" && /substrate/.test(seen[0].text), `wrong detail ${JSON.stringify(seen[0])}`);
+    assert((await bridge.intents.take()) === null, "a second take found a note");
+    prefs.set("intent", JSON.stringify({ kind: "ask", text: "old", at: Date.now() - 11 * 60 * 1000 }));
+    assert((await bridge.intents.take()) === null && !prefs.has("intent"), "a stale note was not dropped");
+    return "taken once, cleared, stale dropped";
   });
 
   await check("a write to a phone: path updates the app's copy and only that", async () => {

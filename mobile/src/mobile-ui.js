@@ -474,6 +474,34 @@
      when the sheet closes the bridge finds out whether the account is still
      there and signs the phone out if it is not. Phone-only for the same reason
      as the section above: the desktop has its own account surface. */
+  /* Siri and Shortcuts. "Ask Crowe Logic <question>" sends the question as a
+     turn; "Log a block" opens the grow log on the Blocks lane with the note in
+     the form. The note arrives from the bridge as crowe:intent (see
+     takePendingIntent), on launch and on every return to the foreground. */
+  window.addEventListener("crowe:intent", (e) => {
+    const d = (e && e.detail) || {};
+    if (d.kind === "ask" && d.text) {
+      __tapTab("Chat");
+      if (typeof send === "function") { send(d.text); }
+      else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
+    } else if (d.kind === "log-block") {
+      __tapTab("Cultivation");
+      const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');
+      if (blocks) blocks.click();
+      setTimeout(() => {
+        const form = document.querySelector("#lane-body form.grow-add");
+        if (!form) return;
+        if (d.text && form.elements.notes) form.elements.notes.value = d.text;
+        const first = form.elements.species || form.querySelector("input,select");
+        if (first) first.focus();
+      }, 350);
+    }
+  });
+  function __tapTab(label) {
+    const tab = [...document.querySelectorAll("#m-tabs .m-tab")].find((t) => t.textContent.trim() === label);
+    if (tab) tab.click();
+  }
+
   /* Dictation. WKWebView exposes webkitSpeechRecognition but the recogniser
      behind it never starts (WebKit 239816), so the desktop handler would light
      the button and fail. On the phone the button drives CroweSpeech, a small

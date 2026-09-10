@@ -370,6 +370,21 @@
      could do that silently would not gain a shell, but they would receive
      every command the user asked for and get to answer with whatever they
      liked. One confirmation, naming the host, closes that. */
+  let takingIntent = false;
+  async function takePendingIntent() {
+    if (takingIntent) return null;
+    takingIntent = true;
+    try {
+      const note = await store.get("intent");
+      if (!note || typeof note !== "object" || !note.kind) return null;
+      await store.remove("intent");
+      // Notes older than ten minutes are stale: the phone was opened for some
+      // other reason since, and running an old question now would surprise.
+      if (note.at && Date.now() - Number(note.at) > 10 * 60 * 1000) return null;
+      try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: String(note.kind), text: String(note.text || "") } })); } catch { /* no window in tests */ }
+      return note;
+    } finally { takingIntent = false; }
+  }
   function pairFromUrl(rawUrl) {
     const url = String(rawUrl || "");
     if (!/^com\.crowelogic\.mobile:\/\/pair\b/i.test(url)) return false;
@@ -408,6 +423,13 @@
     const App = plugin("App");
     if (!App) return;
     Promise.resolve(App.addListener("appUrlOpen", (e) => { pairFromUrl(e && e.url); }));
+    /* Siri and Shortcuts. The App Intents in CroweIntents.swift open the app and
+       leave a note under the Preferences key `intent` ({kind, text, at}); it is
+       read and cleared here on launch and on every return to the foreground,
+       then handed to the UI as a crowe:intent event. Two readers race on a cold
+       start (this one and the appStateChange below), so the read is a take. */
+    Promise.resolve(App.addListener("appStateChange", (st) => { if (st && st.isActive) takePendingIntent(); })).catch(() => {});
+    ready.then(() => takePendingIntent()).catch(() => {});
     if (App.getLaunchUrl) {
       Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
     }
@@ -1624,6 +1646,7 @@
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
 
+    intents: { take: takePendingIntent },
     auth: {
       login: signIn,
       logout: async () => { await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config); return { ok: true }; },
