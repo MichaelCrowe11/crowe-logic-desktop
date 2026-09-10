@@ -35,7 +35,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>INAlternativeAppNames</key>
 	<array>
-		<string>Crowe</string>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Crowe</string>
+		</dict>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
