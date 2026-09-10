@@ -472,3 +472,66 @@ body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1
 .m-attach-chip.is-photo .m-attach-name { color: var(--gold); font-weight: 500; }
 .m-sent-photos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .m-sent-photo { max-width: 48%; max-height: 220px; border-radius: 8px; object-fit: cover; display: block; }
+
+/* ── 1.1: Home and Camera, the phone's own panes ──────────────────────────────
+   Two sections that sit beside the workbench and the surfaces. The tab bar
+   chooses one pane at a time; while Home or Camera is up, the conversation, the
+   surfaces and the HUD are off screen rather than merely covered. */
+body.mobile .m-pane { display: none; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 104px; min-height: 0; }
+body.mobile[data-pane="home"] #m-home-pane, body.mobile[data-pane="camera"] #m-camera-pane { display: block; }
+body.mobile[data-pane="home"] #workbench, body.mobile[data-pane="home"] .surface, body.mobile[data-pane="home"] #hud,
+body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .surface, body.mobile[data-pane="camera"] #hud { display: none !important; }
+.m-home-inner { padding: 22px 16px 26px; }
+.m-home-head h1 { font-size: 1.45rem; margin: 0 0 6px; }
+.m-home-sub, .m-home-empty, .m-cam-lot { color: var(--muted, #8b8b93); margin: 0 0 16px; }
+.m-home-sec { margin: 18px 0 0; }
+.m-home-sec h2 { font-size: 0.74rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted, #8b8b93); margin: 0 0 8px; font-weight: 600; }
+.m-lot, .m-rem, .m-roll, .m-sess { border: 1px solid rgba(127, 127, 140, 0.25); border-radius: 12px; padding: 11px 13px; margin-bottom: 8px; }
+.m-lot-main { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.m-lot-name, .m-lot-meta { color: var(--muted, #8b8b93); }
+.m-lot-meta { font-size: 0.85rem; margin-top: 3px; }
+.m-lot-yield { margin-top: 5px; font-size: 0.92rem; }
+.m-lot-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.m-stage { margin-left: auto; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; color: var(--muted, #8b8b93); }
+.m-stage-fruiting { color: var(--gold, #d2ad62); }
+.m-stage-colonizing, .m-stage-consolidating { color: var(--ink, inherit); }
+.m-rem { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.m-roll { display: flex; gap: 12px; align-items: flex-start; }
+.m-roll-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 9px; flex: none; }
+.m-roll-verdict { font-size: 0.9rem; margin-top: 3px; }
+.m-cam-actions { display: flex; gap: 10px; margin: 6px 0 20px; }
+.m-cam-actions .primary { flex: 1; min-height: 50px; font-size: 1rem; }
+.m-cam-actions .ghost { min-height: 50px; }
+.m-log-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.m-log-row select { min-height: 40px; max-width: 60%; }
+.m-log-done { color: var(--muted, #8b8b93); font-size: 0.9rem; margin-top: 8px; }
+
+/* ── The vision scan ──────────────────────────────────────────────────────────
+   The photo CroweLM Vision was handed sits large in the bubble that sent it. A
+   hairline sweeps it while the model reads; the areas the model reports
+   examining are drawn where they are, with their labels, and stay once the
+   answer lands. Fractions, not pixels, so the marks fit whatever the bubble
+   measures. */
+.m-sent-photos.m-scan { display: block; }
+.m-scan-wrap { position: relative; width: 100%; max-height: 360px; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+.m-scan-wrap .m-scan-photo { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 0; }
+.m-scan-grid { position: absolute; inset: 0; pointer-events: none; opacity: 0.35;
+  background-image: linear-gradient(rgba(210, 173, 98, 0.22) 1px, transparent 1px), linear-gradient(90deg, rgba(210, 173, 98, 0.22) 1px, transparent 1px);
+  background-size: 12.5% 12.5%; transition: opacity 600ms ease; }
+.m-scan-sweep { position: absolute; left: 0; right: 0; top: 0; height: 18%; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(210, 173, 98, 0) 0%, rgba(210, 173, 98, 0.16) 70%, rgba(210, 173, 98, 0.95) 99%, rgba(210, 173, 98, 0) 100%);
+  animation: m-sweep 1.7s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@keyframes m-sweep { 0% { transform: translateY(-100%); } 100% { transform: translateY(560%); } }
+.m-scan-boxes { position: absolute; inset: 0; pointer-events: none; }
+.m-scan-box { position: absolute; border: 1.5px solid rgba(210, 173, 98, 0.95); border-radius: 6px; background: rgba(210, 173, 98, 0.08);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 18px rgba(210, 173, 98, 0.25); opacity: 0; animation: m-box-in 520ms ease-out forwards; }
+@keyframes m-box-in { 0% { opacity: 0; transform: scale(1.08); } 60% { opacity: 1; } 100% { opacity: 1; transform: scale(1); } }
+.m-scan-label { position: absolute; left: -1.5px; top: 100%; margin-top: 4px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  font: 600 10.5px/1.4 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #0a0a0b; background: rgba(210, 173, 98, 0.95); padding: 2px 6px; border-radius: 4px; }
+.m-scan-label.above { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }
+.m-scan-cap { margin-top: 8px; font-size: 0.85rem; color: var(--muted, #8b8b93); }
+.m-scan-done .m-scan-sweep { display: none; }
+.m-scan-done .m-scan-grid { opacity: 0; }
+.m-scan-hide .m-scan-boxes { display: none; }
+@media (prefers-reduced-motion: reduce) { .m-scan-sweep { animation: none; opacity: 0; } .m-scan-box { animation: none; opacity: 1; } }

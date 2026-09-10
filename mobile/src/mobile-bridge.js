@@ -465,6 +465,14 @@
     try {
       const part = String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
       return JSON.parse(decodeURIComponent(escape(atob(part))));
+    // A reminder that is tapped opens Home on the lot it named.
+    const LN0 = plugin("LocalNotifications");
+    if (LN0) {
+      Promise.resolve(LN0.addListener("localNotificationActionPerformed", (n) => {
+        const lot = (n && n.notification && n.notification.extra && n.notification.extra.lot) || "";
+        try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: "home", text: String(lot) } })); } catch { /* no window in tests */ }
+      })).catch(() => {});
+    }
     } catch { return {}; }
   }
   // Every slug the catalog sells. Same list as main.js and web-bridge.js, and
@@ -809,7 +817,61 @@
     "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
     "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
     "Offer to log the finding with log_grow when the tier allows it.",
+    "Begin with exactly one line of the form REGIONS: [{\"label\": \"...\", \"x\": 0.1, \"y\": 0.2, \"w\": 0.3, \"h\": 0.2}] naming up to",
+    "four areas of the photo you examined, x y w h as fractions of the image width and height from the top left, then a",
+    "blank line, then the answer. The line drives the phone's display of what you looked at; never refer to it in the answer.",
   ].join("\n");
+  /* The REGIONS line is display data, not prose. It is lifted out of the
+     stream before the transcript sees a character of it and handed to the UI
+     as its own event, so the phone can draw what the model examined while the
+     rest of the answer is still arriving. */
+  const REGIONS_RE = /^\s*REGIONS:\s*(\[[\s\S]*?\])[ \t]*\r?\n?/;
+  const clamp01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0; };
+  function parseRegions(json) {
+    try {
+      const a = JSON.parse(json);
+      if (!Array.isArray(a)) return null;
+      const out = a.filter((r) => r && typeof r.label === "string").slice(0, 6)
+        .map((r) => ({ label: r.label.trim().slice(0, 60), x: clamp01(r.x), y: clamp01(r.y), w: clamp01(r.w), h: clamp01(r.h) }))
+        .filter((r) => r.label && r.w > 0 && r.h > 0);
+      return out.length ? out : null;
+    } catch { return null; }
+  }
+  function stripRegions(text) {
+    const m = REGIONS_RE.exec(text || "");
+    if (!m) return { text: text || "", regions: null, had: false };
+    return { text: (text || "").slice(m[0].length).replace(/^[ \t]*\r?\n/, ""), regions: parseRegions(m[1]), had: true };
+  }
+  function regionsFilter(onRegions, onDelta) {
+    let buf = "", decided = false, swallow = false;
+    const decide = () => {
+      decided = true;
+      const sr = stripRegions(buf);
+      if (sr.regions) onRegions(sr.regions);
+      let rest = sr.had ? sr.text : buf;
+      buf = "";
+      // The blank line after the map may land in a later chunk; drop leading
+      // whitespace until the prose starts, and only when a map was taken out.
+      if (sr.had) { rest = rest.replace(/^\s+/, ""); swallow = rest === ""; }
+      if (rest) onDelta(rest);
+    };
+    return {
+      delta(chunk) {
+        if (decided) {
+          if (swallow) { chunk = chunk.replace(/^\s+/, ""); if (!chunk) return; swallow = false; }
+          onDelta(chunk); return;
+        }
+        buf += chunk;
+        const head = buf.replace(/^\s+/, "");
+        // Hold only while the text could still be the REGIONS line: an
+        // unfinished prefix of the keyword, or the line itself before its newline.
+        const couldBe = head === "" || "REGIONS:".startsWith(head.slice(0, 8)) || /^REGIONS:/.test(head);
+        if (!couldBe || buf.length > 800) { decide(); return; }
+        if (/^REGIONS:/.test(head) && /\n/.test(head)) decide();
+      },
+      flush() { if (!decided) decide(); },
+    };
+  }
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
     const key = String(plan || "").trim().toLowerCase();
@@ -1300,8 +1362,17 @@
         }
 
         run.controller = new AbortController();
-        const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model,
-          (chunk) => send({ type: "assistant_delta", text: chunk }));
+        const emitDelta = (chunk) => send({ type: "assistant_delta", text: chunk });
+        const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta) : null;
+        const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
+        if (filt) {
+          filt.flush();
+          if (typeof r.content === "string") {
+            const sr = stripRegions(r.content);
+            if (sr.regions && !r.streamed) send({ type: "vision_regions", regions: sr.regions });
+            r.content = sr.text;
+          }
+        }
 
         if (r.usage || r.elapsedMs) {
           meter.in += r.usage?.prompt_tokens || 0;
@@ -1920,6 +1991,52 @@
         }
         try { await navigator.clipboard.writeText(text); return { ok: true, copied: true }; }
         catch { return { ok: false, error: "This device would not share or copy the trace." }; }
+      },
+    },
+
+    /* 1.1: what the phone does when nobody is chatting. Reminders ride the
+       system's local notifications (the plugin owns permission and delivery);
+       the camera roll keeps each photo check's verdict so Home and the Camera
+       tab can show what was looked at, when, and against which lot. Both live
+       in Preferences beside the grow log and never leave the phone. */
+    reminders: {
+      list: async () => ((await store.get("reminders")) || []).filter((r) => r && r.at > Date.now() - 7 * 86400000).sort((a, b) => a.at - b.at),
+      add: async ({ lot, title, body, at } = {}) => {
+        const when = Number(at);
+        if (!Number.isFinite(when) || when < Date.now()) return { ok: false, error: "the reminder time is in the past" };
+        // int32, as the notification plugin requires; seconds plus a nonce keeps two taps apart.
+        const id = (Math.floor(Date.now() / 1000) % 2000000000) + Math.floor(Math.random() * 1000);
+        const rec = { id, lot: String(lot || "").slice(0, 40), title: String(title || "Crowe Logic").slice(0, 80), body: String(body || "").slice(0, 200), at: when, createdAt: Date.now() };
+        const LN = plugin("LocalNotifications");
+        if (LN) {
+          let perm = { display: "denied" };
+          try { perm = await LN.checkPermissions(); if (perm.display !== "granted") perm = await LN.requestPermissions(); }
+          catch (e) { return { ok: false, error: "notifications: " + String(e && e.message || e).slice(0, 80) }; }
+          if (perm.display !== "granted") return { ok: false, error: "Allow notifications for Crowe Logic in Settings to get reminders" };
+          try { await LN.schedule({ notifications: [{ id, title: rec.title, body: rec.body, schedule: { at: new Date(when), allowWhileIdle: true }, extra: { lot: rec.lot } }] }); }
+          catch (e) { return { ok: false, error: "schedule: " + String(e && e.message || e).slice(0, 80) }; }
+        }
+        const all = ((await store.get("reminders")) || []).filter((r) => r && r.id !== id);
+        all.push(rec);
+        await store.set("reminders", all.slice(-200));
+        return { ok: true, reminder: rec, native: Boolean(LN) };
+      },
+      remove: async (id) => {
+        const LN = plugin("LocalNotifications");
+        if (LN) { try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch { /* fired already, or never scheduled */ } }
+        await store.set("reminders", ((await store.get("reminders")) || []).filter((r) => r && r.id !== Number(id)));
+        return { ok: true };
+      },
+    },
+    camera: {
+      list: async () => ((await store.get("camera-roll")) || []).slice().reverse(),
+      add: async ({ lot, verdict, thumb } = {}) => {
+        const ok = typeof thumb === "string" && thumb.startsWith("data:image/") && thumb.length < 120000;
+        const rec = { id: "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6), ts: Date.now(), lot: String(lot || "").slice(0, 40), verdict: String(verdict || "").slice(0, 400), thumb: ok ? thumb : "" };
+        const roll = (await store.get("camera-roll")) || [];
+        roll.push(rec);
+        await store.set("camera-roll", roll.slice(-60));
+        return { ok: true, entry: rec };
       },
     },
 

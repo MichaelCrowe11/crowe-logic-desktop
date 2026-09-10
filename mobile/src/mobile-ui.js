@@ -66,26 +66,30 @@
   function setPane(pane) {
     body.dataset.pane = pane;
     syncTabs();
+    if (pane === "home" && typeof renderHome === "function") renderHome();
+    if (pane === "camera" && typeof renderCamera === "function") renderCamera();
     // The transcript and the panel deck each remember their own scroll, and a
     // deck that was laid out while display:none has no size. Nudging resize
     // lets the panels measure themselves the moment they become visible.
     window.dispatchEvent(new Event("resize"));
   }
 
+  /* 1.1: the phone's own tab set. Home and Camera are panes this file owns;
+     Chat and Log are the rail's chat and cultivation spaces. Projects and
+     Panels describe a workspace on a machine, so they appear only once a
+     machine is paired, as one "Machine" tab onto the workspace pane. */
+  const HOME_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>';
+  const CAMERA_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+  const railIcon = (space) => { const b = spaceButtons().find((x) => x.dataset.space === space); return b && b.querySelector("svg") ? b.querySelector("svg").outerHTML : ""; };
+  const spaceOn = (space) => Boolean(spaceButtons().find((b) => b.dataset.space === space && !b.classList.contains("hidden")));
+
   function buildTabs() {
-    const items = spaceButtons()
-      .filter((b) => !b.classList.contains("hidden"))
-      .map((b) => ({
-        kind: "space",
-        id: b.dataset.space,
-        label: (b.textContent || "").trim(),
-        icon: (b.querySelector("svg") || {}).outerHTML || "",
-      }));
-    // Panels — the workspace column, which on a phone is a view of its own
-    // rather than a second pane. Workflows, the agent fleet and operator
-    // control all live there and all run over the gateway, so it earns a tab
-    // even though the terminal and file panels it also hosts do not open here.
-    items.push({ kind: "pane", id: "workspace", label: "Panels", icon: PANE_ICON });
+    const items = [{ kind: "pane", id: "home", label: "Home", icon: HOME_ICON }];
+    items.push({ kind: "space", id: "chat", label: "Chat", icon: railIcon("chat") });
+    items.push({ kind: "pane", id: "camera", label: "Camera", icon: CAMERA_ICON });
+    if (spaceOn("cultivation")) items.push({ kind: "space", id: "cultivation", label: "Log", icon: railIcon("cultivation") });
+    // Read the class directly: isPaired is declared further down and this runs at boot.
+    if (body.classList.contains("m-paired")) items.push({ kind: "pane", id: "workspace", label: "Machine", icon: PANE_ICON });
 
     tabs.innerHTML = items.map((item) => `
       <button type="button" class="m-tab" data-kind="${item.kind}" data-id="${item.id}">
@@ -94,25 +98,22 @@
 
     tabs.querySelectorAll(".m-tab").forEach((tab) => tab.addEventListener("click", () => {
       setDrawer(false);
+      const id = tab.dataset.id;
       if (tab.dataset.kind === "space") {
-        const btn = spaceButtons().find((b) => b.dataset.space === tab.dataset.id);
+        const btn = spaceButtons().find((b) => b.dataset.space === id);
         if (btn) btn.click();
         setPane("agent");
-      } else if (showsWorkbench()) {
-        setPane("workspace");
-      } else {
+      } else if (id === "workspace") {
+        if (showsWorkbench()) { setPane("workspace"); return; }
         // Panels hang off the workbench, and only some spaces show it, so a tap
-        // from a surface space lands on Chat first.
-        //
-        // The pane then has to be set after that switch, not with it: changing
-        // the space queues the observer below, which resets the pane to the
-        // conversation, and a reset queued during the click runs after
-        // everything the click handler does. Setting Panels inline looked right
-        // and was undone a microtask later — the tab highlighted and the
-        // conversation stayed on screen.
+        // from a surface space lands on Chat first. The pane is set after that
+        // switch: changing the space queues the observer below, which resets
+        // the pane to the conversation, and that reset runs after this handler.
         const chat = spaceButtons().find((b) => b.dataset.space === "chat");
         if (chat) chat.click();
         setTimeout(() => setPane("workspace"), 0);
+      } else {
+        setPane(id);
       }
     }));
     syncTabs();
@@ -120,14 +121,138 @@
 
   function syncTabs() {
     const space = body.dataset.space || "chat";
-    const onPanels = body.dataset.pane === "workspace" && showsWorkbench();
+    const pane = body.dataset.pane || "agent";
+    const onPanels = pane === "workspace" && showsWorkbench();
     tabs.querySelectorAll(".m-tab").forEach((tab) => {
-      const current = tab.dataset.kind === "pane" ? onPanels : (!onPanels && tab.dataset.id === space);
+      let current = false;
+      if (tab.dataset.kind === "pane") current = tab.dataset.id === "workspace" ? onPanels : pane === tab.dataset.id;
+      else current = pane === "agent" && tab.dataset.id === space;
       if (current) tab.setAttribute("aria-current", "true"); else tab.removeAttribute("aria-current");
     });
   }
 
   buildTabs();
+  window.addEventListener("crowe:remote", () => buildTabs());
+
+  /* ── Home and Camera: the phone's own panes ─────────────────────────────────
+     Two sections beside the workbench and the surfaces. Home answers "what
+     does my grow need today" from the log already on this phone; Camera hands a
+     photo to CroweLM Vision through the ordinary chat turn and then offers one
+     tap to log the verdict against a lot. Nothing here needs a desktop. */
+  const workbenchEl = $("workbench");
+  const homePane = document.createElement("section"); homePane.id = "m-home-pane"; homePane.className = "m-pane"; homePane.setAttribute("aria-label", "Home");
+  const cameraPane = document.createElement("section"); cameraPane.id = "m-camera-pane"; cameraPane.className = "m-pane"; cameraPane.setAttribute("aria-label", "Camera");
+  if (workbenchEl && workbenchEl.parentNode) { workbenchEl.parentNode.insertBefore(homePane, workbenchEl); workbenchEl.parentNode.insertBefore(cameraPane, workbenchEl); }
+  const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const sinceDays = (iso) => { const t = Date.parse(String(iso || "") + "T00:00:00"); if (!Number.isFinite(t)) return ""; const d = Math.floor((Date.now() - t) / 86400000); return d < 0 ? "" : d === 0 ? "today" : d === 1 ? "1 day" : `${d} days`; };
+  const live = (blocks) => (blocks || []).filter((b) => b && b.code && !["spent", "discarded"].includes(b.stage));
+  const STAGE_ORDER = ["fruiting", "consolidating", "colonizing", "spawned"];
+  /* Yield only with the basis the grower stated. Dry substrate gives biological
+     efficiency; a wet block gives a ratio and is labelled as one. */
+  function yieldLine(b, byLot) {
+    const got = byLot[b.code] || 0, w = Number(b.weight);
+    if (!got || !w) return "";
+    const pct = Math.round((got / w) * 100);
+    return b.basis === "dry" ? `${pct}% biological efficiency: ${got.toFixed(1)} lb from ${w} lb dry substrate`
+      : b.basis === "wet" ? `${pct}% of wet block weight: ${got.toFixed(1)} lb from ${w} lb` : `${got.toFixed(1)} lb harvested (state the weight basis to see the ratio)`;
+  }
+  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict">${esc((c.verdict || "").slice(0, 180))}</div></div></div>`;
+  let pendingLot = "", cameraArmed = false, photoTurn = null;
+
+  async function renderHome() {
+    const crowe = window.crowe; if (!crowe || !crowe.grow) return;
+    const safe = (p) => Promise.resolve(p).catch(() => []);
+    const [blocks, flushes, reminders, roll, sessions] = await Promise.all([
+      safe(crowe.grow.list("blocks")), safe(crowe.grow.list("flushes")),
+      crowe.reminders ? safe(crowe.reminders.list()) : [], crowe.camera ? safe(crowe.camera.list()) : [],
+      crowe.sessions && crowe.sessions.list ? safe(crowe.sessions.list()) : []]);
+    const rows = live(blocks).sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage));
+    const byLot = {}; for (const f of flushes || []) if (f && f.block) byLot[f.block] = (byLot[f.block] || 0) + (Number(f.weight) || 0);
+    const upcoming = (reminders || []).filter((r) => r.at > Date.now() - 3600000).slice(0, 6);
+    homePane.innerHTML = [
+      '<div class="m-home-inner">',
+      `<header class="m-home-head"><h1>Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
+      rows.length ? '<section class="m-home-sec" id="m-home-blocks"><h2>Blocks by stage</h2>' + rows.map((b) => `<div class="m-lot" data-lot="${esc(b.code)}"><div class="m-lot-main"><b>${esc(b.code)}</b><span class="m-lot-name">${esc([b.species, b.strain].filter(Boolean).join(" · "))}</span><span class="m-stage m-stage-${esc(b.stage || "")}">${esc(b.stage || "")}</span></div><div class="m-lot-meta">${b.spawned ? esc(sinceDays(b.spawned)) + " since spawn" : ""}${b.count ? ` · ${esc(String(b.count))}×` : ""}${b.room ? ` · ${esc(b.room)}` : ""}</div>${yieldLine(b, byLot) ? `<div class="m-lot-yield">${esc(yieldLine(b, byLot))}</div>` : ""}<div class="m-lot-actions"><button type="button" class="ghost sm m-remind" data-lot="${esc(b.code)}" data-species="${esc(b.species || "")}" data-stage="${esc(b.stage || "")}">Remind me</button><button type="button" class="ghost sm m-check" data-lot="${esc(b.code)}">Photograph</button></div></div>`).join("") + "</section>" : "",
+      '<section class="m-home-sec" id="m-home-reminders"><h2>Reminders</h2>' + (upcoming.length ? upcoming.map((r) => `<div class="m-rem"><div><b>${esc(r.title)}</b><div class="m-lot-meta">${esc(new Date(r.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${r.body ? " · " + esc(r.body) : ""}</div></div><button type="button" class="ghost sm m-rem-x" data-id="${r.id}">Remove</button></div>`).join("") : '<p class="m-home-empty">None set. Tap Remind me on a block.</p>') + "</section>",
+      roll.length ? '<section class="m-home-sec"><h2>Camera checks</h2>' + roll.slice(0, 4).map(rollCard).join("") + "</section>" : "",
+      sessions.length ? '<section class="m-home-sec"><h2>Recent conversations</h2>' + sessions.slice(0, 3).map((x) => `<div class="m-sess">${esc(x.name || x.title || "Untitled")}</div>`).join("") + "</section>" : "",
+      "</div>",
+    ].join("");
+    homePane.querySelectorAll(".m-remind").forEach((btn) => btn.addEventListener("click", () => remindChooser(btn.dataset.lot, btn.dataset.species, btn.dataset.stage)));
+    homePane.querySelectorAll(".m-check").forEach((btn) => btn.addEventListener("click", () => { pendingLot = btn.dataset.lot; setPane("camera"); }));
+    homePane.querySelectorAll(".m-rem-x").forEach((btn) => btn.addEventListener("click", async () => { await window.crowe.reminders.remove(Number(btn.dataset.id)); renderHome(); }));
+  }
+
+  function remindChooser(lot, species, stage) {
+    const host = homePane.querySelector(`.m-lot[data-lot="${CSS.escape(lot)}"] .m-lot-actions`); if (!host) return;
+    host.innerHTML = [3, 7, 14].map((d) => `<button type="button" class="ghost sm m-rem-pick" data-days="${d}">${d} days</button>`).join("") + '<button type="button" class="ghost sm m-rem-cancel">Cancel</button>';
+    host.querySelector(".m-rem-cancel").addEventListener("click", () => renderHome());
+    host.querySelectorAll(".m-rem-pick").forEach((b) => b.addEventListener("click", async () => {
+      const r = await window.crowe.reminders.add({ lot, title: `Check ${lot}`, body: [species, stage].filter(Boolean).join(" · "), at: Date.now() + Number(b.dataset.days) * 86400000 });
+      if (!r || !r.ok) alert((r && r.error) || "The reminder could not be set.");
+      renderHome();
+    }));
+  }
+
+  const VISION_PROMPT = "Look at this photo of my block. Tell me what stage it is at, whether you see contamination or another problem, and what I should do next.";
+  async function renderCamera() {
+    const roll = window.crowe && window.crowe.camera ? await window.crowe.camera.list().catch(() => []) : [];
+    cameraPane.innerHTML = [
+      '<div class="m-home-inner">',
+      '<header class="m-home-head"><h1>Point the camera at a block</h1><p class="m-home-sub">CroweLM Vision, running Claude Fable 5.1, reads the photo and answers in Chat. One tap logs the verdict against a lot.</p></header>',
+      pendingLot ? `<p class="m-cam-lot">Checking <b>${esc(pendingLot)}</b></p>` : "",
+      '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div>',
+      roll.length ? '<section class="m-home-sec"><h2>Checked</h2>' + roll.slice(0, 12).map(rollCard).join("") + "</section>" : '<p class="m-home-empty">Nothing checked yet.</p>',
+      "</div>",
+    ].join("");
+    const camInput = () => document.querySelector('input[type="file"][accept="image/*"]');
+    cameraPane.querySelector(".m-cam-shoot").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.setAttribute("capture", "environment"); i.click(); });
+    cameraPane.querySelector(".m-cam-pick").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.removeAttribute("capture"); i.click(); setTimeout(() => i.setAttribute("capture", "environment"), 1500); });
+  }
+
+  /* A photo taken from the Camera tab becomes a chat turn on its own: the photo
+     is already attached by the picker, so the question goes out at once and the
+     answer streams where every answer streams. */
+  if (window.crowePhone && window.crowePhone.onChange) {
+    window.crowePhone.onChange(() => {
+      if (!cameraArmed) return;
+      const photos = window.crowePhone.images ? window.crowePhone.images() : [];
+      if (!photos.length) return;
+      cameraArmed = false;
+      photoTurn = { lot: pendingLot, thumb: "" };
+      setPane("agent");
+      const q = pendingLot ? `${VISION_PROMPT} This is lot ${pendingLot}.` : VISION_PROMPT;
+      if (typeof send === "function") send(q);
+      else { const inp = $("input"); if (inp) { inp.value = q; inp.dispatchEvent(new Event("input")); } }
+    });
+  }
+
+  /* After a vision reply: one row under the answer to log it against a lot. The
+     journal gets the verdict as a dated entry; the camera roll keeps the
+     thumbnail and the first lines so Home can show what was checked. */
+  if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+    window.crowe.agent.onEvent(async (ev) => {
+      if (!ev) return;
+      if (ev.type === "photos" && Array.isArray(ev.thumbs)) { if (!photoTurn) photoTurn = { lot: pendingLot, thumb: "" }; photoTurn.thumb = ev.thumbs[0] || ""; return; }
+      if (ev.type !== "assistant" || !photoTurn || ev.agentId && ev.agentId !== "main") return;
+      const turn = photoTurn; photoTurn = null; pendingLot = "";
+      const text = String(ev.text || "").trim(); if (!text) return;
+      const bodies = document.querySelectorAll(".msg.assistant .body"); const body = bodies[bodies.length - 1]; if (!body) return;
+      const blocks = live(await window.crowe.grow.list("blocks").catch(() => []));
+      const row = document.createElement("div"); row.className = "m-log-row";
+      row.innerHTML = `<select aria-label="Lot">${blocks.map((b) => `<option value="${esc(b.code)}"${b.code === turn.lot ? " selected" : ""}>${esc(b.code)}${b.species ? " · " + esc(b.species) : ""}</option>`).join("")}<option value=""${turn.lot ? "" : " selected"}>No lot</option></select><button type="button" class="primary sm m-log-it">Log this check</button><button type="button" class="ghost sm m-log-skip">Not now</button>`;
+      body.appendChild(row);
+      row.querySelector(".m-log-skip").addEventListener("click", () => row.remove());
+      row.querySelector(".m-log-it").addEventListener("click", async () => {
+        const lot = row.querySelector("select").value;
+        const entry = (lot ? `Photo check of ${lot}. ` : "Photo check. ") + text.slice(0, 1200);
+        const saved = await window.crowe.grow.save("log", { date: todayISO(), subject: lot ? `Photo check ${lot}` : "Photo check", entry });
+        if (!saved || saved.ok === false) { alert((saved && saved.error) || "The journal did not take the entry."); return; }
+        await window.crowe.camera.add({ lot, verdict: text.slice(0, 400), thumb: turn.thumb });
+        row.innerHTML = `<span class="m-log-done">Logged${lot ? " to " + esc(lot) : ""} in the grow journal.</span>`;
+      });
+    });
+  }
   // The space picker in Settings hides and shows rail buttons after load, and
   // the rail is the tab bar's only source of truth about which spaces exist.
   new MutationObserver(buildTabs).observe($("spaces"), { attributes: true, subtree: true, attributeFilter: ["class"] });
@@ -386,19 +511,69 @@
     window.crowePhone.onChange(renderRow);
     /* The photo leaves the chip row the moment the turn starts; show it in the
        bubble that asked, so the transcript reads as what was actually sent. */
+    /* The scan. While CroweLM Vision works, the photo it was given sits large
+       in the bubble that sent it, under a moving hairline; the areas the model
+       says it examined arrive as their own event before any prose and are drawn
+       where they are, with their labels, so the reading is watched, not waited
+       for. The boxes stay when the answer lands; a tap on the photo hides them. */
+    let activeScan = null;
+    function beginScan(strip, img) {
+      strip.classList.add("m-scan");
+      const wrap = document.createElement("div"); wrap.className = "m-scan-wrap";
+      img.classList.add("m-scan-photo");
+      wrap.appendChild(img);
+      const sweep = document.createElement("div"); sweep.className = "m-scan-sweep"; wrap.appendChild(sweep);
+      const grid = document.createElement("div"); grid.className = "m-scan-grid"; wrap.appendChild(grid);
+      const boxes = document.createElement("div"); boxes.className = "m-scan-boxes"; wrap.appendChild(boxes);
+      const cap = document.createElement("div"); cap.className = "m-scan-cap"; cap.textContent = "CroweLM Vision is reading the photo";
+      strip.appendChild(wrap); strip.appendChild(cap);
+      const fit = () => { if (img.naturalWidth && img.naturalHeight) wrap.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`; };
+      if (img.complete) fit(); else img.addEventListener("load", fit, { once: true });
+      wrap.addEventListener("click", () => wrap.classList.toggle("m-scan-hide"));
+      activeScan = { strip, wrap, boxes, cap, regions: [] };
+    }
+    function scanRegions(regions) {
+      if (!activeScan) return;
+      activeScan.boxes.innerHTML = "";
+      activeScan.regions = regions;
+      regions.forEach((r, i) => {
+        const box = document.createElement("div"); box.className = "m-scan-box";
+        box.style.left = `${(r.x * 100).toFixed(2)}%`; box.style.top = `${(r.y * 100).toFixed(2)}%`;
+        box.style.width = `${(r.w * 100).toFixed(2)}%`; box.style.height = `${(r.h * 100).toFixed(2)}%`;
+        box.style.animationDelay = `${i * 260}ms`;
+        const label = document.createElement("span"); label.className = "m-scan-label"; label.textContent = r.label;
+        if (r.y > 0.85) label.classList.add("above");
+        box.appendChild(label);
+        activeScan.boxes.appendChild(box);
+      });
+      activeScan.cap.textContent = regions.length ? "Looking at: " + regions.map((r) => r.label).join(", ") : "CroweLM Vision is reading the photo";
+    }
+    function endScan(how) {
+      if (!activeScan) return;
+      activeScan.strip.classList.add("m-scan-done");
+      activeScan.cap.textContent = how === "error" ? "The photo could not be read." : how === "stopped" ? "Stopped." :
+        (activeScan.regions.length ? "Read. Tap the photo to hide the marks." : "Read.");
+      activeScan = null;
+    }
     if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
       window.crowe.agent.onEvent((ev) => {
-        if (!ev || ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
+        if (!ev) return;
+        if (ev.type === "vision_regions" && Array.isArray(ev.regions)) { scanRegions(ev.regions); return; }
+        if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
+        if (ev.type === "error") { endScan("error"); return; }
+        if (ev.type === "stopped") { endScan("stopped"); return; }
+        if (ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
         const bodies = document.querySelectorAll(".msg.user .body");
         const body = bodies[bodies.length - 1];
         if (!body) return;
         const strip = document.createElement("div");
         strip.className = "m-sent-photos";
-        for (const src of ev.thumbs) {
+        ev.thumbs.forEach((src, i) => {
           const img = document.createElement("img");
           img.className = "m-sent-photo"; img.src = src; img.alt = "photo sent to CroweLM Vision";
+          if (i === 0) { beginScan(strip, img); return; }
           strip.appendChild(img);
-        }
+        });
         body.appendChild(strip);
       });
     }
@@ -479,6 +654,7 @@
      the form. The note arrives from the bridge as crowe:intent (see
      takePendingIntent), on launch and on every return to the foreground. */
   window.addEventListener("crowe:intent", (e) => {
+    if (e && e.detail && e.detail.kind === "home") { setPane("home"); return; }
     const d = (e && e.detail) || {};
     if (d.kind === "ask" && d.text) {
       __tapTab("Chat");

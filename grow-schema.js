@@ -21,6 +21,8 @@ const GROW_SCHEMA = {
       { k: "strain", d: "strain or isolate name" },
       { k: "substrate", d: "substrate recipe name" },
       { k: "count", d: "how many blocks in the lot (number)" },
+      { k: "weight", d: "weight of one block in lb (number)" },
+      { k: "basis", d: "what the weight measures", opts: ["wet", "dry"] },
       // Where it is growing. MGAP 12.1a wants lot tagging traceable to location
       // and date of harvest; indoors the room is the location, and without it a
       // trace cannot say which environment a lot actually saw.

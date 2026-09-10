@@ -2719,6 +2719,12 @@ const GROW = {
       { k: "strain", label: "Strain", from: ["strains", "name"] },
       { k: "substrate", label: "Substrate", from: ["recipes", "name"] },
       { k: "count", label: "Count", type: "number", w: "xs" },
+      // Weight with its basis stated, never assumed: a "5 lb block" is dry
+      // substrate in The Mushroom Grower and a wet block on most farms, and a
+      // yield figure against the wrong one is off by more than half. Biological
+      // efficiency is only computed on a dry basis; wet gives a plain ratio.
+      { k: "weight", label: "Weight (lb)", type: "number", w: "xs" },
+      { k: "basis", label: "Basis", opts: ["wet", "dry"], w: "xs" },
       // Suggests from the rooms already logged, so a lot and its readings agree
       // on the spelling. A trace joins them on this string.
       { k: "room", label: "Room", from: ["env", "room"], w: "sm" },
