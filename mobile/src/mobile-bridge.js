@@ -99,6 +99,7 @@
     autonomy: "edit",
     autoApprove: false,
     approvals: "high-risk",
+    textPace: "reading",      // a phone in a hand reads along; the desktop defaults to brisk
     verifier: false,          // the verifier is a second full turn; too expensive on cellular by default
     turnBudgetUsd: 2,
     telemetry: true,
@@ -140,7 +141,7 @@
     return {
       baseUrl: config.baseUrl, hasToken: Boolean(config.token), cwd: "",
       autoApprove: Boolean(config.autoApprove), autonomy: config.autonomy,
-      approvals: config.approvals, verifier: Boolean(config.verifier),
+      approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
       version: BUILD.version, platform: PLATFORM, mobile: true,
@@ -213,6 +214,14 @@
      Session-scoped on purpose: holding a user's document contents in
      localStorage would outlive the conversation the grant was made for. */
   const phoneFiles = new Map();               // name -> { content, at }
+  /* Photos are a second grant, kept apart from text files because they travel
+     differently. A text file waits at a phone: path for a tool to read it. A
+     photo rides inside the next turn itself, as an image part on the user's
+     message, and that turn goes to CroweLM Vision whatever the words would
+     have routed to. Pending until sent, then cleared: a photo is looked at
+     once, on purpose, and never lands in the saved session. */
+  const phoneImages = new Map();              // name -> { dataUrl, at }
+  const PHONE_IMAGE_MAX = 4 * 1024 * 1024;    // data URL length; the composer downsizes to ~1280px first
   const PHONE_FILE_MAX = 512 * 1024;
   const phoneListeners = new Set();
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
@@ -227,10 +236,22 @@
       phoneNotify();
       return { ok: true, name };
     },
-    remove(name) { phoneFiles.delete(String(name || "")); phoneNotify(); },
+    remove(name) { phoneFiles.delete(String(name || "")); phoneImages.delete(String(name || "")); phoneNotify(); },
     list() { return [...phoneFiles.entries()].map(([name, f]) => ({ name, size: f.content.length, at: f.at })); },
     get(name) { const f = phoneFiles.get(String(name || "")); return f ? f.content : null; },
     onChange(fn) { phoneListeners.add(fn); return () => phoneListeners.delete(fn); },
+    addImage(name, dataUrl) {
+      name = String(name || "photo.jpg").replace(/[/\\]/g, "_").trim() || "photo.jpg";
+      dataUrl = String(dataUrl || "");
+      if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataUrl)) return { error: "not an image" };
+      if (dataUrl.length > PHONE_IMAGE_MAX) return { error: "photo too large even after downsizing" };
+      let key = name, n = 2;
+      while (phoneImages.has(key)) key = name.replace(/(\.[^.]+)?$/, ` ${n++}$1`);
+      phoneImages.set(key, { dataUrl, at: Date.now() });
+      phoneNotify();
+      return { ok: true, name: key };
+    },
+    images() { return [...phoneImages.entries()].map(([name, p]) => ({ name, size: p.dataUrl.length, at: p.at })); },
     async share(name) {
       const f = phoneFiles.get(String(name || ""));
       if (!f) return { error: "no such file" };
@@ -349,6 +370,21 @@
      could do that silently would not gain a shell, but they would receive
      every command the user asked for and get to answer with whatever they
      liked. One confirmation, naming the host, closes that. */
+  let takingIntent = false;
+  async function takePendingIntent() {
+    if (takingIntent) return null;
+    takingIntent = true;
+    try {
+      const note = await store.get("intent");
+      if (!note || typeof note !== "object" || !note.kind) return null;
+      await store.remove("intent");
+      // Notes older than ten minutes are stale: the phone was opened for some
+      // other reason since, and running an old question now would surprise.
+      if (note.at && Date.now() - Number(note.at) > 10 * 60 * 1000) return null;
+      try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: String(note.kind), text: String(note.text || "") } })); } catch { /* no window in tests */ }
+      return note;
+    } finally { takingIntent = false; }
+  }
   function pairFromUrl(rawUrl) {
     const url = String(rawUrl || "");
     if (!/^com\.crowelogic\.mobile:\/\/pair\b/i.test(url)) return false;
@@ -387,6 +423,13 @@
     const App = plugin("App");
     if (!App) return;
     Promise.resolve(App.addListener("appUrlOpen", (e) => { pairFromUrl(e && e.url); }));
+    /* Siri and Shortcuts. The App Intents in CroweIntents.swift open the app and
+       leave a note under the Preferences key `intent` ({kind, text, at}); it is
+       read and cleared here on launch and on every return to the foreground,
+       then handed to the UI as a crowe:intent event. Two readers race on a cold
+       start (this one and the appStateChange below), so the read is a take. */
+    Promise.resolve(App.addListener("appStateChange", (st) => { if (st && st.isActive) takePendingIntent(); })).catch(() => {});
+    ready.then(() => takePendingIntent()).catch(() => {});
     if (App.getLaunchUrl) {
       Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
     }
@@ -599,6 +642,39 @@
   }
 
   // ─── Gateway ───────────────────────────────────────────────────────────────
+  /* One place that turns OpenAI chunk frames into a finished reply. The
+     streamed fetch path feeds it line by line; the native fallback feeds it a
+     whole body when the gateway streamed at a transport that cannot. An
+     `error` object on a frame is the gateway saying the upstream failed after
+     the headers were out, and it is surfaced as an error, not as an answer. */
+  function sseAccumulator(useModel, onDelta) {
+    let content = "", usage = {}, gotModel = useModel, gatewayError = null;
+    const toolCalls = [];
+    const handle = (payload) => {
+      if (payload === "[DONE]") return;
+      let d; try { d = JSON.parse(payload); } catch { return; }
+      if (d && d.error) { gatewayError = String(d.error.message || d.error); return; }
+      const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
+      const chunk = typeof delta.content === "string" ? delta.content : "";
+      if (chunk) { content += chunk; if (onDelta) onDelta(chunk); }
+      for (const t of delta.tool_calls || []) {
+        const i = Number.isInteger(t.index) ? t.index : toolCalls.length;
+        const cur = toolCalls[i] || (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
+        if (t.id) cur.id = t.id;
+        if (t.function?.name) cur.function.name = t.function.name;
+        if (t.function?.arguments) cur.function.arguments += t.function.arguments;
+      }
+      if (d.usage) usage = d.usage;
+      if (d.model) gotModel = d.model;
+    };
+    return {
+      handle,
+      feedText(text) { for (const raw of String(text || "").split("\n")) { const line = raw.trim(); if (line.startsWith("data:")) handle(line.slice(5).trim()); } },
+      get content() { return content; },
+      get error() { return gatewayError; },
+      result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage }; },
+    };
+  }
   async function gatewayChat(messages, tools, signal, model, onDelta, _retried) {
     await ready;
     if (!config.token) return { error: 'Not signed in. Tap "Sign in with Crowe ID" to continue.' };
@@ -618,10 +694,22 @@
     } catch (e) {
       if (e && e.name === "AbortError") return { error: "stopped", aborted: true };
       if (!corsBlocked(e)) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
-      const r = await nativePost(url, headers, JSON.parse(body));
+      // The native transport hands back one finished body, so it must not ask
+      // the gateway to stream: since control plane 0.2.17 the gateway honours
+      // stream:true, and an event stream read as JSON is an empty answer.
+      const nativeBody = JSON.parse(body); delete nativeBody.stream;
+      const r = await nativePost(url, headers, nativeBody);
       if (!r) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
-      let data; try { data = JSON.parse(r.text); } catch { data = { detail: r.text }; }
+      let data;
+      try { data = JSON.parse(r.text); }
+      catch {
+        if (/^\s*data:/m.test(String(r.text || ""))) {
+          const acc = sseAccumulator(useModel, null); acc.feedText(r.text);
+          if (acc.error) return { error: `HTTP ${r.status}: ${acc.error}`.slice(0, 400), content: acc.content };
+          data = acc.result();
+        } else data = { detail: r.text };
+      }
       if (!r.ok) return { error: `HTTP ${r.status}: ${data.detail || r.text}`.slice(0, 400) };
       return done(data, 0);
     }
@@ -631,24 +719,8 @@
     // Streaming is decided by the response, not the request — same contract as
     // main.js, so a gateway build that answers JSON to stream:true still works.
     if (resp.ok && onDelta && String(resp.headers.get("content-type") || "").includes("text/event-stream") && resp.body) {
-      let content = "", usage = {}, gotModel = useModel, buf = "";
-      const toolCalls = [];
-      const handle = (payload) => {
-        if (payload === "[DONE]") return;
-        let d; try { d = JSON.parse(payload); } catch { return; }
-        const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
-        const chunk = typeof delta.content === "string" ? delta.content : "";
-        if (chunk) { content += chunk; onDelta(chunk); }
-        for (const t of delta.tool_calls || []) {
-          const i = Number.isInteger(t.index) ? t.index : toolCalls.length;
-          const cur = toolCalls[i] || (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
-          if (t.id) cur.id = t.id;
-          if (t.function?.name) cur.function.name = t.function.name;
-          if (t.function?.arguments) cur.function.arguments += t.function.arguments;
-        }
-        if (d.usage) usage = d.usage;
-        if (d.model) gotModel = d.model;
-      };
+      const acc = sseAccumulator(useModel, onDelta);
+      let buf = "";
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
       try {
@@ -659,15 +731,15 @@
           let i;
           while ((i = buf.indexOf("\n")) >= 0) {
             const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-            if (line.startsWith("data:")) handle(line.slice(5).trim());
+            if (line.startsWith("data:")) acc.handle(line.slice(5).trim());
           }
         }
       } catch (e) {
-        if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content, streamed: content.length };
-        return { error: `stream broke: ${String(e).slice(0, 160)}`, content, streamed: content.length };
+        if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content: acc.content, streamed: acc.content.length };
+        return { error: `stream broke: ${String(e).slice(0, 160)}`, content: acc.content, streamed: acc.content.length };
       }
-      return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage,
-               elapsedMs: Date.now() - t0, streamed: content.length };
+      if (acc.error) return { error: `gateway: ${acc.error}`.slice(0, 400), content: acc.content, streamed: acc.content.length };
+      return { ...acc.result(), elapsedMs: Date.now() - t0, streamed: acc.content.length };
     }
 
     const text = await resp.text();
@@ -726,6 +798,18 @@
   const PLAN_ALIASES = { developer: "personal", lab: "team" };
   const TIER_PLAN = { free: "free", pro: "pro", studio: "team", enterprise: "enterprise", byok: "byok", personal: "personal", team: "team", max: "max", admin: "enterprise" };
   const FREE_MODEL = "crowelm-flash";
+  // Photos go here, whatever the words routed to. Same id the catalog serves.
+  const VISION_MODEL = "crowelm-vision";
+  const PHOTO_DEFAULT_ASK = "Look at this photo. Is this contamination, and what should I do?";
+  const VISION_BRIEF = [
+    "A photo taken on this phone is attached to the user's message. Describe what is actually visible first:",
+    "the substrate or agar, the mycelium's color and texture, any discoloration, wet or slimy patches, pins or",
+    "fruit bodies. Then assess: healthy, or contamination and which kind (green Trichoderma, cobweb mold,",
+    "bacterial blotch or wet spot, black pin mold, yellow metabolite staining), where on the block or plate,",
+    "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
+    "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
+    "Offer to log the finding with log_grow when the tier allows it.",
+  ].join("\n");
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
     const key = String(plan || "").trim().toLowerCase();
@@ -1121,6 +1205,7 @@
       "You are Crowe Logic, running on the user's phone.",
       machine,
       attached,
+      route.vision ? "\n" + VISION_BRIEF : "",
       "",
       "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
       "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
@@ -1166,6 +1251,31 @@
 
     try {
       const route = routeTurn(messages, String(opts.role || ""));
+      /* A photo changes the turn: it rides inside the user message as an image
+         part and the turn goes to CroweLM Vision, whatever the words would have
+         routed to. Decided here, before the route is announced, so the rail
+         shows where the photo actually went. A free account hears the truth up
+         front instead of being handed to a text model that cannot see. */
+      let msgs = messages;
+      const photos = [...phoneImages.entries()];
+      if (photos.length) {
+        phoneImages.clear(); phoneNotify();
+        if (planBlocks(VISION_MODEL)) {
+          const need = minPlanFor(VISION_MODEL) || "personal";
+          const err = `Crowe Vision reads photos on the ${need} plan and higher. This Crowe ID is on the ${sessionPlan() || "free"} plan, so the photo was not sent. Sign in with an account that has a plan.`;
+          send({ type: "error", text: err }); send({ type: "final", note: "vision needs a plan" });
+          return { done: false, error: err, text };
+        }
+        msgs = messages.slice();
+        const i = msgs.map((m) => m && m.role).lastIndexOf("user");
+        const ask = String((i >= 0 && msgs[i].content) || "").trim() || PHOTO_DEFAULT_ASK;
+        const parts = [{ type: "text", text: ask }, ...photos.map(([, p]) => ({ type: "image_url", image_url: { url: p.dataUrl } }))];
+        if (i >= 0) msgs[i] = { ...msgs[i], content: parts }; else msgs.push({ role: "user", content: parts });
+        Object.assign(route, { expert: "vision", model: VISION_MODEL, vision: true,
+          reason: `vision · ${photos.length === 1 ? "a photo" : photos.length + " photos"} attached` });
+        delete route.planLimited;
+        send({ type: "photos", names: photos.map(([n]) => n), thumbs: photos.map(([, p]) => p.dataUrl) });
+      }
       if (route.planLimited) {
         send({ type: "plan", model: route.model, blocked: route.planLimited.model, required: route.planLimited.required,
                text: planNotice(route.model, route.planLimited.required) });
@@ -1179,7 +1289,7 @@
       // context.
       if (opts.brief) convo.push({ role: "system", content: String(opts.brief).slice(0, 4000) });
       if (opts.context) convo.push({ role: "system", content: `Situation on this device:\n${String(opts.context).slice(0, 8000)}` });
-      convo.push(...compact(messages));
+      convo.push(...compact(msgs));
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
@@ -1207,7 +1317,7 @@
           // Plan gate: refused for this account's plan. Once, to the free
           // model; a second refusal there is the account's answer.
           const gate = planGateOf(r.error);
-          if (gate && !planGated && route.model !== freeModel()) {
+          if (gate && !planGated && route.model !== freeModel() && !route.vision) {
             planGated = true; route.model = freeModel();
             send({ type: "plan", model: route.model, blocked: gate.model, required: gate.required, text: planNotice(route.model, gate.required) });
             send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });
@@ -1536,9 +1646,42 @@
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
 
+    intents: { take: takePendingIntent },
     auth: {
       login: signIn,
       logout: async () => { await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config); return { ok: true }; },
+      /* App Store guideline 5.1.1(v): an account a person can create in the app
+         must be one they can delete from the app. The deletion itself lives on
+         the Crowe ID account page (Keycloak's delete_account action), so the
+         phone opens that page in the browser sheet and, when the sheet closes,
+         asks the realm whether this session still exists. A deleted user has no
+         session, the refresh is refused, and the phone forgets its tokens. A
+         person who only looked and closed the sheet refreshes fine and stays
+         signed in. Without a refresh token there is nothing to ask, so the
+         answer is unknown rather than guessed. */
+      deleteAccount: async () => {
+        await ready;
+        const url = `${CROWE_ID}/account/`;
+        const Browser = plugin("Browser");
+        if (!Browser) { window.open(url, "_blank", "noopener"); return { opened: true, deleted: null }; }
+        return new Promise((resolve) => {
+          let handle = null, settled = false;
+          const finish = async () => {
+            if (settled) return;
+            settled = true;
+            try { if (handle) handle.remove(); } catch { /* listener already gone */ }
+            if (!config.refreshToken) { resolve({ opened: true, deleted: null }); return; }
+            const alive = await refreshToken();
+            if (alive) { resolve({ opened: true, deleted: false }); return; }
+            await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config);
+            resolve({ opened: true, deleted: true });
+          };
+          // Promise.resolve for the same reason as in signIn: the injected
+          // bridge returns the handle synchronously, the JS package a promise.
+          Promise.resolve(Browser.addListener("browserFinished", finish)).then((h) => { handle = h; }).catch(() => {});
+          Browser.open({ url, presentationStyle: "popover" }).catch(() => finish());
+        });
+      },
       status: async () => {
         await ready;
         let u = currentUser();
@@ -1601,10 +1744,10 @@
         const tier = u ? String(u.tier || "") : "";
         return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) };
       },
-      catalog: async () => ({ error: "The price list is not readable from the phone. Prices and plans are at crowelogic.com." }),
+      catalog: async () => ({ error: "The plan list is not available in the phone app." }),
       checkout: async () => ({
         ok: false,
-        error: "Subscribing happens on the web or in the desktop app, not in the phone app. Sign in at crowelogic.com with this same Crowe ID and the plan reaches this phone on its next sign-in.",
+        error: "Plans are not sold in the phone app. The plan on your Crowe ID reaches this phone on its next sign-in.",
       }),
       refresh: async () => {
         await ready;

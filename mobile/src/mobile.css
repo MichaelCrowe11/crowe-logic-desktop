@@ -48,6 +48,9 @@ body.mobile .ws-sep, body.mobile #ws-path, body.mobile .cwd,
 body.mobile #hud-branch, body.mobile #glass-launcher,
 body.mobile .dock-tab[data-pane="git"], body.mobile .dock-tab[data-pane="files"],
 body.mobile #panel-add-term, body.mobile #panel-add-system, body.mobile #panel-add-agent,
+/* The browser panel too, for 1.0: an in-app browser is "unrestricted web access" to App Review
+   (a 17+ rating) and the panel only ever drew page headers on a phone. */
+body.mobile #panel-add-browser,
 body.mobile .m-desktop-only { display: none !important; }
 
 /* Execute is the tier that runs commands, and it was hidden here outright
@@ -462,3 +465,10 @@ body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1
   body.mobile #signin, body.mobile #upgrade-pill { white-space: nowrap; padding: 4px 9px; font-size: var(--fs-cap); }
   body.mobile #userbadge { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
+
+/* Photos: the camera button beside the paperclip, photo chips, and the strip
+   of thumbnails that lands in the bubble that sent them. */
+#m-camera { border: none; background: transparent; color: var(--muted); cursor: pointer; }
+.m-attach-chip.is-photo .m-attach-name { color: var(--gold); font-weight: 500; }
+.m-sent-photos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.m-sent-photo { max-width: 48%; max-height: 220px; border-radius: 8px; object-fit: cover; display: block; }

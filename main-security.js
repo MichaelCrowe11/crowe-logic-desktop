@@ -114,6 +114,7 @@ function sanitizeConfigPatch(raw) {
   }
   if (AUTONOMY.has(patch.autonomy)) out.autonomy = patch.autonomy;
   if (APPROVALS.has(patch.approvals)) out.approvals = patch.approvals;
+  if (["reading", "brisk", "instant"].includes(patch.textPace)) out.textPace = patch.textPace;
   for (const [key, max] of [["turnBudgetUsd", 10000], ["turnTokenCap", 10000000]]) {
     const value = Number(patch[key]);
     if (Number.isFinite(value) && value >= 0) out[key] = Math.min(value, max);

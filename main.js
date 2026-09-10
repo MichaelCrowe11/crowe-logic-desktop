@@ -53,6 +53,7 @@ const DEFAULTS = {
   // Which actions stop for an explicit yes, independently of the autonomy tier:
   // off | high-risk (irreversible only) | strict (anything past the working tree).
   approvals: "high-risk",
+  textPace: "brisk",      // reply pace in the transcript: reading | brisk | instant (see renderer TEXT_PACES)
   verifier: true,         // check a mutating turn independently before reporting it done
   turnBudgetUsd: 2,       // hard ceiling on model spend per turn; 0 = no ceiling
   // Backstop for the ceiling above. Dollars are priced from display rates, so a
@@ -1231,7 +1232,7 @@ ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { 
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
-    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
+    approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     mcpServers: c.mcpServers || {},
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
@@ -1244,7 +1245,7 @@ ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   if (patch && patch.mcpServers) await mcpConnectAll();
   if (patch && patch.sense) sensePoller().start();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
-    approvals: c.approvals, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
+    approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 

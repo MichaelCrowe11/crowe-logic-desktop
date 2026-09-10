@@ -50,6 +50,14 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Crowe Logic uses the camera to photograph blocks, bags and plates so CroweLM Vision can read them.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Crowe Logic listens while you dictate a message. Nothing is recorded or kept.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Crowe Logic reads a photo you choose so CroweLM Vision can look at it. Photos are sent once and never stored in the app.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Crowe Logic turns your dictation into text for the message you are writing.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

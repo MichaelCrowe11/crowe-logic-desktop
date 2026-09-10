@@ -2,6 +2,10 @@
   "appId": "com.crowelogic.mobile",
   "appName": "Crowe Logic",
   "webDir": "www",
+  "server": {
+    "hostname": "app.crowelogic.com",
+    "androidScheme": "https"
+  },
   "android": {
     "allowMixedContent": false
   },

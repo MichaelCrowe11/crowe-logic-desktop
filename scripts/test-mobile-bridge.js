@@ -60,10 +60,10 @@ function loadPreloadSurface() {
 // mobile-bridge.js runs in a webview. Give it the smallest globals it touches
 // at load: storage it can write to, a fetch that fails the way an offline
 // device does, and no Capacitor, which is the browser-preview path.
-function loadMobileSurface(fetchImpl) {
+function loadMobileSurface(fetchImpl, capacitor) {
   const store = new Map();
   const win = {
-    Capacitor: null,
+    Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
     CROWE_GROW: require(path.join(root, "grow-schema.js")),
     open: () => {},
@@ -151,7 +151,7 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal"];
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount", "intents.take"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -354,6 +354,168 @@ function methodPaths(surface) {
     const tr = seen.find((e) => e.type === "tool_result");
     assert(tr && /water block 12/.test(String(tr.result)), `read_file phone: answered ${JSON.stringify(tr)}`);
     assert(result.done, "the turn did not finish");
+  });
+
+  await check("a photo rides inside the turn as an image part and goes to Crowe Vision", async () => {
+    // The camera grant: mobile-ui.js downsizes the picture and hands it over
+    // as a data URL; the bridge puts it on the user's message as an image_url
+    // part, routes that turn to crowelm-vision, announces it, and clears it.
+    const asked = [], bodies = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      const body = JSON.parse(init.body || "{}"); asked.push(body.model); bodies.push(body);
+      return new Response(`data: ${JSON.stringify({ delta: { content: "Green Trichoderma, lower left corner. Isolate it." } })}\ndata: [DONE]\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    assert(win.crowePhone.addImage("block.txt", "not an image").error, "a non-image was accepted as a photo");
+    const r = win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    assert(r.ok && win.crowePhone.images().length === 1, `the photo was not held: ${JSON.stringify(r)}`);
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "Is this contamination?" }]);
+    off();
+    assert(asked.join(",") === "crowelm-vision", `asked the gateway for: ${asked.join(", ")}`);
+    const last = bodies[0].messages.filter((m) => m.role === "user").pop();
+    assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
+      && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
+      `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
+    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    const route = seen.find((e) => e.type === "route");
+    assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
+    const photos = seen.find((e) => e.type === "photos");
+    assert(photos && photos.names[0] === "block.jpg" && photos.thumbs[0].startsWith("data:image/jpeg"), "no photos event for the transcript thumbnail");
+    assert(win.crowePhone.images().length === 0, "the photo was not cleared after the turn");
+    assert(result.done && /Trichoderma/.test(result.text), `the turn returned ${JSON.stringify(result)}`);
+    return "image part sent, vision routed, photo cleared";
+  });
+
+  await check("a free account is told Crowe Vision needs a plan, and no text model is asked to see", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (String(url).includes("/api/gateway/catalog")) {
+        return new Response(JSON.stringify({ models: [
+          { model: "crowelm-flash", name: "CroweLM Flash", min_plan: "free" },
+          { model: "crowelm-vision", name: "CroweLM Vision", min_plan: "personal" },
+        ] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asked.push(JSON.parse(init.body || "{}").model);
+      return new Response("data: [DONE]\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.addImage("plate.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64") + ".sig" });
+    await bridge.catalog.get();
+    await new Promise((r) => setTimeout(r, 50));
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "what is this" }]);
+    off();
+    assert(asked.length === 0, `the gateway was asked anyway: ${asked.join(", ")}`);
+    const err = seen.find((e) => e.type === "error");
+    assert(err && /Crowe Vision reads photos on the personal plan/.test(err.text), `the refusal was ${JSON.stringify(err)}`);
+    assert(!result.done && win.crowePhone.images().length === 0, "the photo should be cleared and the turn not done");
+    return "refused in words, nothing sent";
+  });
+
+  await check("the native fallback never asks the gateway to stream, and still reads a stream if handed one", async () => {
+    // Since control plane 0.2.17 the gateway honours stream:true. CapacitorHttp
+    // hands back one finished body, so a fallback that forwards the fetch body
+    // unchanged gets an event stream, fails to parse it as JSON, and shows the
+    // user an empty answer ("Done. See the workspace."). This was every phone
+    // reply on 2026-09-09 until it was fixed.
+    const prefs = new Map();
+    const seen = [];
+    const capacitor = { Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      CapacitorHttp: { request: async (opts) => { seen.push(opts); return { status: 200, data:
+        'data: {"choices":[{"delta":{"content":"Whole "}}]}\ndata: {"choices":[{"delta":{"content":"answer."}}]}\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\ndata: [DONE]\n' }; } },
+    } };
+    const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
+    await bridge.setConfig({ token: "a.b.c" });
+    const result = await bridge.agent.run([{ role: "user", content: "hi" }]);
+    const chat = seen.find((o) => String(o.url).includes("/api/gateway/chat"));
+    assert(chat, "the fallback never reached the gateway");
+    assert(chat.data && chat.data.stream === undefined, `the native body still asked to stream: ${JSON.stringify(chat.data.stream)}`);
+    assert(result.done && result.text === "Whole answer.", `the fallback returned ${JSON.stringify(result)}`);
+    return "stream stripped from the native body; an SSE body is still read";
+  });
+
+  await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
+    // App Store guideline 5.1.1(v). The deletion happens on the account page;
+    // the bridge learns the outcome by asking the realm for a fresh token when
+    // the browser sheet closes. Refused refresh = the user is gone = sign out.
+    // A refresh that succeeds means they only looked, and they stay signed in.
+    const makeCapacitor = (opened, fired) => { const prefs = new Map(); return { Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      Browser: {
+        open: async ({ url }) => { opened.push(url); },
+        addListener: (name, cb) => { fired[name] = cb; return { remove() { fired[name] = null; } }; },
+      },
+    } }; };
+    const tokenAnswer = (body, status = 200) => (url) => Promise.resolve({ status, text: async () => JSON.stringify(body), json: async () => body })
+      .then((r) => { if (!String(url).includes("/protocol/openid-connect/token")) throw new TypeError("unexpected fetch " + url); return r; });
+
+    // 1. The account was deleted: Keycloak refuses the refresh, the phone signs out.
+    let opened = [], fired = {};
+    let bridge = loadMobileSurface(tokenAnswer({ error: "invalid_grant", error_description: "Session not active" }, 400), makeCapacitor(opened, fired));
+    await bridge.setConfig({ token: "a.b.c", refreshToken: "r1" });
+    let pending = bridge.auth.deleteAccount();
+    await new Promise((r) => setTimeout(r, 20));
+    assert(opened.length === 1 && /\/realms\/crowe\/account\/$/.test(opened[0]), `opened ${JSON.stringify(opened)} instead of the account console`);
+    assert(typeof fired.browserFinished === "function", "no browserFinished listener was registered before the sheet opened");
+    fired.browserFinished();
+    let r = await pending;
+    assert(r.deleted === true, `expected deleted:true, got ${JSON.stringify(r)}`);
+    assert((await bridge.auth.status()).user === null, "the phone is still signed in after the account was deleted");
+    assert(!(await bridge.getConfig()).hasToken, "the access token survived the deletion");
+
+    // 2. They only looked: the refresh succeeds and nothing is forgotten.
+    opened = []; fired = {};
+    bridge = loadMobileSurface(tokenAnswer({ access_token: "x.y.z", refresh_token: "r2" }), makeCapacitor(opened, fired));
+    await bridge.setConfig({ token: "a.b.c", refreshToken: "r1" });
+    pending = bridge.auth.deleteAccount();
+    await new Promise((r) => setTimeout(r, 20));
+    fired.browserFinished();
+    r = await pending;
+    assert(r.deleted === false, `expected deleted:false, got ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a look at the account page signed the phone out");
+    return "deleted -> signed out; looked -> still signed in";
+  });
+
+  await check("a Shortcut's note is taken once, dispatched as crowe:intent, and stale notes are dropped", async () => {
+    // CroweIntents.swift writes {kind, text, at} under the Preferences key
+    // `intent`; the bridge reads it on launch and on foreground, clears it, and
+    // hands it to the UI. A second read must find nothing.
+    const prefs = new Map([["intent", JSON.stringify({ kind: "ask", text: "how wet should the substrate be", at: Date.now() })]]);
+    const capacitor = { Plugins: { Preferences: {
+      get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+      set: async ({ key, value }) => { prefs.set(key, value); },
+      remove: async ({ key }) => { prefs.delete(key); },
+    } } };
+    const bridge = loadMobileSurface(fakeGateway([]), capacitor);
+    const win = loadMobileSurface.lastWindow;
+    const seen = [];
+    if (typeof win.addEventListener === "function") win.addEventListener("crowe:intent", (e) => seen.push(e.detail));
+    await new Promise((r) => setTimeout(r, 30));      // the boot read
+    let note = await bridge.intents.take();            // already taken at boot, or taken now
+    assert(!prefs.has("intent"), "the note was not cleared after being taken");
+    assert(seen.length === 1 || note, `expected one crowe:intent (saw ${seen.length}) or a direct note`);
+    if (seen.length) assert(seen[0].kind === "ask" && /substrate/.test(seen[0].text), `wrong detail ${JSON.stringify(seen[0])}`);
+    assert((await bridge.intents.take()) === null, "a second take found a note");
+    prefs.set("intent", JSON.stringify({ kind: "ask", text: "old", at: Date.now() - 11 * 60 * 1000 }));
+    assert((await bridge.intents.take()) === null && !prefs.has("intent"), "a stale note was not dropped");
+    return "taken once, cleared, stale dropped";
   });
 
   await check("a write to a phone: path updates the app's copy and only that", async () => {

@@ -103,12 +103,23 @@ function md(s) {
    so it is skipped outright and the last stretch is written at the base rate.
    The trailing distance is then bounded by construction rather than by hope. */
 const STREAM_CPS = 420, STREAM_LAG_MS = 220;
+/* Reply pace, a setting. "brisk" is the policy above: keep up with the model,
+   never trail it by more than a beat. "reading" is for a phone in a hand:
+   140 characters a second is a fast reader's pace, the backlog is allowed to
+   grow for a full minute before anything is skipped, and the end of the run
+   waits for the typing to finish instead of slamming the rest in. "instant"
+   writes every delta the moment it lands. The desktop defaults to brisk, the
+   phone to reading; both are in Settings under Reply pace. */
+const TEXT_PACES = { brisk: { cps: STREAM_CPS, lagMs: STREAM_LAG_MS }, reading: { cps: 140, lagMs: 60000 } };
+let TEXT_PACE = "brisk";
+function setTextPace(v) { TEXT_PACE = v === "reading" || v === "instant" ? v : "brisk"; }
 function streamRevealLen(shown, total, dtMs) {
   if (shown >= total) return total;
   if (!(dtMs > 0)) return shown;
-  const maxBacklog = (STREAM_CPS * STREAM_LAG_MS) / 1000;
+  const pace = TEXT_PACES[TEXT_PACE] || TEXT_PACES.brisk;
+  const maxBacklog = (pace.cps * pace.lagMs) / 1000;
   const from = Math.max(shown, total - maxBacklog);
-  return Math.min(total, from + Math.max(1, Math.ceil((STREAM_CPS * dtMs) / 1000)));
+  return Math.min(total, from + Math.max(1, Math.ceil((pace.cps * dtMs) / 1000)));
 }
 /* The last blank line that can be committed to the DOM permanently. `from` is
    the previous settled point, which is never inside a code fence, so parity of
@@ -651,6 +662,8 @@ async function send(text, opts = {}) {
     curSaid = document.createElement("div"); curSaid.className = "said streaming";
     tailEl = document.createElement("div"); tailEl.className = "md-tail";
     curSaid.appendChild(tailEl); body.appendChild(curSaid);
+    // A reader who is ahead of the typing taps the block and gets the rest.
+    curSaid.addEventListener("click", () => { shownLen = curText.length; }, { once: false });
     curText = ""; shownLen = 0; settledLen = 0;
   };
   const paint = () => {
@@ -674,11 +687,18 @@ async function send(text, opts = {}) {
   const typeTick = (now) => {
     if (!curSaid) { typerOn = false; return; }
     const dt = lastFrame ? now - lastFrame : 16; lastFrame = now;
-    shownLen = REDUCED_MOTION.matches ? curText.length : streamRevealLen(shownLen, curText.length, dt);
+    shownLen = REDUCED_MOTION.matches || TEXT_PACE === "instant" ? curText.length : streamRevealLen(shownLen, curText.length, dt);
     paint(); scrollBottom();
     if (shownLen >= curText.length) { typerOn = false; lastFrame = 0; return; }
     requestAnimationFrame(typeTick);
   };
+  // Reading pace lets the typing finish before the run is declared settled;
+  // the other paces have nothing left to wait for by the time the run ends.
+  const drainTyper = () => new Promise((resolve) => {
+    if (TEXT_PACE !== "reading") return resolve();
+    const tick = () => ((typerOn && curSaid) ? requestAnimationFrame(tick) : resolve());
+    tick();
+  });
   const pushText = (txt, burst) => {
     if (!txt) return;
     hideThinking(body);
@@ -783,6 +803,7 @@ async function send(text, opts = {}) {
     finishSaid(); settleThinking(body, "fail");
     addError(body, result.error || result.text || "The run was refused.");
   }
+  if (!body.querySelector(".err, .stopped")) await drainTyper();
   finishSaid(); settleThinking(body);
   if (body.querySelector(".err")) setComposerStatus("Failed", "error");
   else if (body.querySelector(".stopped")) setComposerStatus("Stopped", "note");
@@ -1888,6 +1909,7 @@ function abbrevPath(p) {
 function setCwd(c) { if (c) { $("cwd").textContent = c; const w = $("ws-path"); if (w) { w.textContent = abbrevPath(c); w.title = c; } } }
 async function refreshStatus() {
   const c = await window.crowe.getConfig();
+  if (c.textPace) setTextPace(c.textPace);
   setCwd(c.cwd);
   refreshModelBadge(c);
   const total = (c.mcp || []).reduce((n, s) => n + s.tools, 0);
@@ -2042,6 +2064,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-base").value = c.baseUrl; $("cfg-cwd").value = c.cwd || ""; $("cfg-token").value = "";
   $("cfg-auto").checked = Boolean(c.autoApprove);
   $("cfg-approvals").value = c.approvals || "high-risk";
+  if ($("cfg-pace")) $("cfg-pace").value = c.textPace || TEXT_PACE;
   $("cfg-verifier").checked = c.verifier !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-mcp").value = c.mcpServers && Object.keys(c.mcpServers).length ? JSON.stringify(c.mcpServers, null, 2) : "";
@@ -2068,6 +2091,7 @@ $("cfg-save").addEventListener("click", async () => {
   const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked,
     approvals: $("cfg-approvals").value, verifier: $("cfg-verifier").checked,
     turnBudgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 2 };
+  if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   const tok = $("cfg-token").value.trim(); if (tok) patch.token = tok;
   const mcpRaw = $("cfg-mcp").value.trim();
   if (mcpRaw) { try { patch.mcpServers = JSON.parse(mcpRaw); } catch { $("cfg-status").textContent = "MCP JSON is invalid."; return; } }
@@ -2856,6 +2880,16 @@ function growForm(lane, def, rows, refs, editing) {
     // next record has no business overwriting the one this record already has.
     for (const fd of def.fields) if (editing[fd.k] != null) f.elements[fd.k].value = String(editing[fd.k]);
     prefilled.clear(); // nothing here is a guess any more
+    /* A new block's lot code is a default the grower may overwrite (the farm's
+       traceability SOP owns the format). An existing block's lot code is its
+       identity: flushes, readings and journal lines point at it by this string,
+       and a trace joins them on it. Retyping it here would orphan all of them
+       while the record itself lived on, so while editing it is read-only. */
+    if (lane === "blocks" && f.elements.code) {
+      f.elements.code.readOnly = true;
+      f.elements.code.title = "Lot code is this block's identity; flushes and readings point at it. To change it, add the block again under the new code.";
+      f.elements.code.classList.add("locked");
+    }
   } else if (lane === "blocks") { f.elements.code.value = nextLot(rows); prefilled.add("code"); }
   // The button gets its own row rather than trailing whichever field happened to
   // wrap last, so the panel keeps one shape across all seven lanes. The caption
@@ -3866,7 +3900,10 @@ async function maybeShowOnboarding(cfg) {
   signinBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await doSignIn(); });
   const laterBtn = document.createElement("button");
   laterBtn.className = "ghost"; laterBtn.textContent = "Explore first";
-  laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); b.remove(); });
+  // The card is the .body of a message; removing only that left the message's
+  // shell (the mark and an empty body) standing in the transcript as a blank
+  // operator bubble. Remove the message.
+  laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); (b.closest(".msg") || b).remove(); });
   row.appendChild(signinBtn); row.appendChild(laterBtn);
   b.appendChild(row);
   // Platform shells rewrite promises the local desktop can keep but they

@@ -94,6 +94,16 @@ function must(html, needle, what) {
 
 function buildIndex() {
   let html = fs.readFileSync(path.join(root, "renderer", "index.html"), "utf8");
+  // The desktop talks to the gateway from the main process, so its page CSP can
+  // keep connect-src at 'self'. The phone talks from the page: fetch must reach
+  // api.crowelogic.com (the reply streams), id.crowelogic.com (token refresh)
+  // and sense.crowelogic.com. Without this every reply falls back to the
+  // native, whole-body request and arrives in one piece. The other half of
+  // that fix lives on the gateway: its CORS allowlist carries the phone's
+  // capacitor:// and https://localhost origins (control plane 0.2.18).
+  const csp = "connect-src 'self';";
+  if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
+  html = html.replace(csp, "connect-src 'self' https://*.crowelogic.com;");
 
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);

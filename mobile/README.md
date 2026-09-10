@@ -81,6 +81,14 @@ to overwrite the original where it lives, so a changed copy leaves through the
 share sheet, from the chips row above the composer. Text files, 512 KB cap,
 held in memory for the session only.
 
+**Photos, once.** The paperclip also takes a photo from the library, and the
+camera button beside it opens the camera. The picture is downsized on the
+phone (1280 px on the long edge, JPEG) and rides inside the next message as an
+image part; that turn goes to CroweLM Vision whatever the words would have
+routed to, with a brief that asks for what is visible before any verdict on
+contamination. A free Crowe ID is told Vision needs a plan instead of being
+handed to a text model. Photos are never written into the saved session.
+
 **Refused, with a reason.** The shell, the file tree, git, and MCP plugins.
 There is no PTY on iOS or Android, no workspace folder to point at, and no way
 to spawn a plugin server. Those panes state that rather than showing an empty

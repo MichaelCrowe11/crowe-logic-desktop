@@ -173,13 +173,14 @@
     "Show me the last 30 lines of the log and tell me what went wrong",
   ];
   const CULTIVATION_CHIP = "What did I log about contamination this month, and what should I change?";
+  const CULTIVATION_PHOTO_CHIP = "Photograph this block and tell me if that is contamination";
 
   // Three, in the order they earn their place: the machine when there is one,
   // the farm when that space is on, then general reasoning to fill the rest.
   const welcomeChips = () => {
     const chips = [];
     if (isPaired()) chips.push(...MACHINE_CHIPS);
-    if (cultivationOn()) chips.push(CULTIVATION_CHIP);
+    if (cultivationOn()) chips.push(CULTIVATION_PHOTO_CHIP, CULTIVATION_CHIP);
     chips.push(...GENERAL_CHIPS);
     return chips.slice(0, 3);
   };
@@ -303,7 +304,7 @@
     else composerForm.insertBefore(row, composerForm.firstChild);
     const picker = document.createElement("input");
     picker.type = "file"; picker.multiple = true; picker.hidden = true;
-    picker.accept = "text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
+    picker.accept = "image/*,text/*,.md,.txt,.csv,.json,.js,.ts,.py,.html,.css,.yml,.yaml,.toml,.sh,.log";
     const clipBtn = document.createElement("button");
     clipBtn.type = "button"; clipBtn.id = "m-attach"; clipBtn.className = "bar-icon";
     clipBtn.title = "Attach a file from this phone";
@@ -313,17 +314,53 @@
     if (actions) actions.insertBefore(clipBtn, actions.firstChild);
     else if (foot) foot.insertBefore(clipBtn, foot.firstChild);
     composerForm.appendChild(picker);
-    picker.addEventListener("change", async () => {
-      for (const file of picker.files || []) {
+    /* Photos. The same picker accepts them (the Photos library on iOS), and a
+       second input with `capture` opens the camera straight away, which is the
+       gesture at the rack: point at the block, ask what that is. Either way
+       the file is downsized here before it becomes a data URL, so a 4 MB HEIC
+       leaves the phone as a JPEG a few hundred KB wide that the vision tier
+       reads just as well. */
+    const cam = document.createElement("input");
+    cam.type = "file"; cam.accept = "image/*"; cam.hidden = true; cam.setAttribute("capture", "environment");
+    const camBtn = document.createElement("button");
+    camBtn.type = "button"; camBtn.id = "m-camera"; camBtn.className = "bar-icon";
+    camBtn.title = "Photograph a block, bag or plate";
+    camBtn.setAttribute("aria-label", "Photograph a block, bag or plate");
+    camBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+    camBtn.addEventListener("click", () => cam.click());
+    clipBtn.insertAdjacentElement("afterend", camBtn);
+    composerForm.appendChild(cam);
+
+    const PHOTO_EDGE = 1280;
+    async function shrinkPhoto(file) {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close && bitmap.close();
+      return canvas.toDataURL("image/jpeg", 0.82);
+    }
+    async function takeIn(files) {
+      for (const file of files || []) {
+        if (/^image\//.test(file.type) || /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name)) {
+          try {
+            const r = window.crowePhone.addImage(file.name || "photo.jpg", await shrinkPhoto(file));
+            if (r.error) alert(`${file.name}: ${r.error}`);
+          } catch (e) { alert(`${file.name}: this photo could not be read (${String(e && e.message || e).slice(0, 80)})`); }
+          continue;
+        }
         if (file.size > window.crowePhone.max) { alert(`${file.name} is over the ${Math.round(window.crowePhone.max / 1024)} KB cap for attached files.`); continue; }
         const text = await file.text();
         // A null byte means this is not text; the tools would hand the model gibberish.
-        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file. The operator can only read text for now.`); continue; }
+        if (/\u0000/.test(text.slice(0, 4096))) { alert(`${file.name} is not a text file. The operator reads text files and photos.`); continue; }
         const r = window.crowePhone.add(file.name, text);
         if (r.error) alert(`${file.name}: ${r.error}`);
       }
-      picker.value = "";
-    });
+    }
+    picker.addEventListener("change", async () => { await takeIn(picker.files); picker.value = ""; });
+    cam.addEventListener("change", async () => { await takeIn(cam.files); cam.value = ""; });
     const renderRow = () => {
       const files = window.crowePhone.list();
       row.innerHTML = "";
@@ -335,10 +372,36 @@
         chip.querySelector(".m-attach-x").addEventListener("click", () => window.crowePhone.remove(f.name));
         row.appendChild(chip);
       }
-      row.classList.toggle("has-files", files.length > 0);
+      const photos = window.crowePhone.images ? window.crowePhone.images() : [];
+      for (const ph of photos) {
+        const chip = document.createElement("span");
+        chip.className = "m-attach-chip is-photo";
+        chip.innerHTML = `<span class="m-attach-name" title="Goes to CroweLM Vision with your next message">${esc(ph.name)}</span><button type="button" class="m-attach-x" title="Remove ${esc(ph.name)}" aria-label="Remove ${esc(ph.name)}">×</button>`;
+        chip.querySelector(".m-attach-x").addEventListener("click", () => window.crowePhone.remove(ph.name));
+        row.appendChild(chip);
+      }
+      row.classList.toggle("has-files", files.length + photos.length > 0);
     };
     renderRow();
     window.crowePhone.onChange(renderRow);
+    /* The photo leaves the chip row the moment the turn starts; show it in the
+       bubble that asked, so the transcript reads as what was actually sent. */
+    if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+      window.crowe.agent.onEvent((ev) => {
+        if (!ev || ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
+        const bodies = document.querySelectorAll(".msg.user .body");
+        const body = bodies[bodies.length - 1];
+        if (!body) return;
+        const strip = document.createElement("div");
+        strip.className = "m-sent-photos";
+        for (const src of ev.thumbs) {
+          const img = document.createElement("img");
+          img.className = "m-sent-photo"; img.src = src; img.alt = "photo sent to CroweLM Vision";
+          strip.appendChild(img);
+        }
+        body.appendChild(strip);
+      });
+    }
   }
 
   /* The surface composers' placeholders were written for a desktop-width
@@ -365,6 +428,13 @@
     const row = field && field.closest("label");
     if (row) row.classList.add("m-desktop-only");
   }
+  /* The Phone companion section is the desktop's half of pairing: it starts a
+     listener on this machine and draws the QR the phone scans. On the phone it
+     described a Tailscale it could not find, under a heading about a phone it
+     already was. The Remote machine section below is the phone's half. */
+  const companion = $("companion-body") || $("companion-state");
+  const companionSection = companion && companion.closest("section");
+  if (companionSection) companionSection.classList.add("m-desktop-only");
 
   /* Remote machine.
      "Workspace folder" is hidden just above because a phone has no folder. What
@@ -398,6 +468,107 @@
   ].join("");
   const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
   if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
+
+  /* Account deletion, App Store guideline 5.1.1(v). The deletion happens on
+     the Crowe ID account page, which the bridge opens in the browser sheet;
+     when the sheet closes the bridge finds out whether the account is still
+     there and signs the phone out if it is not. Phone-only for the same reason
+     as the section above: the desktop has its own account surface. */
+  /* Siri and Shortcuts. "Ask Crowe Logic <question>" sends the question as a
+     turn; "Log a block" opens the grow log on the Blocks lane with the note in
+     the form. The note arrives from the bridge as crowe:intent (see
+     takePendingIntent), on launch and on every return to the foreground. */
+  window.addEventListener("crowe:intent", (e) => {
+    const d = (e && e.detail) || {};
+    if (d.kind === "ask" && d.text) {
+      __tapTab("Chat");
+      if (typeof send === "function") { send(d.text); }
+      else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
+    } else if (d.kind === "log-block") {
+      __tapTab("Cultivation");
+      const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');
+      if (blocks) blocks.click();
+      setTimeout(() => {
+        const form = document.querySelector("#lane-body form.grow-add");
+        if (!form) return;
+        if (d.text && form.elements.notes) form.elements.notes.value = d.text;
+        const first = form.elements.species || form.querySelector("input,select");
+        if (first) first.focus();
+      }, 350);
+    }
+  });
+  function __tapTab(label) {
+    const tab = [...document.querySelectorAll("#m-tabs .m-tab")].find((t) => t.textContent.trim() === label);
+    if (tab) tab.click();
+  }
+
+  /* Dictation. WKWebView exposes webkitSpeechRecognition but the recogniser
+     behind it never starts (WebKit 239816), so the desktop handler would light
+     the button and fail. On the phone the button drives CroweSpeech, a small
+     native plugin in the app target over Apple's speech recogniser, and writes
+     into the composer exactly as the desktop handler does: appended to what is
+     already typed, one input event per partial result. */
+  const Speech = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CroweSpeech;
+  const dictBtn = $("voice-input"), dictInput = $("input");
+  const say = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
+  if (dictBtn && dictInput && Speech && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    dictBtn.classList.remove("unavailable"); dictBtn.removeAttribute("aria-disabled"); dictBtn.title = "Dictate with microphone";
+    let listening = false, base = "";
+    const stopped = () => {
+      listening = false;
+      dictBtn.classList.remove("active"); dictBtn.setAttribute("aria-pressed", "false");
+      const st = $("composer-status");
+      if (st && st.dataset.state === "listening") say("Ready");
+    };
+    Promise.resolve(Speech.addListener("partialResults", (d) => {
+      const heard = d && Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
+      dictInput.value = (base + " " + heard).trim();
+      dictInput.dispatchEvent(new Event("input"));
+    })).catch(() => {});
+    Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
+    dictBtn.onclick = async () => {
+      if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
+      let perm = { speechRecognition: "denied" };
+      try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
+      if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }
+      let avail = { available: false };
+      try { avail = await Speech.available(); } catch { /* answered below */ }
+      if (!avail.available) { say("Dictation is not available on this phone right now", "error"); return; }
+      base = dictInput.value.trim(); listening = true;
+      dictBtn.classList.add("active"); dictBtn.setAttribute("aria-pressed", "true"); say("Listening", "listening");
+      try { await Speech.start({ language: "en-US", partialResults: true }); }
+      catch (e) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); }
+    };
+  } else if (dictBtn && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    // No native recogniser in this build: say so instead of lighting a button that fails.
+    dictBtn.classList.add("unavailable"); dictBtn.setAttribute("aria-disabled", "true"); dictBtn.title = "Dictation is not available in this build";
+    dictBtn.onclick = () => say("Dictation is not available in this build", "error");
+  }
+
+  const accountSection = document.createElement("section");
+  accountSection.className = "key-manager m-account";
+  accountSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Your Crowe ID</b>',
+    "<span>Deleting your Crowe ID removes the account and everything kept under it, including any plan on it, and cannot be undone. ",
+    "This opens your account page; choose Delete account there. The phone signs out on its own once the account is gone.</span></div></div>",
+    '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
+  ].join("");
+  if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+  const deleteBtn = $("m-delete-account");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      const sure = window.confirm("Delete your Crowe ID?\n\nYour account page opens next. Choose Delete account there. This cannot be undone.");
+      if (!sure) return;
+      deleteBtn.disabled = true;
+      let r = null;
+      try { r = await window.crowe.auth.deleteAccount(); } catch { r = null; }
+      deleteBtn.disabled = false;
+      if (r && r.deleted) {
+        if (typeof refreshAuth === "function") { try { await refreshAuth(); } catch { /* the badge redraws on next load */ } }
+        window.alert("Your Crowe ID has been deleted and this phone is signed out.");
+      }
+    });
+  }
 
   /* One class on <body> is what the rest of the phone UI reads to know a
      machine is paired: the CSS uses it to reveal the Execute tier, the
