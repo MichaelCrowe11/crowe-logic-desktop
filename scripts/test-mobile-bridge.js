@@ -422,6 +422,42 @@ function methodPaths(surface) {
     return "2 regions lifted before the first delta; transcript clean";
   });
 
+  await check("the owner account is asked for a REASONING line and gets it as its own event; a customer is asked for neither", async () => {
+    const mk = (email) => {
+      const bodies = [];
+      const bridge = loadMobileSurface(async (url, init = {}) => {
+        if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+        bodies.push(JSON.parse(init.body || "{}"));
+        const frames = ['REGIONS: [{"label":"Substrate face","x":0.1,"y":0.2,"w":0.5,"h":0.5}]\n', 'REASONING: The face is uniformly white with no ', 'green, so contamination is ruled out; the caps are still curled, so it is not past peak.\n\n', 'Healthy. Harvest today.'];
+        return new Response(frames.map((c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n`).join("") + "data: [DONE]\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+      });
+      return { bridge, bodies, win: loadMobileSurface.lastWindow, tok: "header." + Buffer.from(JSON.stringify({ email, tier: "enterprise", exp: 9999999999 })).toString("base64") + ".sig" };
+    };
+    // owner
+    let { bridge, bodies, win, tok } = mk("michael@crowelogic.com");
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: tok });
+    let seen = []; let off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    let result = await bridge.agent.run([{ role: "user", content: "Look at this." }]); off();
+    assert(/REASONING:/.test(bodies[0].messages[0].content), "the owner's system prompt did not ask for the reasoning line");
+    const reason = seen.find((e) => e.type === "vision_reasoning");
+    assert(reason && /ruled out/.test(reason.text) && /not past peak/.test(reason.text), `no reasoning event for the owner: ${JSON.stringify(reason)}`);
+    let deltas = seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("");
+    assert(!/REASONING|REGIONS/.test(deltas) && deltas === "Healthy. Harvest today.", `owner transcript carried: ${JSON.stringify(deltas)}`);
+    assert(result.text === "Healthy. Harvest today.", `owner final text: ${JSON.stringify(result.text)}`);
+    // customer
+    ({ bridge, bodies, win, tok } = mk("grower@example.com"));
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: tok });
+    seen = []; off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    result = await bridge.agent.run([{ role: "user", content: "Look at this." }]); off();
+    assert(!/REASONING:/.test(bodies[0].messages[0].content), "a customer's system prompt asked for reasoning");
+    assert(!seen.some((e) => e.type === "vision_reasoning"), "a customer received a reasoning event");
+    deltas = seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("");
+    assert(!/REASONING|REGIONS/.test(deltas), `customer transcript carried: ${JSON.stringify(deltas)}`);
+    return "owner: asked, lifted, shown; customer: not asked, nothing shown, transcript clean either way";
+  });
+
   await check("a vision reply with no REGIONS line streams untouched", async () => {
     const bridge = loadMobileSurface(async (url, init = {}) => {
       if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });

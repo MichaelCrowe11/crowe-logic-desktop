@@ -826,6 +826,7 @@
      as its own event, so the phone can draw what the model examined while the
      rest of the answer is still arriving. */
   const REGIONS_RE = /^\s*REGIONS:\s*(\[[\s\S]*?\])[ \t]*\r?\n?/;
+  const REASONING_RE = /^\s*REASONING:\s*([^\n]*)\r?\n?/;
   const clamp01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0; };
   function parseRegions(json) {
     try {
@@ -839,15 +840,20 @@
   }
   function stripRegions(text) {
     const m = REGIONS_RE.exec(text || "");
-    if (!m) return { text: text || "", regions: null, had: false };
-    return { text: (text || "").slice(m[0].length).replace(/^[ \t]*\r?\n/, ""), regions: parseRegions(m[1]), had: true };
+    if (!m) return { text: text || "", regions: null, reasoning: null, had: false };
+    let rest = (text || "").slice(m[0].length).replace(/^[ \t]*\r?\n/, "");
+    let reasoning = null;
+    const r = REASONING_RE.exec(rest);
+    if (r) { reasoning = r[1].trim().slice(0, 900) || null; rest = rest.slice(r[0].length).replace(/^[ \t]*\r?\n/, ""); }
+    return { text: rest, regions: parseRegions(m[1]), reasoning, had: true };
   }
-  function regionsFilter(onRegions, onDelta) {
+  function regionsFilter(onRegions, onDelta, onReasoning) {
     let buf = "", decided = false, swallow = false;
     const decide = () => {
       decided = true;
       const sr = stripRegions(buf);
       if (sr.regions) onRegions(sr.regions);
+      if (sr.reasoning && onReasoning) onReasoning(sr.reasoning);
       let rest = sr.had ? sr.text : buf;
       buf = "";
       // The blank line after the map may land in a later chunk; drop leading
@@ -866,12 +872,27 @@
         // Hold only while the text could still be the REGIONS line: an
         // unfinished prefix of the keyword, or the line itself before its newline.
         const couldBe = head === "" || "REGIONS:".startsWith(head.slice(0, 8)) || /^REGIONS:/.test(head);
-        if (!couldBe || buf.length > 800) { decide(); return; }
-        if (/^REGIONS:/.test(head) && /\n/.test(head)) decide();
+        if (!couldBe || buf.length > 2000) { decide(); return; }
+        if (/^REGIONS:/.test(head) && /\n/.test(head)) {
+          // Past the map. If a REASONING line follows (owner accounts), wait for
+          // its newline too; otherwise the answer has started and we decide now.
+          const after = head.replace(REGIONS_RE, "").replace(/^\s+/, "");
+          if (after === "" || "REASONING:".startsWith(after.slice(0, 10))) { if (buf.length > 2000) decide(); return; }
+          if (/^REASONING:/.test(after) && !/\n/.test(after)) return;
+          decide();
+        }
       },
       flush() { if (!decided) decide(); },
     };
   }
+  /* The owner account sees the model's stated reasoning under a vision scan;
+     nobody else is asked for it, so nobody else can receive it. */
+  const OWNER_EMAILS = new Set(["michael@crowelogic.com", "mike@southwestmushrooms.com"]);
+  const isOwner = () => { const u = currentUser(); return Boolean(u && OWNER_EMAILS.has(String(u.email || "").trim().toLowerCase())); };
+  const VISION_REASONING_BRIEF = [
+    "After the REGIONS line and before the answer, add exactly one line REASONING: followed by two or three sentences on how you",
+    "weighed what the photo shows, what you ruled out and why, and where you are unsure. Then a blank line, then the answer.",
+  ].join("\n");
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
     const key = String(plan || "").trim().toLowerCase();
@@ -1267,7 +1288,7 @@
       "You are Crowe Logic, running on the user's phone.",
       machine,
       attached,
-      route.vision ? "\n" + VISION_BRIEF : "",
+      route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
       "",
       "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
       "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
@@ -1363,13 +1384,15 @@
 
         run.controller = new AbortController();
         const emitDelta = (chunk) => send({ type: "assistant_delta", text: chunk });
-        const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta) : null;
+        const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta,
+          (reasoning) => { if (isOwner()) send({ type: "vision_reasoning", text: reasoning }); }) : null;
         const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
         if (filt) {
           filt.flush();
           if (typeof r.content === "string") {
             const sr = stripRegions(r.content);
             if (sr.regions && !r.streamed) send({ type: "vision_regions", regions: sr.regions });
+            if (sr.reasoning && !r.streamed && isOwner()) send({ type: "vision_reasoning", text: sr.reasoning });
             r.content = sr.text;
           }
         }

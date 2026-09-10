@@ -171,7 +171,7 @@
     const upcoming = (reminders || []).filter((r) => r.at > Date.now() - 3600000).slice(0, 6);
     homePane.innerHTML = [
       '<div class="m-home-inner">',
-      `<header class="m-home-head"><h1>Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
+      `<header class="m-home-head"><div class="m-kicker">Grow log · this phone</div><h1 class="m-title">Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
       rows.length ? '<section class="m-home-sec" id="m-home-blocks"><h2>Blocks by stage</h2>' + rows.map((b) => `<div class="m-lot" data-lot="${esc(b.code)}"><div class="m-lot-main"><b>${esc(b.code)}</b><span class="m-lot-name">${esc([b.species, b.strain].filter(Boolean).join(" · "))}</span><span class="m-stage m-stage-${esc(b.stage || "")}">${esc(b.stage || "")}</span></div><div class="m-lot-meta">${b.spawned ? esc(sinceDays(b.spawned)) + " since spawn" : ""}${b.count ? ` · ${esc(String(b.count))}×` : ""}${b.room ? ` · ${esc(b.room)}` : ""}</div>${yieldLine(b, byLot) ? `<div class="m-lot-yield">${esc(yieldLine(b, byLot))}</div>` : ""}<div class="m-lot-actions"><button type="button" class="ghost sm m-remind" data-lot="${esc(b.code)}" data-species="${esc(b.species || "")}" data-stage="${esc(b.stage || "")}">Remind me</button><button type="button" class="ghost sm m-check" data-lot="${esc(b.code)}">Photograph</button></div></div>`).join("") + "</section>" : "",
       '<section class="m-home-sec" id="m-home-reminders"><h2>Reminders</h2>' + (upcoming.length ? upcoming.map((r) => `<div class="m-rem"><div><b>${esc(r.title)}</b><div class="m-lot-meta">${esc(new Date(r.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${r.body ? " · " + esc(r.body) : ""}</div></div><button type="button" class="ghost sm m-rem-x" data-id="${r.id}">Remove</button></div>`).join("") : '<p class="m-home-empty">None set. Tap Remind me on a block.</p>') + "</section>",
       roll.length ? '<section class="m-home-sec"><h2>Camera checks</h2>' + roll.slice(0, 4).map(rollCard).join("") + "</section>" : "",
@@ -195,19 +195,38 @@
   }
 
   const VISION_PROMPT = "Look at this photo of my block. Tell me what stage it is at, whether you see contamination or another problem, and what I should do next.";
+  /* The Camera tab reads as a field inspection: a specimen frame with the last
+     capture on file, a numbered capture protocol, and a ledger of findings
+     against lots. The register is the Log's: mono kickers, a serif title,
+     hairline rows. Nothing here claims more than one photo can carry. */
+  const verdictKind = (v) => /contamin|trichoderma|mold|mould|bacteri|cobweb|discard|isolate/i.test(v) ? "bad" : /harvest|ready|pins|pinning|fruit|cluster/i.test(v) ? "gold" : /healthy|clean|no contamination|colonis|coloniz/i.test(v) ? "myc" : "neutral";
+  const firstSentence = (v) => { const t = String(v || "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
+  const fmtDay = (ts) => new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
   async function renderCamera() {
     const roll = window.crowe && window.crowe.camera ? await window.crowe.camera.list().catch(() => []) : [];
+    const last = roll[0];
     cameraPane.innerHTML = [
       '<div class="m-home-inner">',
-      '<header class="m-home-head"><h1>Point the camera at a block</h1><p class="m-home-sub">CroweLM Vision, running Claude Fable 5.1, reads the photo and answers in Chat. One tap logs the verdict against a lot.</p></header>',
-      pendingLot ? `<p class="m-cam-lot">Checking <b>${esc(pendingLot)}</b></p>` : "",
-      '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div>',
-      roll.length ? '<section class="m-home-sec"><h2>Checked</h2>' + roll.slice(0, 12).map(rollCard).join("") + "</section>" : '<p class="m-home-empty">Nothing checked yet.</p>',
+      '<header class="m-fi-head"><div class="m-kicker">Field inspection · CroweLM Vision</div><h1 class="m-title">Photograph a block</h1>',
+      '<p class="m-home-sub">The block face is read by CroweLM Vision, running Claude Fable 5.1. Each check returns a graded finding, marked on the photo, and is recorded against its lot.</p></header>',
+      `<section class="m-fi-frame${last ? "" : " is-empty"}"><div class="m-fi-view">`,
+      last && last.thumb ? `<img class="m-fi-img" src="${last.thumb}" alt="last capture">` : "",
+      '<div class="m-fi-lattice"></div><i class="m-fi-c c1"></i><i class="m-fi-c c2"></i><i class="m-fi-c c3"></i><i class="m-fi-c c4"></i><i class="m-fi-cross"></i>',
+      last ? `<div class="m-fi-meta"><span>Last check</span><span>${esc(last.lot || "no lot")}</span><span>${esc(fmtDay(last.ts))}</span></div>` : '<div class="m-fi-empty"><span class="m-kicker">Specimen</span>No capture on file.<br>Frame the block face and photograph it.</div>',
+      pendingLot ? `<div class="m-fi-lot">Checking lot <b>${esc(pendingLot)}</b></div>` : "",
+      "</div>",
+      '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div></section>',
+      '<section class="m-fi-sec"><h2 class="m-kicker">Capture protocol</h2><ol class="m-fi-protocol"><li>Fill the frame with the block face.</li><li>Even light. No flash glare on the bag.</li><li>Include the lot tag when there is one.</li><li>One block per photo.</li></ol></section>',
+      '<section class="m-fi-sec"><h2 class="m-kicker">Inspection ledger</h2>',
+      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Lot</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "no lot")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<p>${esc(c.verdict || "")}</p></div>`).join("") + "</div>" : '<p class="m-home-empty">No inspections recorded on this phone.</p>',
+      "</section>",
+      '<p class="m-fi-note">A finding is the model\'s reading of one image. It informs a hands-on inspection; it does not replace one.</p>',
       "</div>",
     ].join("");
     const camInput = () => document.querySelector('input[type="file"][accept="image/*"]');
     cameraPane.querySelector(".m-cam-shoot").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.setAttribute("capture", "environment"); i.click(); });
     cameraPane.querySelector(".m-cam-pick").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.removeAttribute("capture"); i.click(); setTimeout(() => i.setAttribute("capture", "environment"), 1500); });
+    cameraPane.querySelectorAll(".m-ledger-row").forEach((row) => row.addEventListener("click", () => { const d = row.nextElementSibling; if (d) d.hidden = !d.hidden; row.classList.toggle("is-open", d && !d.hidden); }));
   }
 
   /* A photo taken from the Camera tab becomes a chat turn on its own: the photo
@@ -220,6 +239,10 @@
       if (!photos.length) return;
       cameraArmed = false;
       photoTurn = { lot: pendingLot, thumb: "" };
+      // The transcript is the chat space's; from Camera the space may still be
+      // Log, whose lane surface would hide the scan and the answer.
+      const chatBtn = spaceButtons().find((b) => b.dataset.space === "chat");
+      if (chatBtn && body.dataset.space !== "chat") chatBtn.click();
       setPane("agent");
       const q = pendingLot ? `${VISION_PROMPT} This is lot ${pendingLot}.` : VISION_PROMPT;
       if (typeof send === "function") send(q);
@@ -239,8 +262,10 @@
       const text = String(ev.text || "").trim(); if (!text) return;
       const bodies = document.querySelectorAll(".msg.assistant .body"); const body = bodies[bodies.length - 1]; if (!body) return;
       const blocks = live(await window.crowe.grow.list("blocks").catch(() => []));
+      // The lot the check came from; else the only lot; else the fruiting one, which is the one usually photographed.
+      const pick = turn.lot || (blocks.length === 1 ? blocks[0].code : ((blocks.find((b) => b.stage === "fruiting") || {}).code || ""));
       const row = document.createElement("div"); row.className = "m-log-row";
-      row.innerHTML = `<select aria-label="Lot">${blocks.map((b) => `<option value="${esc(b.code)}"${b.code === turn.lot ? " selected" : ""}>${esc(b.code)}${b.species ? " · " + esc(b.species) : ""}</option>`).join("")}<option value=""${turn.lot ? "" : " selected"}>No lot</option></select><button type="button" class="primary sm m-log-it">Log this check</button><button type="button" class="ghost sm m-log-skip">Not now</button>`;
+      row.innerHTML = `<select aria-label="Lot">${blocks.map((b) => `<option value="${esc(b.code)}"${b.code === pick ? " selected" : ""}>${esc(b.code)}${b.species ? " · " + esc(b.species) : ""}</option>`).join("")}<option value=""${pick ? "" : " selected"}>No lot</option></select><button type="button" class="primary sm m-log-it">Log this check</button><button type="button" class="ghost sm m-log-skip">Not now</button>`;
       body.appendChild(row);
       row.querySelector(".m-log-skip").addEventListener("click", () => row.remove());
       row.querySelector(".m-log-it").addEventListener("click", async () => {
@@ -517,48 +542,101 @@
        where they are, with their labels, so the reading is watched, not waited
        for. The boxes stay when the answer lands; a tap on the photo hides them. */
     let activeScan = null;
+    const REGION_KIND = [
+      [/trich|mold|mould|contam|bacter|slim|wet spot|blotch|rot|green patch|black|yellow stain|cobweb/i, "bad"],
+      [/pin|primordia|fruit|cap|cluster|harvest|bouquet|stem|gill/i, "gold"],
+      [/mycel|substrate|coloni|white|healthy|block|bag|agar|grain|surface/i, "myc"],
+    ];
+    const regionKind = (label) => (REGION_KIND.find(([re]) => re.test(label)) || [null, "neutral"])[1];
     function beginScan(strip, img) {
       strip.classList.add("m-scan");
-      const wrap = document.createElement("div"); wrap.className = "m-scan-wrap";
+      const wrap = document.createElement("div"); wrap.className = "m-scan-wrap m-scan-sending";
       img.classList.add("m-scan-photo");
       wrap.appendChild(img);
-      const sweep = document.createElement("div"); sweep.className = "m-scan-sweep"; wrap.appendChild(sweep);
-      const grid = document.createElement("div"); grid.className = "m-scan-grid"; wrap.appendChild(grid);
+      for (const cls of ["m-scan-lattice", "m-scan-sweep"]) { const el = document.createElement("div"); el.className = cls; wrap.appendChild(el); }
       const boxes = document.createElement("div"); boxes.className = "m-scan-boxes"; wrap.appendChild(boxes);
-      const cap = document.createElement("div"); cap.className = "m-scan-cap"; cap.textContent = "CroweLM Vision is reading the photo";
-      strip.appendChild(wrap); strip.appendChild(cap);
+      const tiles = document.createElement("div"); tiles.className = "m-scan-tiles"; tiles.hidden = true;
+      const cap = document.createElement("div"); cap.className = "m-scan-cap"; cap.innerHTML = '<span class="m-scan-dot"></span><span class="m-scan-cap-text">Sending the photo to CroweLM Vision</span>';
+      strip.appendChild(wrap); strip.appendChild(tiles); strip.appendChild(cap);
       const fit = () => { if (img.naturalWidth && img.naturalHeight) wrap.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`; };
       if (img.complete) fit(); else img.addEventListener("load", fit, { once: true });
       wrap.addEventListener("click", () => wrap.classList.toggle("m-scan-hide"));
-      activeScan = { strip, wrap, boxes, cap, regions: [] };
+      activeScan = { strip, wrap, img, boxes, tiles, cap, regions: [], reading: false };
+    }
+    const scanSay = (text) => { if (activeScan) activeScan.cap.querySelector(".m-scan-cap-text").textContent = text; };
+    /* The dissection: one tile per reported area, cut from the photo itself at
+       the model's coordinates with a little margin, so the reading can be
+       inspected part by part. Tapping a tile lights its box. */
+    function cutTiles() {
+      const sc = activeScan; if (!sc || !sc.regions.length || !sc.img.naturalWidth) return;
+      sc.tiles.innerHTML = ""; sc.tiles.hidden = false;
+      const W = sc.img.naturalWidth, H = sc.img.naturalHeight;
+      sc.regions.forEach((r, i) => {
+        const pad = 0.06;
+        const x0 = Math.max(0, (r.x - pad) * W), y0 = Math.max(0, (r.y - pad) * H);
+        const x1 = Math.min(W, (r.x + r.w + pad) * W), y1 = Math.min(H, (r.y + r.h + pad) * H);
+        const side = Math.max(x1 - x0, y1 - y0, 24);
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const sx = Math.max(0, Math.min(W - side, cx - side / 2)), sy = Math.max(0, Math.min(H - side, cy - side / 2));
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = 240;
+        try { canvas.getContext("2d").drawImage(sc.img, sx, sy, Math.min(side, W - sx), Math.min(side, H - sy), 0, 0, 240, 240); } catch { /* a tainted or unloaded image: no tile */ return; }
+        const tile = document.createElement("button"); tile.type = "button"; tile.className = `m-scan-tile m-r-${regionKind(r.label)}`; tile.style.animationDelay = `${i * 120}ms`;
+        tile.appendChild(canvas);
+        const lab = document.createElement("span"); lab.className = "m-scan-tile-label"; lab.textContent = r.label; tile.appendChild(lab);
+        tile.addEventListener("click", () => {
+          const on = tile.classList.toggle("is-focus");
+          sc.tiles.querySelectorAll(".m-scan-tile").forEach((t) => { if (t !== tile) t.classList.remove("is-focus"); });
+          sc.boxes.querySelectorAll(".m-scan-box").forEach((b, j) => b.classList.toggle("is-focus", on && j === i));
+          sc.wrap.classList.toggle("m-scan-focus", on);
+        });
+        sc.tiles.appendChild(tile);
+      });
     }
     function scanRegions(regions) {
       if (!activeScan) return;
+      activeScan.wrap.classList.remove("m-scan-sending");
       activeScan.boxes.innerHTML = "";
       activeScan.regions = regions;
       regions.forEach((r, i) => {
-        const box = document.createElement("div"); box.className = "m-scan-box";
+        const box = document.createElement("div"); box.className = `m-scan-box m-r-${regionKind(r.label)}`;
         box.style.left = `${(r.x * 100).toFixed(2)}%`; box.style.top = `${(r.y * 100).toFixed(2)}%`;
         box.style.width = `${(r.w * 100).toFixed(2)}%`; box.style.height = `${(r.h * 100).toFixed(2)}%`;
         box.style.animationDelay = `${i * 260}ms`;
-        const label = document.createElement("span"); label.className = "m-scan-label"; label.textContent = r.label;
-        if (r.y > 0.85) label.classList.add("above");
+        box.innerHTML = '<i class="c c1"></i><i class="c c2"></i><i class="c c3"></i><i class="c c4"></i>';
+        const label = document.createElement("span"); label.className = "m-scan-label"; label.textContent = `${i + 1}  ${r.label}`;
+        if (r.y < 0.12) label.classList.add("below");
         box.appendChild(label);
         activeScan.boxes.appendChild(box);
       });
-      activeScan.cap.textContent = regions.length ? "Looking at: " + regions.map((r) => r.label).join(", ") : "CroweLM Vision is reading the photo";
+      scanSay(regions.length ? "Looking at " + regions.map((r) => r.label.toLowerCase()).join(", ") : "Reading the photo");
+      if (activeScan.img.complete && activeScan.img.naturalWidth) cutTiles(); else activeScan.img.addEventListener("load", cutTiles, { once: true });
+    }
+    function scanReading() {
+      if (!activeScan || activeScan.reading) return;
+      activeScan.reading = true;
+      activeScan.wrap.classList.remove("m-scan-sending");
+      if (!activeScan.regions.length) scanSay("Reading the photo");
+    }
+    function scanReasoning(text) {
+      if (!activeScan || !text) return;
+      const d = document.createElement("details"); d.className = "m-scan-reason";
+      d.innerHTML = `<summary>Reasoning<span class="m-scan-reason-tag">owner view</span></summary><p>${esc(text)}</p>`;
+      activeScan.strip.appendChild(d);
     }
     function endScan(how) {
       if (!activeScan) return;
       activeScan.strip.classList.add("m-scan-done");
-      activeScan.cap.textContent = how === "error" ? "The photo could not be read." : how === "stopped" ? "Stopped." :
-        (activeScan.regions.length ? "Read. Tap the photo to hide the marks." : "Read.");
+      activeScan.wrap.classList.remove("m-scan-sending");
+      scanSay(how === "error" ? "The photo could not be read." : how === "stopped" ? "Stopped." :
+        (activeScan.regions.length ? `Read. ${activeScan.regions.length} area${activeScan.regions.length === 1 ? "" : "s"} marked; tap the photo to hide them.` : "Read."));
       activeScan = null;
     }
     if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
       window.crowe.agent.onEvent((ev) => {
         if (!ev) return;
         if (ev.type === "vision_regions" && Array.isArray(ev.regions)) { scanRegions(ev.regions); return; }
+        if (ev.type === "vision_reasoning" && typeof ev.text === "string") { scanReasoning(ev.text); return; }
+        if (ev.type === "assistant_delta") { scanReading(); return; }
         if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
         if (ev.type === "error") { endScan("error"); return; }
         if (ev.type === "stopped") { endScan("stopped"); return; }
