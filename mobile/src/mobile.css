@@ -472,3 +472,137 @@ body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1
 .m-attach-chip.is-photo .m-attach-name { color: var(--gold); font-weight: 500; }
 .m-sent-photos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .m-sent-photo { max-width: 48%; max-height: 220px; border-radius: 8px; object-fit: cover; display: block; }
+
+/* ── 1.1: Home and Camera, the phone's own panes ──────────────────────────────
+   Two sections that sit beside the workbench and the surfaces. The tab bar
+   chooses one pane at a time; while Home or Camera is up, the conversation, the
+   surfaces and the HUD are off screen rather than merely covered. */
+body.mobile .m-pane { display: none; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 104px; min-height: 0; }
+body.mobile[data-pane="home"] #m-home-pane, body.mobile[data-pane="camera"] #m-camera-pane { display: block; }
+body.mobile[data-pane="home"] #workbench, body.mobile[data-pane="home"] .surface, body.mobile[data-pane="home"] #hud,
+body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .surface, body.mobile[data-pane="camera"] #hud { display: none !important; }
+.m-home-inner { padding: 22px 16px 26px; }
+.m-home-head h1 { font-size: 1.45rem; margin: 0 0 6px; }
+.m-home-sub, .m-home-empty, .m-cam-lot { color: var(--muted, #8b8b93); margin: 0 0 16px; }
+.m-home-sec { margin: 18px 0 0; }
+.m-home-sec h2 { font-size: 0.74rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted, #8b8b93); margin: 0 0 8px; font-weight: 600; }
+.m-lot, .m-rem, .m-roll, .m-sess { border: 1px solid rgba(127, 127, 140, 0.25); border-radius: 12px; padding: 11px 13px; margin-bottom: 8px; }
+.m-lot-main { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.m-lot-name, .m-lot-meta { color: var(--muted, #8b8b93); }
+.m-lot-meta { font-size: 0.85rem; margin-top: 3px; }
+.m-lot-yield { margin-top: 5px; font-size: 0.92rem; }
+.m-lot-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.m-stage { margin-left: auto; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; color: var(--muted, #8b8b93); }
+.m-stage-fruiting { color: var(--gold, #d2ad62); }
+.m-stage-colonizing, .m-stage-consolidating { color: var(--ink, inherit); }
+.m-rem { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.m-roll { display: flex; gap: 12px; align-items: flex-start; }
+.m-roll-thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 9px; flex: none; }
+.m-roll-verdict { font-size: 0.9rem; margin-top: 3px; }
+.m-cam-actions { display: flex; gap: 10px; margin: 6px 0 20px; }
+.m-cam-actions .primary { flex: 1; min-height: 50px; font-size: 1rem; }
+.m-cam-actions .ghost { min-height: 50px; }
+.m-log-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.m-log-row select { min-height: 40px; max-width: 60%; }
+.m-log-done { color: var(--muted, #8b8b93); font-size: 0.9rem; margin-top: 8px; }
+
+/* ── The vision scan ─────────────────────────────────────────────────────────
+   The photo the model was given sits large in the bubble that sent it. Under
+   it a gold hairline sweeps over a faint hexagonal lattice, the brand's
+   mycelial geometry, while the model reads. The areas the model reports
+   examining arrive as reticle marks with mono labels, colored by what they
+   are: brick for trouble, gold for fruit, mycelium green for healthy growth.
+   Below the photo each area is cut out of the photo itself as a tile. Once the
+   answer lands the sweep stops and the marks stay; a tap on the photo hides
+   them, a tap on a tile lights its mark. */
+.m-sent-photos.m-scan { display: block; }
+.m-scan-wrap { position: relative; width: 100%; max-height: 380px; aspect-ratio: 4 / 3; border-radius: 12px; overflow: hidden; background: #0a0a0b; border: 1px solid rgba(210, 173, 98, 0.28); cursor: pointer; }
+.m-scan-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; max-width: none; max-height: none; border-radius: 0; }
+.m-scan-lattice { position: absolute; inset: 0; pointer-events: none; opacity: 0.22;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'><path d='M28 1 55 16.5v31L28 63 1 47.5v-31Zm0 33L55 49.5v31L28 96 1 80.5v-31Z' fill='none' stroke='%23d2ad62' stroke-width='1'/></svg>");
+  background-size: 56px 97px; mix-blend-mode: screen; }
+.m-scan-sweep { position: absolute; left: 0; right: 0; top: -22%; height: 22%; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(210, 173, 98, 0) 0%, rgba(210, 173, 98, 0.10) 70%, rgba(210, 173, 98, 0.85) 99%, rgba(255, 244, 214, 1) 100%);
+  animation: m-scan-sweep 1.9s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+.m-scan-sending .m-scan-sweep { animation-duration: 2.6s; }
+.m-scan-done .m-scan-sweep, .m-scan-done .m-scan-lattice { display: none; }
+@keyframes m-scan-sweep { from { transform: translateY(0); } to { transform: translateY(560%); } }
+.m-scan-boxes { position: absolute; inset: 0; pointer-events: none; }
+.m-scan-hide .m-scan-boxes { opacity: 0; }
+.m-scan-box { position: absolute; --rc: #e8e2cf; color: var(--rc); animation: m-scan-in 420ms ease-out both; transition: opacity 240ms; }
+.m-scan-box.m-r-bad { --rc: #d9634f; } .m-scan-box.m-r-gold { --rc: #d2ad62; } .m-scan-box.m-r-myc { --rc: #9fb58a; } .m-scan-box.m-r-neutral { --rc: #e8e2cf; }
+.m-scan-box::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--rc); opacity: 0.35; }
+.m-scan-box .c { position: absolute; width: 14px; height: 14px; border: 2px solid var(--rc); }
+.m-scan-box .c1 { left: -1px; top: -1px; border-right: 0; border-bottom: 0; } .m-scan-box .c2 { right: -1px; top: -1px; border-left: 0; border-bottom: 0; }
+.m-scan-box .c3 { left: -1px; bottom: -1px; border-right: 0; border-top: 0; } .m-scan-box .c4 { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.m-scan-focus .m-scan-box { opacity: 0.25; } .m-scan-focus .m-scan-box.is-focus { opacity: 1; }
+.m-scan-box.is-focus::after { opacity: 0.9; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 22px var(--rc); }
+.m-scan-label { position: absolute; left: -1px; bottom: calc(100% + 5px); white-space: nowrap; font: 600 10.5px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; color: #0a0a0b; background: var(--rc); padding: 4px 7px; border-radius: 3px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.m-scan-label.below { bottom: auto; top: calc(100% + 5px); }
+@keyframes m-scan-in { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: none; } }
+.m-scan-tiles { display: flex; gap: 8px; margin-top: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; scrollbar-width: none; }
+.m-scan-tiles::-webkit-scrollbar { display: none; }
+.m-scan-tile { flex: none; width: 92px; padding: 0; border: 1px solid rgba(127, 127, 140, 0.3); border-radius: 10px; overflow: hidden; background: #0a0a0b; color: inherit; text-align: left; animation: m-scan-in 360ms ease-out both; --rc: #e8e2cf; }
+.m-scan-tile.m-r-bad { --rc: #d9634f; } .m-scan-tile.m-r-gold { --rc: #d2ad62; } .m-scan-tile.m-r-myc { --rc: #9fb58a; }
+.m-scan-tile canvas { display: block; width: 92px; height: 92px; border-top: 3px solid var(--rc); }
+.m-scan-tile.is-focus { border-color: var(--rc); box-shadow: 0 0 0 1px var(--rc); }
+.m-scan-tile-label { display: block; font: 500 10.5px/1.25 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted, #8b8b93); padding: 6px 7px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-scan-cap { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.86rem; color: var(--muted, #8b8b93); }
+.m-scan-dot { width: 7px; height: 7px; border-radius: 50%; background: #d2ad62; box-shadow: 0 0 10px #d2ad62; animation: m-scan-pulse 1.2s ease-in-out infinite; flex: none; }
+.m-scan-done .m-scan-dot { animation: none; box-shadow: none; background: #9fb58a; }
+@keyframes m-scan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.m-scan-reason { margin-top: 8px; border: 1px solid rgba(210, 173, 98, 0.28); border-radius: 10px; padding: 8px 12px; }
+.m-scan-reason summary { cursor: pointer; font: 600 11px/1.4 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; color: #d2ad62; list-style: none; display: flex; align-items: center; gap: 10px; }
+.m-scan-reason summary::-webkit-details-marker { display: none; }
+.m-scan-reason-tag { font-weight: 500; color: var(--muted, #8b8b93); letter-spacing: 0.06em; }
+.m-scan-reason p { margin: 8px 0 2px; font-size: 0.9rem; line-height: 1.45; color: var(--muted, #b8b8bf); }
+@media (prefers-reduced-motion: reduce) { .m-scan-sweep, .m-scan-dot, .m-scan-box, .m-scan-tile { animation: none; } .m-scan-sweep { display: none; } }
+
+/* ── Field inspection register (Camera, Home) ─────────────────────────────── */
+.m-kicker { font: 600 10.5px/1.3 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: #b8965a; margin: 0 0 8px; }
+.m-title { font-family: "Fraunces", Georgia, "Times New Roman", serif; font-weight: 500; font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 8px; }
+.m-fi-head { margin-bottom: 14px; }
+.m-fi-frame { border: 1px solid rgba(210, 173, 98, 0.22); border-radius: 14px; background: linear-gradient(180deg, #121215, #0d0d0f); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 30px rgba(0, 0, 0, 0.35); padding: 10px; margin-bottom: 18px; }
+.m-fi-view { position: relative; aspect-ratio: 4 / 3; border-radius: 9px; overflow: hidden; background: #080809; }
+.m-fi-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.m-fi-lattice { position: absolute; inset: 0; opacity: 0.16; pointer-events: none; mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97' viewBox='0 0 56 97'><path d='M28 1 55 16.5v31L28 63 1 47.5v-31Zm0 33L55 49.5v31L28 96 1 80.5v-31Z' fill='none' stroke='%23d2ad62' stroke-width='1'/></svg>"); background-size: 56px 97px; }
+.m-fi-c { position: absolute; width: 22px; height: 22px; border: 2px solid rgba(210, 173, 98, 0.9); }
+.m-fi-c.c1 { left: 12px; top: 12px; border-right: 0; border-bottom: 0; } .m-fi-c.c2 { right: 12px; top: 12px; border-left: 0; border-bottom: 0; }
+.m-fi-c.c3 { left: 12px; bottom: 12px; border-right: 0; border-top: 0; } .m-fi-c.c4 { right: 12px; bottom: 12px; border-left: 0; border-top: 0; }
+.m-fi-cross { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%); pointer-events: none; }
+.m-fi-cross::before, .m-fi-cross::after { content: ""; position: absolute; background: rgba(210, 173, 98, 0.7); }
+.m-fi-cross::before { left: 0; right: 0; top: 50%; height: 1px; } .m-fi-cross::after { top: 0; bottom: 0; left: 50%; width: 1px; }
+.m-fi-meta { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+.m-fi-meta span { font: 600 10px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.1em; text-transform: uppercase; color: #0a0a0b; background: rgba(210, 173, 98, 0.92); padding: 5px 7px; border-radius: 3px; }
+.m-fi-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--muted, #8b8b93); font-size: 0.92rem; line-height: 1.45; padding: 24px; }
+.m-fi-empty .m-kicker { margin-bottom: 10px; }
+.m-fi-lot { position: absolute; left: 12px; top: 12px; transform: translate(34px, 0); font: 500 11px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.06em; color: #e8e2cf; background: rgba(10, 10, 11, 0.7); padding: 6px 8px; border-radius: 4px; }
+.m-fi-frame .m-cam-actions { margin: 12px 0 2px; }
+.m-fi-sec { margin: 18px 0 0; }
+.m-fi-protocol { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.m-fi-protocol li { counter-increment: step; display: flex; gap: 12px; align-items: baseline; padding: 9px 0; border-top: 1px solid rgba(127, 127, 140, 0.18); font-size: 0.95rem; }
+.m-fi-protocol li:last-child { border-bottom: 1px solid rgba(127, 127, 140, 0.18); }
+.m-fi-protocol li::before { content: counter(step, decimal-leading-zero); font: 600 11px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; color: #b8965a; letter-spacing: 0.08em; min-width: 22px; }
+.m-ledger { border-top: 1px solid rgba(127, 127, 140, 0.18); }
+.m-ledger-head, .m-ledger-row { display: grid; grid-template-columns: 56px 92px 1fr 10px; gap: 10px; align-items: center; width: 100%; text-align: left; }
+.m-ledger-head { padding: 8px 0 6px; font: 600 10px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted, #8b8b93); }
+.m-ledger-row { background: none; border: 0; border-bottom: 1px solid rgba(127, 127, 140, 0.18); padding: 11px 0; color: inherit; font-size: 0.9rem; --rc: #e8e2cf; }
+.m-ledger-row .d, .m-ledger-row .l { font: 500 12px/1.3 ui-monospace, "JetBrains Mono", Menlo, monospace; color: var(--muted, #b8b8bf); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-ledger-row .l { color: #d2ad62; }
+.m-ledger-row .f { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-ledger-row .mark { width: 10px; height: 10px; border-radius: 2px; background: var(--rc); justify-self: end; }
+.m-ledger-row.m-r-bad { --rc: #d9634f; } .m-ledger-row.m-r-gold { --rc: #d2ad62; } .m-ledger-row.m-r-myc { --rc: #9fb58a; }
+.m-ledger-row.is-open .f { white-space: normal; }
+.m-ledger-detail { padding: 6px 0 12px; border-bottom: 1px solid rgba(127, 127, 140, 0.18); font-size: 0.9rem; line-height: 1.45; color: var(--muted, #b8b8bf); }
+.m-ledger-detail img { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: 8px; margin-bottom: 8px; background: #080809; }
+.m-fi-note { margin: 18px 0 0; font-size: 0.82rem; line-height: 1.45; color: var(--muted, #8b8b93); }
+/* Empty specimen frame: the copy sits below the crosshair, not on it. A real
+   capture keeps the lattice as a whisper so the block stays legible. */
+.m-fi-frame.is-empty .m-fi-empty { justify-content: flex-end; padding-bottom: 34px; }
+.m-fi-frame.is-empty .m-fi-cross { top: 38%; }
+.m-fi-frame:not(.is-empty) .m-fi-lattice { opacity: 0.07; }
+.m-fi-frame:not(.is-empty) .m-fi-cross { opacity: 0.55; }
+/* Diagnostics in Settings */
+.m-diag-log { font: 11px/1.45 ui-monospace, "JetBrains Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 8px; padding: 10px; border: 1px solid rgba(127, 127, 140, 0.25); border-radius: 8px; color: var(--muted, #b8b8bf); }
+.m-diag-actions { display: flex; gap: 8px; }

@@ -151,7 +151,8 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount", "intents.take"];
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
+      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -391,6 +392,108 @@ function methodPaths(surface) {
     return "image part sent, vision routed, photo cleared";
   });
 
+  await check("the REGIONS line a vision reply opens with becomes its own event and never reaches the transcript", async () => {
+    // The brief asks the model to open with one line naming the areas it examined.
+    // Split across chunks the way a stream lands, that line must arrive as
+    // vision_regions with parsed fractions, and neither the deltas nor the final
+    // text may carry a character of it.
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      const chunks = ['REGIONS: [{"label": "green patch, lower left", "x": 0.05, "y": 0.6', ', "w": 0.3, "h": 0.3}, {"label": "healthy mycelium", "x": 0.4, "y": 0.1, "w": 0.5, "h": 0.4}]\n', "\nGreen Trichoderma in the lower left. ", "Isolate the block today."];
+      return new Response(chunks.map((c) => `data: ${JSON.stringify({ delta: { content: c } })}\n`).join("") + "data: [DONE]\n",
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "Is this contamination?" }]);
+    off();
+    const regions = seen.find((e) => e.type === "vision_regions");
+    assert(regions && regions.regions.length === 2 && regions.regions[0].label === "green patch, lower left" && regions.regions[0].x === 0.05 && regions.regions[1].w === 0.5,
+      `vision_regions was ${JSON.stringify(regions)}`);
+    const deltas = seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("");
+    assert(!/REGIONS/.test(deltas) && /^Green Trichoderma/.test(deltas), `deltas carried: ${JSON.stringify(deltas).slice(0, 120)}`);
+    const final = seen.find((e) => e.type === "assistant");
+    assert(final && /^Green Trichoderma/.test(final.text) && !/REGIONS/.test(final.text), `final text was ${JSON.stringify(final && final.text).slice(0, 120)}`);
+    assert(seen.findIndex((e) => e.type === "vision_regions") < seen.findIndex((e) => e.type === "assistant_delta"), "the regions arrived after the prose started");
+    assert(result.done && /^Green Trichoderma/.test(result.text), `the turn returned ${JSON.stringify(result).slice(0, 120)}`);
+    return "2 regions lifted before the first delta; transcript clean";
+  });
+
+  await check("the owner account is asked for a REASONING line and gets it as its own event; a customer is asked for neither", async () => {
+    const mk = (email) => {
+      const bodies = [];
+      const bridge = loadMobileSurface(async (url, init = {}) => {
+        if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+        bodies.push(JSON.parse(init.body || "{}"));
+        const frames = ['REGIONS: [{"label":"Substrate face","x":0.1,"y":0.2,"w":0.5,"h":0.5}]\n', 'NOTES: The face is uniformly white with no ', 'green, so contamination is ruled out; the caps are still curled, so it is not past peak.\n\n', 'Healthy. Harvest today.'];
+        return new Response(frames.map((c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n`).join("") + "data: [DONE]\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+      });
+      return { bridge, bodies, win: loadMobileSurface.lastWindow, tok: "header." + Buffer.from(JSON.stringify({ email, tier: "enterprise", exp: 9999999999 })).toString("base64") + ".sig" };
+    };
+    // owner
+    let { bridge, bodies, win, tok } = mk("michael@crowelogic.com");
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: tok });
+    let seen = []; let off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    let result = await bridge.agent.run([{ role: "user", content: "Look at this." }]); off();
+    assert(/NOTES:/.test(bodies[0].messages[0].content) && !/REASONING:/.test(bodies[0].messages[0].content), "the owner's system prompt must ask for NOTES, never REASONING (the model answers empty to that word)");
+    const reason = seen.find((e) => e.type === "vision_reasoning");
+    assert(reason && /ruled out/.test(reason.text) && /not past peak/.test(reason.text), `no reasoning event for the owner: ${JSON.stringify(reason)}`);
+    let deltas = seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("");
+    assert(!/NOTES|REASONING|REGIONS/.test(deltas) && deltas === "Healthy. Harvest today.", `owner transcript carried: ${JSON.stringify(deltas)}`);
+    assert(result.text === "Healthy. Harvest today.", `owner final text: ${JSON.stringify(result.text)}`);
+    // customer
+    ({ bridge, bodies, win, tok } = mk("grower@example.com"));
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: tok });
+    seen = []; off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    result = await bridge.agent.run([{ role: "user", content: "Look at this." }]); off();
+    assert(!/NOTES:|REASONING:/.test(bodies[0].messages[0].content), "a customer's system prompt asked for notes or reasoning");
+    assert(!seen.some((e) => e.type === "vision_reasoning"), "a customer received a reasoning event");
+    deltas = seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("");
+    assert(!/REASONING|REGIONS/.test(deltas), `customer transcript carried: ${JSON.stringify(deltas)}`);
+    return "owner: asked, lifted, shown; customer: not asked, nothing shown, transcript clean either way";
+  });
+
+  await check("an empty vision completion is asked once more, then reported as such, not as a blank answer", async () => {
+    let asks = 0;
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asks += 1;
+      return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4437,"completion_tokens":0}}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = []; const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "Look at this." }]); off();
+    const err = seen.find((e) => e.type === "error");
+    assert(err && /returned nothing for this photo/.test(err.text), `no plain error for the empty completion: ${JSON.stringify(seen.map((e) => e.type))}`);
+    assert(result.done === false, "an empty vision answer was treated as done");
+    assert(asks === 2, `expected one retry (2 asks), got ${asks}`);
+    return "0-token vision reply: asked twice, then a sentence the grower can act on";
+  });
+
+  await check("a vision reply with no REGIONS line streams untouched", async () => {
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      return new Response(["Regular ", "answer, no map."].map((c) => `data: ${JSON.stringify({ delta: { content: c } })}\n`).join("") + "data: [DONE]\n",
+        { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const win = loadMobileSurface.lastWindow;
+    win.crowePhone.addImage("block.jpg", "data:image/jpeg;base64,/9j/AAAA");
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = []; const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "What is this?" }]); off();
+    assert(!seen.some((e) => e.type === "vision_regions"), "regions were invented");
+    assert(seen.filter((e) => e.type === "assistant_delta").map((e) => e.text).join("") === "Regular answer, no map.", "the prose was altered");
+    assert(result.text === "Regular answer, no map.", `final was ${JSON.stringify(result.text)}`);
+    return "no line, nothing held back";
+  });
+
   await check("a free account is told Crowe Vision needs a plan, and no text model is asked to see", async () => {
     const asked = [];
     const bridge = loadMobileSurface(async (url, init = {}) => {
@@ -447,6 +550,72 @@ function methodPaths(surface) {
     return "stream stripped from the native body; an SSE body is still read";
   });
 
+  await check("reminders schedule through the system and come back in order; the camera roll keeps a verdict per lot", async () => {
+    const scheduled = [], cancelled = []; const prefs = new Map();
+    const cap = { Plugins: {
+      Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
+      LocalNotifications: { checkPermissions: async () => ({ display: "granted" }), requestPermissions: async () => ({ display: "granted" }),
+        schedule: async ({ notifications }) => { scheduled.push(...notifications); }, cancel: async ({ notifications }) => { cancelled.push(...notifications.map((n) => n.id)); },
+        getPending: async () => ({ notifications: scheduled.filter((n) => !cancelled.includes(n.id)) }),
+        addListener: () => ({ remove() {} }) },
+    } };
+    const bridge = loadMobileSurface(() => { throw new TypeError("no network in this check"); }, cap);
+    const past = await bridge.reminders.add({ lot: "260910-01", title: "Check 260910-01", at: Date.now() - 1000 });
+    assert(past.ok === false && /past/.test(past.error), "a reminder in the past was accepted");
+    const later = await bridge.reminders.add({ lot: "260910-01", title: "Check 260910-01", body: "Blue oyster · colonizing", at: Date.now() + 14 * 86400000 });
+    const sooner = await bridge.reminders.add({ lot: "260910-02", title: "Check 260910-02", at: Date.now() + 3 * 86400000 });
+    assert(later.ok && sooner.ok && later.native === true, `reminders were refused: ${JSON.stringify([later, sooner])}`);
+    assert(scheduled.length === 2 && scheduled.every((n) => Number.isInteger(n.id) && n.id < 2 ** 31 && n.schedule && n.schedule.at instanceof Date), "the plugin did not get two int32-id notifications with a date");
+    const list = await bridge.reminders.list();
+    assert(list.length === 2 && list[0].lot === "260910-02", `list is not soonest first: ${JSON.stringify(list.map((r) => r.lot))}`);
+    // pending reads what the SYSTEM holds, soonest first, with a millisecond
+    // time, so Diagnostics can show that iOS accepted the schedule.
+    const pend = await bridge.reminders.pending();
+    assert(pend.native === true && pend.notifications.length === 2 && pend.notifications[0].id === sooner.reminder.id && pend.notifications.every((n) => Number.isInteger(n.at)), `pending did not mirror the system: ${JSON.stringify(pend)}`);
+    await bridge.reminders.remove(sooner.reminder.id);
+    assert(cancelled.includes(sooner.reminder.id) && (await bridge.reminders.list()).length === 1, "remove did not cancel with the system and drop the row");
+    assert((await bridge.reminders.pending()).notifications.length === 1, "pending still lists a cancelled notification");
+    const noPlugin = loadMobileSurface(() => { throw new TypeError("no network"); }, { Plugins: { Preferences: cap.Plugins.Preferences } });
+    const none = await noPlugin.reminders.pending();
+    assert(none.native === false && none.notifications.length === 0, "without the plugin, pending must say so instead of failing");
+    const c = await bridge.camera.add({ lot: "260910-01", verdict: "Healthy colonisation, no contamination. Move to fruiting in about a week.", thumb: "data:image/jpeg;base64,/9j/4AAQ" });
+    assert(c.ok && c.entry.thumb.startsWith("data:image/"), "the roll dropped a small thumbnail");
+    const bad = await bridge.camera.add({ lot: "x", verdict: "v", thumb: "javascript:alert(1)" });
+    assert(bad.ok && bad.entry.thumb === "", "a non-image thumb was kept");
+    const roll = await bridge.camera.list();
+    assert(roll.length === 2 && roll[0].lot === "x", "the roll is not newest first");
+    return `2 reminders scheduled (int32 ids, soonest first), pending mirrors the system, 1 cancelled; roll keeps ${roll.length}, rejects non-image thumbs`;
+  });
+
+  await check("diagnostics record a run's request, response and ending, and a failed fetch names itself", async () => {
+    const prefs = new Map();
+    const cap = { Plugins: { Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } } } };
+    let mode = "ok";
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      if (mode === "down") throw new TypeError("Load failed");
+      return new Response('data: {"choices":[{"delta":{"content":"Fine."}}]}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    }, cap);
+    await bridge.diag.clear();
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    await bridge.agent.run([{ role: "user", content: "hello" }]);
+    let rows = await bridge.diag.list();
+    const kinds = rows.map((r) => r.k);
+    assert(kinds.includes("run:start") && kinds.includes("net:fetch") && kinds.includes("net:response") && kinds.includes("net:stream-end") && kinds.includes("run:final"), `a good run recorded ${JSON.stringify(kinds)}`);
+    assert(rows[0].t >= rows[rows.length - 1].t, "the list is not newest first");
+    mode = "down";
+    const r = await bridge.agent.run([{ role: "user", content: "hello again" }]);
+    rows = await bridge.diag.list();
+    const threw = rows.find((x) => x.k === "net:fetch-threw");
+    assert(threw && /Load failed/.test(threw.d), `the failed fetch was not recorded: ${JSON.stringify(rows.slice(0, 4))}`);
+    assert(rows.some((x) => x.k === "run:error") && r.done === false, "the failed run did not end as an error");
+    await bridge.diag.note("page:error", "something the page threw");
+    assert((await bridge.diag.list())[0].k === "page:error", "a page note did not land on top");
+    await bridge.diag.clear();
+    assert((await bridge.diag.list()).length === 0, "clear left entries");
+    return `${kinds.length} entries for a good run; a dead network shows as net:fetch-threw Load failed`;
+  });
+
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
     // App Store guideline 5.1.1(v). The deletion happens on the account page;
     // the bridge learns the outcome by asking the realm for a fresh token when
@@ -491,6 +660,56 @@ function methodPaths(surface) {
     assert(r.deleted === false, `expected deleted:false, got ${JSON.stringify(r)}`);
     assert((await bridge.getConfig()).hasToken, "a look at the account page signed the phone out");
     return "deleted -> signed out; looked -> still signed in";
+  });
+
+  await check("Delete account goes through the gateway when it can confirm the address, and falls back to the console on an older gateway", async () => {
+    // Control plane 0.2.20: DELETE /api/auth/me with the typed email. The
+    // harness has no window.prompt, which is why the check above still takes
+    // the console route; here the prompt is supplied.
+    const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+    const token = jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 });
+    const makeCap = (opened) => ({ Plugins: {
+      Preferences: (() => { const prefs = new Map(); return { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } }; })(),
+      Browser: { open: async ({ url }) => { opened.push(url); }, addListener: (name, cb) => { setTimeout(() => cb(), 5); return { remove() {} }; } },
+    } });
+    const gateway = (status, body) => { const calls = []; const f = async (url, init = {}) => {
+      if (String(url).includes("/api/auth/me")) { calls.push(init); return { status, ok: status >= 200 && status < 300, json: async () => body }; }
+      if (String(url).includes("/protocol/openid-connect/token")) return { status: 400, text: async () => "{}", json: async () => ({ error: "invalid_grant" }) };
+      throw new TypeError("unexpected fetch " + url); }; f.calls = calls; return f; };
+
+    // 1. Confirmed and accepted: no browser sheet, tokens gone.
+    let opened = []; let gw = gateway(200, { deleted: true });
+    let bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "Grower@Example.com ";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    let r = await bridge.auth.deleteAccount();
+    assert(r.deleted === true && r.opened === false, `native deletion did not report deleted: ${JSON.stringify(r)}`);
+    assert(gw.calls.length === 1 && gw.calls[0].method === "DELETE" && /Bearer h\./.test(gw.calls[0].headers.Authorization) && JSON.parse(gw.calls[0].body).confirm === "Grower@Example.com", `the DELETE was not sent as expected: ${JSON.stringify(gw.calls)}`);
+    assert(opened.length === 0, "the console opened although the gateway deleted the account");
+    assert(!(await bridge.getConfig()).hasToken, "the access token survived a native deletion");
+
+    // 2. The typed address does not match: nothing is sent, nothing opens.
+    opened = []; gw = gateway(200, { deleted: true });
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "someone@else.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(r.deleted === false && /did not match/.test(r.error) && gw.calls.length === 0 && opened.length === 0, `a wrong address got through: ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a refused confirmation signed the phone out");
+
+    // 3. A protected account: the gateway's own words, still signed in.
+    opened = []; gw = gateway(403, { detail: { message: "This account is protected while the app is in review." } });
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "grower@example.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(r.deleted === false && /protected/.test(r.error) && opened.length === 0, `the 403 was not surfaced in words: ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a refused deletion signed the phone out");
+
+    // 4. An older gateway (404): the console route, exactly as before.
+    opened = []; gw = gateway(404, {});
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "grower@example.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(opened.length === 1 && /\/realms\/crowe\/account\/$/.test(opened[0]) && r.opened === true, `an older gateway did not fall back to the console: ${JSON.stringify({ r, opened })}`);
+    return "200 -> deleted natively; mismatch -> nothing sent; 403 -> the gateway's words; 404 -> console fallback";
   });
 
   await check("a Shortcut's note is taken once, dispatched as crowe:intent, and stale notes are dropped", async () => {

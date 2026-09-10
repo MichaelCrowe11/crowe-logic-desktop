@@ -53,6 +53,24 @@ jobs:
           node scripts/build-rooms-web.js --check
           node scripts/test-web-bridge.js
 
+      # Everything else `npm test` runs in plain Node. This step exists because
+      # scripts/test-plan.js failed on main for a day (751c75b changed the phone's
+      # billing refusals and the check still demanded the old words) and nothing
+      # here ran it: the job listed its steps by hand and the list had drifted
+      # from package.json. The rule now is that a node check added to `npm test`
+      # is added here in the same commit, and this step is where it goes.
+      - name: Run the remaining node contract checks
+        run: |
+          node scripts/test-plan.js
+          node scripts/test-version-parity.js
+          node mobile/scripts/sync-version.js --check
+          node scripts/test-brand-copy.js
+          node scripts/test-companion.js
+          node scripts/test-qr.js
+          node scripts/test-sense.js
+          node scripts/test-releases-worker.js
+          node scripts/test-verify-release.js
+
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
       # spends, who reviews whom, what the budget halts - are worth holding at
@@ -135,6 +153,13 @@ jobs:
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-mobile-shell.js
+
+      # Install-time space profiles, both shapes `npm test` covers: a build that
+      # declares nothing, and one narrowed to chat and projects.
+      - name: Run install-spaces suite (headless via xvfb)
+        run: |
+          xvfb-run -a npx electron scripts/test-install-spaces.js
+          CROWE_SPACES=chat,projects xvfb-run -a npx electron scripts/test-install-spaces.js
 
       # The chain in one piece: renderer, preload, ipcMain, engine, harness. The
       # suites above each cut it somewhere - the engine one injects a fake

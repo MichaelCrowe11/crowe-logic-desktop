@@ -175,7 +175,14 @@ check("the phone refuses to sell, and says why", () => {
   assert(/billing: \{/.test(mobileBridge), "mobile must expose billing for bridge parity");
   assert(/catalog: async \(\) => \(\{ error:/.test(billing), "mobile catalog must be a stated refusal, not a fetch the browser will block");
   assert(/checkout: async \(\) => \(\{[\s\S]{0,80}ok: false/.test(billing), "mobile checkout must refuse rather than send a buyer to Stripe from in-app");
-  assert(/crowelogic\.com/.test(billing), "the refusals must name where subscribing does work");
+  // Since 751c75b the refusals name NO outside address. App Review reads
+  // "prices at crowelogic.com" as steering to a purchase outside the store
+  // (guideline 3.1.1), so the phone says only that plans are not sold here and
+  // that the plan on the Crowe ID reaches the phone on its next sign-in. This
+  // check used to demand the address; a test that demands what review forbids
+  // is a test that must lose, and it lost quietly while CI was billing-locked.
+  assert(!/crowelogic\.com/.test(billing), "the phone's billing refusals must not point at an outside price list (App Review 3.1.1)");
+  assert(/not sold in the phone app/.test(billing) && /next sign-in/.test(billing), "the checkout refusal must say plans are not sold here and how a plan reaches the phone");
   assert(/plan: async/.test(billing) && /refresh: async/.test(billing), "plan and refresh are the token's own claim and must be real on the phone");
   return "2 refused, 2 real";
 });

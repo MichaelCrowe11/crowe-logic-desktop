@@ -227,6 +227,9 @@
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
   window.crowePhone = {
     max: PHONE_FILE_MAX,
+    // For phone-only scripts that call the gateway themselves (speak.js): the
+    // current bearer, after auth.status() has had its chance to refresh it.
+    accessToken: () => config.token || null,
     add(name, content) {
       name = String(name || "").replace(/[/\\]/g, "_").trim();
       if (!name) return { error: "a file needs a name" };
@@ -465,6 +468,14 @@
     try {
       const part = String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
       return JSON.parse(decodeURIComponent(escape(atob(part))));
+    // A reminder that is tapped opens Home on the lot it named.
+    const LN0 = plugin("LocalNotifications");
+    if (LN0) {
+      Promise.resolve(LN0.addListener("localNotificationActionPerformed", (n) => {
+        const lot = (n && n.notification && n.notification.extra && n.notification.extra.lot) || "";
+        try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: "home", text: String(lot) } })); } catch { /* no window in tests */ }
+      })).catch(() => {});
+    }
     } catch { return {}; }
   }
   // Every slug the catalog sells. Same list as main.js and web-bridge.js, and
@@ -689,9 +700,11 @@
     });
 
     let resp;
+    diag("net:fetch", { model: useModel, stream: Boolean(onDelta), bytes: body.length, images: (body.match(/"type":"image_url"/g) || []).length });
     try {
       resp = await fetch(url, { method: "POST", headers, body, signal });
     } catch (e) {
+      diag("net:fetch-threw", { name: e && e.name, message: String(e && e.message || e).slice(0, 200), cors: corsBlocked(e) });
       if (e && e.name === "AbortError") return { error: "stopped", aborted: true };
       if (!corsBlocked(e)) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       // The native transport hands back one finished body, so it must not ask
@@ -699,6 +712,7 @@
       // stream:true, and an event stream read as JSON is an empty answer.
       const nativeBody = JSON.parse(body); delete nativeBody.stream;
       const r = await nativePost(url, headers, nativeBody);
+      diag("net:native", r ? { status: r.status, bytes: String(r.text || "").length } : "no native transport");
       if (!r) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
       let data;
@@ -714,6 +728,7 @@
       return done(data, 0);
     }
 
+    diag("net:response", { status: resp.status, type: String(resp.headers.get("content-type") || "").slice(0, 40), ms: Date.now() - t0 });
     if (resp.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
 
     // Streaming is decided by the response, not the request — same contract as
@@ -735,9 +750,11 @@
           }
         }
       } catch (e) {
+        diag("net:stream-broke", { name: e && e.name, message: String(e && e.message || e).slice(0, 160), got: acc.content.length });
         if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content: acc.content, streamed: acc.content.length };
         return { error: `stream broke: ${String(e).slice(0, 160)}`, content: acc.content, streamed: acc.content.length };
       }
+      diag("net:stream-end", { chars: acc.content.length, error: acc.error || "", ms: Date.now() - t0 });
       if (acc.error) return { error: `gateway: ${acc.error}`.slice(0, 400), content: acc.content, streamed: acc.content.length };
       return { ...acc.result(), elapsedMs: Date.now() - t0, streamed: acc.content.length };
     }
@@ -809,6 +826,86 @@
     "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
     "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
     "Offer to log the finding with log_grow when the tier allows it.",
+    "Begin with exactly one line of the form REGIONS: [{\"label\": \"...\", \"x\": 0.1, \"y\": 0.2, \"w\": 0.3, \"h\": 0.2}] naming up to",
+    "four areas of the photo you examined, x y w h as fractions of the image width and height from the top left, then a",
+    "blank line, then the answer. The line drives the phone's display of what you looked at; never refer to it in the answer.",
+  ].join("\n");
+  /* The REGIONS line is display data, not prose. It is lifted out of the
+     stream before the transcript sees a character of it and handed to the UI
+     as its own event, so the phone can draw what the model examined while the
+     rest of the answer is still arriving. */
+  const REGIONS_RE = /^\s*REGIONS:\s*(\[[\s\S]*?\])[ \t]*\r?\n?/;
+  const REASONING_RE = /^\s*(?:NOTES|REASONING):\s*([^\n]*)\r?\n?/;
+  const clamp01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0; };
+  function parseRegions(json) {
+    try {
+      const a = JSON.parse(json);
+      if (!Array.isArray(a)) return null;
+      const out = a.filter((r) => r && typeof r.label === "string").slice(0, 6)
+        .map((r) => ({ label: r.label.trim().slice(0, 60), x: clamp01(r.x), y: clamp01(r.y), w: clamp01(r.w), h: clamp01(r.h) }))
+        .filter((r) => r.label && r.w > 0 && r.h > 0);
+      return out.length ? out : null;
+    } catch { return null; }
+  }
+  function stripRegions(text) {
+    const m = REGIONS_RE.exec(text || "");
+    if (!m) return { text: text || "", regions: null, reasoning: null, had: false };
+    let rest = (text || "").slice(m[0].length).replace(/^[ \t]*\r?\n/, "");
+    let reasoning = null;
+    const r = REASONING_RE.exec(rest);
+    if (r) { reasoning = r[1].trim().slice(0, 900) || null; rest = rest.slice(r[0].length).replace(/^[ \t]*\r?\n/, ""); }
+    return { text: rest, regions: parseRegions(m[1]), reasoning, had: true };
+  }
+  function regionsFilter(onRegions, onDelta, onReasoning) {
+    let buf = "", decided = false, swallow = false;
+    const decide = () => {
+      decided = true;
+      const sr = stripRegions(buf);
+      if (sr.regions) onRegions(sr.regions);
+      if (sr.reasoning && onReasoning) onReasoning(sr.reasoning);
+      let rest = sr.had ? sr.text : buf;
+      buf = "";
+      // The blank line after the map may land in a later chunk; drop leading
+      // whitespace until the prose starts, and only when a map was taken out.
+      if (sr.had) { rest = rest.replace(/^\s+/, ""); swallow = rest === ""; }
+      if (rest) onDelta(rest);
+    };
+    return {
+      delta(chunk) {
+        if (decided) {
+          if (swallow) { chunk = chunk.replace(/^\s+/, ""); if (!chunk) return; swallow = false; }
+          onDelta(chunk); return;
+        }
+        buf += chunk;
+        const head = buf.replace(/^\s+/, "");
+        // Hold only while the text could still be the REGIONS line: an
+        // unfinished prefix of the keyword, or the line itself before its newline.
+        const couldBe = head === "" || "REGIONS:".startsWith(head.slice(0, 8)) || /^REGIONS:/.test(head);
+        if (!couldBe || buf.length > 2000) { decide(); return; }
+        if (/^REGIONS:/.test(head) && /\n/.test(head)) {
+          // Past the map. If a REASONING line follows (owner accounts), wait for
+          // its newline too; otherwise the answer has started and we decide now.
+          const after = head.replace(REGIONS_RE, "").replace(/^\s+/, "");
+          if (after === "" || "NOTES:".startsWith(after.slice(0, 6)) || "REASONING:".startsWith(after.slice(0, 10))) { if (buf.length > 2000) decide(); return; }
+          if (/^(?:NOTES|REASONING):/.test(after) && !/\n/.test(after)) return;
+          decide();
+        }
+      },
+      flush() { if (!decided) decide(); },
+    };
+  }
+  /* The owner account sees the model's stated reasoning under a vision scan;
+     nobody else is asked for it, so nobody else can receive it. */
+  const OWNER_EMAILS = new Set(["michael@crowelogic.com", "mike@southwestmushrooms.com"]);
+  const isOwner = () => { const u = currentUser(); return Boolean(u && OWNER_EMAILS.has(String(u.email || "").trim().toLowerCase())); };
+  /* Wire word: NOTES, not REASONING. Asked for a "REASONING:" line, CroweLM
+     Vision returns an empty completion (0 tokens, finish stop; measured
+     2026-09-10 against the live model with the same photo); asked for NOTES in
+     the same shape it answers in full. The UI still calls the fold Reasoning. */
+  const VISION_REASONING_BRIEF = [
+    "After the REGIONS line and before the answer, add exactly one line NOTES: followed by two or three sentences an inspector",
+    "would write in the margin: what in the photo carried the most weight, what was ruled out and why, and where the photo alone",
+    "leaves doubt. Then a blank line, then the answer.",
   ].join("\n");
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
@@ -1205,7 +1302,7 @@
       "You are Crowe Logic, running on the user's phone.",
       machine,
       attached,
-      route.vision ? "\n" + VISION_BRIEF : "",
+      route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
       "",
       "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
       "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
@@ -1237,14 +1334,36 @@
 
   // ─── The agent loop ────────────────────────────────────────────────────────
   const listeners = new Set();
-  const emit = (ev) => { for (const fn of listeners) { try { fn(ev); } catch { /* one bad listener must not stop the rest */ } } };
+  const emit = (ev) => { for (const fn of listeners) { try { fn(ev); } catch (e) { diag("ui:listener-threw", String(e && e.message || e)); } } };
+
+  /* Diagnostics. A ring of the last sixty things the bridge did: run start,
+     route, the request it sent, what came back, and how it ended. Written to
+     Preferences so it survives a relaunch, read by Settings, copied by hand.
+     It exists because a phone cannot be attached to a debugger from a text
+     message, and "nothing happened" needs a where. Never throws. */
+  const DIAG_MAX = 60;
+  let diagBuf = null;
+  async function diag(kind, detail) {
+    try {
+      if (!diagBuf) diagBuf = (await store.get("diag")) || [];
+      const d = detail == null ? "" : typeof detail === "string" ? detail : JSON.stringify(detail);
+      diagBuf.push({ t: Date.now(), k: String(kind).slice(0, 40), d: String(d).slice(0, 400) });
+      if (diagBuf.length > DIAG_MAX) diagBuf = diagBuf.slice(-DIAG_MAX);
+      await store.set("diag", diagBuf);
+    } catch { /* diagnostics never get in the way */ }
+  }
   const runs = new Map();
 
   async function runAgent(messages, id, opts) {
     await ready;
     const run = { aborted: false, controller: null };
     runs.set(id, run);
-    const send = (ev) => emit({ ...ev, agentId: id });
+    const send = (ev) => {
+      if (ev && (ev.type === "route" || ev.type === "error" || ev.type === "final" || ev.type === "plan" || ev.type === "photos" || ev.type === "vision_regions"))
+        diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
+      emit({ ...ev, agentId: id });
+    };
+    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
     const budget = Number(config.turnBudgetUsd) > 0 ? Number(config.turnBudgetUsd) : 0;
     let text = "";
@@ -1281,7 +1400,7 @@
                text: planNotice(route.model, route.planLimited.required) });
       }
       send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
-      let planGated = false;
+      let planGated = false, emptyRetried = false;
 
       const convo = [{ role: "system", content: systemPrompt(route) }];
       // The session's standing brief: who is speaking for this thread, ahead of
@@ -1300,8 +1419,19 @@
         }
 
         run.controller = new AbortController();
-        const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model,
-          (chunk) => send({ type: "assistant_delta", text: chunk }));
+        const emitDelta = (chunk) => send({ type: "assistant_delta", text: chunk });
+        const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta,
+          (reasoning) => { if (isOwner()) send({ type: "vision_reasoning", text: reasoning }); }) : null;
+        const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
+        if (filt) {
+          filt.flush();
+          if (typeof r.content === "string") {
+            const sr = stripRegions(r.content);
+            if (sr.regions && !r.streamed) send({ type: "vision_regions", regions: sr.regions });
+            if (sr.reasoning && !r.streamed && isOwner()) send({ type: "vision_reasoning", text: sr.reasoning });
+            r.content = sr.text;
+          }
+        }
 
         if (r.usage || r.elapsedMs) {
           meter.in += r.usage?.prompt_tokens || 0;
@@ -1334,7 +1464,21 @@
           text += (text ? "\n\n" : "") + r.content;
         }
         const calls = r.tool_calls || [];
-        if (!calls.length) { send({ type: "final", note: "answered" }); return { done: true, text }; }
+        if (!calls.length) {
+          /* A vision round that returns neither words nor a tool call is an
+             answer of nothing about a photo the grower is standing in front
+             of (measured live: 0 completion tokens, finish stop). Ask once
+             more; if it is still nothing, say so instead of letting the
+             transcript fill the silence with a generic line. */
+          if (route.vision && !(text || "").trim()) {
+            if (!emptyRetried) { emptyRetried = true; diag("run:empty-vision-retry", { round }); continue; }
+            const msg = "CroweLM Vision returned nothing for this photo, twice. Try again in a moment, or a closer photo of the block face in even light.";
+            diag("run:empty-vision", { round });
+            send({ type: "error", text: msg }); send({ type: "final", note: "empty completion" });
+            return { done: false, error: msg, text };
+          }
+          send({ type: "final", note: "answered" }); return { done: true, text };
+        }
 
         convo.push({ role: "assistant", content: r.content || "", tool_calls: calls });
         for (const call of calls) {
@@ -1661,6 +1805,39 @@
          answer is unknown rather than guessed. */
       deleteAccount: async () => {
         await ready;
+        /* Two routes, native first. Control plane 0.2.20 added DELETE
+           /api/auth/me: the person types the address on the account, the
+           gateway cancels the subscription (keeping the Stripe customer),
+           removes the account's rows and deletes the Crowe ID, and the phone
+           forgets its tokens. An older gateway answers 404 and the
+           account-console route below takes over, so the app never depends
+           on the deploy having landed. Without a way to ask for the typed
+           address (no prompt in this webview, or in the test harness) the
+           console route is used too: deletion is never attempted unconfirmed.
+           The gateway refuses protected accounts with 403 and a message; that
+           message is shown and nothing else happens. */
+        const canPrompt = typeof window.prompt === "function";
+        let u = currentUser();
+        if (u && u.email && canPrompt) {
+          if (u.exp && u.exp * 1000 < Date.now() + 60000) { await refreshToken(); u = currentUser() || u; }
+          const typed = window.prompt(`Type ${u.email} to delete this Crowe ID and everything stored under it. This cannot be undone.`);
+          if (typed === null || typed === undefined) return { opened: false, deleted: false, error: "Not deleted." };
+          if (String(typed).trim().toLowerCase() !== String(u.email).toLowerCase()) return { opened: false, deleted: false, error: "Not deleted: the email did not match." };
+          let res = null;
+          try {
+            res = await fetch(`${base()}/api/auth/me`, { method: "DELETE", headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` }, body: JSON.stringify({ confirm: String(typed).trim() }) });
+          } catch { res = null; }
+          if (res && res.status !== 404) {
+            if (!res.ok) {
+              const d = await Promise.resolve(res.json ? res.json() : {}).catch(() => ({}));
+              const detail = d && d.detail; const msg = detail && (detail.message || (typeof detail === "string" ? detail : "")) || d && d.error || "";
+              return { opened: false, deleted: false, error: msg || `Deletion failed (${res.status})` };
+            }
+            await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config);
+            return { opened: false, deleted: true };
+          }
+          // 404 or unreachable: the gateway predates 0.2.20, use the console.
+        }
         const url = `${CROWE_ID}/account/`;
         const Browser = plugin("Browser");
         if (!Browser) { window.open(url, "_blank", "noopener"); return { opened: true, deleted: null }; }
@@ -1921,6 +2098,71 @@
         try { await navigator.clipboard.writeText(text); return { ok: true, copied: true }; }
         catch { return { ok: false, error: "This device would not share or copy the trace." }; }
       },
+    },
+
+    /* 1.1: what the phone does when nobody is chatting. Reminders ride the
+       system's local notifications (the plugin owns permission and delivery);
+       the camera roll keeps each photo check's verdict so Home and the Camera
+       tab can show what was looked at, when, and against which lot. Both live
+       in Preferences beside the grow log and never leave the phone. */
+    reminders: {
+      list: async () => ((await store.get("reminders")) || []).filter((r) => r && r.at > Date.now() - 7 * 86400000).sort((a, b) => a.at - b.at),
+      add: async ({ lot, title, body, at } = {}) => {
+        const when = Number(at);
+        if (!Number.isFinite(when) || when < Date.now()) return { ok: false, error: "the reminder time is in the past" };
+        // int32, as the notification plugin requires; seconds plus a nonce keeps two taps apart.
+        const id = (Math.floor(Date.now() / 1000) % 2000000000) + Math.floor(Math.random() * 1000);
+        const rec = { id, lot: String(lot || "").slice(0, 40), title: String(title || "Crowe Logic").slice(0, 80), body: String(body || "").slice(0, 200), at: when, createdAt: Date.now() };
+        const LN = plugin("LocalNotifications");
+        if (LN) {
+          let perm = { display: "denied" };
+          try { perm = await LN.checkPermissions(); if (perm.display !== "granted") perm = await LN.requestPermissions(); }
+          catch (e) { return { ok: false, error: "notifications: " + String(e && e.message || e).slice(0, 80) }; }
+          if (perm.display !== "granted") return { ok: false, error: "Allow notifications for Crowe Logic in Settings to get reminders" };
+          try { await LN.schedule({ notifications: [{ id, title: rec.title, body: rec.body, schedule: { at: new Date(when), allowWhileIdle: true }, extra: { lot: rec.lot } }] }); }
+          catch (e) { return { ok: false, error: "schedule: " + String(e && e.message || e).slice(0, 80) }; }
+        }
+        const all = ((await store.get("reminders")) || []).filter((r) => r && r.id !== id);
+        all.push(rec);
+        await store.set("reminders", all.slice(-200));
+        return { ok: true, reminder: rec, native: Boolean(LN) };
+      },
+      // What the system still holds for this app, so Diagnostics can show that
+      // iOS accepted a reminder and not only that Preferences kept a row.
+      // Pending is scheduling, not delivery: the one-minute test in Settings is
+      // what proves a notification reaches the lock screen.
+      pending: async () => {
+        const LN = plugin("LocalNotifications");
+        if (!LN || typeof LN.getPending !== "function") return { native: false, notifications: [] };
+        try {
+          const r = await LN.getPending();
+          const list = (r && r.notifications) || [];
+          return { native: true, notifications: list.map((n) => ({ id: n.id, title: String(n.title || ""), at: n.schedule && n.schedule.at ? new Date(n.schedule.at).getTime() : null })).sort((a, b) => (a.at || 0) - (b.at || 0)) };
+        } catch (e) { return { native: true, notifications: [], error: String(e && e.message || e).slice(0, 80) }; }
+      },
+      remove: async (id) => {
+        const LN = plugin("LocalNotifications");
+        if (LN) { try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch { /* fired already, or never scheduled */ } }
+        await store.set("reminders", ((await store.get("reminders")) || []).filter((r) => r && r.id !== Number(id)));
+        return { ok: true };
+      },
+    },
+    camera: {
+      list: async () => ((await store.get("camera-roll")) || []).slice().reverse(),
+      add: async ({ lot, verdict, thumb } = {}) => {
+        const ok = typeof thumb === "string" && thumb.startsWith("data:image/") && thumb.length < 120000;
+        const rec = { id: "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6), ts: Date.now(), lot: String(lot || "").slice(0, 40), verdict: String(verdict || "").slice(0, 400), thumb: ok ? thumb : "" };
+        const roll = (await store.get("camera-roll")) || [];
+        roll.push(rec);
+        await store.set("camera-roll", roll.slice(-60));
+        return { ok: true, entry: rec };
+      },
+    },
+
+    diag: {
+      list: async () => { if (!diagBuf) diagBuf = (await store.get("diag")) || []; return diagBuf.slice().reverse(); },
+      clear: async () => { diagBuf = []; await store.set("diag", []); return { ok: true }; },
+      note: (kind, detail) => diag(kind, detail),
     },
 
     onBrowserNavigate: noop,

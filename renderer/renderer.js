@@ -819,7 +819,18 @@ async function send(text, opts = {}) {
     if (mark) mark.ping();
   }
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
-  else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
+  else if (!body.querySelector(".said, .err, .stopped")) {
+    // No prose came back. If tools ran, the work is in the workspace (or, on
+    // the phone, in the log) and that is what to say. If nothing ran at all,
+    // the model returned an empty completion, and the honest line names that
+    // rather than dressing it as a finished job. The phone read every empty
+    // vision round as "Done. See the workspace." until 0.25.3; see
+    // mobile-bridge.js for the retry that now precedes this.
+    const phone = document.body.classList.contains("mobile");
+    body.innerHTML = acts.length
+      ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
+      : '<p class="said hint">The model returned no text. Send it again.</p>';
+  }
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
@@ -2719,6 +2730,12 @@ const GROW = {
       { k: "strain", label: "Strain", from: ["strains", "name"] },
       { k: "substrate", label: "Substrate", from: ["recipes", "name"] },
       { k: "count", label: "Count", type: "number", w: "xs" },
+      // Weight with its basis stated, never assumed: a "5 lb block" is dry
+      // substrate in The Mushroom Grower and a wet block on most farms, and a
+      // yield figure against the wrong one is off by more than half. Biological
+      // efficiency is only computed on a dry basis; wet gives a plain ratio.
+      { k: "weight", label: "Weight (lb)", type: "number", w: "xs" },
+      { k: "basis", label: "Basis", opts: ["wet", "dry"], w: "xs" },
       // Suggests from the rooms already logged, so a lot and its readings agree
       // on the spelling. A trace joins them on this string.
       { k: "room", label: "Room", from: ["env", "room"], w: "sm" },

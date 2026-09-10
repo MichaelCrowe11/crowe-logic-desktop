@@ -101,6 +101,9 @@ const PRELUDE = `
   // macrotask late by design — see the Panels handler in mobile-ui.js.
   window.__settle = (ms) => new Promise((r) => setTimeout(r, ms || 400));
   window.__drawerOpen = () => !document.body.classList.contains("sidebar-collapsed");
+  // 1.1: the workspace pane is reached through the Machine tab, which exists only
+  // once a machine is paired. Tests pair by class and rebuild the bar.
+  window.__pair = (on) => { document.body.classList.toggle("m-paired", on); window.dispatchEvent(new Event("crowe:remote")); };
   true;   // executeJavaScript clones what the script evaluates to, and a function cannot be cloned
 `;
 
@@ -112,9 +115,13 @@ const tests = [
     expect: { bridge: "object", mobile: true, pane: "agent", tabBar: true },
   },
   {
-    name: "the tab bar is built from the rail's spaces, plus Panels",
-    body: `return { tabs: __tabs().join(","), current: __current().join(",") };`,
-    expect: { tabs: "Chat,Projects,Cultivation,Panels", current: "Chat" },
+    name: "the phone's tabs are Home, Chat, Camera and Log; Machine appears only once paired",
+    body: `const before = __tabs().join(",");
+      __pair(true); await __settle(50);
+      const paired = __tabs().join(",");
+      __pair(false); await __settle(50);
+      return { tabs: before, current: __current().join(","), paired };`,
+    expect: { tabs: "Home,Chat,Camera,Log", current: "Chat", paired: "Home,Chat,Camera,Log,Machine" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
@@ -158,23 +165,26 @@ const tests = [
     expect: { fits: true, min: true },
   },
   {
-    name: "Panels swaps the workbench pane, and a space tab swaps it back",
-    body: `__tap("Panels");
+    name: "Machine swaps the workbench pane, and a space tab swaps it back",
+    body: `__pair(true); await __settle(50);
+      __tap("Machine");
       await __settle();
       const onPanels = { pane: document.body.dataset.pane, agentHidden: !__shown("#agent"),
                          workspaceShown: __shown("#workspace"), current: __current().join(",") };
-      __tap("Cultivation");
+      __tap("Log");
       await __settle();
       const back = { pane: document.body.dataset.pane, current: __current().join(",") };
       __tap("Chat");
       await __settle();
+      __pair(false); await __settle(50);
       return { ...onPanels, backPane: back.pane, backCurrent: back.current };`,
-    expect: { pane: "workspace", agentHidden: true, workspaceShown: true, current: "Panels",
-              backPane: "agent", backCurrent: "Cultivation" },
+    expect: { pane: "workspace", agentHidden: true, workspaceShown: true, current: "Machine",
+              backPane: "agent", backCurrent: "Log" },
   },
   {
     name: "the workspace opens on Operator Control, not a terminal that cannot start",
-    body: `__tap("Panels");
+    body: `__pair(true); await __settle(50);
+      __tap("Machine");
       await __settle();
       // .panel-title is an <input> — a panel's name is editable in place — so
       // the title is its value, not its text.
@@ -182,6 +192,7 @@ const tests = [
         .map((p) => (p.querySelector(".panel-title") || {}).value || "").join(",");
       __tap("Chat");
       await __settle();
+      __pair(false); await __settle(50);
       return { titles, terminals: /Terminal/.test(titles) };`,
     expect: { titles: "Operator Control", terminals: false },
   },
@@ -206,7 +217,8 @@ const tests = [
                           editTier: __shown('#autonomy .seg-btn[data-tier="edit"]') };
       // The dock bar lives inside the workspace column, so its controls have to
       // be asked about while that column is the one on screen.
-      __tap("Panels");
+      __pair(true); await __settle(50);
+      __tap("Machine");
       await __settle();
       const dock = { gitTab: __shown('.dock-tab[data-pane="git"]'),
                      filesTab: __shown('.dock-tab[data-pane="files"]'),
@@ -222,6 +234,7 @@ const tests = [
                          autoApproveRow: __shown("#cfg-auto"), gatewayRow: __shown("#cfg-base") };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
+      __pair(false); await __settle(50);
       return { ...composer, ...dock, ...settings };`,
     // The two trues are the control: they prove this check can still see a row
     // that is meant to be there, rather than reporting everything as hidden.
@@ -434,7 +447,7 @@ const tests = [
     // Flushes, readings and journal lines point at a block by its lot code, so
     // retyping it on an existing record would orphan them. A new block's code
     // is only a default the farm's traceability SOP may overwrite.
-    body: `__tap("Cultivation");
+    body: `__tap("Log");
       await __settle();
       // The space opens on its Overview; the Blocks lane is a section of it.
       document.querySelector('#cult-nav .sn-item[data-cult="blocks"]').click();
@@ -442,7 +455,7 @@ const tests = [
       let form = document.querySelector("#lane-body form.grow-add");
       if (!form) return { form: false };
       const newEditable = !form.elements.code.readOnly;
-      form.elements.species.value = "Oyster"; form.elements.count.value = "4";
+      form.elements.species.value = "Oyster"; form.elements.count.value = "4"; form.elements.stage.value = "spawned";
       form.requestSubmit();
       await __settle(400);
       const open = document.querySelector(".growrow .gr-open");
@@ -465,6 +478,48 @@ const tests = [
       await __settle(120);
       return out;`,
     expect: { present: true, shown: true, value: "reading", configured: "reading" },
+  },
+  {
+    name: "Home lists the lots by stage from the log on this phone, with Remind me and Photograph",
+    // The lot test above added a block; Home must show it without a desktop.
+    body: `__tap("Home");
+      await __settle(500);
+      const lots = [...document.querySelectorAll("#m-home-pane .m-lot")];
+      const out = { paneShown: __shown("#m-home-pane"), chatHidden: !__shown("#agent"), lots: lots.length,
+                    stage: lots.length ? lots[0].querySelector(".m-stage").textContent.trim() : "",
+                    remind: Boolean(document.querySelector("#m-home-pane .m-remind")), photo: Boolean(document.querySelector("#m-home-pane .m-check")),
+                    reminders: __shown("#m-home-reminders"),
+                    // The Siri words show only where Siri is; this harness has no Capacitor, so the gate must hide them.
+                    siriHidden: !document.querySelector("#m-home-siri") };
+      __tap("Chat");
+      await __settle();
+      return { ...out, backToChat: __shown("#agent") };`,
+    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, siriHidden: true, backToChat: true },
+  },
+  {
+    name: "Camera offers Photograph and Choose a photo, and names the engine",
+    body: `__tap("Camera");
+      await __settle(300);
+      const out = { paneShown: __shown("#m-camera-pane"), shoot: __shown("#m-camera-pane .m-cam-shoot"), pick: __shown("#m-camera-pane .m-cam-pick"),
+                    engine: /CroweLM Vision/.test(document.querySelector("#m-camera-pane").textContent), input: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
+      __tap("Chat");
+      await __settle();
+      return out;`,
+    expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
+  },
+  {
+    name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
+    body: `document.getElementById("settings-btn").click();
+      await __settle(300);
+      const out = { log: __shown("#m-diag-log"), copy: __shown("#m-diag-copy"), share: __shown("#m-diag-share"), clear: __shown("#m-diag-clear"),
+                    hasHeader: /Crowe Logic/.test(document.getElementById("m-diag-log").textContent),
+                    pending: __shown("#m-diag-pending"), testBtn: __shown("#m-diag-test-reminder"),
+                    // No notification service in this harness: the pane must say so in words, not sit on "Loading".
+                    pendingSaysWhy: /browser build/.test(document.getElementById("m-diag-pending").textContent) };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return out;`,
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true },
   },
 ];
 
