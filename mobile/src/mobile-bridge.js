@@ -227,6 +227,9 @@
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
   window.crowePhone = {
     max: PHONE_FILE_MAX,
+    // For phone-only scripts that call the gateway themselves (speak.js): the
+    // current bearer, after auth.status() has had its chance to refresh it.
+    accessToken: () => config.token || null,
     add(name, content) {
       name = String(name || "").replace(/[/\\]/g, "_").trim();
       if (!name) return { error: "a file needs a name" };
@@ -1802,6 +1805,39 @@
          answer is unknown rather than guessed. */
       deleteAccount: async () => {
         await ready;
+        /* Two routes, native first. Control plane 0.2.20 added DELETE
+           /api/auth/me: the person types the address on the account, the
+           gateway cancels the subscription (keeping the Stripe customer),
+           removes the account's rows and deletes the Crowe ID, and the phone
+           forgets its tokens. An older gateway answers 404 and the
+           account-console route below takes over, so the app never depends
+           on the deploy having landed. Without a way to ask for the typed
+           address (no prompt in this webview, or in the test harness) the
+           console route is used too: deletion is never attempted unconfirmed.
+           The gateway refuses protected accounts with 403 and a message; that
+           message is shown and nothing else happens. */
+        const canPrompt = typeof window.prompt === "function";
+        let u = currentUser();
+        if (u && u.email && canPrompt) {
+          if (u.exp && u.exp * 1000 < Date.now() + 60000) { await refreshToken(); u = currentUser() || u; }
+          const typed = window.prompt(`Type ${u.email} to delete this Crowe ID and everything stored under it. This cannot be undone.`);
+          if (typed === null || typed === undefined) return { opened: false, deleted: false, error: "Not deleted." };
+          if (String(typed).trim().toLowerCase() !== String(u.email).toLowerCase()) return { opened: false, deleted: false, error: "Not deleted: the email did not match." };
+          let res = null;
+          try {
+            res = await fetch(`${base()}/api/auth/me`, { method: "DELETE", headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` }, body: JSON.stringify({ confirm: String(typed).trim() }) });
+          } catch { res = null; }
+          if (res && res.status !== 404) {
+            if (!res.ok) {
+              const d = await Promise.resolve(res.json ? res.json() : {}).catch(() => ({}));
+              const detail = d && d.detail; const msg = detail && (detail.message || (typeof detail === "string" ? detail : "")) || d && d.error || "";
+              return { opened: false, deleted: false, error: msg || `Deletion failed (${res.status})` };
+            }
+            await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config);
+            return { opened: false, deleted: true };
+          }
+          // 404 or unreachable: the gateway predates 0.2.20, use the console.
+        }
         const url = `${CROWE_ID}/account/`;
         const Browser = plugin("Browser");
         if (!Browser) { window.open(url, "_blank", "noopener"); return { opened: true, deleted: null }; }
