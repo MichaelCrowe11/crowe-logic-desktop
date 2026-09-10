@@ -662,6 +662,56 @@ function methodPaths(surface) {
     return "deleted -> signed out; looked -> still signed in";
   });
 
+  await check("Delete account goes through the gateway when it can confirm the address, and falls back to the console on an older gateway", async () => {
+    // Control plane 0.2.20: DELETE /api/auth/me with the typed email. The
+    // harness has no window.prompt, which is why the check above still takes
+    // the console route; here the prompt is supplied.
+    const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+    const token = jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 });
+    const makeCap = (opened) => ({ Plugins: {
+      Preferences: (() => { const prefs = new Map(); return { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } }; })(),
+      Browser: { open: async ({ url }) => { opened.push(url); }, addListener: (name, cb) => { setTimeout(() => cb(), 5); return { remove() {} }; } },
+    } });
+    const gateway = (status, body) => { const calls = []; const f = async (url, init = {}) => {
+      if (String(url).includes("/api/auth/me")) { calls.push(init); return { status, ok: status >= 200 && status < 300, json: async () => body }; }
+      if (String(url).includes("/protocol/openid-connect/token")) return { status: 400, text: async () => "{}", json: async () => ({ error: "invalid_grant" }) };
+      throw new TypeError("unexpected fetch " + url); }; f.calls = calls; return f; };
+
+    // 1. Confirmed and accepted: no browser sheet, tokens gone.
+    let opened = []; let gw = gateway(200, { deleted: true });
+    let bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "Grower@Example.com ";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    let r = await bridge.auth.deleteAccount();
+    assert(r.deleted === true && r.opened === false, `native deletion did not report deleted: ${JSON.stringify(r)}`);
+    assert(gw.calls.length === 1 && gw.calls[0].method === "DELETE" && /Bearer h\./.test(gw.calls[0].headers.Authorization) && JSON.parse(gw.calls[0].body).confirm === "Grower@Example.com", `the DELETE was not sent as expected: ${JSON.stringify(gw.calls)}`);
+    assert(opened.length === 0, "the console opened although the gateway deleted the account");
+    assert(!(await bridge.getConfig()).hasToken, "the access token survived a native deletion");
+
+    // 2. The typed address does not match: nothing is sent, nothing opens.
+    opened = []; gw = gateway(200, { deleted: true });
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "someone@else.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(r.deleted === false && /did not match/.test(r.error) && gw.calls.length === 0 && opened.length === 0, `a wrong address got through: ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a refused confirmation signed the phone out");
+
+    // 3. A protected account: the gateway's own words, still signed in.
+    opened = []; gw = gateway(403, { detail: { message: "This account is protected while the app is in review." } });
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "grower@example.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(r.deleted === false && /protected/.test(r.error) && opened.length === 0, `the 403 was not surfaced in words: ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a refused deletion signed the phone out");
+
+    // 4. An older gateway (404): the console route, exactly as before.
+    opened = []; gw = gateway(404, {});
+    bridge = loadMobileSurface(gw, makeCap(opened)); loadMobileSurface.lastWindow.prompt = () => "grower@example.com";
+    await bridge.setConfig({ token, refreshToken: "r1" });
+    r = await bridge.auth.deleteAccount();
+    assert(opened.length === 1 && /\/realms\/crowe\/account\/$/.test(opened[0]) && r.opened === true, `an older gateway did not fall back to the console: ${JSON.stringify({ r, opened })}`);
+    return "200 -> deleted natively; mismatch -> nothing sent; 403 -> the gateway's words; 404 -> console fallback";
+  });
+
   await check("a Shortcut's note is taken once, dispatched as crowe:intent, and stale notes are dropped", async () => {
     // CroweIntents.swift writes {kind, text, at} under the Preferences key
     // `intent`; the bridge reads it on launch and on foreground, clears it, and
