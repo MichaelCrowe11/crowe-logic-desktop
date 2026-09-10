@@ -832,7 +832,7 @@
      as its own event, so the phone can draw what the model examined while the
      rest of the answer is still arriving. */
   const REGIONS_RE = /^\s*REGIONS:\s*(\[[\s\S]*?\])[ \t]*\r?\n?/;
-  const REASONING_RE = /^\s*REASONING:\s*([^\n]*)\r?\n?/;
+  const REASONING_RE = /^\s*(?:NOTES|REASONING):\s*([^\n]*)\r?\n?/;
   const clamp01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0; };
   function parseRegions(json) {
     try {
@@ -883,8 +883,8 @@
           // Past the map. If a REASONING line follows (owner accounts), wait for
           // its newline too; otherwise the answer has started and we decide now.
           const after = head.replace(REGIONS_RE, "").replace(/^\s+/, "");
-          if (after === "" || "REASONING:".startsWith(after.slice(0, 10))) { if (buf.length > 2000) decide(); return; }
-          if (/^REASONING:/.test(after) && !/\n/.test(after)) return;
+          if (after === "" || "NOTES:".startsWith(after.slice(0, 6)) || "REASONING:".startsWith(after.slice(0, 10))) { if (buf.length > 2000) decide(); return; }
+          if (/^(?:NOTES|REASONING):/.test(after) && !/\n/.test(after)) return;
           decide();
         }
       },
@@ -895,9 +895,14 @@
      nobody else is asked for it, so nobody else can receive it. */
   const OWNER_EMAILS = new Set(["michael@crowelogic.com", "mike@southwestmushrooms.com"]);
   const isOwner = () => { const u = currentUser(); return Boolean(u && OWNER_EMAILS.has(String(u.email || "").trim().toLowerCase())); };
+  /* Wire word: NOTES, not REASONING. Asked for a "REASONING:" line, CroweLM
+     Vision returns an empty completion (0 tokens, finish stop; measured
+     2026-09-10 against the live model with the same photo); asked for NOTES in
+     the same shape it answers in full. The UI still calls the fold Reasoning. */
   const VISION_REASONING_BRIEF = [
-    "After the REGIONS line and before the answer, add exactly one line REASONING: followed by two or three sentences on how you",
-    "weighed what the photo shows, what you ruled out and why, and where you are unsure. Then a blank line, then the answer.",
+    "After the REGIONS line and before the answer, add exactly one line NOTES: followed by two or three sentences an inspector",
+    "would write in the margin: what in the photo carried the most weight, what was ruled out and why, and where the photo alone",
+    "leaves doubt. Then a blank line, then the answer.",
   ].join("\n");
   const PLAN_GATE_RE = /HTTP 403: Model '([^']+)' requires (\S+) plan or higher/i;
   function planRank(plan) {
@@ -1392,7 +1397,7 @@
                text: planNotice(route.model, route.planLimited.required) });
       }
       send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
-      let planGated = false;
+      let planGated = false, emptyRetried = false;
 
       const convo = [{ role: "system", content: systemPrompt(route) }];
       // The session's standing brief: who is speaking for this thread, ahead of
@@ -1456,7 +1461,21 @@
           text += (text ? "\n\n" : "") + r.content;
         }
         const calls = r.tool_calls || [];
-        if (!calls.length) { send({ type: "final", note: "answered" }); return { done: true, text }; }
+        if (!calls.length) {
+          /* A vision round that returns neither words nor a tool call is an
+             answer of nothing about a photo the grower is standing in front
+             of (measured live: 0 completion tokens, finish stop). Ask once
+             more; if it is still nothing, say so instead of letting the
+             transcript fill the silence with a generic line. */
+          if (route.vision && !(text || "").trim()) {
+            if (!emptyRetried) { emptyRetried = true; diag("run:empty-vision-retry", { round }); continue; }
+            const msg = "CroweLM Vision returned nothing for this photo, twice. Try again in a moment, or a closer photo of the block face in even light.";
+            diag("run:empty-vision", { round });
+            send({ type: "error", text: msg }); send({ type: "final", note: "empty completion" });
+            return { done: false, error: msg, text };
+          }
+          send({ type: "final", note: "answered" }); return { done: true, text };
+        }
 
         convo.push({ role: "assistant", content: r.content || "", tool_calls: calls });
         for (const call of calls) {
