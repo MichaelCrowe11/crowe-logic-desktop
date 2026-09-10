@@ -263,6 +263,39 @@ function methodPaths(surface) {
     assert(asked.join(",") === "crowelm-mycelium", `asked the gateway for: ${asked.join(", ")}`);
     assert(seen.some((e) => e.type === "plan"), "no plan notice ahead of the route");
   });
+  await check("connector tools ride along to the gateway and their calls are answered through it", async () => {
+    // connectors.js exposes window.croweConnectors; the bridge widens the tool list
+    // it sends and routes those calls back to the gateway, which holds the grant.
+    const bodies = [];
+    const gw = fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "google_calendar_list_events", arguments: '{"query":"harvest"}' } }] } },
+       { usage: { prompt_tokens: 50, completion_tokens: 10 } }],
+      [{ delta: { content: "One event: Harvest at 9." } }, { usage: { prompt_tokens: 90, completion_tokens: 8 } }],
+    ]);
+    const bridge = loadMobileSurface(async (url, init = {}) => { if (String(url).includes("/api/gateway/chat")) bodies.push(JSON.parse(init.body)); return gw(url, init); });
+    const win = loadMobileSurface.lastWindow;
+    const acted = [];
+    win.croweConnectors = {
+      tools: async () => [{ type: "function", function: { name: "google_calendar_list_events", description: "list", parameters: { type: "object", properties: {} } } }],
+      owns: (n) => n === "google_calendar_list_events",
+      act: async (n, a) => { acted.push([n, a]); return JSON.stringify({ events: [{ summary: "Harvest" }], count: 1 }); },
+    };
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64") + ".sig" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    const result = await bridge.agent.run([{ role: "user", content: "what is on my calendar about the harvest" }]);
+    off();
+    assert(result.done && /Harvest at 9/.test(result.text), `turn returned ${JSON.stringify(result)}`);
+    const names = (bodies[0].tools || []).map((t) => t.function.name);
+    assert(names.includes("google_calendar_list_events") && names.includes("read_grow"), `tools sent: ${names.join(",")}`);
+    assert(acted.length === 1 && acted[0][0] === "google_calendar_list_events" && acted[0][1].query === "harvest", `act saw ${JSON.stringify(acted)}`);
+    const toolMsg = bodies[1].messages.find((m) => m.role === "tool");
+    assert(toolMsg && /Harvest/.test(toolMsg.content), "the connector result did not go back to the model");
+    const tr = seen.find((e) => e.type === "tool_result");
+    assert(tr && tr.status === "ok", "no tool_result event for the connector call");
+    delete win.croweConnectors;
+    return "tools merged, call answered via the gateway, result fed back";
+  });
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.

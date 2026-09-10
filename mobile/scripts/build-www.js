@@ -52,13 +52,14 @@ const COPY = [
   ["mobile/src/mobile-ui.js", "mobile-ui.js"],
   ["mobile/src/speak.js", "speak.js"],
   ["mobile/src/share-inbox.js", "share-inbox.js"],
+  ["mobile/src/connectors.js", "connectors.js"],
 ];
 
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js",
+  "mark-geometry.js", "mark.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -137,7 +138,7 @@ function buildIndex() {
   // after renderer.js rather than before it.
   must(html, '<script src="renderer.js"></script>', "the renderer script tag");
   html = html.replace('<script src="renderer.js"></script>',
-    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>');
+    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
 
   // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
   // sells a subscription through Stripe, which is the app store's business on

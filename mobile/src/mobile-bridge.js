@@ -1142,7 +1142,20 @@
     return tools;
   }
 
+  /* Connector tools come from the gateway, for the services this Crowe ID has
+     connected (Google Calendar and Drive first). connectors.js owns the fetch
+     and the dispatch; the bridge only widens the tool list it hands the model
+     and routes those calls back through the gateway, which holds the grant. */
+  async function turnTools() {
+    const tools = toolsForTurn();
+    const cx = typeof window !== "undefined" && window.croweConnectors;
+    if (!cx) return tools;
+    try { return tools.concat(await cx.tools()); } catch { return tools; }
+  }
+
   async function execTool(name, args) {
+    const cx = typeof window !== "undefined" && window.croweConnectors;
+    if (cx && cx.owns(name)) return { text: await cx.act(name, args), status: "ok" };
     if (name === "read_grow") {
       const rows = await growRead(String(args.type || ""));
       if (!rows.length) return { text: `no ${args.type || "records"} logged on this device yet`, status: "empty" };
@@ -1426,7 +1439,7 @@
         const emitDelta = (chunk) => send({ type: "assistant_delta", text: chunk });
         const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta,
           (reasoning) => { if (isOwner()) send({ type: "vision_reasoning", text: reasoning }); }) : null;
-        const r = await gatewayChat(convo, toolsForTurn(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
+        const r = await gatewayChat(convo, await turnTools(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
         if (filt) {
           filt.flush();
           if (typeof r.content === "string") {
