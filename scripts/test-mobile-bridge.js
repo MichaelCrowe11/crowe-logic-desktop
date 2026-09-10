@@ -152,7 +152,7 @@ function methodPaths(surface) {
     // desktop to grow here either — it already has the engine this is standing
     // in for.
     const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
-      "intents.take", "reminders.list", "reminders.add", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
+      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -556,6 +556,7 @@ function methodPaths(surface) {
       Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
       LocalNotifications: { checkPermissions: async () => ({ display: "granted" }), requestPermissions: async () => ({ display: "granted" }),
         schedule: async ({ notifications }) => { scheduled.push(...notifications); }, cancel: async ({ notifications }) => { cancelled.push(...notifications.map((n) => n.id)); },
+        getPending: async () => ({ notifications: scheduled.filter((n) => !cancelled.includes(n.id)) }),
         addListener: () => ({ remove() {} }) },
     } };
     const bridge = loadMobileSurface(() => { throw new TypeError("no network in this check"); }, cap);
@@ -567,15 +568,23 @@ function methodPaths(surface) {
     assert(scheduled.length === 2 && scheduled.every((n) => Number.isInteger(n.id) && n.id < 2 ** 31 && n.schedule && n.schedule.at instanceof Date), "the plugin did not get two int32-id notifications with a date");
     const list = await bridge.reminders.list();
     assert(list.length === 2 && list[0].lot === "260910-02", `list is not soonest first: ${JSON.stringify(list.map((r) => r.lot))}`);
+    // pending reads what the SYSTEM holds, soonest first, with a millisecond
+    // time, so Diagnostics can show that iOS accepted the schedule.
+    const pend = await bridge.reminders.pending();
+    assert(pend.native === true && pend.notifications.length === 2 && pend.notifications[0].id === sooner.reminder.id && pend.notifications.every((n) => Number.isInteger(n.at)), `pending did not mirror the system: ${JSON.stringify(pend)}`);
     await bridge.reminders.remove(sooner.reminder.id);
     assert(cancelled.includes(sooner.reminder.id) && (await bridge.reminders.list()).length === 1, "remove did not cancel with the system and drop the row");
+    assert((await bridge.reminders.pending()).notifications.length === 1, "pending still lists a cancelled notification");
+    const noPlugin = loadMobileSurface(() => { throw new TypeError("no network"); }, { Plugins: { Preferences: cap.Plugins.Preferences } });
+    const none = await noPlugin.reminders.pending();
+    assert(none.native === false && none.notifications.length === 0, "without the plugin, pending must say so instead of failing");
     const c = await bridge.camera.add({ lot: "260910-01", verdict: "Healthy colonisation, no contamination. Move to fruiting in about a week.", thumb: "data:image/jpeg;base64,/9j/4AAQ" });
     assert(c.ok && c.entry.thumb.startsWith("data:image/"), "the roll dropped a small thumbnail");
     const bad = await bridge.camera.add({ lot: "x", verdict: "v", thumb: "javascript:alert(1)" });
     assert(bad.ok && bad.entry.thumb === "", "a non-image thumb was kept");
     const roll = await bridge.camera.list();
     assert(roll.length === 2 && roll[0].lot === "x", "the roll is not newest first");
-    return `2 reminders scheduled (int32 ids, soonest first), 1 cancelled; roll keeps ${roll.length}, rejects non-image thumbs`;
+    return `2 reminders scheduled (int32 ids, soonest first), pending mirrors the system, 1 cancelled; roll keeps ${roll.length}, rejects non-image thumbs`;
   });
 
   await check("diagnostics record a run's request, response and ending, and a failed fetch names itself", async () => {

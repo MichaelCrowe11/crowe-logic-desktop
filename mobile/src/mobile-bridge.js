@@ -697,7 +697,7 @@
     });
 
     let resp;
-    diag("net:fetch", { model: useModel, stream: Boolean(onDelta), bytes: body.length, images: (body.match(/"image_url"/g) || []).length });
+    diag("net:fetch", { model: useModel, stream: Boolean(onDelta), bytes: body.length, images: (body.match(/"type":"image_url"/g) || []).length });
     try {
       resp = await fetch(url, { method: "POST", headers, body, signal });
     } catch (e) {
@@ -2090,6 +2090,19 @@
         all.push(rec);
         await store.set("reminders", all.slice(-200));
         return { ok: true, reminder: rec, native: Boolean(LN) };
+      },
+      // What the system still holds for this app, so Diagnostics can show that
+      // iOS accepted a reminder and not only that Preferences kept a row.
+      // Pending is scheduling, not delivery: the one-minute test in Settings is
+      // what proves a notification reaches the lock screen.
+      pending: async () => {
+        const LN = plugin("LocalNotifications");
+        if (!LN || typeof LN.getPending !== "function") return { native: false, notifications: [] };
+        try {
+          const r = await LN.getPending();
+          const list = (r && r.notifications) || [];
+          return { native: true, notifications: list.map((n) => ({ id: n.id, title: String(n.title || ""), at: n.schedule && n.schedule.at ? new Date(n.schedule.at).getTime() : null })).sort((a, b) => (a.at || 0) - (b.at || 0)) };
+        } catch (e) { return { native: true, notifications: [], error: String(e && e.message || e).slice(0, 80) }; }
       },
       remove: async (id) => {
         const LN = plugin("LocalNotifications");

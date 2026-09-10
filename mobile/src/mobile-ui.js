@@ -159,6 +159,7 @@
   const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict">${esc((c.verdict || "").slice(0, 180))}</div></div></div>`;
   let pendingLot = "", cameraArmed = false, photoTurn = null;
 
+  const isIOS = () => Boolean(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "ios");
   async function renderHome() {
     const crowe = window.crowe; if (!crowe || !crowe.grow) return;
     const safe = (p) => Promise.resolve(p).catch(() => []);
@@ -174,6 +175,10 @@
       `<header class="m-home-head"><div class="m-kicker">Grow log · this phone</div><h1 class="m-title">Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
       rows.length ? '<section class="m-home-sec" id="m-home-blocks"><h2>Blocks by stage</h2>' + rows.map((b) => `<div class="m-lot" data-lot="${esc(b.code)}"><div class="m-lot-main"><b>${esc(b.code)}</b><span class="m-lot-name">${esc([b.species, b.strain].filter(Boolean).join(" · "))}</span><span class="m-stage m-stage-${esc(b.stage || "")}">${esc(b.stage || "")}</span></div><div class="m-lot-meta">${b.spawned ? esc(sinceDays(b.spawned)) + " since spawn" : ""}${b.count ? ` · ${esc(String(b.count))}×` : ""}${b.room ? ` · ${esc(b.room)}` : ""}</div>${yieldLine(b, byLot) ? `<div class="m-lot-yield">${esc(yieldLine(b, byLot))}</div>` : ""}<div class="m-lot-actions"><button type="button" class="ghost sm m-remind" data-lot="${esc(b.code)}" data-species="${esc(b.species || "")}" data-stage="${esc(b.stage || "")}">Remind me</button><button type="button" class="ghost sm m-check" data-lot="${esc(b.code)}">Photograph</button></div></div>`).join("") + "</section>" : "",
       '<section class="m-home-sec" id="m-home-reminders"><h2>Reminders</h2>' + (upcoming.length ? upcoming.map((r) => `<div class="m-rem"><div><b>${esc(r.title)}</b><div class="m-lot-meta">${esc(new Date(r.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${r.body ? " · " + esc(r.body) : ""}</div></div><button type="button" class="ghost sm m-rem-x" data-id="${r.id}">Remove</button></div>`).join("") : '<p class="m-home-empty">None set. Tap Remind me on a block.</p>') + "</section>",
+      // Siri only where Siri is. The phrase is the whole sentence: iOS App
+      // Shortcuts carry no free text, so a question spoken in the same breath
+      // gets "hasn't added support for that". That was the first hardware report.
+      isIOS() ? '<section class="m-home-sec" id="m-home-siri"><h2>Siri</h2><p class="m-home-empty">Say “Hey Siri, ask Crowe” and stop there. Siri asks what you want to ask, then opens the answer here. The question cannot ride in the same sentence.</p></section>' : "",
       roll.length ? '<section class="m-home-sec"><h2>Camera checks</h2>' + roll.slice(0, 4).map(rollCard).join("") + "</section>" : "",
       sessions.length ? '<section class="m-home-sec"><h2>Recent conversations</h2>' + sessions.slice(0, 3).map((x) => `<div class="m-sess">${esc(x.name || x.title || "Untitled")}</div>`).join("") + "</section>" : "",
       "</div>",
@@ -818,6 +823,10 @@
     "<span>The last things this app did: each run, the request it sent, what came back, and how it ended. Copy it and send it to support when something does not answer.</span></div></div>",
     '<pre id="m-diag-log" class="m-diag-log" aria-live="off">Loading</pre>',
     '<div class="m-diag-actions"><button id="m-diag-copy" class="ghost sm" type="button">Copy</button><button id="m-diag-share" class="ghost sm" type="button">Share</button><button id="m-diag-clear" class="ghost sm" type="button">Clear</button></div>',
+    '<div class="settings-section-head m-diag-rem"><div><b>Reminders</b>',
+    "<span>What this phone still holds for Crowe Logic. Pending means iOS accepted the schedule, not that it rang. The one-minute test is the proof: set it, lock the phone, and wait.</span></div></div>",
+    '<pre id="m-diag-pending" class="m-diag-log" aria-live="off">Loading</pre>',
+    '<div class="m-diag-actions"><button id="m-diag-test-reminder" class="ghost sm" type="button">Test reminder (1 minute)</button></div>',
   ].join("");
   accountSection.parentNode && accountSection.parentNode.insertBefore(diagSection, accountSection.nextSibling);
   const diagText = async () => {
@@ -840,7 +849,24 @@
     else window.prompt("Copy this:", text);
   });
   $("m-diag-clear").addEventListener("click", async () => { if (window.crowe && window.crowe.diag) await window.crowe.diag.clear(); renderDiag(); });
-  $("settings-btn").addEventListener("click", () => setTimeout(renderDiag, 50));
+  const fmtWhen = (ts) => new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  async function renderPending() {
+    const pre = $("m-diag-pending"); if (!pre) return;
+    const R = window.crowe && window.crowe.reminders;
+    if (!R || !R.pending) { pre.textContent = "Reminders are not part of this build."; return; }
+    const p = await R.pending().catch(() => ({ native: false, notifications: [] }));
+    if (!p.native) { pre.textContent = "No notification service here; this is the browser build. On the phone this lists what iOS holds."; return; }
+    if (p.error) { pre.textContent = "Could not read pending notifications: " + p.error; return; }
+    pre.textContent = p.notifications.length ? p.notifications.map((n) => `${n.at ? fmtWhen(n.at) : "no time"}  ${n.title} (#${n.id})`).join("\n") : "Nothing pending.";
+  }
+  $("m-diag-test-reminder").addEventListener("click", async () => {
+    const R = window.crowe && window.crowe.reminders; if (!R) return;
+    const r = await R.add({ title: "Crowe Logic test", body: "Reminders reach this phone.", at: Date.now() + 60000 });
+    if (r && r.ok) say(r.native ? "Test reminder set. Lock the phone; it rings in one minute." : "Set, but this build has no notification service to ring it.", "note");
+    else say((r && r.error) || "The reminder could not be set.", "error");
+    renderPending(); if (typeof renderHome === "function") renderHome();
+  });
+  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); }, 50));
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
   window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
 

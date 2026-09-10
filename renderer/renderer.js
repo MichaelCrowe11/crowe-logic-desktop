@@ -819,7 +819,18 @@ async function send(text, opts = {}) {
     if (mark) mark.ping();
   }
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
-  else if (!body.querySelector(".said, .err, .stopped")) body.innerHTML = '<p class="said hint">Done. See the workspace.</p>';
+  else if (!body.querySelector(".said, .err, .stopped")) {
+    // No prose came back. If tools ran, the work is in the workspace (or, on
+    // the phone, in the log) and that is what to say. If nothing ran at all,
+    // the model returned an empty completion, and the honest line names that
+    // rather than dressing it as a finished job. The phone read every empty
+    // vision round as "Done. See the workspace." until 0.25.3; see
+    // mobile-bridge.js for the retry that now precedes this.
+    const phone = document.body.classList.contains("mobile");
+    body.innerHTML = acts.length
+      ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
+      : '<p class="said hint">The model returned no text. Send it again.</p>';
+  }
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }

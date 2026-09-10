@@ -488,11 +488,13 @@ const tests = [
       const out = { paneShown: __shown("#m-home-pane"), chatHidden: !__shown("#agent"), lots: lots.length,
                     stage: lots.length ? lots[0].querySelector(".m-stage").textContent.trim() : "",
                     remind: Boolean(document.querySelector("#m-home-pane .m-remind")), photo: Boolean(document.querySelector("#m-home-pane .m-check")),
-                    reminders: __shown("#m-home-reminders") };
+                    reminders: __shown("#m-home-reminders"),
+                    // The Siri words show only where Siri is; this harness has no Capacitor, so the gate must hide them.
+                    siriHidden: !document.querySelector("#m-home-siri") };
       __tap("Chat");
       await __settle();
       return { ...out, backToChat: __shown("#agent") };`,
-    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, backToChat: true },
+    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, siriHidden: true, backToChat: true },
   },
   {
     name: "Camera offers Photograph and Choose a photo, and names the engine",
@@ -506,15 +508,18 @@ const tests = [
     expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
   },
   {
-    name: "Settings carries Diagnostics with Copy, Share and Clear",
+    name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
     body: `document.getElementById("settings-btn").click();
       await __settle(300);
       const out = { log: __shown("#m-diag-log"), copy: __shown("#m-diag-copy"), share: __shown("#m-diag-share"), clear: __shown("#m-diag-clear"),
-                    hasHeader: /Crowe Logic/.test(document.getElementById("m-diag-log").textContent) };
+                    hasHeader: /Crowe Logic/.test(document.getElementById("m-diag-log").textContent),
+                    pending: __shown("#m-diag-pending"), testBtn: __shown("#m-diag-test-reminder"),
+                    // No notification service in this harness: the pane must say so in words, not sit on "Loading".
+                    pendingSaysWhy: /browser build/.test(document.getElementById("m-diag-pending").textContent) };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true },
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true },
   },
 ];
 
