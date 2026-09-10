@@ -1626,6 +1626,38 @@
     auth: {
       login: signIn,
       logout: async () => { await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config); return { ok: true }; },
+      /* App Store guideline 5.1.1(v): an account a person can create in the app
+         must be one they can delete from the app. The deletion itself lives on
+         the Crowe ID account page (Keycloak's delete_account action), so the
+         phone opens that page in the browser sheet and, when the sheet closes,
+         asks the realm whether this session still exists. A deleted user has no
+         session, the refresh is refused, and the phone forgets its tokens. A
+         person who only looked and closed the sheet refreshes fine and stays
+         signed in. Without a refresh token there is nothing to ask, so the
+         answer is unknown rather than guessed. */
+      deleteAccount: async () => {
+        await ready;
+        const url = `${CROWE_ID}/account/`;
+        const Browser = plugin("Browser");
+        if (!Browser) { window.open(url, "_blank", "noopener"); return { opened: true, deleted: null }; }
+        return new Promise((resolve) => {
+          let handle = null, settled = false;
+          const finish = async () => {
+            if (settled) return;
+            settled = true;
+            try { if (handle) handle.remove(); } catch { /* listener already gone */ }
+            if (!config.refreshToken) { resolve({ opened: true, deleted: null }); return; }
+            const alive = await refreshToken();
+            if (alive) { resolve({ opened: true, deleted: false }); return; }
+            await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config);
+            resolve({ opened: true, deleted: true });
+          };
+          // Promise.resolve for the same reason as in signIn: the injected
+          // bridge returns the handle synchronously, the JS package a promise.
+          Promise.resolve(Browser.addListener("browserFinished", finish)).then((h) => { handle = h; }).catch(() => {});
+          Browser.open({ url, presentationStyle: "popover" }).catch(() => finish());
+        });
+      },
       status: async () => {
         await ready;
         let u = currentUser();

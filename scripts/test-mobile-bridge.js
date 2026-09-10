@@ -151,7 +151,7 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal"];
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -445,6 +445,52 @@ function methodPaths(surface) {
     assert(chat.data && chat.data.stream === undefined, `the native body still asked to stream: ${JSON.stringify(chat.data.stream)}`);
     assert(result.done && result.text === "Whole answer.", `the fallback returned ${JSON.stringify(result)}`);
     return "stream stripped from the native body; an SSE body is still read";
+  });
+
+  await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
+    // App Store guideline 5.1.1(v). The deletion happens on the account page;
+    // the bridge learns the outcome by asking the realm for a fresh token when
+    // the browser sheet closes. Refused refresh = the user is gone = sign out.
+    // A refresh that succeeds means they only looked, and they stay signed in.
+    const makeCapacitor = (opened, fired) => { const prefs = new Map(); return { Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      Browser: {
+        open: async ({ url }) => { opened.push(url); },
+        addListener: (name, cb) => { fired[name] = cb; return { remove() { fired[name] = null; } }; },
+      },
+    } }; };
+    const tokenAnswer = (body, status = 200) => (url) => Promise.resolve({ status, text: async () => JSON.stringify(body), json: async () => body })
+      .then((r) => { if (!String(url).includes("/protocol/openid-connect/token")) throw new TypeError("unexpected fetch " + url); return r; });
+
+    // 1. The account was deleted: Keycloak refuses the refresh, the phone signs out.
+    let opened = [], fired = {};
+    let bridge = loadMobileSurface(tokenAnswer({ error: "invalid_grant", error_description: "Session not active" }, 400), makeCapacitor(opened, fired));
+    await bridge.setConfig({ token: "a.b.c", refreshToken: "r1" });
+    let pending = bridge.auth.deleteAccount();
+    await new Promise((r) => setTimeout(r, 20));
+    assert(opened.length === 1 && /\/realms\/crowe\/account\/$/.test(opened[0]), `opened ${JSON.stringify(opened)} instead of the account console`);
+    assert(typeof fired.browserFinished === "function", "no browserFinished listener was registered before the sheet opened");
+    fired.browserFinished();
+    let r = await pending;
+    assert(r.deleted === true, `expected deleted:true, got ${JSON.stringify(r)}`);
+    assert((await bridge.auth.status()).user === null, "the phone is still signed in after the account was deleted");
+    assert(!(await bridge.getConfig()).hasToken, "the access token survived the deletion");
+
+    // 2. They only looked: the refresh succeeds and nothing is forgotten.
+    opened = []; fired = {};
+    bridge = loadMobileSurface(tokenAnswer({ access_token: "x.y.z", refresh_token: "r2" }), makeCapacitor(opened, fired));
+    await bridge.setConfig({ token: "a.b.c", refreshToken: "r1" });
+    pending = bridge.auth.deleteAccount();
+    await new Promise((r) => setTimeout(r, 20));
+    fired.browserFinished();
+    r = await pending;
+    assert(r.deleted === false, `expected deleted:false, got ${JSON.stringify(r)}`);
+    assert((await bridge.getConfig()).hasToken, "a look at the account page signed the phone out");
+    return "deleted -> signed out; looked -> still signed in";
   });
 
   await check("a write to a phone: path updates the app's copy and only that", async () => {

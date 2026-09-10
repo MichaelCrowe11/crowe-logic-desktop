@@ -462,6 +462,36 @@
   const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
   if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
 
+  /* Account deletion, App Store guideline 5.1.1(v). The deletion happens on
+     the Crowe ID account page, which the bridge opens in the browser sheet;
+     when the sheet closes the bridge finds out whether the account is still
+     there and signs the phone out if it is not. Phone-only for the same reason
+     as the section above: the desktop has its own account surface. */
+  const accountSection = document.createElement("section");
+  accountSection.className = "key-manager m-account";
+  accountSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Your Crowe ID</b>',
+    "<span>Deleting your Crowe ID removes the account and everything kept under it, including any plan on it, and cannot be undone. ",
+    "This opens your account page; choose Delete account there. The phone signs out on its own once the account is gone.</span></div></div>",
+    '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
+  ].join("");
+  if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+  const deleteBtn = $("m-delete-account");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      const sure = window.confirm("Delete your Crowe ID?\n\nYour account page opens next. Choose Delete account there. This cannot be undone.");
+      if (!sure) return;
+      deleteBtn.disabled = true;
+      let r = null;
+      try { r = await window.crowe.auth.deleteAccount(); } catch { r = null; }
+      deleteBtn.disabled = false;
+      if (r && r.deleted) {
+        if (typeof refreshAuth === "function") { try { await refreshAuth(); } catch { /* the badge redraws on next load */ } }
+        window.alert("Your Crowe ID has been deleted and this phone is signed out.");
+      }
+    });
+  }
+
   /* One class on <body> is what the rest of the phone UI reads to know a
      machine is paired: the CSS uses it to reveal the Execute tier, the
      placeholder table uses it to stop describing a grow log when the tier now
