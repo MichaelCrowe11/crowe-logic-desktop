@@ -1688,10 +1688,10 @@
         const tier = u ? String(u.tier || "") : "";
         return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) };
       },
-      catalog: async () => ({ error: "The price list is not readable from the phone. Prices and plans are at crowelogic.com." }),
+      catalog: async () => ({ error: "The plan list is not available in the phone app." }),
       checkout: async () => ({
         ok: false,
-        error: "Subscribing happens on the web or in the desktop app, not in the phone app. Sign in at crowelogic.com with this same Crowe ID and the plan reaches this phone on its next sign-in.",
+        error: "Plans are not sold in the phone app. The plan on your Crowe ID reaches this phone on its next sign-in.",
       }),
       refresh: async () => {
         await ready;
