@@ -152,7 +152,7 @@ function methodPaths(surface) {
     // desktop to grow here either — it already has the engine this is standing
     // in for.
     const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
-      "intents.take", "reminders.list", "reminders.add", "reminders.remove", "camera.list", "camera.add"];
+      "intents.take", "reminders.list", "reminders.add", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -557,6 +557,35 @@ function methodPaths(surface) {
     const roll = await bridge.camera.list();
     assert(roll.length === 2 && roll[0].lot === "x", "the roll is not newest first");
     return `2 reminders scheduled (int32 ids, soonest first), 1 cancelled; roll keeps ${roll.length}, rejects non-image thumbs`;
+  });
+
+  await check("diagnostics record a run's request, response and ending, and a failed fetch names itself", async () => {
+    const prefs = new Map();
+    const cap = { Plugins: { Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } } } };
+    let mode = "ok";
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      if (mode === "down") throw new TypeError("Load failed");
+      return new Response('data: {"choices":[{"delta":{"content":"Fine."}}]}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    }, cap);
+    await bridge.diag.clear();
+    await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".sig" });
+    await bridge.agent.run([{ role: "user", content: "hello" }]);
+    let rows = await bridge.diag.list();
+    const kinds = rows.map((r) => r.k);
+    assert(kinds.includes("run:start") && kinds.includes("net:fetch") && kinds.includes("net:response") && kinds.includes("net:stream-end") && kinds.includes("run:final"), `a good run recorded ${JSON.stringify(kinds)}`);
+    assert(rows[0].t >= rows[rows.length - 1].t, "the list is not newest first");
+    mode = "down";
+    const r = await bridge.agent.run([{ role: "user", content: "hello again" }]);
+    rows = await bridge.diag.list();
+    const threw = rows.find((x) => x.k === "net:fetch-threw");
+    assert(threw && /Load failed/.test(threw.d), `the failed fetch was not recorded: ${JSON.stringify(rows.slice(0, 4))}`);
+    assert(rows.some((x) => x.k === "run:error") && r.done === false, "the failed run did not end as an error");
+    await bridge.diag.note("page:error", "something the page threw");
+    assert((await bridge.diag.list())[0].k === "page:error", "a page note did not land on top");
+    await bridge.diag.clear();
+    assert((await bridge.diag.list()).length === 0, "clear left entries");
+    return `${kinds.length} entries for a good run; a dead network shows as net:fetch-threw Load failed`;
   });
 
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {

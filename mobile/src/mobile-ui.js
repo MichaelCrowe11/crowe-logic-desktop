@@ -623,11 +623,11 @@
       d.innerHTML = `<summary>Reasoning<span class="m-scan-reason-tag">owner view</span></summary><p>${esc(text)}</p>`;
       activeScan.strip.appendChild(d);
     }
-    function endScan(how) {
+    function endScan(how, why) {
       if (!activeScan) return;
       activeScan.strip.classList.add("m-scan-done");
       activeScan.wrap.classList.remove("m-scan-sending");
-      scanSay(how === "error" ? "The photo could not be read." : how === "stopped" ? "Stopped." :
+      scanSay(how === "error" ? ("The photo could not be read. " + String(why || "").slice(0, 140)).trim() : how === "stopped" ? "Stopped." :
         (activeScan.regions.length ? `Read. ${activeScan.regions.length} area${activeScan.regions.length === 1 ? "" : "s"} marked; tap the photo to hide them.` : "Read."));
       activeScan = null;
     }
@@ -638,7 +638,7 @@
         if (ev.type === "vision_reasoning" && typeof ev.text === "string") { scanReasoning(ev.text); return; }
         if (ev.type === "assistant_delta") { scanReading(); return; }
         if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
-        if (ev.type === "error") { endScan("error"); return; }
+        if (ev.type === "error") { endScan("error", ev.text); return; }
         if (ev.type === "stopped") { endScan("stopped"); return; }
         if (ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
         const bodies = document.querySelectorAll(".msg.user .body");
@@ -808,6 +808,42 @@
     '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
   ].join("");
   if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+  /* Diagnostics. What the bridge did, newest first, with Copy and Share, so a
+     phone that says nothing can be read from a text message. Errors the page
+     itself throws are noted here too. */
+  const diagSection = document.createElement("section");
+  diagSection.className = "key-manager m-diag";
+  diagSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Diagnostics</b>',
+    "<span>The last things this app did: each run, the request it sent, what came back, and how it ended. Copy it and send it to support when something does not answer.</span></div></div>",
+    '<pre id="m-diag-log" class="m-diag-log" aria-live="off">Loading</pre>',
+    '<div class="m-diag-actions"><button id="m-diag-copy" class="ghost sm" type="button">Copy</button><button id="m-diag-share" class="ghost sm" type="button">Share</button><button id="m-diag-clear" class="ghost sm" type="button">Clear</button></div>',
+  ].join("");
+  accountSection.parentNode && accountSection.parentNode.insertBefore(diagSection, accountSection.nextSibling);
+  const diagText = async () => {
+    const rows = window.crowe && window.crowe.diag ? await window.crowe.diag.list().catch(() => []) : [];
+    const ver = (window.crowe && window.crowe.getConfig) ? await window.crowe.getConfig().then((c) => c.version || "").catch(() => "") : "";
+    const head = `Crowe Logic ${ver || ""} · ${navigator.userAgent.slice(0, 80)} · ${new Date().toISOString()}`;
+    return head + "\n" + (rows.length ? rows.map((r) => `${new Date(r.t).toISOString().slice(11, 19)} ${r.k} ${r.d}`).join("\n") : "(nothing recorded yet)");
+  };
+  async function renderDiag() { const pre = $("m-diag-log"); if (pre) pre.textContent = (await diagText()).split("\n").slice(0, 26).join("\n"); }
+  $("m-diag-copy").addEventListener("click", async () => {
+    const text = await diagText();
+    try { await navigator.clipboard.writeText(text); say("Diagnostics copied", "note"); }
+    catch { if (window.crowePhone && window.crowePhone.shareText) window.crowePhone.shareText(text); else window.prompt("Copy this:", text); }
+  });
+  $("m-diag-share").addEventListener("click", async () => {
+    const text = await diagText();
+    const Share = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
+    if (Share) { try { await Share.share({ title: "Crowe Logic diagnostics", text }); } catch { /* dismissed */ } }
+    else if (navigator.share) { try { await navigator.share({ title: "Crowe Logic diagnostics", text }); } catch { /* dismissed */ } }
+    else window.prompt("Copy this:", text);
+  });
+  $("m-diag-clear").addEventListener("click", async () => { if (window.crowe && window.crowe.diag) await window.crowe.diag.clear(); renderDiag(); });
+  $("settings-btn").addEventListener("click", () => setTimeout(renderDiag, 50));
+  window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
+  window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
+
   const deleteBtn = $("m-delete-account");
   if (deleteBtn) {
     deleteBtn.addEventListener("click", async () => {

@@ -697,9 +697,11 @@
     });
 
     let resp;
+    diag("net:fetch", { model: useModel, stream: Boolean(onDelta), bytes: body.length, images: (body.match(/"image_url"/g) || []).length });
     try {
       resp = await fetch(url, { method: "POST", headers, body, signal });
     } catch (e) {
+      diag("net:fetch-threw", { name: e && e.name, message: String(e && e.message || e).slice(0, 200), cors: corsBlocked(e) });
       if (e && e.name === "AbortError") return { error: "stopped", aborted: true };
       if (!corsBlocked(e)) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       // The native transport hands back one finished body, so it must not ask
@@ -707,6 +709,7 @@
       // stream:true, and an event stream read as JSON is an empty answer.
       const nativeBody = JSON.parse(body); delete nativeBody.stream;
       const r = await nativePost(url, headers, nativeBody);
+      diag("net:native", r ? { status: r.status, bytes: String(r.text || "").length } : "no native transport");
       if (!r) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
       if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
       let data;
@@ -722,6 +725,7 @@
       return done(data, 0);
     }
 
+    diag("net:response", { status: resp.status, type: String(resp.headers.get("content-type") || "").slice(0, 40), ms: Date.now() - t0 });
     if (resp.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
 
     // Streaming is decided by the response, not the request — same contract as
@@ -743,9 +747,11 @@
           }
         }
       } catch (e) {
+        diag("net:stream-broke", { name: e && e.name, message: String(e && e.message || e).slice(0, 160), got: acc.content.length });
         if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content: acc.content, streamed: acc.content.length };
         return { error: `stream broke: ${String(e).slice(0, 160)}`, content: acc.content, streamed: acc.content.length };
       }
+      diag("net:stream-end", { chars: acc.content.length, error: acc.error || "", ms: Date.now() - t0 });
       if (acc.error) return { error: `gateway: ${acc.error}`.slice(0, 400), content: acc.content, streamed: acc.content.length };
       return { ...acc.result(), elapsedMs: Date.now() - t0, streamed: acc.content.length };
     }
@@ -1320,14 +1326,36 @@
 
   // ─── The agent loop ────────────────────────────────────────────────────────
   const listeners = new Set();
-  const emit = (ev) => { for (const fn of listeners) { try { fn(ev); } catch { /* one bad listener must not stop the rest */ } } };
+  const emit = (ev) => { for (const fn of listeners) { try { fn(ev); } catch (e) { diag("ui:listener-threw", String(e && e.message || e)); } } };
+
+  /* Diagnostics. A ring of the last sixty things the bridge did: run start,
+     route, the request it sent, what came back, and how it ended. Written to
+     Preferences so it survives a relaunch, read by Settings, copied by hand.
+     It exists because a phone cannot be attached to a debugger from a text
+     message, and "nothing happened" needs a where. Never throws. */
+  const DIAG_MAX = 60;
+  let diagBuf = null;
+  async function diag(kind, detail) {
+    try {
+      if (!diagBuf) diagBuf = (await store.get("diag")) || [];
+      const d = detail == null ? "" : typeof detail === "string" ? detail : JSON.stringify(detail);
+      diagBuf.push({ t: Date.now(), k: String(kind).slice(0, 40), d: String(d).slice(0, 400) });
+      if (diagBuf.length > DIAG_MAX) diagBuf = diagBuf.slice(-DIAG_MAX);
+      await store.set("diag", diagBuf);
+    } catch { /* diagnostics never get in the way */ }
+  }
   const runs = new Map();
 
   async function runAgent(messages, id, opts) {
     await ready;
     const run = { aborted: false, controller: null };
     runs.set(id, run);
-    const send = (ev) => emit({ ...ev, agentId: id });
+    const send = (ev) => {
+      if (ev && (ev.type === "route" || ev.type === "error" || ev.type === "final" || ev.type === "plan" || ev.type === "photos" || ev.type === "vision_regions"))
+        diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
+      emit({ ...ev, agentId: id });
+    };
+    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
     const budget = Number(config.turnBudgetUsd) > 0 ? Number(config.turnBudgetUsd) : 0;
     let text = "";
@@ -2061,6 +2089,12 @@
         await store.set("camera-roll", roll.slice(-60));
         return { ok: true, entry: rec };
       },
+    },
+
+    diag: {
+      list: async () => { if (!diagBuf) diagBuf = (await store.get("diag")) || []; return diagBuf.slice().reverse(); },
+      clear: async () => { diagBuf = []; await store.set("diag", []); return { ok: true }; },
+      note: (kind, detail) => diag(kind, detail),
     },
 
     onBrowserNavigate: noop,

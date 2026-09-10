@@ -505,6 +505,17 @@ const tests = [
       return out;`,
     expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
   },
+  {
+    name: "Settings carries Diagnostics with Copy, Share and Clear",
+    body: `document.getElementById("settings-btn").click();
+      await __settle(300);
+      const out = { log: __shown("#m-diag-log"), copy: __shown("#m-diag-copy"), share: __shown("#m-diag-share"), clear: __shown("#m-diag-clear"),
+                    hasHeader: /Crowe Logic/.test(document.getElementById("m-diag-log").textContent) };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return out;`,
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true },
+  },
 ];
 
 function compare(actual, expected) {
