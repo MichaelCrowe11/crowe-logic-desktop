@@ -352,6 +352,13 @@
            stay above the fold of a scrolling card, and test-panels.js hit-tests
            them where they are drawn to keep it that way. -->
       <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+        <label>Reply pace
+          <select id="cfg-pace">
+            <option value="reading">Reading pace (the phone's default)</option>
+            <option value="brisk">Brisk, keeps up with the model</option>
+            <option value="instant">Instant</option>
+          </select>
+        </label>
         <label>Ask before an action that cannot be taken back
           <select id="cfg-approvals">
             <option value="high-risk">Irreversible actions only (recommended)</option>

@@ -474,6 +474,49 @@
      when the sheet closes the bridge finds out whether the account is still
      there and signs the phone out if it is not. Phone-only for the same reason
      as the section above: the desktop has its own account surface. */
+  /* Dictation. WKWebView exposes webkitSpeechRecognition but the recogniser
+     behind it never starts (WebKit 239816), so the desktop handler would light
+     the button and fail. On the phone the button drives CroweSpeech, a small
+     native plugin in the app target over Apple's speech recogniser, and writes
+     into the composer exactly as the desktop handler does: appended to what is
+     already typed, one input event per partial result. */
+  const Speech = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CroweSpeech;
+  const dictBtn = $("voice-input"), dictInput = $("input");
+  const say = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
+  if (dictBtn && dictInput && Speech && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    dictBtn.classList.remove("unavailable"); dictBtn.removeAttribute("aria-disabled"); dictBtn.title = "Dictate with microphone";
+    let listening = false, base = "";
+    const stopped = () => {
+      listening = false;
+      dictBtn.classList.remove("active"); dictBtn.setAttribute("aria-pressed", "false");
+      const st = $("composer-status");
+      if (st && st.dataset.state === "listening") say("Ready");
+    };
+    Promise.resolve(Speech.addListener("partialResults", (d) => {
+      const heard = d && Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
+      dictInput.value = (base + " " + heard).trim();
+      dictInput.dispatchEvent(new Event("input"));
+    })).catch(() => {});
+    Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
+    dictBtn.onclick = async () => {
+      if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
+      let perm = { speechRecognition: "denied" };
+      try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
+      if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }
+      let avail = { available: false };
+      try { avail = await Speech.available(); } catch { /* answered below */ }
+      if (!avail.available) { say("Dictation is not available on this phone right now", "error"); return; }
+      base = dictInput.value.trim(); listening = true;
+      dictBtn.classList.add("active"); dictBtn.setAttribute("aria-pressed", "true"); say("Listening", "listening");
+      try { await Speech.start({ language: "en-US", partialResults: true }); }
+      catch (e) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); }
+    };
+  } else if (dictBtn && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    // No native recogniser in this build: say so instead of lighting a button that fails.
+    dictBtn.classList.add("unavailable"); dictBtn.setAttribute("aria-disabled", "true"); dictBtn.title = "Dictation is not available in this build";
+    dictBtn.onclick = () => say("Dictation is not available in this build", "error");
+  }
+
   const accountSection = document.createElement("section");
   accountSection.className = "key-manager m-account";
   accountSection.innerHTML = [

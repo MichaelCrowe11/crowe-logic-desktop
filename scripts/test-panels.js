@@ -610,6 +610,21 @@ const tests = [
     expect: { withinLag: true, cleared: 4000, trickle: 107, done: 500, noTime: 0 },
   },
   {
+    name: "reading pace types at a reader's speed and skips nothing; brisk is unchanged after",
+    body: `const r = streamRevealLen;
+      setTextPace("reading");
+      // 16 ms frames at 140 chars/s: about 3 characters a frame, and a 4 KB burst
+      // is not skipped ahead (the backlog ceiling is a full minute).
+      const step = r(0, 4000, 16) - 0;
+      let shown = 0, frames = 0;
+      while (shown < 4000 && frames < 40000) { shown = r(shown, 4000, 16); frames++; }
+      const seconds = (frames * 16) / 1000;
+      setTextPace("brisk");
+      let b = 0, bf = 0; while (b < 4000 && bf < 600) { b = r(b, 4000, 16); bf++; }
+      return { step, tookAReadersWhile: seconds > 20 && seconds < 40, cleared: shown, briskBack: (bf * 16) <= 300 };`,
+    expect: { step: 3, tookAReadersWhile: true, cleared: 4000, briskBack: true },
+  },
+  {
     name: "only whole paragraphs settle, and never inside a code fence",
     body: `const s = streamSettleAt;
       const plain = "one\\n\\ntwo\\n\\nthr";

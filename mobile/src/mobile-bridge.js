@@ -99,6 +99,7 @@
     autonomy: "edit",
     autoApprove: false,
     approvals: "high-risk",
+    textPace: "reading",      // a phone in a hand reads along; the desktop defaults to brisk
     verifier: false,          // the verifier is a second full turn; too expensive on cellular by default
     turnBudgetUsd: 2,
     telemetry: true,
@@ -140,7 +141,7 @@
     return {
       baseUrl: config.baseUrl, hasToken: Boolean(config.token), cwd: "",
       autoApprove: Boolean(config.autoApprove), autonomy: config.autonomy,
-      approvals: config.approvals, verifier: Boolean(config.verifier),
+      approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
       version: BUILD.version, platform: PLATFORM, mobile: true,

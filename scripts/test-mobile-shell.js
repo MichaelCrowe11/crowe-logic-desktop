@@ -454,6 +454,18 @@ const tests = [
                lockedWhileEditing: Boolean(form && form.elements.code.readOnly) };`,
     expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
   },
+  {
+    name: "Reply pace is a setting and the phone starts on reading pace",
+    body: `document.getElementById("settings-btn").click();
+      await __settle();
+      const sel = document.getElementById("cfg-pace");
+      const out = { present: Boolean(sel), shown: __shown("#cfg-pace"), value: sel ? sel.value : null,
+                    configured: (await window.crowe.getConfig()).textPace };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return out;`,
+    expect: { present: true, shown: true, value: "reading", configured: "reading" },
+  },
 ];
 
 function compare(actual, expected) {
