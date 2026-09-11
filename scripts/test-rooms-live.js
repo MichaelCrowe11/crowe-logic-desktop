@@ -16,8 +16,40 @@
 // through the same window.crowe the product uses. The only fake left is the
 // network, which is the one piece that cannot be honest in CI.
 
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, safeStorage } = require("electron");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
+
+/* An isolated profile, the way scripts/smoke-shot.js does it. Until 2026-09-10
+   this suite booted against the developer's real userData: it wrote its rooms
+   into the real sessions store, and it "signed in" only because the machine
+   already held a real Crowe ID token. In CI there is no such token, and the
+   IPC hardening (sanitizeConfigPatch) had made the renderer's setConfig drop a
+   token on purpose, so the suite went red the first day Actions ran again. */
+const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-rooms-profile-"));
+const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-rooms-workspace-"));
+app.setPath("userData", PROFILE);
+app.setPath("sessionData", PROFILE);
+fs.writeFileSync(path.join(PROFILE, "config.json"), JSON.stringify({
+  cwd: WORKSPACE, telemetry: false, onboarded: true, autonomy: "edit",
+}), { mode: 0o600 });
+
+/* The session is written where main.js keeps it, by the same rule main.js
+   writes it: encrypted when the OS offers it, plaintext only under the headless
+   escape hatch (CROWE_ALLOW_PLAINTEXT_AUTH=1, unpackaged). The token is shaped
+   like a Crowe ID access token with a paid tier and an hour of life, so the
+   plan gate treats the seats as a member's, not a free account's. No renderer
+   path can set a token, and this test must not need one to. */
+function writeTestSession() {
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const token = `${b64({ alg: "none", typ: "JWT" })}.${b64({ email: "rooms-test@example.com", crowe_tier: "pro", tier: "pro", exp: Math.floor(Date.now() / 1000) + 3600 })}.x`;
+  const store = JSON.stringify({ token, refreshToken: "" });
+  const file = path.join(PROFILE, "auth.bin");
+  if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(file, safeStorage.encryptString(store), { mode: 0o600 });
+  else if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) fs.writeFileSync(file, store, { mode: 0o600 });
+  else throw new Error("no credential encryption here and CROWE_ALLOW_PLAINTEXT_AUTH is not set; the suite cannot sign in");
+}
 
 /* The gateway is replaced at the process's own fetch, before main.js is loaded.
 
@@ -75,9 +107,11 @@ app.whenReady().then(async () => {
 
     console.log("rooms, end to end");
 
-    // Only a token and a tier: the gateway host stays exactly what the product
-    // ships, because fetch is what has been replaced.
-    await js(`window.crowe.setConfig(${JSON.stringify({ token: "test-token", autonomy: "edit" })})`);
+    // The gateway host stays exactly what the product ships, because fetch is
+    // what has been replaced. The session goes in through main's own store.
+    writeTestSession();
+    const cfg = await js(`window.crowe.getConfig()`);
+    assert(cfg && cfg.hasToken === true, `main.js does not see the test session (hasToken=${cfg && cfg.hasToken}); every seat would answer "Not signed in"`);
 
     await check("the roster and templates come back through ipcMain", async () => {
       const r = await js(`window.crowe.rooms.agents()`);

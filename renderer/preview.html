@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1788824889435" />
+  <link rel="stylesheet" href="styles.css?v=1789078127481" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -357,6 +357,13 @@
            stay above the fold of a scrolling card, and test-panels.js hit-tests
            them where they are drawn to keep it that way. -->
       <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+        <label>Reply pace
+          <select id="cfg-pace">
+            <option value="reading">Reading pace (the phone's default)</option>
+            <option value="brisk">Brisk, keeps up with the model</option>
+            <option value="instant">Instant</option>
+          </select>
+        </label>
         <label>Ask before an action that cannot be taken back
           <select id="cfg-approvals">
             <option value="high-risk">Irreversible actions only (recommended)</option>
@@ -438,10 +445,10 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1788824889435"></script>
-  <script src="mark-geometry.js?v=1788824889435"></script>
-  <script src="mark.js?v=1788824889435"></script>
-  <script src="renderer.js?v=1788824889435"></script>
+  <script src="preview-shim.js?v=1789078127481"></script>
+  <script src="mark-geometry.js?v=1789078127481"></script>
+  <script src="mark.js?v=1789078127481"></script>
+  <script src="renderer.js?v=1789078127481"></script>
   <script src="plan.js"></script>
 </body>
 </html>
