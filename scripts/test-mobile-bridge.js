@@ -296,6 +296,54 @@ function methodPaths(surface) {
     delete win.croweConnectors;
     return "tools merged, call answered via the gateway, result fed back";
   });
+  await check("the vault falls back to Preferences when the Keychain refuses, instead of signing the person out", async () => {
+    // vault.js sits in front of the bridge's store for the "config" record. A
+    // rejected Keychain read must answer from Preferences and leave the key
+    // unmigrated; a rejected write must land in Preferences.
+    const load = (vaultStub) => {
+      const prefs = new Map([["config", JSON.stringify({ token: "t.o.k", refreshToken: "r" })]]);
+      const Preferences = { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } };
+      const win = { Capacitor: { isNativePlatform: () => true, Plugins: { CroweVault: vaultStub, Preferences } } };
+      new Function("window", read("mobile/src/vault.js"))(win);
+      assert(win.croweVault && win.croweVault.handles("config") && !win.croweVault.handles("grow"), "vault.js did not install croweVault for config only");
+      return { vault: win.croweVault, prefs };
+    };
+    // 1. Keychain refuses every read: Preferences answers, and keeps the record.
+    let calls = [];
+    let { vault, prefs } = load({ get: async () => { calls.push("get"); throw new Error("keychain read failed: -25300"); }, set: async () => { calls.push("set"); }, remove: async () => {} });
+    const v = await vault.get("config");
+    assert(v && JSON.parse(v).token === "t.o.k", `a refused Keychain read did not fall back to Preferences: ${v}`);
+    assert(prefs.has("config"), "the fallback read removed the record from Preferences");
+    // 2. Keychain refuses the write: Preferences takes it.
+    ({ vault, prefs } = load({ get: async () => ({ value: null }), set: async () => { throw new Error("keychain write failed: -34018"); }, remove: async () => {} }));
+    await vault.set("config", JSON.stringify({ token: "new" }));
+    assert(JSON.parse(prefs.get("config")).token === "new", "a refused Keychain write was lost");
+    // 3. Healthy Keychain: the first read migrates Preferences into it and clears Preferences.
+    const kc = new Map();
+    ({ vault, prefs } = load({ get: async ({ key }) => ({ value: kc.has(key) ? kc.get(key) : null }), set: async ({ key, value }) => { kc.set(key, value); }, remove: async ({ key }) => { kc.delete(key); } }));
+    const m = await vault.get("config");
+    assert(m && JSON.parse(m).token === "t.o.k" && kc.has("config") && !prefs.has("config"), "a healthy Keychain did not take over the record on first read");
+    return "refused read -> Preferences (kept); refused write -> Preferences; healthy -> migrated once";
+  });
+
+  await check("the share inbox reads the App Group natively and never switches the Preferences group", async () => {
+    // The Capacitor Preferences plugin never opens a UserDefaults suite: its
+    // "group" is a key prefix on the standard defaults, and configure() swaps
+    // one shared instance. So the extension's note is read in Swift, and the
+    // two sides must agree on the suite and the key.
+    const inbox = read("mobile/src/share-inbox.js");
+    const vaultSwift = read("mobile/ios/App/App/CroweVault.swift");
+    const shareSwift = read("mobile/ios/App/CroweShare/ShareViewController.swift");
+    assert(/Vault\.takeShared\(\)/.test(inbox), "share-inbox.js must read the note through CroweVault.takeShared");
+    assert(!/Preferences\.configure/.test(inbox), "share-inbox.js must never call Preferences.configure");
+    assert(/name: "takeShared"/.test(vaultSwift) && /UserDefaults\(suiteName: shareGroup\)/.test(vaultSwift), "CroweVault.swift must declare takeShared over the App Group suite");
+    const group = /shareGroup = "([^"]+)"/.exec(vaultSwift), key = /shareKey = "([^"]+)"/.exec(vaultSwift);
+    assert(group && shareSwift.includes(`"${group[1]}"`), "the extension and the vault name different App Groups");
+    assert(key && shareSwift.includes(`"${key[1]}"`), "the extension and the vault name different keys");
+    assert(/removeObject\(forKey: shareKey\)/.test(vaultSwift), "takeShared must remove the note as it reads it");
+    return `${group[1]} / ${key[1]}, read natively, removed on read`;
+  });
+
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.

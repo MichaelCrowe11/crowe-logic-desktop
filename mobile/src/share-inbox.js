@@ -1,9 +1,9 @@
 /* The share inbox: what the Share Extension left for the app.
  *
  * CroweShare (ios/App/CroweShare) writes one JSON note into the App Group's
- * UserDefaults under the key the Capacitor Preferences plugin reads for
- * "share" in the suite group.com.crowelogic.mobile, then opens the app on
- * com.crowelogic.mobile://share. This file collects the note on launch, on
+ * UserDefaults (suite group.com.crowelogic.mobile, key CapacitorStorage.share),
+ * then opens the app on com.crowelogic.mobile://share. This file collects the
+ * note through CroweVault.takeShared (a native read of that suite) on launch, on
  * that URL, and on every return to the foreground, clears it, and hands it to
  * the composer: text and links become the draft, a photo goes to CroweLM
  * Vision through the same path as the camera button.
@@ -16,25 +16,21 @@
   const Cap = window.Capacitor;
   if (!Cap || !Cap.isNativePlatform || !Cap.isNativePlatform()) return;
   const Plugins = Cap.Plugins || {};
-  const Preferences = Plugins.Preferences, App = Plugins.App;
-  if (!Preferences || !App) return;
-  const GROUP = "group.com.crowelogic.mobile";
-  const KEY = "share";
+  const Vault = Plugins.CroweVault, App = Plugins.App;
+  if (!Vault || typeof Vault.takeShared !== "function" || !App) return;
   const MAX_AGE_MS = 10 * 60 * 1000;
   const $ = (id) => document.getElementById(id);
   let busy = false;
 
   async function take() {
-    // Read from the shared suite, then put the plugin back on the app's own
-    // store so nothing else in the bridge ever sees the group.
-    await Preferences.configure({ group: GROUP });
+    /* The App Group suite is read natively (CroweVault.takeShared). The
+       Preferences plugin cannot do it: its "group" is a key prefix on the app's
+       own defaults, not a suite, and switching it is shared state that every
+       other store call in the bridge would see mid-flight. The native read
+       removes the note as it reads it. */
     let note = null;
-    try {
-      const { value } = await Preferences.get({ key: KEY });
-      if (value) { await Preferences.remove({ key: KEY }); try { note = JSON.parse(value); } catch { note = null; } }
-    } finally {
-      await Preferences.configure({ group: "CapacitorStorage" });
-    }
+    const { value } = await Vault.takeShared();
+    if (value) { try { note = JSON.parse(value); } catch { note = null; } }
     if (!note || !note.at || Date.now() - Number(note.at) > MAX_AGE_MS) return null;
     return note;
   }

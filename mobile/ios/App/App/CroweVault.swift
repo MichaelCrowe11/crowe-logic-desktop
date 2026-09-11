@@ -24,7 +24,14 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "get", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "set", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "remove", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "takeShared", returnType: CAPPluginReturnPromise),
     ]
+    /// The Share Extension's note. The Capacitor Preferences plugin never opens
+    /// a UserDefaults suite (its "group" is only a key prefix on the standard
+    /// defaults), so the App Group has to be read here, natively. Take, not
+    /// peek: the note is removed as it is read, so a second launch finds nothing.
+    private let shareGroup = "group.com.crowelogic.mobile"
+    private let shareKey = "CapacitorStorage.share"
 
     private let service = "com.crowelogic.mobile.vault"
 
@@ -67,6 +74,12 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
         call.resolve()
     }
 
+    @objc func takeShared(_ call: CAPPluginCall) {
+        guard let suite = UserDefaults(suiteName: shareGroup) else { call.resolve(["value": NSNull()]); return }
+        let value = suite.string(forKey: shareKey)
+        if value != nil { suite.removeObject(forKey: shareKey) }
+        call.resolve(["value": value ?? NSNull()])
+    }
     @objc func remove(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else { call.reject("key is required"); return }
         let status = SecItemDelete(query(key) as CFDictionary)

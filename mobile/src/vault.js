@@ -35,10 +35,26 @@
     } catch { /* a failed migration leaves Preferences as the source, as before */ migrated.delete(key); }
   }
 
+  /* A Keychain refusal (any SecItem status other than success or not-found)
+     must not read as "signed out". The bridge asks this object first and never
+     Preferences for a handled key, so the fallback lives here: a rejected read
+     answers from Preferences and leaves the key unmigrated; a rejected write
+     lands in Preferences, where the next successful migrate() will pick it up. */
+  const fromPrefs = async (key) => { if (!Preferences) return null; const { value } = await Preferences.get({ key }); return value || null; };
   window.croweVault = {
     handles: (key) => KEYS.has(key),
-    async get(key) { await migrate(key); const { value } = await Vault.get({ key }); return value || null; },
-    async set(key, value) { migrated.add(key); await Vault.set({ key, value }); },
-    async remove(key) { await Vault.remove({ key }); },
+    async get(key) {
+      await migrate(key);
+      try { const { value } = await Vault.get({ key }); return value || (migrated.has(key) ? null : await fromPrefs(key)); }
+      catch { migrated.delete(key); return fromPrefs(key); }
+    },
+    async set(key, value) {
+      try { await Vault.set({ key, value }); migrated.add(key); }
+      catch { migrated.delete(key); if (Preferences) await Preferences.set({ key, value }); else throw new Error("no store accepted the write"); }
+    },
+    async remove(key) {
+      try { await Vault.remove({ key }); } catch { /* nothing to remove is not a failure */ }
+      if (Preferences) { try { await Preferences.remove({ key }); } catch { /* same */ } }
+    },
   };
 })();
