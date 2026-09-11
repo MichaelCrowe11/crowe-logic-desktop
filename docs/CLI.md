@@ -106,10 +106,55 @@ pruned after seven days.
 | `CROWE_APPROVALS` | default approval mode |
 | `CROWE_HOME` | state directory |
 | `CROWE_CONFIG` | config file path |
+| `CROWE_CONTROL_PLANE` | `off`, `local` or `remote` |
+| `CROWE_TENANT` | tenant to authorize and meter against |
+| `CROWE_WORKSPACE` | workspace within the tenant |
 
 The desktop refreshes an expired token because it owns the sign-in window. The
 CLI cannot, so a 401 comes back as an error naming the fix rather than as a
 silent unauthorised retry.
+
+## The control plane
+
+Selling hosted access needs two things the local runner does not have: an answer
+to "may this tenant run this turn", and a record of what the turn cost. Those are
+one interface with two calls, and `--control-plane` chooses who answers them.
+
+```sh
+crowe --control-plane local --tenant acme "summarise the failing test"
+```
+
+`off` is the default and means no plane at all: the runner behaves exactly as it
+did before this existed. `local` backs the same interface with files under
+`CROWE_HOME`, so entitlement, quota and metering can be demonstrated and tested
+before any hosted service exists. `remote` calls the gateway.
+
+Four things are worth knowing about how it behaves.
+
+**Quota is a ceiling, not a second gate.** The harness already stops a turn that
+spends past `turnBudgetUsd`, and it stops it well: a reserve, a closing call, a
+real answer. A tenant's remaining quota is expressed in those same units and
+whichever ceiling is lower wins, so running out of allowance ends a turn the way
+running out of budget does. A quota that is already spent is refused before the
+turn starts, because zero means "no ceiling" to the harness and passing it down
+would remove the limit rather than enforce it.
+
+**A turn is never billed twice.** Every usage event's id is derived from the
+tenant, the turn and the meter rather than generated, so a retry after a timeout
+is byte-identical to the original and the plane stores it once. That is what
+makes it safe to retry at all.
+
+**Usage outlives the network.** The turn is over by the time its cost is known,
+so there is nothing left to fail. Events are written to an outbox first and
+delivered when the plane answers. The outbox is bounded and drops oldest first.
+
+**An unreachable plane is not the same as a refusal.** A 402 or a 403 is an
+answer and is honoured everywhere. Silence is not, and what it means depends on
+the product: the desktop degrades to running the turn and says so in the journal,
+because a plane outage must not brick a laptop that is offline; a hosted seat
+fails closed, because serving metered access unmetered is giving it away.
+
+Refusals exit `6` and never reach the gateway.
 
 ## What is not here yet
 
@@ -123,3 +168,8 @@ is the same: refused, not stubbed.
 a temp workspace. `scripts/smoke-cli.js` spawns the real binary against a real
 local HTTP gateway and checks that a file actually gets written and a journal
 actually gets chained. Both run in `npm test` and in CI.
+
+`scripts/test-cloud.js` covers the control plane on its own: the derived id, the
+quota arithmetic, the outbox across a failed delivery, and the degrade policy in
+both directions. It runs first, because a billing bug is not something a later
+test catches.

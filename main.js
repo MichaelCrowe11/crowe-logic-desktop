@@ -63,8 +63,14 @@ const DEFAULTS = {
   // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
   // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
   sense: { ...Sense.SENSE_DEFAULTS },
+  // The hosted control plane: off | local | remote. Off is the desktop exactly
+  // as it ships today, and it is the default so this changes nothing for an
+  // existing install. See cloud/contract.js.
+  controlPlane: "off",
+  tenantId: "",
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
+const PLANE_MODES = new Set(["off", "local", "remote"]);
 
 // ─── Crash reporting + minimal telemetry ─────────────────────────────────────
 // Local crash dumps always write to userData/crashes so the user can inspect
@@ -173,6 +179,9 @@ function loadConfig() {
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     cfg.sense = Sense.normalizeSense(cfg.sense);
+    // Same closed-set rule again: an unrecognised plane mode means no plane,
+    // never an unmetered remote one.
+    if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
@@ -866,6 +875,7 @@ async function mcpCall(fullName, args) {
 
 // ─── Agent harness (tools, system prompt, loop) — see harness.js ─────────────
 const harness = require("./harness");
+const { makeControlPlane, runTurn } = require("./cloud/index.js");
 function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.homedir()); return path.isAbsolute(p) ? p : path.join(CWD, p); }
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
@@ -1087,27 +1097,63 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
   agentRuns.set(id, run);
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
-    const result = await harness.runAgent(harnessCtx, messages.slice(), {
-      gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
-      send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
-      isAborted: () => run.aborted,
-      setController: (c) => { run.controller = c; },
-      role: String(role || ""),
-      agentId: String(id || "main"),
-      // Per-turn situational state from the renderer - today the cultivation
-      // records. Capped here rather than trusted from the caller: the renderer
-      // decides what is worth saying, the main process decides how much of the
-      // context window a caller may spend saying it.
-      context: String(context || "").slice(0, 8000),
-      // The session's standing brief is who is speaking for this thread; the
-      // harness already composes `persona` ahead of `context`, so a briefed
-      // session and a room seat are the same mechanism from here down.
-      persona: String(brief || "").slice(0, 4000),
+    const cfg = loadConfig();
+    const user = currentUser();
+    const plane = makeControlPlane({
+      mode: cfg.controlPlane, baseUrl: cfg.baseUrl, token: cfg.token,
+      dir: app.getPath("userData"),
+      // The desktop is a local agent someone already paid for. A plane it
+      // cannot reach must not brick it, so this one degrades and says so; the
+      // hosted seat is the deployment that fails closed.
+      requirePlane: false,
     });
-    if (id === "main") {
-      try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
+    const meter = { in: 0, out: 0 };
+    const send = (ev) => {
+      if (ev && ev.type === "telemetry") {
+        meter.in = Number(ev.promptTokens) || meter.in;
+        meter.out = Number(ev.completionTokens) || meter.out;
+      }
+      evt.sender.send("crowe:agent:event", { ...ev, agentId: id });
+    };
+
+    const turn = await runTurn({
+      plane, cfg, model: "",
+      identity: { tenantId: cfg.tenantId || (user && user.email) || "local", workspaceId: String(workspaceId || "") },
+      journal: journalWrite,
+      run: async ({ ceiling }) => {
+        // The plane's remaining quota arrives as the ceiling the harness
+        // already enforces, so it ends a turn with a reserve and a closing
+        // call rather than as a second, blunter stop.
+        const ctx = { ...harnessCtx, loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        const r = await harness.runAgent(ctx, messages.slice(), {
+          gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
+          send,
+          isAborted: () => run.aborted,
+          setController: (c) => { run.controller = c; },
+          role: String(role || ""),
+          agentId: String(id || "main"),
+          // Per-turn situational state from the renderer - today the cultivation
+          // records. Capped here rather than trusted from the caller: the renderer
+          // decides what is worth saying, the main process decides how much of the
+          // context window a caller may spend saying it.
+          context: String(context || "").slice(0, 8000),
+          // The session's standing brief is who is speaking for this thread; the
+          // harness already composes `persona` ahead of `context`, so a briefed
+          // session and a room seat are the same mechanism from here down.
+          persona: String(brief || "").slice(0, 4000),
+        });
+        return { ...r, inputTokens: meter.in, outputTokens: meter.out };
+      },
+    });
+
+    if (!turn.authorized) {
+      send({ type: "error", text: turn.decision.reason });
+      return { done: false, error: turn.decision.reason, text: turn.decision.reason };
     }
-    return { done: true, text: result.text || "" };
+    if (id === "main") {
+      try { persistSession([...messages, { role: "assistant", content: turn.text || "" }]); } catch {}
+    }
+    return { done: true, text: turn.text || "" };
   } finally {
     agentRuns.delete(id);
   }

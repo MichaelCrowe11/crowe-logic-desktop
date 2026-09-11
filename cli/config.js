@@ -27,7 +27,15 @@ const DEFAULTS = {
   verifier: true,
   turnBudgetUsd: 2,
   turnTokenCap: 400000,
+  // The hosted control plane: off | local | remote. Off is the product as it
+  // ships today, and it is the default because this must not change what an
+  // existing install does.
+  controlPlane: "off",
+  tenantId: "local",
+  workspaceId: "",
 };
+
+const PLANE_MODES = new Set(["off", "local", "remote"]);
 
 // Display rates for the daily driver, mirrored from main.js. They price the
 // dollar ceiling and the usage line; they are not billing.
@@ -57,6 +65,9 @@ function fromEnv(env = process.env) {
   if (env.CROWE_MODEL) out.model = env.CROWE_MODEL;
   if (env.CROWE_AUTONOMY) out.autonomy = env.CROWE_AUTONOMY;
   if (env.CROWE_APPROVALS) out.approvals = env.CROWE_APPROVALS;
+  if (env.CROWE_CONTROL_PLANE) out.controlPlane = env.CROWE_CONTROL_PLANE;
+  if (env.CROWE_TENANT) out.tenantId = env.CROWE_TENANT;
+  if (env.CROWE_WORKSPACE) out.workspaceId = env.CROWE_WORKSPACE;
   return out;
 }
 
@@ -88,9 +99,12 @@ function loadConfig({ env = process.env, flags = {}, file } = {}) {
     verifier: merged.verifier !== false,
     turnBudgetUsd: num(merged.turnBudgetUsd, DEFAULTS.turnBudgetUsd),
     turnTokenCap: num(merged.turnTokenCap, DEFAULTS.turnTokenCap),
+    controlPlane: PLANE_MODES.has(merged.controlPlane) ? merged.controlPlane : DEFAULTS.controlPlane,
+    tenantId: String(merged.tenantId || DEFAULTS.tenantId),
+    workspaceId: String(merged.workspaceId || ""),
     configFile: target,
     home: homeDir(env),
   };
 }
 
-module.exports = { loadConfig, configPath, homeDir, DEFAULTS, TIERS, APPROVAL_MODES, RATE_IN, RATE_OUT };
+module.exports = { loadConfig, configPath, homeDir, DEFAULTS, TIERS, APPROVAL_MODES, PLANE_MODES, RATE_IN, RATE_OUT };

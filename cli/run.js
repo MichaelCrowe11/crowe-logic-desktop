@@ -18,8 +18,9 @@ const { loadConfig, RATE_IN, RATE_OUT } = require("./config");
 const { makeGateway } = require("./gateway");
 const { makeJournal, makeArtifactDir } = require("./journal");
 const { askYesNo, lineDiff } = require("./prompt");
+const { makeControlPlane, runTurn } = require("../cloud");
 
-const EXIT = { ok: 0, error: 1, stopped: 2, failed: 3, usage: 4, capped: 5 };
+const EXIT = { ok: 0, error: 1, stopped: 2, failed: 3, usage: 4, capped: 5, denied: 6 };
 
 function resolveIn(cwd, p) {
   return path.isAbsolute(p) ? p : path.join(cwd, p);
@@ -152,6 +153,7 @@ async function runOnce(opts) {
     prompt, flags = {}, env = process.env,
     stdout = process.stdout, stderr = process.stderr, stdin = process.stdin,
     gatewayChat: injectedChat, getCatalog: injectedCatalog,
+    controlPlane: injectedPlane,
     appVersion = require("../package.json").version,
     onSignal,
   } = opts;
@@ -182,9 +184,22 @@ async function runOnce(opts) {
   };
   if (onSignal) onSignal(stop);
 
+  /* Token counts for the meter are read off the telemetry the harness already
+     emits, rather than by changing what runAgent returns. The CLI is a second
+     caller of that function and this slice adds a third concern to it; neither
+     is a reason to widen its contract. */
+  const meter = { in: 0, out: 0 };
+  const observe = (ev) => {
+    if (ev && ev.type === "telemetry") {
+      meter.in = Number(ev.promptTokens) || meter.in;
+      meter.out = Number(ev.completionTokens) || meter.out;
+    }
+    send(ev);
+  };
+
   const deps = {
     gatewayChat: gateway.gatewayChat,
-    send,
+    send: observe,
     isAborted: () => aborted,
     setController: (c) => { controller = c; },
     role: flags.role || "",
@@ -192,12 +207,43 @@ async function runOnce(opts) {
     agentId: "cli",
   };
 
-  const result = await harness.runAgent(ctx, [{ role: "user", content: prompt }], deps);
+  const plane = injectedPlane !== undefined ? injectedPlane : makeControlPlane({
+    mode: cfg.controlPlane, baseUrl: cfg.baseUrl, token: cfg.token, dir: cfg.home,
+  });
+
+  const turn = await runTurn({
+    plane, cfg, model: deps.model,
+    identity: { tenantId: cfg.tenantId, workspaceId: cfg.workspaceId },
+    journal: ctx.journal,
+    run: async ({ ceiling, ceilingSource }) => {
+      // The plane's quota arrives as the ceiling the harness already enforces,
+      // so an exhausted allowance ends a turn the same way an exhausted budget
+      // does: a reserve, a closing call and a real answer.
+      cfg.turnBudgetUsd = ceiling;
+      if (ceilingSource === "quota") observe({ type: "budget", reason: `quota ceiling of $${ceiling.toFixed(2)}`, source: "control-plane" });
+      const r = await harness.runAgent(ctx, [{ role: "user", content: prompt }], deps);
+      return { ...r, inputTokens: meter.in, outputTokens: meter.out };
+    },
+  });
+
+  if (!turn.authorized) {
+    const text = turn.decision.reason;
+    if (flags.output === "json") {
+      stdout.write(JSON.stringify({ type: "denied", code: turn.decision.code, reason: text, turnId: turn.turnId }) + "\n");
+    } else {
+      stderr.write(`  refused: ${text}\n`);
+    }
+    return EXIT.denied;
+  }
+
+  const result = turn;
 
   if (flags.output === "json") {
     stdout.write(JSON.stringify({ type: "result", text: result.text || "", stop: result.stop,
       verdict: result.verdict ? result.verdict.status : undefined,
-      cost: result.cost, mutations: (result.mutations || []).length }) + "\n");
+      cost: result.cost, mutations: (result.mutations || []).length,
+      turnId: result.turnId,
+      metered: result.recorded ? Boolean(result.recorded.ok) : undefined }) + "\n");
   } else if (flags.output === "quiet") {
     stdout.write(`${result.text || ""}\n`);
   } else {

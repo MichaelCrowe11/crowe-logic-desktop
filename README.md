@@ -108,6 +108,11 @@ which has to be registered before sign-in works on a device.
 - `bin/crowe.js` + `cli/` — the headless runner. A second caller of the same
   `harness.js`, supplying a non-Electron ctx: terminal approvals, file-backed
   config, a hash-chained journal under `~/.crowe`. See [docs/CLI.md](docs/CLI.md).
+- `cloud/` — the control-plane contract: may this tenant run this turn, and what
+  did the turn cost. Off by default. Both callers go through it, so entitlement,
+  quota and metering are written once rather than twice. Quota arrives as the
+  spend ceiling the harness already enforces, and usage ids are derived so a
+  retry cannot bill twice. See [docs/CLI.md](docs/CLI.md#the-control-plane).
 - `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig,installSpaces}` (contextIsolation on, nodeIntegration off).
 - `renderer/` — the Crowe editorial UI (cream/ink/gold, self-hosted
   Fraunces/Inter/JetBrains Mono), chat loop, tool-call cards, settings.

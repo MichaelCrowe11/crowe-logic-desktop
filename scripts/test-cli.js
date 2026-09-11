@@ -19,6 +19,7 @@ const { runOnce, EXIT } = require("../cli/run");
 const { loadConfig } = require("../cli/config");
 const { lineDiff } = require("../cli/prompt");
 const { parseArgs } = require("../bin/crowe");
+const { makeLocalPlane } = require("../cloud/local");
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -38,6 +39,11 @@ function workspace() {
 function home() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "crowe-home-"));
 }
+// The journal is a file per day under the home, so a test reads the lot.
+function journalText(h) {
+  const dir = path.join(h, "journal");
+  return fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), "utf8")).join("");
+}
 const call = (name, args, id = "c" + Math.random().toString(36).slice(2, 7)) =>
   ({ id, function: { name, arguments: JSON.stringify(args) } });
 const reply = (tool_calls, content = "", usage = { prompt_tokens: 10, completion_tokens: 5 }) =>
@@ -47,7 +53,7 @@ const isVerify = (tools) => (tools || []).some((t) => t.function && t.function.n
 // A run with everything injected: scripted gateway, temp home, temp workspace,
 // captured streams. `stdin` defaults to a non-TTY so the default policy under
 // test is the one CI would get.
-async function run(script, { flags = {}, env = {}, cwd, stdin } = {}) {
+async function run(script, { flags = {}, env = {}, cwd, stdin, plane } = {}) {
   const dir = cwd || workspace();
   const h = home();
   const out = sink(), err = sink();
@@ -58,6 +64,7 @@ async function run(script, { flags = {}, env = {}, cwd, stdin } = {}) {
     flags: { output: "json", catalog: false, cwd: dir, ...flags, config: { token: "t", model: "test-model", verifier: false, ...(flags.config || {}) } },
     env: { CROWE_HOME: h, CROWE_CONFIG: path.join(h, "cli.json"), ...env },
     stdout: out, stderr: err,
+    controlPlane: plane,
     stdin: stdin || Object.assign(Readable.from([]), { isTTY: false }),
     gatewayChat: async (msgs, tools, _signal, model, onDelta) => {
       const stage = isVerify(tools) ? "verify" : "execute";
@@ -288,6 +295,100 @@ test("lineDiff marks removals and additions and stays bounded", () => {
   const big = lineDiff("", Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n"), 10);
   assert.ok(big.split("\n").length <= 11, big.split("\n").length);
   assert.match(big, /more changed line/);
+});
+
+// ─── The control plane, through the runner ───────────────────────────────────
+test("the control-plane flags parse, and a bad mode is refused", () => {
+  const { flags } = parseArgs(["--control-plane", "local", "--tenant", "acme", "--workspace", "w1", "go"]);
+  assert.strictEqual(flags.config.controlPlane, "local");
+  assert.strictEqual(flags.config.tenantId, "acme");
+  assert.strictEqual(flags.config.workspaceId, "w1");
+  assert.throws(() => parseArgs(["--control-plane", "maybe", "go"]), /unknown control plane/);
+});
+
+test("the plane is off by default, so an existing install is unchanged", async () => {
+  const r = await run(async () => reply([], "answer"));
+  assert.strictEqual(r.code, EXIT.ok);
+  const [result] = r.ofType("result");
+  assert.strictEqual(result.metered, undefined);
+});
+
+test("a refusal exits 6 and never reaches the gateway", async () => {
+  const plane = {
+    authorize: async () => ({ allowed: false, code: "quota_exhausted", reason: "the quota is spent" }),
+    record: async () => ({ ok: true }),
+  };
+  const r = await run(async () => reply([], "should not happen"), { plane });
+  assert.strictEqual(r.code, EXIT.denied);
+  assert.strictEqual(r.calls.length, 0, "the turn must not run");
+  const [denied] = r.ofType("denied");
+  assert.strictEqual(denied.code, "quota_exhausted");
+  assert.match(denied.reason, /quota is spent/);
+});
+
+test("a real turn is metered against the local plane, tokens included", async () => {
+  const h = home();
+  fs.writeFileSync(path.join(h, "control-plane.json"),
+    JSON.stringify({ tenants: { acme: { plan: "pro", entitled: true } } }));
+  const plane = makeLocalPlane({ dir: h });
+  const r = await run(async () => reply([], "answer", { prompt_tokens: 120, completion_tokens: 34 }),
+    { plane, flags: { config: { tenantId: "acme" } } });
+  assert.strictEqual(r.code, EXIT.ok);
+  const totals = plane.usage("acme");
+  assert.strictEqual(totals.turns, 1);
+  assert.strictEqual(totals.input_tokens, 120, "tokens come off the telemetry the harness emits");
+  assert.strictEqual(totals.output_tokens, 34);
+  assert.ok(totals.cost_usd > 0, "a turn that used tokens cost something");
+});
+
+test("a mutating turn meters its mutations", async () => {
+  const h = home();
+  fs.writeFileSync(path.join(h, "control-plane.json"),
+    JSON.stringify({ tenants: { acme: { entitled: true } } }));
+  const plane = makeLocalPlane({ dir: h });
+  const r = await run(async (stage, n) => (n === 0
+    ? reply([call("write_file", { path: "new.txt", content: "hello\n" })])
+    : reply([], "wrote it")),
+    { plane, flags: { config: { tenantId: "acme", autonomy: "edit", autoApprove: true } } });
+  assert.strictEqual(r.code, EXIT.ok);
+  assert.strictEqual(plane.usage("acme").mutations, 1);
+});
+
+test("remaining quota becomes the turn's ceiling", async () => {
+  const seen = [];
+  const plane = {
+    authorize: async () => ({ allowed: true, code: "ok", plan: "pro", remainingUsd: 0.0001 }),
+    record: async (u) => { seen.push(u); return { ok: true, written: 1 }; },
+  };
+  // A tool call on the first reply, so the loop reaches a second round and the
+  // ceiling is tested where the harness tests it: at the top of the round.
+  const r = await run(async (stage, n) => (n === 0
+    ? reply([call("read_file", { path: "a.txt" })], "", { prompt_tokens: 900000, completion_tokens: 900000 })
+    : reply([], "answer")),
+    { plane, flags: { config: { turnBudgetUsd: 50 } } });
+  const budget = r.ofType("budget").find((e) => e.source === "control-plane");
+  assert.ok(budget, "the operator is told which ceiling is in force");
+  assert.strictEqual(r.code, EXIT.capped, "the quota ends the turn the way a budget does");
+  assert.strictEqual(seen.length, 1, "a capped turn is still metered");
+});
+
+test("a plane that cannot be reached still runs the turn when it is not required", async () => {
+  const plane = {
+    requirePlane: false,
+    authorize: async () => ({ allowed: true, code: "ok", degraded: true, reason: "the control plane could not be reached" }),
+    record: async () => ({ ok: true, written: 0, pending: 5 }),
+  };
+  const r = await run(async () => reply([], "answer"), { plane });
+  assert.strictEqual(r.code, EXIT.ok);
+  assert.match(journalText(r.home), /CONTROL_PLANE_DEGRADED/);
+});
+
+test("metering is journaled next to the rest of the turn", async () => {
+  const h = home();
+  fs.writeFileSync(path.join(h, "control-plane.json"), JSON.stringify({ tenants: { acme: { entitled: true } } }));
+  const r = await run(async () => reply([], "answer"),
+    { plane: makeLocalPlane({ dir: h }), flags: { config: { tenantId: "acme" } } });
+  assert.match(journalText(r.home), /USAGE_RECORDED/);
 });
 
 // ─── Runner ──────────────────────────────────────────────────────────────────

@@ -17,9 +17,10 @@
 //   3  the verifier failed the turn
 //   4  bad usage
 //   5  hit the tool-round limit or a spend ceiling before finishing
+//   6  the control plane refused the turn
 
 const { runOnce, EXIT } = require("../cli/run");
-const { TIERS, APPROVAL_MODES } = require("../cli/config");
+const { TIERS, APPROVAL_MODES, PLANE_MODES } = require("../cli/config");
 
 const USAGE = `crowe - the Crowe Logic agent, headless
 
@@ -41,6 +42,9 @@ Options:
   --base-url <url>    gateway base URL
   --token <jwt>       Crowe ID bearer token
   --no-catalog        skip the catalog fetch and route from the bridge table
+  --control-plane <m> off | local | remote                (default: off)
+  --tenant <id>       tenant to authorize and meter against
+  --workspace <id>    workspace within the tenant
   --json              emit one JSON event per line on stdout
   --quiet             print only the final answer
   -h, --help          show this
@@ -69,6 +73,14 @@ function parseArgs(argv) {
       case "--auto-approve": flags.config.autoApprove = true; break;
       case "--no-verifier": flags.config.verifier = false; break;
       case "--no-catalog": flags.catalog = false; break;
+      case "--control-plane": {
+        const v = need(i, a); i++;
+        if (!PLANE_MODES.has(v)) throw new Error(`unknown control plane mode "${v}" (off, local, remote)`);
+        flags.config.controlPlane = v;
+        break;
+      }
+      case "--tenant": flags.config.tenantId = need(i, a); i++; break;
+      case "--workspace": flags.config.workspaceId = need(i, a); i++; break;
       case "--stdin": flags.stdin = true; break;
       case "--cwd": flags.cwd = need(i, a); i++; break;
       case "--role": flags.role = need(i, a); i++; break;

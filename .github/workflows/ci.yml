@@ -38,6 +38,11 @@ jobs:
       # cheapest place to catch the seam going wrong: a CLI that auto-approves in
       # a pipe, or treats a missing terminal as consent, passes every harness
       # test above and is still a hole.
+      # The billing path, before the runner that uses it. A turn billed twice or
+      # a plane outage served unmetered is not something a later test catches.
+      - name: Run control-plane tests
+        run: node scripts/test-cloud.js
+
       - name: Run CLI tests
         run: |
           node scripts/test-cli.js
