@@ -26,6 +26,10 @@ jobs:
   bundle:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The secrets context is not allowed in a step's `if`, so the keystore is
+    # lifted into the job's env once and the step condition reads env instead.
+    env:
+      KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,9 +70,7 @@ jobs:
           node scripts/sync-version.js --check
 
       - name: Decode the upload keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-        env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        if: env.KS_B64 != ''
         run: |
           echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
           echo "CROWE_ANDROID_KEYSTORE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
