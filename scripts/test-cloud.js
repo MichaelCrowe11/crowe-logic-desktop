@@ -236,6 +236,29 @@ test("usage survives a plane that is down and lands when it returns", async () =
   assert.strictEqual(plane.pending(), 0);
   assert.strictEqual(new Set(seen.map((s) => s.usage_id)).size, 5);
 });
+test("a row the plane refuses by name leaves the outbox instead of retrying forever", async () => {
+  const dir = tmp();
+  let calls = 0;
+  const plane = makeRemotePlane({ baseUrl: "https://x", token: "t", dir, requirePlane: true,
+    fetchImpl: async (url, init) => {
+      calls++;
+      if (url.endsWith("/api/control/usage")) {
+        const events = JSON.parse(init.body).events;
+        // The plane stores the first row and refuses the rest by id.
+        return resp(200, { accepted: [events[0].usage_id],
+          rejected: events.slice(1).map((e) => ({ usage_id: e.usage_id, code: "tenant_mismatch", reason: "not yours" })) });
+      }
+      return resp(200, {});
+    } });
+  const r = await plane.record(usage({ meters: { turns: 1, input_tokens: 5, output_tokens: 5 } }));
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.delivered, 3, "accepted and refused rows both leave the queue");
+  assert.strictEqual(r.rejected, 2);
+  assert.strictEqual(plane.pending(), 0);
+  const again = await plane.flush();
+  assert.strictEqual(again.delivered, 0, "nothing is re-sent");
+  assert.strictEqual(calls, 1);
+});
 test("a remote call is bounded by a deadline", async () => {
   let sawSignal = false;
   // A real fetch holds a socket open. The fake one does not, and the timer

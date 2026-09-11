@@ -74,7 +74,7 @@ async function runTurn({ plane, identity = {}, cfg, model, run, journal }) {
   });
   if (journal) {
     journal({ event_type: "USAGE_RECORDED", input_hash: turnId,
-      output_summary: recorded.ok ? `$${meters.cost_usd.toFixed(4)} · ${recorded.written || 0} row(s)${recorded.pending ? ` · ${recorded.pending} queued` : ""}` : `not recorded: ${recorded.error}` });
+      output_summary: recorded.ok ? `$${meters.cost_usd.toFixed(4)} · ${recorded.written || recorded.delivered || 0} row(s)${recorded.pending ? ` · ${recorded.pending} queued` : ""}${recorded.rejected ? ` · ${recorded.rejected} refused by the plane` : ""}` : `not recorded: ${recorded.error}` });
   }
 
   return { ...result, turnId, authorized: true, decision, ceiling, ceilingSource: source, recorded };

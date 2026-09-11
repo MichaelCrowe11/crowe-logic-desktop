@@ -354,6 +354,20 @@ test("a mutating turn meters its mutations", async () => {
   assert.strictEqual(plane.usage("acme").mutations, 1);
 });
 
+test("the routed model is metered even when none was pinned", async () => {
+  const seen = [];
+  const plane = {
+    authorize: async () => ({ allowed: true, code: "ok", plan: "pro", remainingUsd: null }),
+    record: async (u) => { seen.push(u); return { ok: true, written: 1 }; },
+  };
+  const r = await run(async () => reply([], "answer"), { plane, flags: { config: { model: "" } } });
+  assert.strictEqual(r.code, EXIT.ok);
+  const routed = r.ofType("route").find((e) => e.expert !== "verifier");
+  assert.ok(routed && routed.model, "the harness announced a route");
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].model, routed.model, "the usage row names the deployment that answered");
+});
+
 test("remaining quota becomes the turn's ceiling", async () => {
   const seen = [];
   const plane = {

@@ -127,7 +127,18 @@ crowe --control-plane local --tenant acme "summarise the failing test"
 `off` is the default and means no plane at all: the runner behaves exactly as it
 did before this existed. `local` backs the same interface with files under
 `CROWE_HOME`, so entitlement, quota and metering can be demonstrated and tested
-before any hosted service exists. `remote` calls the gateway.
+before any hosted service exists. `remote` calls the control plane at the same
+base URL as the gateway: `POST /api/control/authorize` before the turn and
+`POST /api/control/usage` after it, with the same bearer token the chat uses.
+`GET /api/control/whoami` returns the canonical tenant and workspace for that
+token, which is what `--tenant` should be set to when a name matters; `local`
+and the signed-in email are accepted as aliases for the credential's own
+workspace, and any other value is refused.
+
+A row the plane refuses by name (a forged id, a tenant the credential does not
+prove, a payload that conflicts with what is already recorded) is an answer, not
+an outage: it leaves the outbox and the journal line counts it as refused, so a
+bad row cannot be retried forever.
 
 Four things are worth knowing about how it behaves.
 

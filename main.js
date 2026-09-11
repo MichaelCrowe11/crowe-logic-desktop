@@ -1107,12 +1107,14 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       // hosted seat is the deployment that fails closed.
       requirePlane: false,
     });
-    const meter = { in: 0, out: 0 };
+    const meter = { in: 0, out: 0, model: "" };
     const send = (ev) => {
       if (ev && ev.type === "telemetry") {
         meter.in = Number(ev.promptTokens) || meter.in;
         meter.out = Number(ev.completionTokens) || meter.out;
       }
+      // The routed deployment, so the usage row names what answered.
+      if (ev && ev.type === "route" && ev.expert !== "verifier" && ev.model) meter.model = String(ev.model);
       evt.sender.send("crowe:agent:event", { ...ev, agentId: id });
     };
 
@@ -1142,7 +1144,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
           // session and a room seat are the same mechanism from here down.
           persona: String(brief || "").slice(0, 4000),
         });
-        return { ...r, inputTokens: meter.in, outputTokens: meter.out };
+        return { ...r, inputTokens: meter.in, outputTokens: meter.out, model: r.model || meter.model };
       },
     });
 

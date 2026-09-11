@@ -70,15 +70,25 @@ function makeRemotePlane({ baseUrl, token, dir, requirePlane = true, fetchImpl =
   }
 
   async function flush() {
+    let rejected = [];
     const result = await outbox.flush(async (pending) => {
       const r = await call("/api/control/usage", { events: pending });
       if (!r.ok) return [];
       // The plane names what it stored. A plane that answers 200 with nothing
       // specific is taken at its word for the whole batch, which is the only
       // reading that does not queue the same rows forever.
-      return Array.isArray(r.data.accepted) ? r.data.accepted : pending.map((p) => p.usage_id);
+      const accepted = Array.isArray(r.data.accepted) ? r.data.accepted : pending.map((p) => p.usage_id);
+      /* A row the plane refuses by name (a forged id, a tenant this credential
+         does not prove, a payload that conflicts with what is already on
+         record) is an answer, not an outage. Re-sending it would get the same
+         answer forever, so it leaves the outbox too; the count travels back so
+         the journal line says how many rows the plane would not take. */
+      rejected = Array.isArray(r.data.rejected)
+        ? r.data.rejected.map((x) => (x && typeof x === "object" ? x.usage_id : x)).filter(Boolean)
+        : [];
+      return accepted.concat(rejected);
     });
-    return { ok: true, ...result };
+    return { ok: true, ...result, rejected: rejected.length };
   }
 
   return { kind: "remote", authorize, record, flush, pending: outbox.pending, requirePlane };

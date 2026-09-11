@@ -188,12 +188,16 @@ async function runOnce(opts) {
      emits, rather than by changing what runAgent returns. The CLI is a second
      caller of that function and this slice adds a third concern to it; neither
      is a reason to widen its contract. */
-  const meter = { in: 0, out: 0 };
+  const meter = { in: 0, out: 0, model: "" };
   const observe = (ev) => {
     if (ev && ev.type === "telemetry") {
       meter.in = Number(ev.promptTokens) || meter.in;
       meter.out = Number(ev.completionTokens) || meter.out;
     }
+    // The operator's routed deployment, so the usage row names the model that
+    // actually answered even when nothing was pinned. The verifier's route is
+    // not the turn's model and is skipped.
+    if (ev && ev.type === "route" && ev.expert !== "verifier" && ev.model) meter.model = String(ev.model);
     send(ev);
   };
 
@@ -222,7 +226,7 @@ async function runOnce(opts) {
       cfg.turnBudgetUsd = ceiling;
       if (ceilingSource === "quota") observe({ type: "budget", reason: `quota ceiling of $${ceiling.toFixed(2)}`, source: "control-plane" });
       const r = await harness.runAgent(ctx, [{ role: "user", content: prompt }], deps);
-      return { ...r, inputTokens: meter.in, outputTokens: meter.out };
+      return { ...r, inputTokens: meter.in, outputTokens: meter.out, model: r.model || deps.model || meter.model };
     },
   });
 
