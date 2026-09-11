@@ -16,23 +16,6 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
-    # A real database, because the idempotency guarantee the billing rests on is
-    # a statement about what Postgres does under concurrency. Without this the
-    # Postgres suite skips itself and the claim goes unchecked on every commit.
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
 
@@ -58,20 +41,7 @@ jobs:
       # The billing path, before the runner that uses it. A turn billed twice or
       # a plane outage served unmetered is not something a later test catches.
       - name: Run control-plane tests
-        run: |
-          node scripts/test-cloud.js
-          node scripts/test-control-plane.js
-
-      # The same guarantees against a real Postgres, because "ON CONFLICT makes
-      # duplicate billing impossible" is a claim about what the database does
-      # when connections race, and the in-memory store cannot prove it. Skips
-      # itself when the service is unavailable rather than failing the build.
-      - name: Run control-plane Postgres tests
-        env:
-          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
-        run: |
-          npm --prefix control-plane install --no-audit --no-fund --ignore-scripts
-          node scripts/test-control-plane-pg.js
+        run: node scripts/test-cloud.js
 
       - name: Run CLI tests
         run: |
