@@ -1,159 +1,110 @@
 # Crowe Logic (desktop)
 
-A cross-platform agentic reasoning and coding console over the CroweLM gateway.
-Electron, so it runs the same on **Windows, Linux, and macOS** — the gap Cortex
-(macOS-only) leaves open. Branded with the Crowe Logic avatar.
+Desktop app that chats with language models through the CroweLM gateway and lets you approve their edits, with a terminal, a browser, and git in the same window, for anyone with a Crowe ID.
 
-## Why this exists
+## Status
 
-Members on Windows/Linux had no first-class app, and the competitive agentic
-CLIs each leave a wedge:
+working
 
-- **OpenAI Codex** over-reaches on edits and has no Linux desktop.
-- **Claude Code** is locked to one model vendor + subscription.
-- **Hermes** (Nous) is model-agnostic with great tool calling, but has no
-  sandbox and rougher UX.
+Version 0.24.7 (`package.json`). The macOS and Linux update feeds serve 0.24.7. The Windows feed serves 0.24.0, dated 2026-08-03, so Windows is six patch releases behind. The phone app under `mobile/` is at 0.25.6 and has its own README.
 
-Crowe Logic desktop takes the best of all three: **model-agnostic** (any CroweLM
-tier through the gateway), **native OpenAI-compatible tool calling**, and a
-**GUI-native cross-platform** experience.
+## Install and first run
 
-## Run it
+Run on 2026-09-10 in a fresh clone on macOS (Darwin 25.5.0). Output is copied from the run.
 
-```bash
-npm install
+```
+$ node --version
+v26.5.0
+
+$ npm --version
+11.17.0
+
+$ npm install --no-audit --no-fund
+added 285 packages in 1s
+npm warn allow-scripts 2 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   electron-winstaller@5.4.0 (install: node ./script/select-7z-arch.js)
+npm warn allow-scripts   node-pty@1.1.0 (install: node scripts/prebuild.js || node-gyp rebuild; postinstall: node scripts/post-install.js)
+
+$ npx electron --version
+v43.4.0
+```
+
+The `node-pty` warning is this machine's npm policy, not a fault in the repo. The terminal panel needs that native build; on a machine without the policy, `npm install` builds it.
+
+Then start the app:
+
+```
 npm start
 ```
 
-Click **Sign in with Crowe ID** and complete sign-in in your browser (OAuth2
-Authorization Code + PKCE). Your Pro entitlement unlocks the full CroweLM tiers.
-Tokens are stored in the app's userData config (mode 600) and never leave the
-main process; the renderer only ever sees your decoded email and tier.
+We did not run `npm start` for this README, so there is no output to show. The window asks you to sign in with a Crowe ID; the browser opens for the sign-in and the app stores the token in its own config directory.
 
-## Build installers
+The test suite that does not need a display, run today:
 
-```bash
-npm run build:mac     # dmg + zip
-npm run build:win     # NSIS .exe   (build on Windows or an ephemeral Windows VM)
-npm run build:linux   # AppImage + deb
+```
+$ node scripts/test-harness.js
+harness: 83 tests passed
+
+$ node scripts/test-electron-security.js
+electron-security: 102 checks passed
+
+$ node scripts/test-sense.js
+14 passed, 0 failed
+
+$ node scripts/test-rooms.js
+all room checks passed
+
+$ node scripts/test-companion.js
+all companion checks passed
+
+$ node scripts/test-mobile-bridge.js
+all mobile bridge checks passed
+
+$ node scripts/test-brand-copy.js
+ok      brand copy: 21 files, no em dashes, no emoji, rings on --focus
 ```
 
-Signing prerequisites, the store-submission path for both phones, how the icon
-drift gate works and what it does not prove, and the gotchas that have actually
-bitten: [docs/BUILD-AND-RELEASE.md](docs/BUILD-AND-RELEASE.md). Read it before a
-first build on a new machine — `build:mac` needs a notarytool credential profile
-that is not created by `npm install`.
+Also passed today: `test-plan.js`, `test-version-parity.js` (5/5), `test-qr.js`, `test-packaging.js`, `test-web-bridge.js`.
 
-### Shipping a narrower build
+Not run today: `npm start`, the Electron-hosted tests (`test-panels.js`, `test-icons.js`, `test-mobile-shell.js`, `test-install-spaces.js`, `test-rooms-live.js`), and every `npm run build:*`. Building installers needs signing credentials; `docs/BUILD-AND-RELEASE.md` lists them.
 
-Every build shows all four spaces by default. To hand someone an install that
-opens with only the spaces their job needs — no mushroom farm, no film studio on
-a machine bought to drive a terminal — name them at package time:
+## What runs today
 
-```bash
-npx electron-builder --mac --config.extraMetadata.croweSpaces=chat,projects
-```
+Each item names the file that holds it.
 
-Call electron-builder directly rather than `npm run build:mac -- …`: that script
-is `electron-builder --mac && node scripts/staple-dmg.js release`, and npm
-appends extra arguments to the end of the whole string, so the flag would reach
-the stapler instead of the builder and be silently ignored.
-
-Chat is never optional and is added back whether or not it is listed. Unknown
-names are ignored, so a build outliving a space that gets removed still opens.
-
-This is the install's **default**, not a lock: Settings › Spaces still offers the
-full set, and someone who turns Studio back on keeps it across restarts. To try
-a profile without building, set the same list in the environment:
-
-```bash
-CROWE_SPACES=chat,projects npm start
-```
-
-## iOS and Android
-
-The same UI, in a Capacitor shell, over the same gateway:
-
-```bash
-cd mobile
-npm install
-npm run ios       # or: npm run android
-```
-
-`renderer/` is copied into the mobile build rather than forked — a change to the
-desktop UI reaches the phone by rebuilding. What differs is underneath it: a
-bridge that talks to the gateway over HTTPS instead of to a Node main process,
-Capacitor Preferences instead of `userData`, and honest refusals for the shell,
-the file tree and git, which iOS and Android do not allow. See
-[`mobile/README.md`](mobile/README.md) — in particular the Crowe ID redirect URI,
-which has to be registered before sign-in works on a device.
-
-## Architecture
-
-- `main.js` — window + the gateway bridge. Holds the token; POSTs to
-  `{baseUrl}/api/gateway/chat`, forwarding `tools` and returning `tool_calls`.
-- `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig,installSpaces}` (contextIsolation on, nodeIntegration off).
-- `renderer/` — the Crowe editorial UI (cream/ink/gold, self-hosted
-  Fraunces/Inter/JetBrains Mono), chat loop, tool-call cards, settings.
-- `assets/` — brand assets, all derived from one source of truth.
-
-## Brand assets (one source of truth)
-
-The mark is a chiral spore-whorl: a gold hexagonal core — the inoculum — with
-six ink hyphae on the hex axes, every one curling the same rotational
-direction. Gold appears in exactly one place, the core. The curl is what keeps
-it out of other people's symbols: a straight six-fold radial is
-mirror-symmetric, and mirror-symmetric six-fold forms are already the AI
-sparkle and the snowflake. It replaced an isometric double-C hex cube, which
-spoke freight and ERP and collapsed into mud below about 24px.
-
-Everything derives from one generator, and nothing is drawn by hand:
-
-```bash
-npm run icons         # 24 vectors + renderer/mark-geometry.js, then every
-                      # raster: icon.png/.ico/.icns, tray, mark, avatar,
-                      # wordmarks, the iOS app icon, the Android mipmaps
-npm run icons:check   # fail if any committed asset is not what the vectors
-                      # draw today. Writes nothing.
-```
-
-`icons:check` exists because the assets drifted from the vectors four separate
-times, and `scripts/test-icons.js` reported 14/14 through every one of them.
-Its assertions are properties of the drawing — corner alpha, tile extent, the
-macOS ladder — and those hold across brand revisions, so a render from an older
-run of the same generator satisfies all of them. Re-rendering and comparing is
-the only question staleness answers differently. It runs in `npm test` and CI.
-
-There is no separate icon shell script. `scripts/gen-icons.sh` used to build
-half this set with rsvg-convert and ImageMagick; it needed tools nobody had
-installed, so it went unrun and `avatar.png` — which only it produced — sat at
-the retired cube for months. Chromium does the rasterizing now, so there is
-nothing to install.
-
-Tune proportions in `scripts/gen-mark.js` and rerun; the in-app living mark
-(`renderer/mark.js`) animates the same geometry (idle breath, reasoning drive,
-tool-call ring). After changing `mark.png`, re-upload `/brand/mark.png` in the
-releases Worker R2 bucket so the download page matches.
-
-## Native tool calling
-
-Send an OpenAI-format `tools` array and the model's `tool_calls` come back for
-the app to execute; results go back as `tool` messages. The gateway forwards the
-definitions and returns the calls but does not execute them, so the app keeps
-full control. This is the capability power users asked for.
-
-## Shipped (v0.4.0)
-
-- Crowe ID sign-in (OAuth2 Authorization Code + PKCE) — no token pasting.
-- Agentic tool loop with reviewable edit diffs (approve/reject) and a Stop button.
-- Graduated autonomy tiers (read-only / edit / execute) in the header.
-- Activity rail, sessions browser, and a built-in git version-control pane.
-- Real PTY terminal, in-app browser, file tree; MCP client support.
-- Glass-box HUD (live tokens / cost / tok-s) and a Cmd+K command palette.
+- Sign-in with a Crowe ID using OAuth2 authorization code with PKCE and a loopback redirect. The main process holds the token; the renderer gets only your email and tier. `main.js`, `preload.js`.
+- Chat posted to `{baseUrl}/api/gateway/chat` with an OpenAI-format `tools` array; the gateway returns `tool_calls` and the app executes them. `main.js`.
+- Four autonomy tiers, `plan`, `readonly`, `edit`, `execute`, gating which tools the model may call. `main.js`, `harness.js`, tested in `scripts/test-harness.js`.
+- Proposed edits shown as diffs you approve or reject, plus a separate approval gate for actions you list. `harness.js`, `preload.js`.
+- A scan for secrets (private key blocks, Stripe live keys, Google keys, and others) in text before it leaves the app. `harness.js` `scanForSecrets`, tested in `scripts/test-harness.js`.
+- A terminal panel on `node-pty` and xterm. `main.js`, `package.json`.
+- A browser panel in a `<webview>` with permission requests refused by the main process. `main.js`, `renderer/renderer.js`, tested in `scripts/test-electron-security.js`.
+- A file tree, a git pane, and a sessions browser. `preload.js` (`fs`, `git`, `sessions`), `main.js`.
+- MCP client: servers listed in the config are launched and their tools appear to the model as `mcp__<server>__<tool>`. `main.js` `mcpConnect`.
+- Rooms: several agents work the same repo on separate git worktrees and their results are merged or kept as branches. `rooms/engine.js`, `rooms/worktrees.js`, tested in `scripts/test-rooms.js`.
+- Phone pairing over a QR code with per-device tokens that survive a restart. `companion.js`, `qr.js`, tested in `scripts/test-companion.js` and `scripts/test-qr.js`.
+- Cultivation records and a poller for Crowe Sense readings. `grow-schema.js`, `sense.js`, tested in `scripts/test-sense.js`.
+- Plugins declared in `plugins.builtin.json`, described in `docs/PLUGINS.md`.
+- Install-time choice of spaces through `CROWE_SPACES` or `croweSpaces` in the packaged `package.json`. `main.js`.
+- Update checks through `electron-updater` against the release feeds named under `build.publish` in `package.json`. `main.js`.
+- A phone build of the same renderer in a Capacitor shell. `mobile/`.
 
 ## Roadmap
 
-- Streaming token responses + a live reasoning strip.
-- Total Rewind: checkpoint code + shell + chat, one-click restore.
-- Syntax highlighting + copy on code blocks; per-hunk git staging.
-- Auto-update via electron-updater; Windows code-signing.
+Not built. `docs/ROADMAP.md` carries the working list and says which rows were checked against code and when. Two items we can confirm are not done today: an automatic Windows build, and Windows code signing. The Windows feed is still on 0.24.0.
+
+## Limits
+
+This is a client. Without a Crowe ID and a reachable CroweLM gateway, chat does not work and the tiers do not unlock. The gateway, the models behind it, and Crowe ID are separate services not in this repository.
+
+The app runs shell commands, edits files, and browses the web on the user's behalf when the autonomy tier allows it. The tier gates, the approval prompts, and the secret scan are tested in this repo and nowhere else. No outside review of the security of this app has been done. Do not point it at a machine or a repository you cannot afford to have changed.
+
+Verified today only from this clone: dependency install, the Electron version, and the tests listed above. Not verified today: a launch of the window, an installer build, sign-in against the live gateway, the Windows build, or the phone build. The Windows installer on the update feed is 0.24.0 while macOS and Linux are on 0.24.7.
+
+The old README compared this app with other agent tools and claimed a market position. Nothing in this repository measures that, so it is gone.
+
+## License and contact
+
+Proprietary. See `LICENSE` (`SPDX-License-Identifier: LicenseRef-Proprietary`); `package.json` carries the same identifier. Versions before 0.7.1 shipped under Apache License 2.0, and the LICENSE file says so. Third-party notices are in `THIRD_PARTY_NOTICES.md`.
+
+Contact: michael@crowelogic.com
