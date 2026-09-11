@@ -829,6 +829,26 @@
     '<div class="m-diag-actions"><button id="m-diag-test-reminder" class="ghost sm" type="button">Test reminder (1 minute)</button></div>',
   ].join("");
   accountSection.parentNode && accountSection.parentNode.insertBefore(diagSection, accountSection.nextSibling);
+  /* Reply voice. speak.js reads localStorage crowe-reply-voice on every tap of
+     the speaker, so this row needs no bridge round trip and no config key.
+     "michael" needs a paid plan at the gateway; when the plan says no, speak.js
+     takes the first voice the gateway allows and says which one spoke. */
+  const voiceSection = document.createElement("section");
+  voiceSection.className = "key-manager m-voice";
+  voiceSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Reply voice</b>',
+    "<span>What the speaker button uses to read a reply. Michael's voice needs a paid plan; the Crowe Logic voice is the gateway's own; the phone's voice never leaves the device.</span></div></div>",
+    '<label class="m-voice-row">Voice <select id="m-voice"><option value="michael">Michael\'s voice</option><option value="neural">Crowe Logic voice</option><option value="phone">This phone\'s voice</option></select></label>',
+  ].join("");
+  diagSection.parentNode && diagSection.parentNode.insertBefore(voiceSection, diagSection);
+  const VOICES = ["michael", "neural", "phone"];
+  const voiceSel = $("m-voice");
+  try { const v = localStorage.getItem("crowe-reply-voice"); voiceSel.value = VOICES.includes(v) ? v : "michael"; } catch { voiceSel.value = "michael"; }
+  voiceSel.addEventListener("change", () => {
+    const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "michael";
+    try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to michael */ }
+    say(v === "michael" ? "Replies read in Michael's voice" : v === "neural" ? "Replies read in the Crowe Logic voice" : "Replies read by this phone", "note");
+  });
   const diagText = async () => {
     const rows = window.crowe && window.crowe.diag ? await window.crowe.diag.list().catch(() => []) : [];
     const ver = (window.crowe && window.crowe.getConfig) ? await window.crowe.getConfig().then((c) => c.version || "").catch(() => "") : "";

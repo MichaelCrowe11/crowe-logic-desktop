@@ -344,6 +344,18 @@ function methodPaths(surface) {
     return `${group[1]} / ${key[1]}, read natively, removed on read`;
   });
 
+  await check("the speaker reads the Reply voice setting, keeps the phone's voice off the network, and notes what spoke", async () => {
+    // speak.js and the Settings row share one key in localStorage; nothing in
+    // the bridge carries the preference, so the contract is held here in text.
+    const speak = read("mobile/src/speak.js"), ui = read("mobile/src/mobile-ui.js");
+    assert(/localStorage\.getItem\("crowe-reply-voice"\)/.test(speak), "speak.js must read crowe-reply-voice");
+    assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
+    assert(/\["michael", "neural", "phone"\]/.test(speak) && /VOICES = \["michael", "neural", "phone"\]/.test(ui), "the two sides must agree on the three voices");
+    assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
+    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
+    return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
+  });
+
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.
