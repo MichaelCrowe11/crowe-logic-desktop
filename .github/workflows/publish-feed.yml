@@ -45,10 +45,10 @@ jobs:
       # run: preflight-release.js refuses a feed whose version differs from the
       # checked-out package.json, so publishing an older tag from a bumped main
       # would otherwise fail for the wrong reason.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.version }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
