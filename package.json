@@ -4,6 +4,9 @@
   "version": "0.24.7",
   "description": "Crowe Logic desktop: an agentic operator over the CroweLM gateway. Chat, real PTY terminal, in-app browser, file tree, reviewable edits, and MCP tools. Cross-platform (Windows, Linux, macOS).",
   "main": "main.js",
+  "bin": {
+    "crowe": "bin/crowe.js"
+  },
   "author": {
     "name": "Crowe Logic, Inc.",
     "email": "michael@crowelogic.com"
@@ -17,7 +20,8 @@
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
     "smoke": "electron scripts/smoke-shot.js",
-    "test": "node scripts/test-harness.js && node scripts/test-sense.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-electron-security.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/test-brand-copy.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-preflight-release.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
+    "smoke:cli": "node scripts/smoke-cli.js",
+    "test": "node scripts/test-harness.js && node scripts/test-cli.js && node scripts/smoke-cli.js && node scripts/test-sense.js && node scripts/test-rooms.js && node scripts/test-mobile-bridge.js && node scripts/build-rooms-web.js --check && node scripts/test-web-bridge.js && node scripts/test-plan.js && node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js && node scripts/test-qr.js && node scripts/test-packaging.js && node scripts/test-electron-security.js && node scripts/test-companion.js && node scripts/check-contrast.js && node scripts/test-brand-copy.js && node scripts/gen-preview.js --check && node scripts/gen-mark.js --check && node scripts/test-releases-worker.js && node scripts/test-preflight-release.js && node scripts/test-verify-release.js && electron scripts/make-icons.js --check && electron scripts/test-icons.js && electron scripts/test-panels.js && electron scripts/test-mobile-shell.js && electron scripts/test-install-spaces.js && CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-rooms-live.js && CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js",
     "check:contrast": "node scripts/check-contrast.js",
     "rooms:web": "node scripts/build-rooms-web.js",
     "rooms:web:check": "node scripts/build-rooms-web.js --check",

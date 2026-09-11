@@ -34,6 +34,15 @@ jobs:
       - name: Run harness tests
         run: node scripts/test-harness.js
 
+      # The headless runner is a second caller of that same loop, so it is the
+      # cheapest place to catch the seam going wrong: a CLI that auto-approves in
+      # a pipe, or treats a missing terminal as consent, passes every harness
+      # test above and is still a hole.
+      - name: Run CLI tests
+        run: |
+          node scripts/test-cli.js
+          node scripts/smoke-cli.js
+
       # Second, and for the same reason: pure Node, seconds to run, and it is
       # the only thing holding the mobile port to the desktop it copies. The
       # renderer ships to the phone verbatim, so a bridge method dropped here or

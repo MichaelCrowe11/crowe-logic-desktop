@@ -30,6 +30,19 @@ Authorization Code + PKCE). Your Pro entitlement unlocks the full CroweLM tiers.
 Tokens are stored in the app's userData config (mode 600) and never leave the
 main process; the renderer only ever sees your decoded email and tier.
 
+### Headless
+
+The same agent runs without the window, for CI, SSH and scheduled work:
+
+```bash
+export CROWE_TOKEN=...
+node bin/crowe.js --tier execute --yes --json "run the tests and fix what fails"
+```
+
+Same harness, same tiers, same gates, same verifier, same journal. It denies
+approvals when there is no terminal to ask, and it exits non-zero on a failed
+verdict. See [docs/CLI.md](docs/CLI.md).
+
 ## Build installers
 
 ```bash
@@ -92,6 +105,9 @@ which has to be registered before sign-in works on a device.
 
 - `main.js` — window + the gateway bridge. Holds the token; POSTs to
   `{baseUrl}/api/gateway/chat`, forwarding `tools` and returning `tool_calls`.
+- `bin/crowe.js` + `cli/` — the headless runner. A second caller of the same
+  `harness.js`, supplying a non-Electron ctx: terminal approvals, file-backed
+  config, a hash-chained journal under `~/.crowe`. See [docs/CLI.md](docs/CLI.md).
 - `preload.js` — exposes `window.crowe.{agent,auth,git,pty,fs,sessions,chat,getConfig,setConfig,installSpaces}` (contextIsolation on, nodeIntegration off).
 - `renderer/` — the Crowe editorial UI (cream/ink/gold, self-hosted
   Fraunces/Inter/JetBrains Mono), chat loop, tool-call cards, settings.
