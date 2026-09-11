@@ -516,10 +516,17 @@ const tests = [
                     pending: __shown("#m-diag-pending"), testBtn: __shown("#m-diag-test-reminder"),
                     // No notification service in this harness: the pane must say so in words, not sit on "Loading".
                     pendingSaysWhy: /browser build/.test(document.getElementById("m-diag-pending").textContent) };
+      // Reply voice: three choices, remembered where speak.js reads them.
+      const sel = document.getElementById("m-voice");
+      out.voice = __shown("#m-voice");
+      out.voiceOptions = sel ? [...sel.options].map((o) => o.value).join(",") : "";
+      if (sel) { sel.value = "neural"; sel.dispatchEvent(new Event("change")); }
+      out.voiceStored = localStorage.getItem("crowe-reply-voice");
+      if (sel) { sel.value = "michael"; sel.dispatchEvent(new Event("change")); }
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true },
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "michael,neural,phone", voiceStored: "neural" },
   },
 ];
 
