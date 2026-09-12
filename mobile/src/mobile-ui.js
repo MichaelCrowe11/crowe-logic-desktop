@@ -262,9 +262,14 @@
     window.crowe.agent.onEvent(async (ev) => {
       if (!ev) return;
       if (ev.type === "photos" && Array.isArray(ev.thumbs)) { if (!photoTurn) photoTurn = { lot: pendingLot, thumb: "" }; photoTurn.thumb = ev.thumbs[0] || ""; return; }
-      if (ev.type !== "assistant" || !photoTurn || ev.agentId && ev.agentId !== "main") return;
+      if (!photoTurn || ev.agentId && ev.agentId !== "main") return;
+      // The finding is the LAST thing the model said in this turn, not the first: a turn that opens
+      // with "I'll pull your recent block records first" and then reads the photo must log the read,
+      // not the preamble. Collect assistant texts and act when the turn is final.
+      if (ev.type === "assistant") { const t = String(ev.text || "").trim(); if (t) photoTurn.text = t; return; }
+      if (ev.type !== "final") return;
       const turn = photoTurn; photoTurn = null; pendingLot = "";
-      const text = String(ev.text || "").trim(); if (!text) return;
+      const text = String(turn.text || "").trim(); if (!text) return;
       const bodies = document.querySelectorAll(".msg.assistant .body"); const body = bodies[bodies.length - 1]; if (!body) return;
       const blocks = live(await window.crowe.grow.list("blocks").catch(() => []));
       // The lot the check came from; else the only lot; else the fruiting one, which is the one usually photographed.
