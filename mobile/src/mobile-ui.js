@@ -762,7 +762,13 @@
         if (ev.type === "vision_regions" && Array.isArray(ev.regions)) { scanRegions(ev.regions); return; }
         if (ev.type === "vision_reasoning" && typeof ev.text === "string") { scanReasoning(ev.text); return; }
         if (ev.type === "assistant_delta") { scanReading(); return; }
-        if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
+        /* The scan runs until the TURN ends, not until the first text. A read
+           that opens with "I'll pull your recent block records first", calls
+           read_grow and then reads the photo used to be marked Read. at the
+           preamble, and the regions arriving a round later had no scan left to
+           land on. Same shape of bug as the log row's, fixed the same way. */
+        if (ev.type === "assistant") { scanReading(); return; }
+        if (ev.type === "final") { endScan("done"); return; }
         if (ev.type === "error") { endScan("error", ev.text); return; }
         if (ev.type === "stopped") { endScan("stopped"); return; }
         if (ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
