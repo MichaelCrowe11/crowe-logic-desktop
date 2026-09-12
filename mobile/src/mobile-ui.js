@@ -156,8 +156,15 @@
     return b.basis === "dry" ? `${pct}% biological efficiency: ${got.toFixed(1)} lb from ${w} lb dry substrate`
       : b.basis === "wet" ? `${pct}% of wet block weight: ${got.toFixed(1)} lb from ${w} lb` : `${got.toFixed(1)} lb harvested (state the weight basis to see the ratio)`;
   }
-  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict">${esc((c.verdict || "").slice(0, 180))}</div></div></div>`;
+  /* A finding is markdown: the model bolds the stage and lists the actions.
+     Home and Camera used to escape it and show the asterisks. The transcript's
+     own renderer (md, renderer.js) draws it here too, inside a .said so the
+     list and heading rules it already has apply; one-line rows get the plain
+     words instead, since a grid cell cannot hold a list. */
+  const mdSafe = (t) => (typeof md === "function" ? md(String(t || "")) : esc(String(t || "")));
+  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict said m-md">${mdSafe(c.verdict)}</div></div></div>`;
   let pendingLot = "", cameraArmed = false, photoTurn = null;
+  const transcript = $("transcript");
 
   const isIOS = () => Boolean(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "ios");
   async function renderHome() {
@@ -205,7 +212,8 @@
      against lots. The register is the Log's: mono kickers, a serif title,
      hairline rows. Nothing here claims more than one photo can carry. */
   const verdictKind = (v) => /contamin|trichoderma|mold|mould|bacteri|cobweb|discard|isolate/i.test(v) ? "bad" : /harvest|ready|pins|pinning|fruit|cluster/i.test(v) ? "gold" : /healthy|clean|no contamination|colonis|coloniz/i.test(v) ? "myc" : "neutral";
-  const firstSentence = (v) => { const t = String(v || "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
+  const plainWords = (v) => String(v || "").replace(/\*\*|__|`/g, "").replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+\.\s+)/gm, "").replace(/(^|\s)[*_](\S[^*_]*?)[*_](?=[\s.,;:!?]|$)/g, "$1$2");
+  const firstSentence = (v) => { const t = plainWords(v).replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
   const fmtDay = (ts) => new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
   async function renderCamera() {
     const roll = window.crowe && window.crowe.camera ? await window.crowe.camera.list().catch(() => []) : [];
@@ -223,7 +231,7 @@
       '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div></section>',
       '<section class="m-fi-sec"><h2 class="m-kicker">Capture protocol</h2><ol class="m-fi-protocol"><li>Fill the frame with the block face.</li><li>Even light. No flash glare on the bag.</li><li>Include the lot tag when there is one.</li><li>One block per photo.</li></ol></section>',
       '<section class="m-fi-sec"><h2 class="m-kicker">Inspection ledger</h2>',
-      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Lot</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "no lot")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<p>${esc(c.verdict || "")}</p></div>`).join("") + "</div>" : '<p class="m-home-empty">No inspections recorded on this phone.</p>',
+      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Lot</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "no lot")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<div class="said m-md">${mdSafe(c.verdict)}</div></div>`).join("") + "</div>" : '<p class="m-home-empty">No inspections recorded on this phone.</p>',
       "</section>",
       '<p class="m-fi-note">A finding is the model\'s reading of one image. It informs a hands-on inspection; it does not replace one.</p>',
       "</div>",
@@ -288,6 +296,114 @@
       });
     });
   }
+  /* ── 1.1: the transcript a grower sees ─────────────────────────────────────
+     The launch films had to hide the developer chrome with a stylesheet to be
+     watchable: the colophon's tool and token counts, the route card, the tool
+     cards' arguments and results, the tier picker, the copy buttons, the HUD
+     strip. On the phone all of it is now off unless Settings says otherwise.
+     Nothing is removed: mobile.css hides by class, keyed on body.m-usage, so
+     the desktop renderer draws exactly what it always did and the switch turns
+     the same elements back on.
+
+     Two things need script rather than a stylesheet. A tool card collapses to
+     one plain line ("Looked up your grow records") that expands on tap, and
+     that line has to be written from the tool's name. And a failed turn ends
+     in one sentence with a Try again button that sends the same message, and
+     the same photo, again. */
+  const TOOL_SUMMARY = {
+    read_grow: "Looked up your grow records",
+    log_grow: "Added to your grow log",
+    open_url: "Opened a web page",
+    read_file: "Read a file",
+    write_file: "Wrote a file",
+    run_command: "Ran a command on your machine",
+  };
+  const toolSummary = (name) => TOOL_SUMMARY[name]
+    || (/calendar|event/i.test(name) ? "Checked your calendar"
+      : /drive|doc|sheet/i.test(name) ? "Looked in your Drive"
+      : /search|lookup|find|list/i.test(name) ? "Looked something up"
+      : "Used a tool");
+  function summarise(card) {
+    if (card.dataset.mobile) return;
+    card.dataset.mobile = "1";
+    const isEdit = card.classList.contains("editcard");
+    const name = isEdit ? "" : ((card.querySelector(".tc-name") || {}).textContent || "").trim();
+    const path = isEdit ? ((card.querySelector(".ec-path") || {}).textContent || "").trim() : "";
+    const line = isEdit ? `Proposed an edit${path ? " to " + path : ""}` : toolSummary(name);
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "m-tc-summary";
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = `<span class="m-tc-dot"></span><span class="m-tc-text">${esc(line)}</span><span class="m-tc-more">Details</span>`;
+    btn.addEventListener("click", () => { const open = card.classList.toggle("m-open"); btn.setAttribute("aria-expanded", String(open)); });
+    card.insertBefore(btn, card.firstChild);
+  }
+
+  /* The turn that failed, so Try again can send it back. The text is the user
+     bubble's own; the photos are the ones the scan drew into it, still data
+     URLs; the lot is the one the Camera tab was checking, remembered here
+     because the log-row handler above clears it when the turn ends. */
+  let failedLot = "";
+  if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+    window.crowe.agent.onEvent((ev) => {
+      if (ev && ev.type === "error" && (!ev.agentId || ev.agentId === "main")) failedLot = photoTurn ? photoTurn.lot : "";
+    });
+  }
+  const RAW_ERROR = /^(HTTP \d{3}\b|gateway( unreachable)?:|stream broke:|The run did not complete:|\s*[\[{])/i;
+  function dressError(err) {
+    if (err.dataset.mobile) return;
+    err.dataset.mobile = "1";
+    const raw = err.textContent;
+    // The bridge already speaks plainly; this is the net under the renderer's
+    // own two error paths, which quote whatever was thrown.
+    if (RAW_ERROR.test(raw)) {
+      const said = window.__croweHumanError ? window.__croweHumanError(raw) : null;
+      try { console.error("[crowe] turn failed:", raw); } catch { /* no console */ }
+      err.textContent = said && said.kind !== "message" ? said.text : "The reading did not come back. Try again.";
+    }
+    const msg = err.closest(".msg.assistant");
+    const user = msg && msg.previousElementSibling;
+    if (!user || !user.classList.contains("user")) return;
+    const p = user.querySelector(".body > p");
+    const text = p ? p.textContent : "";
+    if (!text.trim()) return;
+    const photos = [...user.querySelectorAll(".m-sent-photos img")]
+      .map((img, i) => ({ name: i ? `photo ${i + 1}.jpg` : "photo.jpg", src: img.getAttribute("src") || "" }))
+      .filter((x) => /^data:image\//.test(x.src));
+    const lot = failedLot;
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "m-retry ghost sm"; btn.textContent = "Try again";
+    btn.addEventListener("click", () => retryTurn({ text, photos, lot, user, msg }));
+    err.appendChild(btn);
+  }
+  function retryTurn(t) {
+    if (typeof send !== "function") return;
+    if (typeof running !== "undefined" && running) return;
+    // The failed exchange comes out of the transcript and out of the
+    // conversation the model is shown, so the retry is the same turn again and
+    // not a second copy of the question under the first.
+    try {
+      if (typeof messages !== "undefined" && messages.length && messages[messages.length - 1].role === "user" && messages[messages.length - 1].content === t.text) messages.pop();
+    } catch { /* the renderer keeps its own list; a duplicate is not worth failing the retry */ }
+    t.msg.remove(); t.user.remove();
+    if (t.lot) pendingLot = t.lot;
+    if (t.photos.length && window.crowePhone && window.crowePhone.addImage) {
+      cameraArmed = false;    // the photo rides this send; the Camera tab's own trigger stays quiet
+      for (const ph of t.photos) window.crowePhone.addImage(ph.name, ph.src);
+    }
+    send(t.text);
+  }
+  if (transcript) {
+    const dress = (root) => {
+      if (!root || root.nodeType !== 1) return;
+      if (root.matches(".toolcard, .editcard:not(.gatecard)")) summarise(root);
+      root.querySelectorAll(".toolcard, .editcard:not(.gatecard)").forEach(summarise);
+      if (root.matches(".err")) dressError(root);
+      root.querySelectorAll(".err").forEach(dressError);
+    };
+    dress(transcript);
+    new MutationObserver((records) => { for (const r of records) r.addedNodes.forEach(dress); }).observe(transcript, { childList: true, subtree: true });
+  }
+
   // The space picker in Settings hides and shows rail buttons after load, and
   // the rail is the tab bar's only source of truth about which spaces exist.
   new MutationObserver(buildTabs).observe($("spaces"), { attributes: true, subtree: true, attributeFilter: ["class"] });
@@ -382,7 +498,6 @@
     if (changed) root.innerHTML = html;
   }
 
-  const transcript = $("transcript");
   if (transcript) {
     mobiliseWelcome(transcript);
     transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy);
@@ -637,7 +752,7 @@
       if (!activeScan) return;
       activeScan.strip.classList.add("m-scan-done");
       activeScan.wrap.classList.remove("m-scan-sending");
-      scanSay(how === "error" ? ("The photo could not be read. " + String(why || "").slice(0, 140)).trim() : how === "stopped" ? "Stopped." :
+      scanSay(how === "error" ? String(why || "The photo could not be read.").slice(0, 160) : how === "stopped" ? "Stopped." :
         (activeScan.regions.length ? `Read. ${activeScan.regions.length} area${activeScan.regions.length === 1 ? "" : "s"} marked; tap the photo to hide them.` : "Read."));
       activeScan = null;
     }
@@ -698,6 +813,38 @@
   const companion = $("companion-body") || $("companion-state");
   const companionSection = companion && companion.closest("section");
   if (companionSection) companionSection.classList.add("m-desktop-only");
+
+  /* The reply pace. The phone now starts on brisk (mobile-bridge.js DEFAULTS),
+     so the desktop's option label naming reading pace as the phone's default is
+     relabelled here, on the phone only. */
+  const paceSelect = $("cfg-pace");
+  if (paceSelect) {
+    const PACE_LABEL = { reading: "Reading pace, slower", brisk: "Brisk, keeps up with the model (the phone's default)", instant: "Instant" };
+    [...paceSelect.options].forEach((o) => { if (PACE_LABEL[o.value]) o.textContent = PACE_LABEL[o.value]; });
+  }
+
+  /* The one switch for the developer chrome (see "the transcript a grower
+     sees" above). Applies on the tap and persists through the bridge as
+     showUsage, so it is a fact the app remembers and not a mode it is in. */
+  const detailsSection = document.createElement("section");
+  detailsSection.className = "key-manager m-details";
+  detailsSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Details</b>',
+    "<span>Which expert answered, what it looked up, token counts and cost under each reply, the strip above the tabs, and the Plan, Read and Edit picker under the composer. Off, a reply is just the reply.</span></div></div>",
+    '<label class="chk"><input id="m-cfg-usage" type="checkbox" /> Show usage and routing details</label>',
+  ].join("");
+  const guardrails = paceSelect && paceSelect.closest("section");
+  if (guardrails && guardrails.parentNode) guardrails.parentNode.insertBefore(detailsSection, guardrails.nextSibling);
+  const usageBox = $("m-cfg-usage");
+  const paintUsage = (on) => { body.classList.toggle("m-usage", Boolean(on)); if (usageBox) usageBox.checked = Boolean(on); };
+  async function syncUsage() {
+    try { const c = await window.crowe.getConfig(); paintUsage(c && c.showUsage); } catch { /* the bridge answers on the next open */ }
+  }
+  syncUsage();
+  if (usageBox) usageBox.addEventListener("change", async () => {
+    paintUsage(usageBox.checked);
+    try { await window.crowe.setConfig({ showUsage: usageBox.checked }); } catch { /* shown either way; saved next time */ }
+  });
 
   /* Remote machine.
      "Workspace folder" is hidden just above because a phone has no folder. What
@@ -818,6 +965,61 @@
     '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
   ].join("");
   if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+
+  /* Founding Growers. A hundred seats for the growers backing the app in its
+     first year; the roster is public at GET /api/public/founders and lists the
+     ones who chose to be named, in the order they signed up. A row in Settings
+     opens a sheet with the count, the roster, and the way in while seats
+     remain. The read is cached a minute in the bridge and fails quietly: a
+     roster that cannot be reached is one muted line, not an error. */
+  const foundersSection = document.createElement("section");
+  foundersSection.className = "key-manager m-founders-row";
+  foundersSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Founding Growers</b>',
+    "<span>The first hundred growers behind Crowe Logic, and who has taken a seat so far.</span></div></div>",
+    '<button id="m-founders-open" class="ghost sm" type="button">Founding Growers</button>',
+  ].join("");
+  if (accountSection.parentNode) accountSection.parentNode.insertBefore(foundersSection, accountSection.nextSibling);
+  const FOUNDERS_URL = "https://crowelogic.com/founders";
+  const foundersSheet = document.createElement("div");
+  foundersSheet.id = "m-founders"; foundersSheet.className = "modal hidden";
+  foundersSheet.setAttribute("aria-label", "Founding Growers");
+  foundersSheet.innerHTML = [
+    '<div class="modal-card m-founders-card">',
+    '<div class="m-kicker">Founding Growers</div><h2 class="m-title">The first hundred</h2>',
+    '<p id="m-founders-seats" class="m-home-sub">Reading the roster.</p>',
+    '<ol id="m-founders-roster" class="m-founders-roster"></ol>',
+    '<p id="m-founders-note" class="m-home-empty"></p>',
+    '<div class="row"><button id="m-founders-link" class="primary" type="button">Take a seat at crowelogic.com/founders</button><button id="m-founders-close" class="ghost" type="button">Close</button></div>',
+    "</div>",
+  ].join("");
+  body.appendChild(foundersSheet);
+  async function renderFounders() {
+    const seats = $("m-founders-seats"), roster = $("m-founders-roster"), note = $("m-founders-note"), link = $("m-founders-link");
+    const d = window.crowePhone && window.crowePhone.publicJson ? await window.crowePhone.publicJson("/api/public/founders") : null;
+    if (!d || !Number.isFinite(Number(d.spots))) {
+      seats.textContent = "The roster could not be reached right now.";
+      roster.innerHTML = ""; note.textContent = ""; link.hidden = true;
+      return;
+    }
+    const spots = Number(d.spots), taken = Math.max(0, Number(d.taken) || 0);
+    const list = (Array.isArray(d.founders) ? d.founders : []).filter((f) => f && (f.name || f.farm))
+      .slice().sort((a, b) => (Number(a.n) || 0) - (Number(b.n) || 0));
+    seats.textContent = taken >= spots ? `All ${spots} seats are taken.` : `${taken} of ${spots} seats taken.`;
+    roster.innerHTML = list.map((f) => `<li><span class="m-founders-n">${esc(String(Number(f.n) || "").padStart(2, "0"))}</span><span><b>${esc(f.name || "A grower")}</b>${f.farm ? `<span class="m-founders-farm">${esc(f.farm)}</span>` : ""}</span></li>`).join("");
+    note.textContent = list.length ? "" : (taken ? "The growers so far have chosen not to be listed." : "No seats taken yet. The roster fills in sign-up order.");
+    link.hidden = taken >= spots;
+  }
+  $("m-founders-open").addEventListener("click", () => {
+    const settings = $("settings"); if (settings) settings.classList.add("hidden");
+    foundersSheet.classList.remove("hidden");
+    renderFounders();
+  });
+  $("m-founders-close").addEventListener("click", () => foundersSheet.classList.add("hidden"));
+  $("m-founders-link").addEventListener("click", () => {
+    if (window.crowe && window.crowe.mobile && window.crowe.mobile.openExternal) window.crowe.mobile.openExternal(FOUNDERS_URL);
+    else window.open(FOUNDERS_URL, "_blank", "noopener");
+  });
   /* Diagnostics. What the bridge did, newest first, with Copy and Share, so a
      phone that says nothing can be read from a text message. Errors the page
      itself throws are noted here too. */
@@ -871,7 +1073,7 @@
     else say((r && r.error) || "The reminder could not be set.", "error");
     renderPending(); if (typeof renderHome === "function") renderHome();
   });
-  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); }, 50));
+  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); syncUsage(); }, 50));
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
   window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
 

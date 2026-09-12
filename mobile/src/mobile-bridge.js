@@ -103,7 +103,17 @@
     autonomy: "edit",
     autoApprove: false,
     approvals: "high-risk",
-    textPace: "reading",      // a phone in a hand reads along; the desktop defaults to brisk
+    /* Brisk, as the desktop. 1.0 shipped "reading" here on the theory that a
+       phone in a hand reads along; on a real turn that pace ran to 150 s and
+       the founder, watching a grower wait, called it too slow. Reading stays
+       a choice in Settings. */
+    textPace: "brisk",
+    /* The developer chrome: which expert answered, tool calls, token counts and
+       cost under each reply, and the strip above the tabs. Off for a grower;
+       one switch in Settings (mobile-ui.js) turns it on. The desktop renderer
+       is untouched: the phone toggles a class on <body> and mobile.css does
+       the hiding. */
+    showUsage: false,
     verifier: false,          // the verifier is a second full turn; too expensive on cellular by default
     turnBudgetUsd: 2,
     telemetry: true,
@@ -146,6 +156,7 @@
       baseUrl: config.baseUrl, hasToken: Boolean(config.token), cwd: "",
       autoApprove: Boolean(config.autoApprove), autonomy: config.autonomy,
       approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
+      showUsage: Boolean(config.showUsage),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
       version: BUILD.version, platform: PLATFORM, mobile: true,
@@ -229,6 +240,7 @@
   const PHONE_FILE_MAX = 512 * 1024;
   const phoneListeners = new Set();
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
+  const publicCache = new Map();               // path -> { data, at }, see crowePhone.publicJson
   window.crowePhone = {
     max: PHONE_FILE_MAX,
     // For phone-only scripts that call the gateway themselves (speak.js): the
@@ -259,6 +271,36 @@
       return { ok: true, name: key };
     },
     images() { return [...phoneImages.entries()].map(([name, p]) => ({ name, size: p.dataUrl.length, at: p.at })); },
+    /* A public GET on the gateway, parsed, cached for a minute, never thrown.
+       The Founding Growers roster reads through this; a pane that fails quietly
+       needs a call that does the same. fetch first, native when CORS refuses,
+       and null when neither answers. */
+    async publicJson(path, ttlMs = 60000) {
+      await ready;
+      const key = String(path || "");
+      const hit = publicCache.get(key);
+      if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+      const url = `${base()}${key}`;
+      const headers = { Accept: "application/json" };
+      let text = null;
+      try {
+        const r = await fetch(url, { headers });
+        if (!r.ok) return hit ? hit.data : null;
+        text = await r.text();
+      } catch (e) {
+        if (!corsBlocked(e) || !CapHttp) return hit ? hit.data : null;
+        try {
+          const r = await CapHttp.request({ url, method: "GET", headers, responseType: "text" });
+          if (r.status < 200 || r.status >= 300) return hit ? hit.data : null;
+          text = typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? null);
+        } catch { return hit ? hit.data : null; }
+      }
+      try {
+        const data = JSON.parse(text);
+        publicCache.set(key, { data, at: Date.now() });
+        return data;
+      } catch { return hit ? hit.data : null; }
+    },
     async share(name) {
       const f = phoneFiles.get(String(name || ""));
       if (!f) return { error: "no such file" };
@@ -668,7 +710,7 @@
     const handle = (payload) => {
       if (payload === "[DONE]") return;
       let d; try { d = JSON.parse(payload); } catch { return; }
-      if (d && d.error) { gatewayError = String(d.error.message || d.error); return; }
+      if (d && d.error) { gatewayError = d.error.type ? `${d.error.type}: ${d.error.message || ""}`.trim() : String(d.error.message || d.error); return; }
       const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
       const chunk = typeof delta.content === "string" ? delta.content : "";
       if (chunk) { content += chunk; if (onDelta) onDelta(chunk); }
@@ -1349,6 +1391,41 @@
     return out;
   }
 
+  // ─── What a failed turn says ───────────────────────────────────────────────
+  /* The founder watched a grower be shown the gateway's error dictionary when
+     the vision model was overloaded. Nobody standing at a rack can act on
+     `gateway: {"type":"overloaded_error",...}`. So every failure a turn can end
+     in is told in one plain sentence, in the app's voice, and the raw error goes
+     to the console and to Diagnostics, which is the surface a support reply
+     reads from. Three sentences, chosen by what the gateway said:
+
+       429                       the month's reading budget is spent
+       overloaded_error, 529     the upstream is busy; a moment fixes it
+       everything else           5xx, a broken stream, no network
+
+     Sentences the bridge itself wrote (not signed in, the plan gate, an empty
+     vision reply) are already in this voice and pass through untouched. */
+  const ERROR_COPY = {
+    budget: "This month's reading budget is used up. It resets on the first.",
+    busy: "The reader is busy. Try again in a moment.",
+    failed: "The reading did not come back. Try again.",
+  };
+  const RAW_ERROR_RE = /^(HTTP \d{3}\b|gateway( unreachable)?:|stream broke:|\s*[\[{])/i;
+  function errorKind(raw) {
+    const s = String(raw || "");
+    if (/^HTTP 429\b/.test(s) || /budget|quota/i.test(s) && /\b429\b/.test(s)) return "budget";
+    if (/overloaded|^HTTP 529\b/i.test(s)) return "busy";
+    return "failed";
+  }
+  function humanError(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return { text: ERROR_COPY.failed, kind: "failed", raw: s };
+    if (!RAW_ERROR_RE.test(s)) return { text: s, kind: "message", raw: s };
+    const kind = errorKind(s);
+    return { text: ERROR_COPY[kind], kind, raw: s };
+  }
+  window.__croweHumanError = humanError;
+
   // ─── The agent loop ────────────────────────────────────────────────────────
   const listeners = new Set();
   const emit = (ev) => { for (const fn of listeners) { try { fn(ev); } catch (e) { diag("ui:listener-threw", String(e && e.message || e)); } } };
@@ -1470,10 +1547,15 @@
             send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });
             round -= 1; continue;
           }
-          const err = gate
-            ? `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`
-            : r.error;
-          send({ type: "error", text: err }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: err, text };
+          const said = gate
+            ? { text: `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`, kind: "message", raw: r.error }
+            : humanError(r.error);
+          // The raw error lives in two places a person can read it from and
+          // one place a grower never sees it: the console, Diagnostics, and
+          // not the transcript.
+          if (said.kind !== "message") { try { console.error("[crowe] turn failed:", said.raw); } catch { /* no console */ } }
+          diag("run:error-raw", { kind: said.kind, raw: said.raw });
+          send({ type: "error", text: said.text, kind: said.kind }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: said.text, text };
         }
 
         if (r.content) {

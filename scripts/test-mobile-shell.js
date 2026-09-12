@@ -150,11 +150,104 @@ const tests = [
     expect: { overflow: 0, width: 390 },
   },
   {
-    name: "the composer and the HUD sit above the tab bar",
-    body: `const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
-      return { composerAbove: composer.bottom <= hud.top + 1, hudAbove: hud.bottom <= tabs.top + 1,
-               tabsOnScreen: tabs.bottom <= window.innerHeight + 1 };`,
-    expect: { composerAbove: true, hudAbove: true, tabsOnScreen: true },
+    name: "the composer sits above the tab bar; the HUD is off by default and, switched on, sits between them",
+    // 1.1: the HUD strip is developer chrome and hidden until Settings says
+    // otherwise. Both states are measured: quiet, the composer meets the tabs;
+    // with the switch on, the HUD is drawn between them.
+    body: `const quiet = { hudHidden: !__shown("#hud"),
+        composerAbove: __box("#composer").bottom <= __box("#m-tabs").top + 1,
+        tabsOnScreen: __box("#m-tabs").bottom <= window.innerHeight + 1 };
+      document.body.classList.add("m-usage"); await __settle(50);
+      const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
+      const loud = { hudShown: __shown("#hud"), composerAboveHud: composer.bottom <= hud.top + 1, hudAboveTabs: hud.bottom <= tabs.top + 1 };
+      document.body.classList.remove("m-usage"); await __settle(50);
+      return { ...quiet, ...loud };`,
+    expect: { hudHidden: true, composerAbove: true, tabsOnScreen: true, hudShown: true, composerAboveHud: true, hudAboveTabs: true },
+  },
+  {
+    name: "usage and routing details are off by default, and one Settings switch turns them on and persists",
+    body: `const off = { hud: __shown("#hud"), tier: __shown("#autonomy"), copy: __shown("#copy-conversation"),
+                    configured: (await window.crowe.getConfig()).showUsage };
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const box = document.getElementById("m-cfg-usage");
+      const row = { present: Boolean(box), shown: __shown("#m-cfg-usage"), checked: box ? box.checked : null };
+      box.checked = true; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const on = { hud: __shown("#hud") || document.body.classList.contains("m-usage"), tier: document.body.classList.contains("m-usage"),
+                   configured: (await window.crowe.getConfig()).showUsage };
+      box.checked = false; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const back = { configured: (await window.crowe.getConfig()).showUsage, cls: document.body.classList.contains("m-usage") };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return { offHud: off.hud, offTier: off.tier, offCopy: off.copy, offConfigured: off.configured,
+               rowPresent: row.present, rowShown: row.shown, rowChecked: row.checked,
+               onHud: on.hud, onTier: on.tier, onConfigured: on.configured, backConfigured: back.configured, backCls: back.cls };`,
+    expect: { offHud: false, offTier: false, offCopy: false, offConfigured: false, rowPresent: true, rowShown: true, rowChecked: false,
+              onHud: true, onTier: true, onConfigured: true, backConfigured: false, backCls: false },
+  },
+  {
+    name: "Settings carries a Founding Growers row that opens the roster sheet with seats, names in order, and the way in",
+    // The roster read is stubbed: this harness must not reach the live gateway.
+    body: `const real = window.crowePhone.publicJson;
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 2, founders: [{ name: "B. Grower", farm: "Second Farm", n: 2 }, { name: "A. Grower", farm: "First Farm", n: 1 }] });
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const row = __shown("#m-founders-open");
+      document.getElementById("m-founders-open").click();
+      await __settle(300);
+      const names = [...document.querySelectorAll("#m-founders-roster li b")].map((b) => b.textContent);
+      const out = { row, sheet: __shown("#m-founders"), settingsClosed: !__shown("#settings"),
+                    seats: document.getElementById("m-founders-seats").textContent, first: names[0], count: names.length,
+                    link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 100, founders: [] });
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const full = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => null;
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const down = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      document.getElementById("m-founders-close").click();
+      window.crowePhone.publicJson = real;
+      await __settle(120);
+      return { ...out, fullSeats: full.seats, fullLink: full.link, downSeats: down.seats, downLink: down.link, closed: !__shown("#m-founders") };`,
+    expect: { row: true, sheet: true, settingsClosed: true, seats: "2 of 100 seats taken.", first: "A. Grower", count: 2, link: true,
+              fullSeats: "All 100 seats are taken.", fullLink: false, downSeats: "The roster could not be reached right now.", downLink: false, closed: true },
+  },
+  {
+    name: "a tool card folds to one plain line that opens on tap; a failed turn is one sentence with Try again",
+    // Drawn the way the renderer draws them (renderer.js addToolCard, addError),
+    // without a gateway: the fold and the button are the phone layer's, and
+    // both are measured on the same DOM the renderer produces.
+    body: `const t = document.getElementById("transcript");
+      const msgU = document.createElement("div"); msgU.className = "msg user"; msgU.innerHTML = '<div class="who"><div class="u">You</div></div><div class="body"><p>Is this lot ready?</p></div>';
+      const msgA = document.createElement("div"); msgA.className = "msg assistant"; msgA.innerHTML = '<div class="who"></div><div class="body"></div>';
+      t.appendChild(msgU); t.appendChild(msgA);
+      const body = msgA.querySelector(".body");
+      const card = document.createElement("div"); card.className = "toolcard ok";
+      card.innerHTML = '<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">read_grow</span><span class="tc-arg">{"type":"blocks"}</span></div><div class="tc-result">2 blocks row(s)</div>';
+      body.appendChild(card);
+      // A raw error is logged to the console on purpose; the harness counts console errors, so it is caught here.
+      const realError = console.error; const logged = []; console.error = (...a) => logged.push(a.join(" "));
+      const err = document.createElement("div"); err.className = "err"; err.textContent = 'gateway: {"type":"overloaded_error","message":"Overloaded"}';
+      body.appendChild(err);
+      await __settle(80);
+      console.error = realError;
+      const sum = card.querySelector(".m-tc-summary");
+      const folded = { line: sum ? sum.querySelector(".m-tc-text").textContent : null, summaryShown: Boolean(sum) && sum.checkVisibility(),
+                       headHidden: !card.querySelector(".tc-head").checkVisibility(), resultHidden: !card.querySelector(".tc-result").checkVisibility() };
+      sum.click(); await __settle(50);
+      const opened = { headShown: card.querySelector(".tc-head").checkVisibility(), resultShown: card.querySelector(".tc-result").checkVisibility() };
+      const retry = err.querySelector(".m-retry");
+      const said = { text: err.childNodes[0].textContent, retry: Boolean(retry) && retry.checkVisibility() };
+      msgU.remove(); msgA.remove();
+      return { ...folded, ...opened, ...said, rawLogged: logged.some((l) => /overloaded_error/.test(l)) };`,
+    expect: { line: "Looked up your grow records", summaryShown: true, headHidden: true, resultHidden: true, headShown: true, resultShown: true,
+              text: "The reader is busy. Try again in a moment.", retry: true, rawLogged: true },
   },
   {
     name: "the composer shows its whole placeholder before anything is typed",
@@ -213,8 +306,13 @@ const tests = [
     // Settings has to be open for its own rows to be asked about — inside a
     // closed modal everything is invisible, and the check would pass by
     // accident whether the rows were hidden or not.
-    body: `const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
+    // 1.1: the tier picker is developer chrome, off unless the Details switch is
+    // on, so the picker is measured with the switch on; what it hides within
+    // itself (Execute, unpaired) is the question here.
+    body: `document.body.classList.add("m-usage"); await __settle(30);
+      const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
                           editTier: __shown('#autonomy .seg-btn[data-tier="edit"]') };
+      document.body.classList.remove("m-usage");
       // The dock bar lives inside the workspace column, so its controls have to
       // be asked about while that column is the one on screen.
       __pair(true); await __settle(50);
@@ -252,7 +350,8 @@ const tests = [
        test asserting only `execTier: false` is happy either way: it cannot tell
        "correctly hidden while unpaired" from "hidden forever". */
     name: "pairing a machine brings the Execute tier back",
-    body: `const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
+    body: `document.body.classList.add("m-usage"); await __settle(30);   // the picker is chrome; see above
+      const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
       document.body.classList.add("m-paired");
       await __settle();
       const paired = __shown('#autonomy .seg-btn[data-tier="execute"]');
@@ -260,6 +359,7 @@ const tests = [
       document.body.classList.remove("m-paired");
       await __settle();
       const restored = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      document.body.classList.remove("m-usage");
       return { unpaired, paired, restored };`,
     expect: { unpaired: false, paired: true, restored: false },
   },
@@ -468,16 +568,19 @@ const tests = [
     expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
   },
   {
-    name: "Reply pace is a setting and the phone starts on reading pace",
+    name: "Reply pace is a setting and the phone starts on brisk; reading pace stays offered",
     body: `document.getElementById("settings-btn").click();
       await __settle();
       const sel = document.getElementById("cfg-pace");
       const out = { present: Boolean(sel), shown: __shown("#cfg-pace"), value: sel ? sel.value : null,
-                    configured: (await window.crowe.getConfig()).textPace };
+                    configured: (await window.crowe.getConfig()).textPace,
+                    reading: Boolean(sel && [...sel.options].some((o) => o.value === "reading")),
+                    // The desktop's label calls reading pace the phone's default; the phone relabels it.
+                    labelHonest: Boolean(sel && ![...sel.options].some((o) => o.value === "reading" && /default/.test(o.textContent))) };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { present: true, shown: true, value: "reading", configured: "reading" },
+    expect: { present: true, shown: true, value: "brisk", configured: "brisk", reading: true, labelHonest: true },
   },
   {
     name: "Home lists the lots by stage from the log on this phone, with Remind me and Photograph",
@@ -549,6 +652,12 @@ app.whenReady().then(async () => {
     // useContentSize, so the numbers above are the viewport and not the
     // viewport plus whatever frame this platform draws around it.
     const win = new BrowserWindow({ ...PHONE, useContentSize: true, show: false });
+    /* Storage is per origin, and the origin is 127.0.0.1 on whatever port the
+       OS handed out. When it hands out one it gave an earlier run, that run's
+       config, its onboarding flag and the block its lot test saved are all
+       still there, and four checks fail for reasons that have nothing to do
+       with the checkout under test. Start clean every time. */
+    await win.webContents.session.clearStorageData({ storages: ["localstorage", "indexdb", "cookies"] });
     const pageErrors = [];
     // Electron 43 passes an event object here and deprecates the old positional
     // (event, level, message). Both are read so this file does not start

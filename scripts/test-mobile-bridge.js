@@ -73,8 +73,12 @@ function loadMobileSurface(fetchImpl, capacitor) {
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
   };
+  const consoleLog = [];
   const sandbox = {
     window: win, localStorage,
+    // The bridge writes a failed turn's raw error to the console and nowhere a
+    // grower reads; recorded here so a check can see it without it printing.
+    console: { error: (...a) => consoleLog.push(a.map(String).join(" ")), log: () => {}, warn: () => {} },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
     navigator: { clipboard: { writeText: () => Promise.resolve() } },
@@ -89,6 +93,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
   // than on it — the surface parity walk below must see exactly the desktop's
   // shape. Exposed for the phone-file checks without widening the surface.
   loadMobileSurface.lastWindow = win;
+  loadMobileSurface.lastConsole = consoleLog;
   return win.crowe;
 }
 
@@ -647,6 +652,75 @@ function methodPaths(surface) {
     await bridge.diag.clear();
     assert((await bridge.diag.list()).length === 0, "clear left entries");
     return `${kinds.length} entries for a good run; a dead network shows as net:fetch-threw Load failed`;
+  });
+
+  await check("a failed turn is one sentence in the app's voice; the raw error goes to the console and Diagnostics only", async () => {
+    // 1.1. The founder watched a grower be shown the gateway's error dictionary
+    // when the vision model was overloaded. Four ways a turn fails, three
+    // sentences, and the raw text in exactly two places a person can read it
+    // from: the console and the Diagnostics ring.
+    const token = "header." + Buffer.from('{"email":"grower@example.com","tier":"personal","exp":9999999999}').toString("base64") + ".sig";
+    const RAW = {
+      budget: () => new Response('{"detail":{"error":"budget_exhausted","message":"Monthly reading budget used"}}', { status: 429 }),
+      busy: () => new Response('data: {"error":{"type":"overloaded_error","message":"Overloaded"}}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } }),
+      five: () => new Response('{"detail":"upstream unavailable"}', { status: 503 }),
+      net: () => { throw new TypeError("Load failed"); },
+    };
+    const WANT = {
+      budget: "This month's reading budget is used up. It resets on the first.",
+      busy: "The reader is busy. Try again in a moment.",
+      five: "The reading did not come back. Try again.",
+      net: "The reading did not come back. Try again.",
+    };
+    const seen = [];
+    for (const [mode, answer] of Object.entries(RAW)) {
+      const bridge = loadMobileSurface(async (url) => (String(url).includes("/api/gateway/chat") ? answer() : new Response("{}", { status: 200 })));
+      const log = loadMobileSurface.lastConsole;
+      await bridge.setConfig({ token });
+      const events = [];
+      bridge.agent.onEvent((ev) => events.push(ev));
+      const r = await bridge.agent.run([{ role: "user", content: "What is this?" }]);
+      const err = events.find((e) => e.type === "error");
+      assert(err, `${mode}: no error event`);
+      assert(err.text === WANT[mode], `${mode}: said ${JSON.stringify(err.text)}`);
+      assert(r.done === false && r.error === WANT[mode], `${mode}: the run's own error is ${JSON.stringify(r.error)}`);
+      assert(!/HTTP \d|\{|overloaded_error|Load failed/.test(err.text), `${mode}: the raw error leaked into the transcript`);
+      assert(log.some((l) => /turn failed/.test(l) && (/429|overloaded|503|Load failed/i.test(l))), `${mode}: the raw error did not reach the console: ${JSON.stringify(log)}`);
+      const rows = await bridge.diag.list();
+      assert(rows.some((x) => x.k === "run:error-raw" && /429|overloaded|503|Load failed/i.test(x.d)), `${mode}: Diagnostics did not keep the raw error`);
+      seen.push(`${mode} -> ${err.kind}`);
+    }
+    // Sentences the bridge itself writes pass through untouched.
+    const h = loadMobileSurface.lastWindow.__croweHumanError;
+    assert(h('Not signed in. Tap "Sign in with Crowe ID" to continue.').kind === "message", "an app-voice sentence was rewritten");
+    assert(h("HTTP 502: Bad Gateway").text === WANT.five && h("stream broke: TypeError").text === WANT.five, "a 5xx or a broken stream did not read as a failed reading");
+    return seen.join(", ");
+  });
+
+  await check("the phone starts on brisk pace with the developer chrome off, and remembers the switch", async () => {
+    const bridge = loadMobileSurface();
+    const c = await bridge.getConfig();
+    assert(c.textPace === "brisk", `textPace defaults to ${c.textPace}`);
+    assert(c.showUsage === false, `showUsage defaults to ${JSON.stringify(c.showUsage)}`);
+    const after = await bridge.setConfig({ showUsage: true, textPace: "reading" });
+    assert(after.showUsage === true && after.textPace === "reading", "the switch and the pace did not persist through setConfig");
+    return "brisk, quiet; both settable";
+  });
+
+  await check("crowePhone.publicJson reads a public gateway route once a minute and answers null when it cannot", async () => {
+    let calls = 0;    // founders reads only: the bridge's boot also fetches build.json through the same fetch
+    const bridge = loadMobileSurface(async (url) => { if (String(url).includes("/api/public/founders")) calls++; return String(url).includes("/api/public/founders")
+      ? new Response('{"spots":100,"taken":0,"founders":[]}', { status: 200 }) : new Response("", { status: 404 }); });
+    await bridge.getConfig();
+    const phone = loadMobileSurface.lastWindow.crowePhone;
+    const a = await phone.publicJson("/api/public/founders");
+    const b = await phone.publicJson("/api/public/founders");
+    assert(a && a.spots === 100 && b === a && calls === 1, `expected one fetch and a cached answer, got ${calls} call(s): ${JSON.stringify([a, b])}`);
+    assert((await phone.publicJson("/api/public/missing")) === null, "a 404 did not answer null");
+    const down = loadMobileSurface(async () => { throw new TypeError("Load failed"); });
+    await down.getConfig();
+    assert((await loadMobileSurface.lastWindow.crowePhone.publicJson("/api/public/founders")) === null, "a dead network did not answer null");
+    return "1 fetch for 2 reads; 404 and no network read as null";
   });
 
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
