@@ -104,8 +104,8 @@ function sanitizeConfigPatch(raw) {
     const url = parsedUrl(patch.baseUrl.trim());
     if (url && isSafeGuestUrl(url.toString())) out.baseUrl = url.toString().replace(/\/$/, "").slice(0, 2048);
   }
-  for (const key of ["cwd", "model", "licenseWorkspaceId"]) {
-    if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" ? 4096 : 256);
+  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId"]) {
+    if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" || key === "reposRoot" ? 4096 : 256);
   }
   // No token. Sign-in writes it in main; nothing in the renderer has a reason
   // to, and a document that could would be choosing where the bearer goes.

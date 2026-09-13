@@ -2055,6 +2055,19 @@
       checkout: () => ({ error: NO_WORKSPACE() }), pull: () => ({ error: NO_WORKSPACE() }),
       push: () => ({ error: NO_WORKSPACE() }),
     },
+    // Local checkouts live on the desktop, and so does the GitHub plugin's
+    // token. The phone lists none and says why, in git's own shapes.
+    repos: {
+      recent: async () => [],
+      open: async () => ({ error: NO_WORKSPACE() }),
+      pick: async () => ({ error: NO_WORKSPACE() }),
+      forget: async () => ({ ok: true }),
+      remote: async () => ({ cwd: "", repo: false, remote: null, error: NO_WORKSPACE() }),
+      githubStatus: async () => ({ configured: false }),
+      githubRepos: async () => ({ configured: false, repos: [], error: NO_WORKSPACE() }),
+      githubWork: async () => ({ configured: false, error: NO_WORKSPACE() }),
+      clone: async () => ({ error: NO_WORKSPACE() }),
+    },
 
     sessions: {
       list: async () => (await sessionIndex()).map((s) => ({ ...s, current: s.id === currentSession })),
