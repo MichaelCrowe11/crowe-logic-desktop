@@ -2061,6 +2061,9 @@ function renderSpacePicker() {
     cb.checked = PROFILE.has(id); cb.disabled = fixed;
     cb.addEventListener("change", () => {
       setSpaceProfile([...box.querySelectorAll("input:checked")].map((i) => i.dataset.space));
+      // The plugin rows further down filter on the profile, so redraw them
+      // rather than leave a row for a space that was just switched off.
+      renderPlugins();
     });
     const name = document.createElement("span");
     name.textContent = sp.label;
@@ -2553,6 +2556,12 @@ function applySpaceProfile() {
     if (btn) btn.classList.toggle("hidden", !on);
     if (sp.nav && !on) $(sp.nav).classList.add("hidden");
   }
+  // The Crowe Sense section in Settings pairs a node whose readings land in
+  // Cultivation. Without that space there is nowhere for them to land, so the
+  // section goes with it. Hidden, not removed: the fields keep their values and
+  // a saved source keeps polling, so turning Cultivation back on loses nothing.
+  const sense = $("cfg-sense");
+  if (sense) sense.classList.toggle("hidden", !PROFILE.has("cultivation"));
   const cur = document.body.dataset.space;
   if (cur && !PROFILE.has(cur)) setSpace("chat");
 }
@@ -2657,8 +2666,13 @@ async function refreshHome() {
      "everything else" row already names. */
   const ROLE_ASKS = { cultivation: "growing", coding: "code", reasoning: "hard problems", "long-context": "long documents" };
   const hr = $("home-routing"); hr.innerHTML = "";
-  for (const [role, r] of Object.entries(cat.resolved || {}))
+  // The grower answers for the Cultivation space. An install without that space
+  // still routes a mushroom question to it, but the card does not advertise a
+  // specialist for work the install does not show.
+  for (const [role, r] of Object.entries(cat.resolved || {})) {
+    if (role === "cultivation" && !PROFILE.has("cultivation")) continue;
     hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(ROLE_ASKS[role] || role)}</span><span class="v">${esc(r.model)}${r.source === "default" ? "" : '<em class="src">expert</em>'}</span></div>`);
+  }
   hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}</span></div>`);
   let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
   $("home-gateway").innerHTML = `
@@ -2700,8 +2714,17 @@ async function renderLane(lane) {
     learnCatalogNames(cat);
     if (gen !== laneGen) return;
     if (!cat.models.length) { body.innerHTML = '<div class="card-empty">Catalog unreachable. Check the gateway URL in Settings.</div>'; return; }
+    // Same rule as the Home card: the Cultivation expert gets no row on an
+    // install without that space. Known by its role tag, or by being what the
+    // router resolves for cultivation, because the live catalog does not tag
+    // it yet (the bridge table in harness.js does). A default-model fallback
+    // is the model everything else uses and is never hidden.
+    const cult = cat.resolved && cat.resolved.cultivation;
+    const growerId = cult && cult.source !== "default" ? cult.model : null;
+    const isGrower = (m) => m.role === "cultivation" || (growerId != null && (m.model || m.id) === growerId);
     for (const m of cat.models) {
       if (!m) continue;
+      if (!PROFILE.has("cultivation") && isGrower(m)) continue;
       const flags = [m.featured ? "featured" : "", m.role || "", m.available === false ? "offline" : "", m.gateway_tool_calling === false ? "no-tools" : ""].filter(Boolean);
       body.insertAdjacentHTML("beforeend", `<div class="mrow"><span class="m-id">${esc(m.model || m.id || "?")}</span><span class="m-name">${esc(m.display || m.display_name || "")}</span><span class="m-flags">${flags.map((f) => `<em>${esc(f)}</em>`).join("")}</span></div>`);
     }
@@ -3619,6 +3642,13 @@ async function renderPlugins() {
   const list = await window.crowe.plugins.list();
   box.innerHTML = "";
   for (const p of list) {
+    // A plugin that serves only spaces this install does not show gets no row.
+    // Crowe Sense feeds Cultivation, and on a Chat and Projects build the farm
+    // otherwise shows through here in Settings. Keyed on PROFILE like the Home
+    // card and the Deployments lane, so turning Cultivation back on in the
+    // picker brings the row back. A manifest with no spaces is for every space,
+    // and one that names any installed space stays, whatever else it names.
+    if (p.spaces && p.spaces.length && !p.spaces.some((id) => PROFILE.has(id))) continue;
     const row = document.createElement("div"); row.className = "plug-row";
     const status = !p.available ? '<em class="plug-tag">server pending</em>'
       : p.connected ? `<em class="plug-tag on">on · ${p.toolCount} tools</em>`

@@ -8,6 +8,7 @@ deploy/releases-worker/.wrangler/
 release-linux-*/
 *.tar.gz
 release/
+release-developers/
 release-archive/
 
 # Python bytecode from the asset/mark generation scripts.
