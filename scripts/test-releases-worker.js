@@ -6,10 +6,18 @@
 // old and linked a Windows installer that had never been built under that name,
 // while every update download 404'd because the manifest lives under the channel
 // prefix and the installers do not.
+//
+// Two editions now share it. Crowe Logic for Developers lives under
+// desktop/developers/, feeds included, and the worker has to keep the two apart
+// in both directions: a developer download must never resolve out of the full
+// edition's tree, and the full edition's page must never offer a developer
+// build. The layout itself is written down once, in scripts/release-channel.js;
+// the worker cannot import it, so this file holds the two spellings together.
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const layout = require('./release-channel');
 
 const src = fs.readFileSync(
   path.join(__dirname, '..', 'deploy', 'releases-worker', 'src', 'index.js'),
@@ -20,9 +28,9 @@ const src = fs.readFileSync(
 // export turned into a local binding and handing back what the tests need.
 const load = new Function(`
   ${src.replace('export default', 'const handler =')}
-  return { versionedKeysFor, catalog, renderPage, handler };
+  return { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey };
 `);
-const { versionedKeysFor, catalog, renderPage, handler } = load();
+const { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey } = load();
 
 let failed = 0;
 let ran = 0;
@@ -43,8 +51,6 @@ function check(name, fn) {
 // Publishing to darwin/ and windows/ instead is why macOS clients sat on 0.12.0
 // for two releases and Windows never had a feed at all. Nothing surfaced it,
 // because a missing manifest looks exactly like being up to date.
-const CHANNEL_DIRS = { mac: 'latest-mac.yml', win: 'latest.yml', linux: 'latest-linux.yml' };
-
 const MANIFESTS = {
   'desktop/channel/mac/latest-mac.yml': `version: 0.14.0
 files:
@@ -75,6 +81,21 @@ path: Crowe Logic-0.14.0.AppImage
 `,
 };
 
+// The developer edition, macOS only, the way its first publish looks.
+const DEV_DMG = 'CroweLogic-developers-0.14.0-arm64.dmg';
+const DEV_MANIFESTS = {
+  'desktop/developers/channel/mac/developers-mac.yml': `version: 0.14.0
+files:
+  - url: CroweLogic-developers-0.14.0-arm64.zip
+    sha512: fff
+    size: 6
+  - url: ${DEV_DMG}
+    sha512: ggg
+    size: 7
+path: CroweLogic-developers-0.14.0-arm64.zip
+`,
+};
+
 function envWith(manifests) {
   return {
     RELEASES: {
@@ -101,6 +122,21 @@ async function main() {
     ['brand/mark.svg', []],
     ['desktop/channel/darwin/nested/CroweLogic-0.14.0-arm64.dmg', []],
     ['desktop/channel/darwin/CroweLogic-arm64.dmg', []],
+    // The developer edition resolves within its own tree, chosen by the channel
+    // directory the request came through. Its feeds are direct hits like the
+    // full edition's and are never remapped.
+    [`desktop/developers/channel/mac/${DEV_DMG}`, [`desktop/developers/0.14.0/${DEV_DMG}`, `desktop/developers/0.14.0-arm64.dmg/${DEV_DMG}`]],
+    ['desktop/developers/channel/mac/CroweLogic-developers-0.14.0-arm64.zip.blockmap', ['desktop/developers/0.14.0/CroweLogic-developers-0.14.0-arm64.zip.blockmap', 'desktop/developers/0.14.0-arm64.zip.blockmap/CroweLogic-developers-0.14.0-arm64.zip.blockmap']],
+    ['desktop/developers/channel/win/CroweLogic-developers-0.14.0-x64.exe', ['desktop/developers/0.14.0/CroweLogic-developers-0.14.0-x64.exe', 'desktop/developers/0.14.0-x64.exe/CroweLogic-developers-0.14.0-x64.exe']],
+    ['desktop/developers/channel/mac/developers-mac.yml', []],
+    ['desktop/developers/channel/win/developers.yml', []],
+    // The tree is chosen by the directory, never by the name: a developer
+    // artifact asked for through the full edition's channel directory is looked
+    // for in the full edition's tree, where it is not, and 404s.
+    [`desktop/channel/mac/${DEV_DMG}`, [`desktop/0.14.0/${DEV_DMG}`, `desktop/0.14.0-arm64.dmg/${DEV_DMG}`]],
+    ['desktop/channel/channel/mac/CroweLogic-0.14.0-arm64.dmg', []],
+    ['desktop/Developers/channel/mac/CroweLogic-0.14.0-arm64.dmg', []],
+    ['desktop/developers/0.14.0/CroweLogic-developers-0.14.0-arm64.dmg', []],
   ];
   for (const [input, expected] of mappings) {
     await check(`maps ${input}`, () => assert.deepStrictEqual(versionedKeysFor(input), expected));
@@ -112,24 +148,32 @@ async function main() {
       publish.some((p) => p.url && p.url.includes('/desktop/channel/${os}')),
       `publish config is ${JSON.stringify(publish)}`
     );
+    const dev = [].concat(require('../electron-builder.developer.js').publish);
+    assert.ok(
+      dev.every((p) => p.url && p.url.endsWith(`/${layout.prefix('developers')}/channel/\${os}`)),
+      `developer publish config is ${JSON.stringify(dev)}`
+    );
   });
 
-  await check('the worker reads the channel dirs electron-builder writes', () => {
-    for (const [dir, manifest] of Object.entries(CHANNEL_DIRS)) {
-      assert.ok(
-        src.includes(`desktop/channel/${dir}/${manifest}`),
-        `worker does not read desktop/channel/${dir}/${manifest}`
-      );
+  await check('the worker and the publishers agree on every feed key', () => {
+    for (const channel of ['latest', 'developers']) {
+      for (const os of layout.OSES) {
+        assert.strictEqual(feedKey(channel, os), layout.feedKey(channel, os));
+      }
     }
     for (const wrong of ['channel/darwin/', 'channel/windows/', 'channel/win32/']) {
       assert.ok(!src.includes(wrong), `worker still references ${wrong}`);
     }
   });
 
-  await check('publish-r2 writes the channel dirs the updater reads', () => {
-    const sh = fs.readFileSync(path.join(__dirname, 'publish-r2.sh'), 'utf8');
-    for (const [dir, manifest] of Object.entries(CHANNEL_DIRS)) {
-      assert.ok(sh.includes(`"${dir}/${manifest}"`), `publish-r2.sh does not write ${dir}/${manifest}`);
+  await check('both publishers key every write off the channel layout', () => {
+    for (const name of ['publish-r2.sh', 'publish-rclone.sh']) {
+      const sh = fs.readFileSync(path.join(__dirname, name), 'utf8');
+      assert.ok(sh.includes('release-channel.js" --shell'), `${name} does not resolve its layout through release-channel.js`);
+      assert.ok(sh.includes('put "$prefix/$version/$url"'), `${name} does not write installers under the channel prefix`);
+      assert.ok(sh.includes('put "$prefix/$version/SHA256SUMS"'), `${name} does not write SHA256SUMS under the channel prefix`);
+      assert.ok(sh.includes('put "$prefix/channel/$os/$name"'), `${name} does not write feeds under the channel prefix`);
+      assert.ok(!/put "desktop\//.test(sh), `${name} still writes a hardcoded desktop/ key`);
     }
   });
 
@@ -190,6 +234,19 @@ path: CroweLogic-0.14.0-x64.dmg
     assert.strictEqual(await catalog(envWith({})), null);
   });
 
+  await check('the developer catalog reads its own feeds and only its own', async () => {
+    const both = { ...MANIFESTS, ...DEV_MANIFESTS };
+    assert.deepStrictEqual(await catalog(envWith(both), 'developers'), {
+      version: '0.14.0', windows: null, macos: DEV_DMG, macosIntel: null, appimage: null, deb: null,
+    });
+    // The full edition's catalog is the same with the developer feeds present
+    // or absent, and a bucket holding only developer builds has no full
+    // release to offer.
+    assert.deepStrictEqual(await catalog(envWith(both)), await catalog(envWith(MANIFESTS)));
+    assert.strictEqual(await catalog(envWith(DEV_MANIFESTS)), null);
+    assert.strictEqual(await catalog(envWith(MANIFESTS), 'developers'), null);
+  });
+
   await check('the page links the filenames that were actually published', async () => {
     const html = renderPage(await catalog(envWith(MANIFESTS)));
     assert.ok(html.includes('v0.14.0'), 'version not rendered');
@@ -204,6 +261,19 @@ path: CroweLogic-0.14.0-x64.dmg
       assert.ok(html.includes(`href="${link}"`), `missing link ${link}`);
     }
     assert.ok(!html.includes('Coming soon'), 'linux is published, not coming soon');
+    assert.ok(html.includes('<title>Crowe Logic releases</title>') && html.includes('<h1>Crowe Logic desktop</h1>'), 'the full page changed its heading');
+  });
+
+  await check('the developer page links its own prefix and nothing of the full edition', async () => {
+    const both = { ...MANIFESTS, ...DEV_MANIFESTS };
+    const html = renderPage(await catalog(envWith(both), 'developers'), 'developers');
+    assert.ok(html.includes('<h1>Crowe Logic for Developers</h1>'), 'edition not named');
+    assert.ok(html.includes(`href="/desktop/developers/0.14.0/${encodeURIComponent(DEV_DMG)}"`), 'dmg not linked under the developers prefix');
+    assert.ok(html.includes('href="/desktop/developers/0.14.0/SHA256SUMS"'), 'SHA256SUMS not linked under the developers prefix');
+    assert.ok(html.includes('Not in this release'), 'platforms the release lacks are not marked');
+    assert.ok(!html.includes('/desktop/0.14.0/'), 'links into the full edition');
+    const full = renderPage(await catalog(envWith(both)));
+    assert.ok(!full.includes('/desktop/developers/') && !full.includes('-developers-'), 'the full page offers a developer build');
   });
 
   await check('a missing installer degrades instead of linking nothing', async () => {
@@ -228,6 +298,24 @@ path: CroweLogic-0.14.0-x64.dmg
     );
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.headers.get('content-length'), String(body.length));
+  });
+
+  await check('a developer update download falls through within the developer tree only', async () => {
+    const body = 'developer bytes';
+    const asked = [];
+    const env = {
+      RELEASES: {
+        async get(key) {
+          asked.push(key);
+          if (key !== `desktop/developers/0.14.0/${DEV_DMG}`) return null;
+          return { body, size: body.length, httpEtag: '"y"', writeHttpMetadata() {} };
+        },
+      },
+    };
+    const res = await handler.fetch(new Request(`https://x/desktop/developers/channel/mac/${DEV_DMG}`), env);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-length'), String(body.length));
+    assert.ok(asked.every((k) => k.startsWith('desktop/developers/')), `looked outside the developer tree: ${asked.join(', ')}`);
   });
 
   await check('a range request is answered with 206 and only those bytes', async () => {
@@ -261,6 +349,79 @@ path: CroweLogic-0.14.0-x64.dmg
       envWith({})
     );
     assert.strictEqual(res.status, 404);
+  });
+
+  await check('/developers serves the developer page and / still serves the full one', async () => {
+    const env = envWith({ ...MANIFESTS, ...DEV_MANIFESTS });
+    const dev = await handler.fetch(new Request('https://x/developers'), env);
+    assert.strictEqual(dev.status, 200);
+    assert.match(dev.headers.get('content-type'), /text\/html/);
+    const devHtml = await dev.text();
+    assert.ok(devHtml.includes('Crowe Logic for Developers') && devHtml.includes('/desktop/developers/0.14.0/'));
+    const full = await handler.fetch(new Request('https://x/'), env);
+    assert.strictEqual(full.status, 200);
+    const fullHtml = await full.text();
+    assert.ok(fullHtml.includes('/desktop/0.14.0/') && !fullHtml.includes('/desktop/developers/'));
+    const head = await handler.fetch(new Request('https://x/developers', { method: 'HEAD' }), env);
+    assert.strictEqual(head.status, 200);
+  });
+
+  await check('/developers/<platform> redirects to the current developer installer', async () => {
+    const env = envWith(DEV_MANIFESTS);
+    const mac = await handler.fetch(new Request('https://x/developers/mac'), env);
+    assert.strictEqual(mac.status, 302);
+    assert.strictEqual(mac.headers.get('location'), `https://x/desktop/developers/0.14.0/${DEV_DMG}`);
+    // A platform the release does not include is a 404, not a redirect to "null".
+    for (const missing of ['windows', 'mac-intel', 'appimage', 'deb']) {
+      const res = await handler.fetch(new Request(`https://x/developers/${missing}`), env);
+      assert.strictEqual(res.status, 404, `${missing} answered ${res.status}`);
+    }
+    const unknown = await handler.fetch(new Request('https://x/developers/amiga'), env);
+    assert.strictEqual(unknown.status, 404);
+  });
+
+  await check('an unseeded developers channel answers 503, not a broken page', async () => {
+    const env = envWith(MANIFESTS);
+    assert.strictEqual((await handler.fetch(new Request('https://x/developers'), env)).status, 503);
+    assert.strictEqual((await handler.fetch(new Request('https://x/developers/mac'), env)).status, 503);
+  });
+
+  await check('ingest accepts both editions\' key shapes and nothing else', () => {
+    for (const ok of [
+      'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg',
+      'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg.blockmap',
+      'desktop/0.14.0/SHA256SUMS',
+      'desktop/0.15.0-rc.1/CroweLogic-0.15.0-rc.1-arm64.dmg',
+      'desktop/channel/mac/latest-mac.yml',
+      'desktop/channel/win/latest.yml',
+      `desktop/developers/0.14.0/${DEV_DMG}`,
+      'desktop/developers/0.14.0/SHA256SUMS',
+      'desktop/developers/channel/mac/developers-mac.yml',
+    ]) {
+      assert.ok(validIngestKey(ok), `refused ${ok}`);
+    }
+    for (const bad of [
+      'brand/mark.svg',
+      'desktop/../0.14.0/x.dmg',
+      '/desktop/0.14.0/x.dmg',
+      'desktop/0.14.0',
+      'desktop/0.14.0/',
+      'desktop/channel/mac/',
+      'desktop/channel/mac/a/b',
+      'desktop/developers/channel/mac/a/b',
+      'desktop/developers/0.14.0',
+      'desktop/nightly/0.14.0/x.dmg',
+      'desktop/latest/0.14.0/x.dmg',
+      'desktop/developers/developers/0.14.0/x.dmg',
+      // A version segment has to look like one, and a channel directory has to
+      // be one the updater can be pointed at.
+      'desktop/nonsense/x.dmg',
+      'desktop/developers/nonsense/x.dmg',
+      'desktop/channel/darwin/latest-mac.yml',
+      'desktop/developers/channel/windows/developers.yml',
+    ]) {
+      assert.ok(!validIngestKey(bad), `accepted ${bad}`);
+    }
   });
 
   console.log(`\n${ran - failed}/${ran} passed`);
