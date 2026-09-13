@@ -26,18 +26,49 @@ const MARK_SVG = `<svg class="mark" aria-hidden="true" xmlns="http://www.w3.org/
 </svg>`;
 const MARK_ICON = "data:image/svg+xml," + encodeURIComponent(MARK_SVG.replace(' class="mark"', ""));
 
-function href(version, name) {
-  return `/desktop/${encodeURIComponent(version)}/${encodeURIComponent(name)}`;
+// Two editions share the bucket and this worker. The full edition is stored
+// under desktop/ and Crowe Logic for Developers under desktop/developers/, its
+// update feeds included, so nothing either publishes can land on a key the
+// other serves. scripts/release-channel.js is the source of this layout; the
+// worker ships on its own and cannot import it, so the same layout is spelled
+// out here and scripts/test-releases-worker.js holds the two to each other.
+const CHANNELS = {
+  latest: {
+    prefix: "desktop",
+    name: "Crowe Logic",
+    tag: "releases",
+    title: "Crowe Logic desktop",
+    description: "Download the Crowe Logic desktop app for Windows, macOS, and Linux.",
+    sub: "The operator for your workspace. Chat, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.",
+  },
+  developers: {
+    prefix: "desktop/developers",
+    name: "Crowe Logic for Developers",
+    tag: "developers",
+    title: "Crowe Logic for Developers",
+    description: "Download Crowe Logic for Developers for Windows, macOS, and Linux.",
+    sub: "The coding agent for your repositories. Chat and Projects, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.",
+  },
+};
+
+// The feed electron-updater asks for: named after the channel, in the channel
+// directory under the edition's prefix. Windows has no os suffix.
+function feedKey(channel, os) {
+  return `${CHANNELS[channel].prefix}/channel/${os}/${channel}${os === "win" ? "" : `-${os}`}.yml`;
+}
+
+function href(channel, version, name) {
+  return `/${CHANNELS[channel].prefix}/${encodeURIComponent(version)}/${encodeURIComponent(name)}`;
 }
 
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
 
-function card(title, meta, body, rel, primary, secondary, secondaryLabel) {
+function card(channel, title, meta, body, rel, primary, secondary, secondaryLabel) {
   const buttons = primary
-    ? `<a class="btn" href="${href(rel.version, primary)}">Download for ${escapeHtml(title)}</a>` +
-      (secondary ? `\n        <span class="alt"><a href="${href(rel.version, secondary)}">${escapeHtml(secondaryLabel)}</a></span>` : "")
+    ? `<a class="btn" href="${href(channel, rel.version, primary)}">Download for ${escapeHtml(title)}</a>` +
+      (secondary ? `\n        <span class="alt"><a href="${href(channel, rel.version, secondary)}">${escapeHtml(secondaryLabel)}</a></span>` : "")
     : `<span class="meta">Not in this release</span>`;
   return `<div class="card">
         <h2>${escapeHtml(title)}</h2>
@@ -60,14 +91,10 @@ async function readManifest(env, key) {
   return { version: version[1], files: [...text.matchAll(/^\s+- url:\s*(.+?)\s*$/gm)].map((m) => m[1]) };
 }
 
-async function catalog(env) {
-  // These paths must match electron-builder's ${os} macro in the publish url,
-  // which expands to mac, win and linux.
-  const [mac, win, lin] = await Promise.all([
-    readManifest(env, "desktop/channel/mac/latest-mac.yml"),
-    readManifest(env, "desktop/channel/win/latest.yml"),
-    readManifest(env, "desktop/channel/linux/latest-linux.yml"),
-  ]);
+async function catalog(env, channel = "latest") {
+  // The channel directories must match electron-builder's ${os} macro in the
+  // publish url, which expands to mac, win and linux.
+  const [mac, win, lin] = await Promise.all(["mac", "win", "linux"].map((os) => readManifest(env, feedKey(channel, os))));
 
   // Platforms can lag each other, so show the newest version any of them
   // reached and only offer the installers that belong to it.
@@ -109,14 +136,15 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function renderPage(rel) {
+function renderPage(rel, channel = "latest") {
+  const edition = CHANNELS[channel];
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Crowe Logic releases</title>
-<meta name="description" content="Download the Crowe Logic desktop app for Windows, macOS, and Linux." />
+<title>${escapeHtml(edition.name)} releases</title>
+<meta name="description" content="${escapeHtml(edition.description)}" />
 <link rel="icon" type="image/svg+xml" href="${MARK_ICON}" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -169,23 +197,23 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
 <header>
   <div class="wrap">
     ${MARK_SVG}
-    <span class="name">Crowe Logic</span>
-    <span class="tag">releases</span>
+    <span class="name">${escapeHtml(edition.name)}</span>
+    <span class="tag">${escapeHtml(edition.tag)}</span>
   </div>
 </header>
 <main>
   <div class="wrap">
-    <h1>Crowe Logic desktop</h1>
-    <p class="sub">The operator for your workspace. Chat, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.</p>
+    <h1>${escapeHtml(edition.title)}</h1>
+    <p class="sub">${escapeHtml(edition.sub)}</p>
     <span class="ver">v${rel.version}</span>
     <div class="grid">
-      ${card("Windows", "64-bit installer", "Run the installer and follow the setup prompts. Windows may show a SmartScreen warning while code-signing validation is completed.", rel, rel.windows)}
-      ${card("macOS", "Apple Silicon dmg", "Open the dmg and drag Crowe Logic to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.", rel, rel.macos, rel.macosIntel, "Download for Intel")}
-      ${card("Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
+      ${card(channel, "Windows", "64-bit installer", "Run the installer and follow the setup prompts. Windows may show a SmartScreen warning while code-signing validation is completed.", rel, rel.windows)}
+      ${card(channel, "macOS", "Apple Silicon dmg", `Open the dmg and drag ${edition.name} to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.`, rel, rel.macos, rel.macosIntel, "Download for Intel")}
+      ${card(channel, "Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
     </div>
     <section class="checks">
       <h3>Verify your download</h3>
-      <p>With <a style="color:var(--gold)" href="${href(rel.version, "SHA256SUMS")}">SHA256SUMS</a> in your download folder:</p>
+      <p>With <a style="color:var(--gold)" href="${href(channel, rel.version, "SHA256SUMS")}">SHA256SUMS</a> in your download folder:</p>
       <pre>sha256sum -c SHA256SUMS --ignore-missing</pre>
     </section>
   </div>
@@ -230,17 +258,22 @@ function contentTypeFor(key, stored) {
 // is stored under the full identifier, and by inspection alone a trailing
 // prerelease is indistinguishable from an arch suffix. So return candidates,
 // shortest first, and let the bucket decide.
+//
+// The edition's tree is chosen by the channel directory the request came
+// through, never by the file's name: desktop/channel/<os>/ resolves under
+// desktop/, desktop/<edition>/channel/<os>/ under desktop/<edition>/. Feeds are
+// stored where they are asked for and are never remapped.
 function versionedKeysFor(key) {
-  const m = /^desktop\/channel\/[^/]+\/([^/]+)$/.exec(key);
+  const m = /^(desktop(?:\/(?!channel\/)[a-z][a-z0-9-]*)?)\/channel\/[^/]+\/([^/]+)$/.exec(key);
   if (!m) return [];
-  const name = m[1];
-  if (name.startsWith("latest")) return [];
+  const [, prefix, name] = m;
+  if (name.endsWith(".yml")) return [];
 
   const v = /(?:^|[-_. ])(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.]+))?(?=[-_. ]|$)/.exec(name);
   if (!v) return [];
 
-  const keys = [`desktop/${v[1]}/${name}`];
-  if (v[2]) keys.push(`desktop/${v[1]}-${v[2]}/${name}`);
+  const keys = [`${prefix}/${v[1]}/${name}`];
+  if (v[2]) keys.push(`${prefix}/${v[1]}-${v[2]}/${name}`);
   return keys;
 }
 
@@ -270,17 +303,20 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// Only the two shapes publish-r2.sh writes: desktop/<version>/<file> and
-// desktop/channel/<os>/<file>. Segments are matched against a literal set of
-// characters, so "..", a leading slash and an empty segment are all unmatchable
-// rather than filtered out afterwards.
+// Only the shapes the publishers write: <prefix>/<version>/<file> and
+// <prefix>/channel/<os>/<file>, where <prefix> is desktop or an edition's
+// desktop/<channel>. Segments are matched against a literal set of characters,
+// so "..", a leading slash and an empty segment are all unmatchable rather than
+// filtered out afterwards.
 function validIngestKey(key) {
   const seg = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/;
   const parts = key.split("/");
-  if (parts.length < 3 || parts.length > 4) return false;
   if (parts[0] !== "desktop") return false;
-  if (parts.length === 4 && parts[1] !== "channel") return false;
-  return parts.slice(1).every((p) => seg.test(p) && !p.includes(".."));
+  const rest = parts.slice(1);
+  if (!rest.every((p) => seg.test(p) && !p.includes(".."))) return false;
+  if (rest.length > 1 && Object.hasOwn(CHANNELS, rest[0]) && CHANNELS[rest[0]].prefix !== "desktop") rest.shift();
+  if (rest.length === 2) return true;
+  return rest.length === 3 && rest[0] === "channel";
 }
 
 async function ingest(request, env) {
@@ -353,6 +389,26 @@ export default {
       return new Response(request.method === "HEAD" ? null : renderPage(rel), {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" },
       });
+    }
+
+    // Crowe Logic for Developers has a page of its own and, for the Azure
+    // Marketplace listing to point at, stable links that resolve to the current
+    // installer without the listing having to know the version: /developers/mac
+    // is the Apple Silicon dmg, /developers/mac-intel the Intel one, and
+    // /developers/windows, /developers/appimage and /developers/deb the rest. A
+    // platform the release does not include is a 404, not a link to nothing.
+    const dev = /^\/developers(?:\/(mac|mac-intel|windows|appimage|deb))?$/.exec(path);
+    if (dev) {
+      const rel = await catalog(env, "developers");
+      if (!rel) return new Response("No developer release published yet", { status: 503 });
+      if (!dev[1]) {
+        return new Response(request.method === "HEAD" ? null : renderPage(rel, "developers"), {
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" },
+        });
+      }
+      const file = rel[{ mac: "macos", "mac-intel": "macosIntel", windows: "windows", appimage: "appimage", deb: "deb" }[dev[1]]];
+      if (!file) return new Response("Not in this release", { status: 404 });
+      return Response.redirect(new URL(href("developers", rel.version, file), url).toString(), 302);
     }
 
     // The previous worker published /crowe-logic/<version>/<file> links with

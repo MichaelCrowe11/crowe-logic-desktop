@@ -16,6 +16,7 @@ const http = require('http');
 const path = require('path');
 const zlib = require('zlib');
 const { execFile } = require('child_process');
+const layout = require('./release-channel');
 
 const VERSION = '1.2.3';
 const VERIFY = path.join(__dirname, 'verify-release.js');
@@ -49,6 +50,7 @@ const APPIMAGE = 'Crowe Logic-1.2.3.AppImage';
 function baseline(appImage = makeAppImage(800)) {
   return {
     version: VERSION,
+    channel: 'latest',   // the one channel this stub serves; the developers scenarios flip it
     requests: [],   // every path the verifier asked for, so a scenario can assert one was not
     // name -> byte length, or a Buffer when the bytes themselves matter
     objects: {
@@ -82,8 +84,6 @@ function baseline(appImage = makeAppImage(800)) {
   };
 }
 
-const FEED_NAME = { mac: 'latest-mac.yml', win: 'latest.yml', linux: 'latest-linux.yml' };
-
 function renderFeed(feed) {
   const files = feed.files
     .map((f) => `  - url: ${f.url}\n    sha512: ${'A'.repeat(88)}\n    size: ${f.size}`
@@ -98,20 +98,24 @@ function serve(state) {
     const p = decodeURIComponent(url.pathname);
     state.requests.push(p);
 
-    if (p === '/') {
+    // The stub holds one channel's layout, under that channel's prefix and page,
+    // so a check of the other channel finds nothing here.
+    const prefix = layout.prefix(state.channel);
+
+    if (p === layout.pagePath(state.channel)) {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(`<html><span class="ver">v${state.version}</span></html>`);
     }
 
-    if (p === `/desktop/${VERSION}/SHA256SUMS`) {
+    if (p === `/${prefix}/${VERSION}/SHA256SUMS`) {
       res.writeHead(200, { 'content-type': 'text/plain' });
       return res.end(state.sums.map((n) => `${'0'.repeat(64)}  ${n}`).join('\n') + '\n');
     }
 
-    const channel = /^\/desktop\/channel\/(mac|win|linux)\/(.+)$/.exec(p);
+    const channel = new RegExp(`^/${prefix}/channel/(mac|win|linux)/(.+)$`).exec(p);
     if (channel) {
       const [, os, name] = channel;
-      if (name === FEED_NAME[os]) {
+      if (name === layout.feedName(state.channel, os)) {
         res.writeHead(200, { 'content-type': 'text/yaml' });
         return res.end(renderFeed(state.feeds[os]));
       }
@@ -152,6 +156,7 @@ function run(port, opts = {}) {
   const args = [VERIFY];
   if (version != null) args.push(version);
   args.push(`--base=http://127.0.0.1:${port}`);
+  if (opts.args) args.push(...opts.args);
   // Blank rather than inherited: run this suite inside Actions and the real
   // GITHUB_REF_NAME would otherwise reach through and make the result depend on
   // which branch the checkout happens to be on.
@@ -329,12 +334,45 @@ const scenarios = [
       assert.match(r.out, /all checks passed/);
     },
   },
+  // Crowe Logic for Developers is verified under its own prefix. The stub here
+  // holds only the developers layout, so a check that strayed into the full
+  // edition's keys would 404 and fail; asserting that it asked for none of them
+  // is the stronger claim, that a green developers check says nothing about the
+  // full app and cannot be satisfied by it.
+  {
+    name: 'the developers channel verifies under its own prefix and reads nothing of the full edition',
+    channel: 'developers',
+    run: { args: ['--channel', 'developers'] },
+    break: () => {},
+    expect: (r, state) => {
+      assert.strictEqual(r.code, 0, `expected exit 0, got ${r.code}\n${r.out}`);
+      assert.match(r.out, /verify-release: 1\.2\.3 on the developers channel/);
+      assert.match(r.out, /all checks passed/);
+      assert.doesNotMatch(r.out, /^warn/m, `warned on a healthy release\n${r.out}`);
+      const strayed = state.requests.filter((p) => p === '/' || /^\/desktop\/(channel|1\.2\.3)\//.test(p));
+      assert.deepStrictEqual(strayed, [], `read the full edition's keys: ${strayed.join(', ')}`);
+      assert.ok(state.requests.includes('/desktop/developers/channel/mac/developers-mac.yml'), 'never read the developers feed');
+      assert.ok(state.requests.includes('/desktop/developers/1.2.3/SHA256SUMS'), 'never read the developers SHA256SUMS');
+      assert.ok(state.requests.includes('/developers'), 'never read the developers page');
+    },
+  },
+  {
+    name: 'a developer release does not pass as the full app',
+    channel: 'developers',
+    break: () => {},
+    expect: (r) => {
+      assert.strictEqual(r.code, 1, `expected exit 1, got ${r.code}\n${r.out}`);
+      assert.match(r.out, /not ok\s+mac: feed resolves/);
+      assert.match(r.out, /not ok\s+download page serves/);
+    },
+  },
 ];
 
 (async () => {
   let failed = 0;
   for (const s of scenarios) {
     const state = baseline(s.appImage ? s.appImage() : undefined);
+    if (s.channel) state.channel = s.channel;
     s.break(state);
     const server = await serve(state);
     const result = await run(server.address().port, s.run || {});

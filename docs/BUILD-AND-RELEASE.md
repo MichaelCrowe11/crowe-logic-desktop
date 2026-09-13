@@ -208,6 +208,37 @@ Updates are served by a Cloudflare Worker, not by GitHub:
 https://crowe-releases.yellow-block-3adc.workers.dev/desktop/channel/${os}
 ```
 
+### The developers channel
+
+Crowe Logic for Developers (`electron-builder.developer.js`, the Azure
+Marketplace edition) publishes on its own channel, under its own prefix in the
+same bucket. `scripts/release-channel.js` is the one place the layout is written
+down; the publishers, the preflight, the verifier and the developer config read
+it, and `scripts/test-releases-worker.js` holds the worker to the same keys.
+
+| | full app (`latest`) | developers |
+| --- | --- | --- |
+| build output | `release/` | `release-developers/` |
+| installers, blockmaps, SHA256SUMS | `desktop/<version>/` | `desktop/developers/<version>/` |
+| update feeds | `desktop/channel/<os>/latest*.yml` | `desktop/developers/channel/<os>/developers*.yml` |
+| download page | `/` | `/developers` |
+| stable installer links | | `/developers/mac`, `/developers/mac-intel`, `/developers/windows`, `/developers/appimage`, `/developers/deb` |
+
+Feeds included: nothing the developer publish writes can land on a key the full
+app serves, and the default publisher reads only `latest*.yml`, so a
+`release-developers/` directory has no feeds as far as it is concerned and is
+refused rather than published as the full app.
+
+```
+npm run dist:developers:mac
+npm run publish:rclone:developers        # or publish:r2:developers; both preflight, upload, then verify
+npm run verify:release:developers
+```
+
+Every script also takes `--channel developers` or `--config
+electron-builder.developer.js` directly. `scripts/ingest-release.sh` takes
+`CHANNEL=developers`.
+
 ### Verifying a release
 
 ```

@@ -6,6 +6,8 @@
 //   npm run verify:release -- 0.16.0
 //   npm run verify:release -- 0.16.0 --full
 //   npm run verify:release -- 0.16.0 --base=https://staging.example
+//   npm run verify:release:developers      # Crowe Logic for Developers, under desktop/developers/
+//   npm run verify:release -- 0.24.7 --channel developers
 //
 // Everything about a release fails silently. An update feed that names a file
 // the bucket does not have reports nothing to anyone: the updater 404s in the
@@ -33,6 +35,7 @@
 
 const crypto = require('crypto');
 const pkg = require('../package.json');
+const { DEFAULT_CHANNEL, feedName, prefix: prefixFor, pagePath, fromArgs } = require('./release-channel');
 
 // One source of truth for where releases live. If the publish url stops looking
 // like this, the assumptions below about channel prefixes are stale too.
@@ -43,11 +46,20 @@ if (LIVE === PUBLISH) {
   process.exit(2);
 }
 
-const CHANNELS = [
-  { os: 'mac', feed: 'latest-mac.yml' },
-  { os: 'win', feed: 'latest.yml' },
-  { os: 'linux', feed: 'latest-linux.yml' },
-];
+// Which channel: the full edition's `latest` unless --channel or --config says
+// otherwise. Every key below hangs off the channel's prefix, so the developer
+// edition is checked under desktop/developers/ and a check of it never reads,
+// let alone passes on the strength of, a key of the full edition's.
+let target;
+try {
+  target = fromArgs(process.argv.slice(2));
+} catch (err) {
+  console.error(`verify-release: ${err.message}`);
+  process.exit(2);
+}
+const CHANNEL = target.channel;
+const PREFIX = prefixFor(CHANNEL);
+const CHANNELS = ['mac', 'win', 'linux'].map((os) => ({ os, feed: feedName(CHANNEL, os) }));
 
 // electron-builder ships the updater's blockmap two different ways, and this
 // check got it wrong for AppImage until 0.16.0 was verified by hand.
@@ -68,7 +80,7 @@ const CHANNELS = [
 const SIDECAR_BLOCKMAP = /\.(exe|dmg|zip)$/;
 const EMBEDDED_BLOCKMAP = /\.AppImage$/;
 
-const args = process.argv.slice(2);
+const args = target.rest;
 const full = args.includes('--full');
 // --base points the same checks at a staging worker, and at the stub server in
 // scripts/test-verify-release.js that proves these checks can actually fail.
@@ -201,11 +213,11 @@ async function verifySha512(channelUrl, file) {
 }
 
 (async () => {
-  console.log(`verify-release: ${version} at ${BASE}\n`);
+  console.log(`verify-release: ${version}${CHANNEL === DEFAULT_CHANNEL ? '' : ` on the ${CHANNEL} channel`} at ${BASE}\n`);
   const published = [];   // every artifact name any feed names, for the SHA256SUMS check
 
   for (const { os, feed } of CHANNELS) {
-    const feedUrl = at(`desktop/channel/${os}/${feed}`);
+    const feedUrl = at(`${PREFIX}/channel/${os}/${feed}`);
     let parsed;
     try {
       const res = await get(feedUrl);
@@ -226,7 +238,7 @@ async function verifySha512(channelUrl, file) {
 
     for (const file of parsed.files) {
       published.push(file.url);
-      const url = at(`desktop/channel/${os}/${file.url}`);
+      const url = at(`${PREFIX}/channel/${os}/${file.url}`);
       let result;
       try { result = await probe(url, file); } catch (err) { result = { okay: false, why: err.message }; }
       if (result.okay) ok(`${os}: ${file.url} resolves and serves ranges`);
@@ -234,7 +246,7 @@ async function verifySha512(channelUrl, file) {
 
       if (SIDECAR_BLOCKMAP.test(file.url)) {
         try {
-          const res = await get(at(`desktop/channel/${os}/${file.url}.blockmap`), { headers: { Range: 'bytes=0-0' } });
+          const res = await get(at(`${PREFIX}/channel/${os}/${file.url}.blockmap`), { headers: { Range: 'bytes=0-0' } });
           await res.arrayBuffer().catch(() => {});
           if (res.status !== 206) warn(`${os}: ${file.url}.blockmap present`, `${res.status} - updates will download in full`);
           else ok(`${os}: ${file.url}.blockmap present`);
@@ -262,7 +274,7 @@ async function verifySha512(channelUrl, file) {
   // The download page tells people to run sha256sum -c, so the file has to exist
   // and has to describe this release and only this release.
   try {
-    const res = await get(at(`desktop/${version}/SHA256SUMS`));
+    const res = await get(at(`${PREFIX}/${version}/SHA256SUMS`));
     if (!res.ok) {
       fail('SHA256SUMS is published', `${res.status}`);
     } else {
@@ -283,8 +295,10 @@ async function verifySha512(channelUrl, file) {
   }
 
   // The page is what humans meet, and it read three releases stale once before.
+  // Each channel has its own: / for the full edition, /developers for the
+  // developer edition.
   try {
-    const res = await get(BASE + '/');
+    const res = await get(BASE + pagePath(CHANNEL));
     const html = res.ok ? await res.text() : '';
     if (!res.ok) fail('download page serves', `${res.status}`);
     else if (!html.includes(`v${version}`)) fail('download page offers this release', `no "v${version}" in the page`);

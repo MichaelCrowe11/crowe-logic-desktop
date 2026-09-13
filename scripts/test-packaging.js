@@ -115,6 +115,10 @@ check("the developer edition config narrows the app and changes nothing else", (
     `croweSpaces is ${JSON.stringify(dev.extraMetadata.croweSpaces)}`);
   assert(/-developers-/.test(dev.artifactName) && /-developers-/.test(dev.mac.artifactName), "artifactName does not mark the edition");
   assert(dev.publish.every((p) => p.channel === "developers"), "the edition shares the full app's update channel");
+  // The feeds live under the edition's own prefix, beside the full app's rather
+  // than in its channel directory, so the url has to end there too.
+  assert(dev.publish.every((p) => p.url === pkg.build.publish[0].url.replace("/desktop/channel/", "/desktop/developers/channel/")),
+    `the edition's feed url is not under desktop/developers/: ${JSON.stringify(dev.publish.map((p) => p.url))}`);
   assert(dev.directories.output !== pkg.build.directories.output, "the edition shares the full app's output directory");
   assert(JSON.stringify(dev.files) === JSON.stringify(pkg.build.files) && dev.mac.identity === pkg.build.mac.identity
     && dev.afterPack === pkg.build.afterPack && dev.afterSign === pkg.build.afterSign, "the edition drifted from package.json");
