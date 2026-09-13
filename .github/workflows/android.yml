@@ -22,6 +22,9 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   bundle:
     runs-on: ubuntu-latest
@@ -68,6 +71,9 @@ jobs:
         run: |
           node -e 'const v=require("./package.json").version; console.log("version", v)'
           node scripts/sync-version.js --check
+
+      - name: Check native security boundaries
+        run: node scripts/test-mobile-security.js
 
       - name: Decode the upload keystore
         if: env.KS_B64 != ''

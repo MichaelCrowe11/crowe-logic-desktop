@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Capacitor invokes plugin methods through the bridge. Keep the local vault's
+# annotated surface while still allowing the rest of the release to shrink.
+-keep @com.getcapacitor.annotation.CapacitorPlugin class com.crowelogic.mobile.CroweVault { *; }

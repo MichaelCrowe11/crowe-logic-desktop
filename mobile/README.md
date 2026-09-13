@@ -141,12 +141,14 @@ are `capacitor://localhost` and `https://localhost`.
 
 ## Storage, plainly
 
-Tokens, provider keys, sessions and grow records go through Capacitor
-Preferences: `UserDefaults` on iOS, `SharedPreferences` on Android. That is
-private to the app and separate from every other app on the device. It is *not*
-the hardware-backed keychain `safeStorage` gives the desktop, and it is included
-in an unencrypted device backup. The Key Manager says exactly that on screen
-rather than repeating the desktop's promise of a vault.
+The token-bearing config record — access and refresh tokens, remote-pairing
+credential and provider keys — goes through `CroweVault`. iOS keeps it in the
+device-only Keychain; Android encrypts it with a non-exportable Android Keystore
+key before app-private storage. A native vault failure signs the app out rather
+than downgrading a credential to Preferences. Sessions and grow records still
+use Capacitor Preferences because they are app data, not authentication
+material. Android app backups are disabled; the iOS vault item does not migrate
+to another device.
 
 ## Layout notes
 

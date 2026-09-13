@@ -34,6 +34,15 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
     private let shareKey = "CapacitorStorage.share"
 
     private let service = "com.crowelogic.mobile.vault"
+    private let allowedKeys: Set<String> = ["config"]
+
+    private func key(_ call: CAPPluginCall) -> String? {
+        guard let key = call.getString("key"), allowedKeys.contains(key) else {
+            call.reject("unsupported vault key")
+            return nil
+        }
+        return key
+    }
 
     private func query(_ key: String) -> [String: Any] {
         [
@@ -44,7 +53,7 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func get(_ call: CAPPluginCall) {
-        guard let key = call.getString("key"), !key.isEmpty else { call.reject("key is required"); return }
+        guard let key = key(call) else { return }
         var q = query(key)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -59,7 +68,7 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func set(_ call: CAPPluginCall) {
-        guard let key = call.getString("key"), !key.isEmpty else { call.reject("key is required"); return }
+        guard let key = key(call) else { return }
         let value = call.getString("value") ?? ""
         let data = Data(value.utf8)
         var q = query(key)
@@ -81,7 +90,7 @@ public class CroweVault: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["value": value ?? NSNull()])
     }
     @objc func remove(_ call: CAPPluginCall) {
-        guard let key = call.getString("key"), !key.isEmpty else { call.reject("key is required"); return }
+        guard let key = key(call) else { return }
         let status = SecItemDelete(query(key) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { call.reject("keychain delete failed: \(status)"); return }
         call.resolve()
