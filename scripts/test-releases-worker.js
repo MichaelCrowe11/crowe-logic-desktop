@@ -389,8 +389,11 @@ path: CroweLogic-0.14.0-x64.dmg
   await check('ingest accepts both editions\' key shapes and nothing else', () => {
     for (const ok of [
       'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg',
+      'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg.blockmap',
       'desktop/0.14.0/SHA256SUMS',
+      'desktop/0.15.0-rc.1/CroweLogic-0.15.0-rc.1-arm64.dmg',
       'desktop/channel/mac/latest-mac.yml',
+      'desktop/channel/win/latest.yml',
       `desktop/developers/0.14.0/${DEV_DMG}`,
       'desktop/developers/0.14.0/SHA256SUMS',
       'desktop/developers/channel/mac/developers-mac.yml',
@@ -410,6 +413,12 @@ path: CroweLogic-0.14.0-x64.dmg
       'desktop/nightly/0.14.0/x.dmg',
       'desktop/latest/0.14.0/x.dmg',
       'desktop/developers/developers/0.14.0/x.dmg',
+      // A version segment has to look like one, and a channel directory has to
+      // be one the updater can be pointed at.
+      'desktop/nonsense/x.dmg',
+      'desktop/developers/nonsense/x.dmg',
+      'desktop/channel/darwin/latest-mac.yml',
+      'desktop/developers/channel/windows/developers.yml',
     ]) {
       assert.ok(!validIngestKey(bad), `accepted ${bad}`);
     }

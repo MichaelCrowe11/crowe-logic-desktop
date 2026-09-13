@@ -305,9 +305,10 @@ function safeEqual(a, b) {
 
 // Only the shapes the publishers write: <prefix>/<version>/<file> and
 // <prefix>/channel/<os>/<file>, where <prefix> is desktop or an edition's
-// desktop/<channel>. Segments are matched against a literal set of characters,
-// so "..", a leading slash and an empty segment are all unmatchable rather than
-// filtered out afterwards.
+// desktop/<channel>, <version> is x.y.z with an optional prerelease, and <os>
+// is one of the three electron-builder's ${os} macro expands to. Segments are
+// matched against a literal set of characters, so "..", a leading slash and an
+// empty segment are all unmatchable rather than filtered out afterwards.
 function validIngestKey(key) {
   const seg = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/;
   const parts = key.split("/");
@@ -315,8 +316,8 @@ function validIngestKey(key) {
   const rest = parts.slice(1);
   if (!rest.every((p) => seg.test(p) && !p.includes(".."))) return false;
   if (rest.length > 1 && Object.hasOwn(CHANNELS, rest[0]) && CHANNELS[rest[0]].prefix !== "desktop") rest.shift();
-  if (rest.length === 2) return true;
-  return rest.length === 3 && rest[0] === "channel";
+  if (rest.length === 2) return /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(rest[0]);
+  return rest.length === 3 && rest[0] === "channel" && ["mac", "win", "linux"].includes(rest[1]);
 }
 
 async function ingest(request, env) {

@@ -50,5 +50,12 @@ module.exports = {
   // write it (scripts/release-channel.js has the layout). The channel is
   // unseeded until someone publishes to it; main.js already ignores the silent
   // launch check that 404s.
-  publish: base.publish.map((p) => ({ ...p, channel, url: p.url.replace("/desktop/channel/", `/${prefix(channel)}/channel/`) })),
+  publish: base.publish.map((p) => {
+    const url = p.url.replace("/desktop/channel/", `/${prefix(channel)}/channel/`);
+    // A url the replace left alone would send this edition's updater through
+    // the full app's channel directory, and nothing would say so until the
+    // next full release installed Cultivation over it. Refuse to build that.
+    if (url === p.url) throw new Error(`electron-builder.developer.js: publish url ${p.url} is not under /desktop/channel/`);
+    return { ...p, channel, url };
+  }),
 };
