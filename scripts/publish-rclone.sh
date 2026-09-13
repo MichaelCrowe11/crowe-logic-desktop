@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # Mirrors scripts/publish-r2.sh key-for-key, but uploads with rclone (swmr2:)
 # because wrangler's sized PUT dies with "fetch failed" on the >100MB artifacts.
+#
+#   scripts/publish-rclone.sh                                          # release/, latest
+#   scripts/publish-rclone.sh --config electron-builder.developer.js   # release-developers/, developers
+#   DRY_RUN=1 scripts/publish-rclone.sh ...                            # preflight only
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-root=$(cd "${1:-$repo/release}" && pwd)
+resolved=$(node "$repo/scripts/release-channel.js" --shell "$@") || exit 1
+eval "$resolved"
+root=$(cd "${root:-$repo/$dir}" && pwd)
 cd "$repo"
 version=$(node -p "require('./package.json').version")
-node scripts/preflight-release.js "$root" "$version"
+node scripts/preflight-release.js "$root" "$version" --channel "$channel"
 if [ "${DRY_RUN:-0}" = 1 ]; then
-  echo "publish-rclone: dry run passed; nothing uploaded"
+  echo "publish-rclone: dry run passed for the $channel channel; nothing uploaded"
   exit 0
 fi
 BUCKET=swmr2:crowe-releases
-echo "publish-rclone: publishing $version from $root"
+echo "publish-rclone: publishing $version from $root to the $channel channel ($prefix/)"
 
 put() {  # key file
   local key="$1" file="$2" attempt=1
@@ -24,11 +30,12 @@ put() {  # key file
 }
 
 feeds=()
-for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
-  file=$(find "$root" -type f -name "${spec#*/}" -print -quit)
+for os in win mac linux; do
+  var="feed_$os"; name="${!var}"
+  file=$(find "$root" -type f -name "$name" -print -quit)
   [ -z "$file" ] || feeds+=("$file")
 done
-[ ${#feeds[@]} -eq 0 ] && { echo "no feeds" >&2; exit 1; }
+[ ${#feeds[@]} -eq 0 ] && { echo "no $channel feeds under $root" >&2; exit 1; }
 
 wanted=$(mktemp)
 for file in "${feeds[@]}"; do
@@ -48,10 +55,10 @@ while IFS= read -r url; do
   [ -n "$url" ] || continue
   file=$(resolve "$url")
   if [ -z "$file" ]; then missing+=("$url"); continue; fi
-  put "desktop/$version/$url" "$file"
+  put "$prefix/$version/$url" "$file"
   installers+=("$file"); names+=("$url")
   bmap=$(resolve "$url.blockmap")
-  [ -z "$bmap" ] || put "desktop/$version/$url.blockmap" "$bmap"
+  [ -z "$bmap" ] || put "$prefix/$version/$url.blockmap" "$bmap"
 done < "$wanted"
 rm -f "$wanted"
 
@@ -65,13 +72,14 @@ for i in "${!installers[@]}"; do
 done
 sort -k2 -o "$sums" "$sums"
 cat "$sums"
-put "desktop/$version/SHA256SUMS" "$sums"
+put "$prefix/$version/SHA256SUMS" "$sums"
 rm -f "$sums"
 
 # Feeds LAST: an artifact must exist before a feed advertises it.
-for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
-  os=${spec%%/*}; name=${spec#*/}; file=$(find "$root" -type f -name "$name" -print -quit)
-  [ -z "$file" ] || put "desktop/channel/$os/$name" "$file"
+for os in win mac linux; do
+  var="feed_$os"; name="${!var}"
+  file=$(find "$root" -type f -name "$name" -print -quit)
+  [ -z "$file" ] || put "$prefix/channel/$os/$name" "$file"
 done
 echo "PUBLISH_UPLOADS_DONE"
-node scripts/verify-release.js "$version"
+node scripts/verify-release.js "$version" --channel "$channel"

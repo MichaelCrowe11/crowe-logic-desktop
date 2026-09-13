@@ -1,13 +1,22 @@
 'use strict';
 
 // Validate every feed and artifact before a publisher performs its first write.
+//
+//   node scripts/preflight-release.js [root] [version]                       # release/, the latest channel
+//   node scripts/preflight-release.js --config electron-builder.developer.js  # release-developers/, developers
+//   node scripts/preflight-release.js release-developers 0.24.7 --channel developers
+//
+// The feeds looked for are the channel's own (latest*.yml, developers*.yml), so
+// a directory holding the other edition's build has no feeds as far as this
+// channel is concerned and is refused rather than published under its name.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const yaml = require('js-yaml');
 const pkg = require('../package.json');
+const { DEFAULT_CHANNEL, OSES, feedName, fromArgs } = require('./release-channel');
 
-async function preflight(root, version = pkg.version) {
+async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL) {
   if (version !== pkg.version) throw new Error(`release version ${version} differs from package ${pkg.version}`);
   const files = [];
   function walk(dir) {
@@ -27,7 +36,7 @@ async function preflight(root, version = pkg.version) {
   }
   const feeds = [];
   let artifacts = 0;
-  for (const name of ['latest.yml', 'latest-mac.yml', 'latest-linux.yml']) {
+  for (const name of OSES.map(os => feedName(channel, os))) {
     const file = resolve(name, true);
     if (!file) continue;
     const feed = yaml.load(fs.readFileSync(file, 'utf8'));
@@ -61,13 +70,20 @@ async function preflight(root, version = pkg.version) {
     }
     feeds.push(name);
   }
-  if (!feeds.length) throw new Error('no release feeds found');
-  return { feeds, artifacts };
+  if (!feeds.length) throw new Error(`no release feeds found for the ${channel} channel`);
+  return { channel, feeds, artifacts };
 }
 
 if (require.main === module) {
-  preflight(process.argv[2] || 'release', process.argv[3] || pkg.version)
-    .then(result => console.log(`preflight: ${result.feeds.length} feeds, ${result.artifacts} artifacts verified`))
+  let target;
+  try {
+    target = fromArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`preflight: ${error.message}`);
+    process.exit(1);
+  }
+  preflight(target.rest[0] || target.dir, target.rest[1] || pkg.version, target.channel)
+    .then(result => console.log(`preflight: ${result.channel} channel, ${result.feeds.length} feeds, ${result.artifacts} artifacts verified`))
     .catch(error => { console.error(`preflight: ${error.message}`); process.exitCode = 1; });
 }
 module.exports = { preflight };

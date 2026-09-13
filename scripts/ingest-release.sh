@@ -12,6 +12,11 @@ set -euo pipefail
 # moment, so let Cloudflare fetch them from there.
 #
 #   scripts/ingest-release.sh v0.21.0 CroweLogic-0.21.0-x64.dmg ...
+#   CHANNEL=developers scripts/ingest-release.sh v0.24.7 CroweLogic-developers-0.24.7-arm64.dmg
+#
+# CHANNEL picks the prefix the objects land under: desktop/<version>/ for the
+# full edition (the default, latest), desktop/developers/<version>/ for Crowe
+# Logic for Developers. scripts/release-channel.js has the layout.
 #
 # With no names it publishes every asset of the tag that is not a feed manifest.
 # Names are the names the object gets in the bucket, which is the name the feed
@@ -29,6 +34,8 @@ fi
 shift || true
 
 : "${INGEST_TOKEN:?set INGEST_TOKEN to the secret set on the worker}"
+resolved=$(node "$(dirname "${BASH_SOURCE[0]}")/release-channel.js" --shell --channel "${CHANNEL:-latest}") || exit 1
+eval "$resolved"
 host="${RELEASES_HOST:-https://crowe-releases.yellow-block-3adc.workers.dev}"
 version="${tag#v}"
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -45,7 +52,7 @@ if [ "$#" -gt 0 ]; then
 else
   names=()
   while IFS=$'\t' read -r name _ _; do
-    case "$name" in latest*.yml) continue ;; esac
+    case "$name" in *.yml) continue ;; esac
     names+=("$name")
   done <<< "$assets"
 fi
@@ -65,7 +72,7 @@ for name in "${names[@]}"; do
   fi
   id=${hit%%$'\t'*}
   size=${hit##*$'\t'}
-  key="desktop/$version/$name"
+  key="$prefix/$version/$name"
 
   printf '%-44s ' "$name"
   code=$(curl -sS -o /tmp/ingest-reply.$$ -w '%{http_code}' -X POST "$host/_ingest" \

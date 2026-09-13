@@ -25,6 +25,11 @@ on:
         required: false
         default: false
         type: boolean
+      channel:
+        description: "Release channel: latest (the full app) or developers (Crowe Logic for Developers)"
+        required: false
+        default: latest
+        type: string
   schedule:
     - cron: "17 13 * * *"
 
@@ -42,4 +47,7 @@ jobs:
           node-version: 22
       # No npm ci: the verifier reads package.json and uses only node builtins,
       # so installing 400 MB of Electron to make three HTTP requests is waste.
-      - run: node scripts/verify-release.js ${{ inputs.version }} ${{ inputs.full && '--full' || '' }}
+      # The scheduled run checks only the full app: the developers channel is
+      # published on its own cadence and is behind package.json between a full
+      # release and the next developer build, which is expected rather than red.
+      - run: node scripts/verify-release.js ${{ inputs.version }} ${{ inputs.channel && format('--channel {0}', inputs.channel) || '' }} ${{ inputs.full && '--full' || '' }}
