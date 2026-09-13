@@ -82,6 +82,22 @@ contextBridge.exposeInMainWorld("crowe", {
     pull: () => ipcRenderer.invoke("crowe:git:pull"),
     push: () => ipcRenderer.invoke("crowe:git:push"),
   },
+  /* Repositories: the folders this app has opened, and what GitHub knows about
+     the ones the plugin's token can see. `open` and `pick` change the
+     workspace the way Settings does and record it; `clone` is a shell action
+     and passes the same approval gate the agent's run_shell does. Reads only
+     on the GitHub side: the token stays in main. */
+  repos: {
+    recent: () => ipcRenderer.invoke("crowe:repos:recent"),
+    open: (path) => ipcRenderer.invoke("crowe:repos:open", { path }),
+    pick: () => ipcRenderer.invoke("crowe:repos:pick"),
+    forget: (path) => ipcRenderer.invoke("crowe:repos:forget", { path }),
+    remote: () => ipcRenderer.invoke("crowe:repos:remote"),
+    githubStatus: () => ipcRenderer.invoke("crowe:repos:github-status"),
+    githubRepos: () => ipcRenderer.invoke("crowe:repos:github-repos"),
+    githubWork: (owner, name) => ipcRenderer.invoke("crowe:repos:github-work", { owner, name }),
+    clone: (owner, name) => ipcRenderer.invoke("crowe:repos:clone", { owner, name }),
+  },
   // Conversation history (persisted on disk in the main process).
   sessions: {
     list: () => ipcRenderer.invoke("crowe:sessions:list"),
