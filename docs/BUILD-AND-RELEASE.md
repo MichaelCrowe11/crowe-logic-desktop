@@ -235,6 +235,17 @@ npm run publish:rclone:developers        # or publish:r2:developers; both prefli
 npm run verify:release:developers
 ```
 
+Windows and Linux developer builds come from `.github/workflows/release-developers.yml`
+(manual dispatch only; a `ref` input, empty for the branch dispatched from).
+It runs `npm run dist:developers -- --win` and `-- --linux` and uploads what
+landed in `release-developers/` as run artifacts. It publishes nothing; the
+publisher downloads the artifacts into `release-developers/` beside the
+notarized macOS build and runs the publish script above. Windows is unsigned,
+as the full app's is. On Linux the edition is `crowe-logic-developers`, deb
+package and binary both (`linux.executableName`, `deb.packageName` in the
+config), so it installs beside the full app's `crowe-logic-desktop` rather
+than replacing it; `scripts/test-packaging.js` holds the two apart.
+
 Every script also takes `--channel developers` or `--config
 electron-builder.developer.js` directly. `scripts/ingest-release.sh` takes
 `CHANNEL=developers`. On an edition's channel the verifier warns, rather than
