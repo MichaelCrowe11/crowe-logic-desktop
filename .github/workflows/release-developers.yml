@@ -1,0 +1,70 @@
+name: Release developers
+
+# Builds Crowe Logic for Developers (electron-builder.developer.js) for Windows
+# and Linux and uploads what electron-builder wrote to release-developers/ as
+# run artifacts. Nothing here publishes: no GitHub release, no R2 write, no
+# feed update. The publisher downloads the artifacts and runs
+# `npm run publish:rclone:developers` (or publish:r2:developers) from a release
+# machine, which preflights, uploads under desktop/developers/ and verifies.
+#
+# Windows ships unsigned. release.yml wires WINDOWS_CERTIFICATE through
+# WIN_CSC_LINK for the full app; no certificate has been bought, so that step
+# has always built unsigned and this workflow does not pretend otherwise.
+# SmartScreen shows "unknown publisher" on install. macOS is not built here:
+# the developer DMGs are notarized and stapled on a release machine with
+# `npm run dist:developers:mac`, exactly as the full app's are.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build. Empty builds the branch this run was dispatched from."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  build:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            command: npm run dist:developers -- --win
+            artifact: developers-windows
+            paths: |
+              release-developers/*.exe
+              release-developers/*.blockmap
+              release-developers/developers.yml
+          - os: ubuntu-latest
+            command: npm run dist:developers -- --linux
+            artifact: developers-linux
+            paths: |
+              release-developers/*.AppImage
+              release-developers/*.deb
+              release-developers/*.blockmap
+              release-developers/developers-linux.yml
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: ${{ matrix.command }}
+      - run: ls -l release-developers
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error

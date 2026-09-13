@@ -22,6 +22,10 @@ const productName = "Crowe Logic for Developers";
 // other's artifact in a shared folder. ${arch} is dropped by electron-builder
 // for a target that has no single architecture.
 const artifactName = "CroweLogic-developers-${version}-${arch}.${ext}";
+// The deb package name and the Linux binary. Both default to package.json's
+// name, which the two editions share, so without this a developer deb would
+// replace the full app on one machine rather than install beside it.
+const linuxName = "crowe-logic-developers";
 
 module.exports = {
   ...base,
@@ -37,6 +41,15 @@ module.exports = {
   extraMetadata: { productName, croweSpaces: ["chat", "projects"] },
   artifactName,
   mac: { ...base.mac, artifactName },
+  // app-builder-lib names the deb after deb.packageName and falls back to
+  // package.json's name (out/targets/FpmTarget.js, computeFpmMetaInfoOptions);
+  // it names the binary, the /usr/bin symlink, the .desktop file and the icons
+  // after linux.executableName and falls back to that same name lowercased
+  // (out/linuxPackager.js). The install directory is /opt/<productName>, which
+  // already differs, and userData is left alone: Electron derives it from
+  // productName, not from either of these.
+  linux: { ...base.linux, executableName: linuxName },
+  deb: { ...base.deb, packageName: linuxName },
   // Its own output directory. The publishers read release/ for the full
   // edition, and a developer artifact must never be swept into the public feed
   // by accident.
