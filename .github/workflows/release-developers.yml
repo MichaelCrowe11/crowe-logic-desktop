@@ -15,12 +15,6 @@ name: Release developers
 # `npm run dist:developers:mac`, exactly as the full app's are.
 
 on:
-  # Temporary. GitHub registers a workflow_dispatch-only file only once it has
-  # been on the default branch or has produced a run; until then every dispatch
-  # answers HTTP 404. This push trigger makes the branch push produce that run.
-  # The next commit removes it, leaving workflow_dispatch only.
-  push:
-    branches: [feat/developers-channel-win-linux]
   workflow_dispatch:
     inputs:
       ref:
