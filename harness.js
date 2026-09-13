@@ -258,7 +258,9 @@ function deliveryOf(ctx, name, args) {
     return c.risk === RISK.STRICT ? "irreversible" : "compensatable";
   }
   if (String(name || "").startsWith("mcp__")) {
-    const tier = pluginToolTier(ctx, name);
+    const rule = pluginToolRule(ctx, name);
+    if (rule && rule.physical) return "irreversible";   // never replayed, never retried on its own
+    const tier = rule ? rule.tier : null;
     return tier === "readonly" || tier === "plan" ? "read_only" : "compensatable";
   }
   return DELIVERY[name] || "compensatable";
@@ -275,12 +277,13 @@ async function gateAction(ctx, state, req) {
   const mode = cfg.approvals || "high-risk";       // off | high-risk | strict
   const jrnl = (ev) => { if (state && state.journal) state.journal(ev); };
   if (req.risk === RISK.AUTO) return { ok: true };
-  if (mode === "off") {
+  // `always` is the physical-write flag: no mode and no floor waves it through.
+  if (mode === "off" && !req.always) {
     jrnl({ event_type: "APPROVAL_SKIPPED", tool_id: req.kind, input_hash: req.hash, output_summary: `approvals off: ${req.why}` });
     return { ok: true };
   }
   const floor = mode === "strict" || req.floorReview ? RISK.REVIEW : RISK.STRICT;
-  if (req.risk < floor) return { ok: true };
+  if (!req.always && req.risk < floor) return { ok: true };
   if (typeof ctx.requestApproval !== "function")
     return { ok: false, text: `blocked: this action ${req.why}, which needs the user's explicit approval, and this build has no way to ask for it. Tell the user exactly what you wanted to run and let them run it themselves.` };
   jrnl({ event_type: "APPROVAL_REQUESTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${RISK_NAMES[req.risk]}: ${req.why}` });
@@ -602,6 +605,13 @@ function toolListDir(ctx, args) {
 // Official plugins declare per-tool tiers in their manifest. A plugin can add
 // capability, never widen autonomy: its tools pass the same gate as built-ins.
 // Unmanaged (hand-configured) MCP servers keep their historic behavior.
+//
+// A rule may also say `physical: true`. That marks a tool that changes something in
+// the world outside the machine - a device, a relay, a motor - and it is the one
+// class of action the harness will not run on a standing setting: it asks, every
+// time, with the exact arguments, even when approvals are off. A file can be put
+// back and a shell command can be read before it runs; a valve cannot be un-opened
+// from a transcript.
 const TIER_RANK = { plan: 0, readonly: 0, edit: 1, execute: 2 };
 /* The lower of two tiers. A cap can only lower; an unknown cap changes nothing.
    Rooms hand each seat a tier, and until this existed the gate read only the
@@ -611,7 +621,7 @@ function capTier(tier, cap) {
   return TIER_RANK[cap] < (TIER_RANK[tier] ?? 1) ? cap : tier;
 }
 function effectiveTier(ctx, cap) { return capTier(ctx.loadConfig().autonomy || "edit", cap); }
-function pluginToolTier(ctx, fullName) {
+function pluginToolRule(ctx, fullName) {
   if (!ctx.getPlugins) return null;
   const [, id, ...rest] = String(fullName).split("__");
   const tool = rest.join("__");
@@ -619,9 +629,13 @@ function pluginToolTier(ctx, fullName) {
   if (!p || !Array.isArray(p.tools)) return null;
   for (const r of p.tools) {
     const rx = new RegExp("^" + String(r.match || "*").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
-    if (rx.test(tool)) return r.tier || "edit";
+    if (rx.test(tool)) return { tier: r.tier || "edit", physical: r.physical === true, plugin: id, tool };
   }
-  return "edit";
+  return { tier: "edit", physical: false, plugin: id, tool };
+}
+function pluginToolTier(ctx, fullName) {
+  const r = pluginToolRule(ctx, fullName);
+  return r ? r.tier : null;
 }
 /* `route` is the expert this turn resolved to. It is a second gate, not a
    convenience: leaving a tool out of allTools() only stops a well-behaved model
@@ -642,11 +656,25 @@ async function execTool(ctx, name, args, route, state) {
         return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
     }
     if (name && name.startsWith("mcp__")) {
-      const need = pluginToolTier(ctx, name);
-      if (need) {
+      const rule = pluginToolRule(ctx, name);
+      if (rule) {
         const tier = effectiveTier(ctx, route && route.tierCap);
-        if ((TIER_RANK[need] ?? 1) > (TIER_RANK[tier] ?? 2))
-          return `blocked: this plugin tool requires "${need}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
+        if ((TIER_RANK[rule.tier] ?? 1) > (TIER_RANK[tier] ?? 2))
+          return `blocked: this plugin tool requires "${rule.tier}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
+        /* A physical write is asked about every time, bound to the exact plugin, tool
+           and arguments, and the approvals setting cannot switch the question off. The
+           device enforces its own limits on its side of the wire; this gate is the
+           person's side, and it exists because the harness cannot see the room. */
+        if (rule.physical) {
+          const gate = await gateAction(ctx, state, {
+            risk: RISK.STRICT, always: true,
+            why: `operates a physical device (${rule.plugin}: ${rule.tool}), which cannot be undone from here`,
+            kind: "physical_write", title: "Operate a physical device",
+            detail: `${rule.plugin} ${rule.tool} ${stableJson(args ?? {})}`,
+            hash: inputHash("physical:" + name, args),
+          });
+          if (!gate.ok) return gate.text;
+        }
       }
       return await ctx.mcpCall(name, args);
     }
@@ -797,6 +825,7 @@ function snapshotBefore(ctx, relPath) {
 function mutationLabel(name, args) {
   if (name === "run_shell") return `run_shell ${String(args.command || "").slice(0, 120)}`;
   if (name === "log_grow") return `log_grow ${args.type || ""}`;
+  if (String(name || "").startsWith("mcp__")) return `${name} ${stableJson(args ?? {}).slice(0, 120)}`;
   if (args && args.path) return `${name} ${args.path}`;
   return name;
 }
@@ -1640,7 +1669,7 @@ async function runAgent(ctx, messages, deps) {
 }
 
 module.exports = {
-  capTier, effectiveTier,
+  capTier, effectiveTier, pluginToolRule, pluginToolTier,
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,

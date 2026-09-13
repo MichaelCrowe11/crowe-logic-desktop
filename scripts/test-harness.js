@@ -976,3 +976,67 @@ test("a compose_workflow with nothing usable authors nothing", async () => {
   }
   console.log(`harness: ${passed} tests passed`);
 })();
+
+// ─── Physical writes through a plugin ────────────────────────────────────────
+const SENSE_PLUGIN = { id: "crowe-sense", tools: [
+  { match: "describe_*", tier: "readonly" }, { match: "read_*", tier: "readonly" }, { match: "list_*", tier: "readonly" },
+  { match: "request_operation", tier: "execute", physical: true }, { match: "*", tier: "execute", physical: true },
+] };
+function senseCtx(cfgPatch, hooks) {
+  const calls = [];
+  const ctx = makeCtx(cfgPatch, { mcpCall: async (name, args) => { calls.push({ name, args }); return "indicator.identify op-1: done."; }, ...hooks });
+  ctx.getPlugins = () => [SENSE_PLUGIN];
+  ctx.calls = calls;
+  return ctx;
+}
+const OP = { operation: "indicator.identify", args: { seconds: 5 } };
+test("a physical plugin tool asks every time, bound to plugin, tool and arguments, and runs only on yes", async () => {
+  const ctx = senseCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: true });
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "cultivation", model: "m" });
+  const out = await H.callTool(ctx, "mcp__crowe-sense__request_operation", OP, {}, state);
+  assert.strictEqual(out.status, "SUCCESS", out.text);
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
+  const a = ctx.approvalsSeen[0];
+  assert.strictEqual(a.kind, "physical_write"); assert.strictEqual(a.risk, "strict");
+  assert.match(a.why, /physical device/); assert.match(a.detail, /crowe-sense request_operation .*indicator\.identify/);
+  assert.strictEqual(a.hash, H.inputHash("physical:mcp__crowe-sense__request_operation", OP), "the approval is bound to these exact arguments");
+  assert.notStrictEqual(a.hash, H.inputHash("physical:mcp__crowe-sense__request_operation", { ...OP, args: { seconds: 30 } }));
+  assert.deepStrictEqual(ctx.calls, [{ name: "mcp__crowe-sense__request_operation", args: OP }]);
+  // The same call again is asked about again: nothing about a physical write is standing.
+  await H.callTool(ctx, "mcp__crowe-sense__request_operation", OP, {}, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 2); assert.strictEqual(ctx.calls.length, 2);
+  assert.ok(ctx.journalEvents.some((e) => e.event_type === "APPROVAL_GRANTED" && e.tool_id === "physical_write"));
+});
+test("a declined physical write never reaches the server, and approvals off does not silence the question", async () => {
+  const denied = senseCtx({ autonomy: "execute" }, { approve: false });
+  const out = await H.callTool(denied, "mcp__crowe-sense__request_operation", OP, {}, H.newState(denied, denied.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.strictEqual(out.status, "BLOCKED"); assert.match(out.text, /DENIED/); assert.deepStrictEqual(denied.calls, []);
+  const off = senseCtx({ autonomy: "execute", approvals: "off" }, { approve: true });
+  await H.callTool(off, "mcp__crowe-sense__request_operation", OP, {}, H.newState(off, off.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.strictEqual(off.approvalsSeen.length, 1, "approvals off still asks about a device");
+  assert.strictEqual(off.calls.length, 1);
+  assert.ok(!off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED"), "nothing was skipped");
+  const noWay = senseCtx({ autonomy: "execute", approvals: "off" });   // no requestApproval at all
+  const out2 = await H.callTool(noWay, "mcp__crowe-sense__request_operation", OP, {}, H.newState(noWay, noWay.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out2.text, /^blocked:/); assert.deepStrictEqual(noWay.calls, []);
+});
+test("the tier is checked before the question: edit mode and a read-only room block a physical write without asking", async () => {
+  const edit = senseCtx({ autonomy: "edit" }, { approve: true });
+  const out = await H.callTool(edit, "mcp__crowe-sense__request_operation", OP, {}, H.newState(edit, edit.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out.text, /requires "execute"/); assert.strictEqual(edit.approvalsSeen.length, 0); assert.deepStrictEqual(edit.calls, []);
+  const room = senseCtx({ autonomy: "execute" }, { approve: true });
+  const out2 = await H.callTool(room, "mcp__crowe-sense__request_operation", OP, { tierCap: "readonly" }, H.newState(room, room.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out2.text, /requires "execute"/); assert.strictEqual(room.approvalsSeen.length, 0);
+  // An unknown tool on this plugin falls to the catch-all: execute and physical, never a quiet edit.
+  assert.deepStrictEqual(H.pluginToolRule(room, "mcp__crowe-sense__set_valve"), { tier: "execute", physical: true, plugin: "crowe-sense", tool: "set_valve" });
+});
+test("reads on the same plugin are read-only: no approval, served in plan and read-only modes, replayable", async () => {
+  const ctx = senseCtx({ autonomy: "readonly" }, { approve: false });
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "cultivation", model: "m" });
+  const out = await H.callTool(ctx, "mcp__crowe-sense__read_latest", { zone: "tent-1" }, {}, state);
+  assert.strictEqual(out.status, "SUCCESS"); assert.strictEqual(ctx.approvalsSeen.length, 0); assert.strictEqual(ctx.calls.length, 1);
+  assert.strictEqual(H.deliveryOf(ctx, "mcp__crowe-sense__read_latest", {}), "read_only");
+  assert.strictEqual(H.deliveryOf(ctx, "mcp__crowe-sense__request_operation", OP), "irreversible");
+  assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__read_latest", {}, "ok"), false);
+  assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__request_operation", OP, "done"), true);
+});

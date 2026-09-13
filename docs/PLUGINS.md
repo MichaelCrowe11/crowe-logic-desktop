@@ -43,6 +43,12 @@ bundled copy; env secrets are collected via `envPrompts` at enable time and
 stored in the plugin's config section — never inline in manifest JSON; a
 plugin with no `tools` tier list defaults to `edit` (never `execute`).
 
+A tool rule may add `"physical": true` for a tool that changes something in the
+world outside the machine. Such a tool runs only at Execute and only after a
+one-shot approval bound to its exact arguments, and `approvals: off` does not
+silence the question. See HARDWARE.md. The Crowe Sense plugin's
+`request_operation` is the first.
+
 ## How it lands on the 62 features
 
 Ground-truth inventory (3-agent sweep, 2026-07-22): 17 main-process,
