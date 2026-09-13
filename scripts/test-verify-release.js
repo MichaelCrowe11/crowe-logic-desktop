@@ -116,6 +116,8 @@ function serve(state) {
     if (channel) {
       const [, os, name] = channel;
       if (name === layout.feedName(state.channel, os)) {
+        // A platform the release was never built for has no feed object at all.
+        if (!state.feeds[os]) { res.writeHead(404); return res.end('Not found'); }
         res.writeHead(200, { 'content-type': 'text/yaml' });
         return res.end(renderFeed(state.feeds[os]));
       }
@@ -364,6 +366,31 @@ const scenarios = [
       assert.strictEqual(r.code, 1, `expected exit 1, got ${r.code}\n${r.out}`);
       assert.match(r.out, /not ok\s+mac: feed resolves/);
       assert.match(r.out, /not ok\s+download page serves/);
+    },
+  },
+  // The first developer release is macOS only. A platform with no feed at all
+  // is said, not failed on, on an edition's channel; on the full app's channel
+  // the same absence is a platform silently missing from a release and fails,
+  // exactly as it always has.
+  {
+    name: 'a macOS-only developer release passes and names the platforms it lacks',
+    channel: 'developers',
+    run: { args: ['--channel', 'developers'] },
+    break: (s) => { delete s.feeds.win; delete s.feeds.linux; s.sums = s.sums.filter((n) => /arm64\.(zip|dmg)$/.test(n)); },
+    expect: (r) => {
+      assert.strictEqual(r.code, 0, `expected exit 0, got ${r.code}\n${r.out}`);
+      assert.match(r.out, /warn\s+win: feed resolves\n\s+404 - no win release on the developers channel/);
+      assert.match(r.out, /warn\s+linux: feed resolves/);
+      assert.match(r.out, /all checks passed, 2 warnings/);
+    },
+  },
+  {
+    name: 'the full app with a platform missing its feed still fails',
+    break: (s) => { delete s.feeds.win; },
+    expect: (r) => {
+      assert.strictEqual(r.code, 1, `expected exit 1, got ${r.code}\n${r.out}`);
+      assert.match(r.out, /not ok\s+win: feed resolves/);
+      assert.match(r.out, /404 for/);
     },
   },
 ];

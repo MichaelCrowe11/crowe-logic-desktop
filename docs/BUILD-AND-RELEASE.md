@@ -237,7 +237,9 @@ npm run verify:release:developers
 
 Every script also takes `--channel developers` or `--config
 electron-builder.developer.js` directly. `scripts/ingest-release.sh` takes
-`CHANNEL=developers`.
+`CHANNEL=developers`. On an edition's channel the verifier warns, rather than
+fails, for a platform that has no feed at all (the first developer release is
+macOS only); on `latest` a missing feed is still a failure.
 
 ### Verifying a release
 

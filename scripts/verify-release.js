@@ -221,6 +221,16 @@ async function verifySha512(channelUrl, file) {
     let parsed;
     try {
       const res = await get(feedUrl);
+      // A platform with no feed at all is a platform the channel has never
+      // published for. On the full app's channel that is a release with a
+      // platform silently missing, and it fails. An edition may ship for macOS
+      // alone, so there it is said and not failed on; any status other than a
+      // clean 404 is still a broken feed on either channel.
+      if (res.status === 404 && CHANNEL !== DEFAULT_CHANNEL) {
+        await res.arrayBuffer().catch(() => {});
+        warn(`${os}: feed resolves`, `404 - no ${os} release on the ${CHANNEL} channel`);
+        continue;
+      }
       if (!res.ok) { fail(`${os}: feed resolves`, `${res.status} for ${feedUrl}`); continue; }
       parsed = parseFeed(await res.text());
     } catch (err) {
