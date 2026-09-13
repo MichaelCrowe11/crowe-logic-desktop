@@ -59,8 +59,13 @@ app.whenReady().then(async () => {
       const growing = [...document.querySelectorAll("#home-routing .k")].some((k) => k.textContent === "growing");
       await renderLane("deployments");
       const grower = [...document.querySelectorAll("#lane-body .m-id")].some((k) => k.textContent === "crowelm-grower");
+      // Settings: the plugin list is drawn from the real manifest over the real
+      // IPC, and the Crowe Sense section follows the same profile.
+      await renderPlugins();
+      const plugins = [...document.querySelectorAll("#cfg-plugins .plug-name")].map((n) => n.firstChild.textContent.trim());
+      const senseHidden = document.getElementById("cfg-sense").classList.contains("hidden");
       return { bridged: window.crowe.installSpaces, profile: [...PROFILE], rail,
-               stored: localStorage.getItem("crowe-spaces"), growing, grower };
+               stored: localStorage.getItem("crowe-spaces"), growing, grower, plugins, senseHidden };
     })()`);
 
     // The value crossed main -> argv -> preload intact.
@@ -79,6 +84,12 @@ app.whenReady().then(async () => {
     // Deployments needs the live catalog. Offline the lane is empty and the
     // check is vacuous, so only the narrowed direction is asserted.
     if (NARROWED) check("deployments list the grower", seen.grower, false);
+    // Crowe Sense declares only cultivation in plugins.builtin.json, so it is
+    // the row that must go; Crowe Skills names chat and projects too, so it is
+    // the row that must stay, in both directions.
+    check("settings list Crowe Sense", seen.plugins.includes("Crowe Sense"), !NARROWED);
+    check("settings list Crowe Skills", seen.plugins.includes("Crowe Skills"), true);
+    check("the Crowe Sense section is hidden", seen.senseHidden, NARROWED);
 
     console.log(`${failures ? "not ok" : "ok    "}  ${LABEL}`);
   } catch (error) {

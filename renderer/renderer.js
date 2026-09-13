@@ -2061,6 +2061,9 @@ function renderSpacePicker() {
     cb.checked = PROFILE.has(id); cb.disabled = fixed;
     cb.addEventListener("change", () => {
       setSpaceProfile([...box.querySelectorAll("input:checked")].map((i) => i.dataset.space));
+      // The plugin rows further down filter on the profile, so redraw them
+      // rather than leave a row for a space that was just switched off.
+      renderPlugins();
     });
     const name = document.createElement("span");
     name.textContent = sp.label;
@@ -2553,6 +2556,12 @@ function applySpaceProfile() {
     if (btn) btn.classList.toggle("hidden", !on);
     if (sp.nav && !on) $(sp.nav).classList.add("hidden");
   }
+  // The Crowe Sense section in Settings pairs a node whose readings land in
+  // Cultivation. Without that space there is nowhere for them to land, so the
+  // section goes with it. Hidden, not removed: the fields keep their values and
+  // a saved source keeps polling, so turning Cultivation back on loses nothing.
+  const sense = $("cfg-sense");
+  if (sense) sense.classList.toggle("hidden", !PROFILE.has("cultivation"));
   const cur = document.body.dataset.space;
   if (cur && !PROFILE.has(cur)) setSpace("chat");
 }
@@ -3633,6 +3642,13 @@ async function renderPlugins() {
   const list = await window.crowe.plugins.list();
   box.innerHTML = "";
   for (const p of list) {
+    // A plugin that serves only spaces this install does not show gets no row.
+    // Crowe Sense feeds Cultivation, and on a Chat and Projects build the farm
+    // otherwise shows through here in Settings. Keyed on PROFILE like the Home
+    // card and the Deployments lane, so turning Cultivation back on in the
+    // picker brings the row back. A manifest with no spaces is for every space,
+    // and one that names any installed space stays, whatever else it names.
+    if (p.spaces && p.spaces.length && !p.spaces.some((id) => PROFILE.has(id))) continue;
     const row = document.createElement("div"); row.className = "plug-row";
     const status = !p.available ? '<em class="plug-tag">server pending</em>'
       : p.connected ? `<em class="plug-tag on">on · ${p.toolCount} tools</em>`

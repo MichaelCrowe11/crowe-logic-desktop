@@ -4,7 +4,8 @@
 // Cultivation out of the default. A default, not a lock: the picker in Settings
 // can still turn it on, exactly as installSpaces() in main.js describes.
 //
-//   npm run dist:developers
+//   npm run dist:developers          # any platform, flags pass through
+//   npm run dist:developers:mac      # also staples the DMG, reading this config
 //
 // Built from package.json's `build` section so icons, signing, entitlements,
 // the files allowlist and the hooks stay in one place; only what makes this a

@@ -746,10 +746,13 @@
     },
 
     plugins: {
-      async list() { return { plugins: [
-        { id: "crowe-skills", name: "Crowe Skills", official: true, enabled: true, tools: 6 },
-        { id: "github", name: "GitHub", official: true, enabled: false, tools: 9 },
-      ] }; },
+      // The same shape pluginList() in main.js returns: a bare array, each row
+      // carrying the manifest's spaces, which renderPlugins() filters on.
+      async list() { return [
+        { id: "crowe-skills", name: "Crowe Skills", description: "The Crowe skills corpus.", spaces: ["chat", "projects", "cultivation"], available: true, envPrompts: [], enabled: true, connected: true, toolCount: 6 },
+        { id: "crowe-sense", name: "Crowe Sense", description: "Grow-room telemetry and farmlog for the Cultivation space.", spaces: ["cultivation"], available: false, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+        { id: "github", name: "GitHub", description: "Repositories, issues and pull requests.", spaces: ["projects", "chat"], available: true, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+      ]; },
       async enable() { return { ok: true }; },
       async disable() { return { ok: true }; },
     },

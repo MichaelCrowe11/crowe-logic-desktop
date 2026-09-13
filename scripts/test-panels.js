@@ -1686,6 +1686,39 @@ const tests = [
     expect: { narrowed: "crowelm,GPT-5.6-Sol", defaultKept: true },
   },
   {
+    // The Settings plugin list filters on a plugin's declared spaces. Handed a
+    // fixture with one plugin per shape - cultivation only, several spaces
+    // including cultivation, projects and chat, and no spaces at all - and read
+    // in both directions, since a rule that hid every cultivation mention would
+    // pass the narrowed half and take Crowe Skills out of every install. The
+    // Crowe Sense section beside it follows the same profile, and the picker
+    // path is exercised too: switching Cultivation back on brings both back.
+    name: "a build without Cultivation lists no cultivation-only plugin and hides Crowe Sense",
+    body: `__resetSpaces();
+      const real = window.crowe.plugins.list;
+      const row = (id, name, spaces) => ({ id, name, description: "", spaces, available: true, enabled: false, envPrompts: [] });
+      window.crowe.plugins.list = async () => [
+        row("crowe-skills", "Crowe Skills", ["chat", "projects", "cultivation"]),
+        row("crowe-sense", "Crowe Sense", ["cultivation"]),
+        row("github", "GitHub", ["projects", "chat"]),
+        row("everywhere", "Everywhere", []),
+      ];
+      const names = async () => { await renderPlugins(); return [...$("cfg-plugins").querySelectorAll(".plug-name")].map((n) => n.firstChild.textContent.trim()).join(","); };
+      const senseHidden = () => $("cfg-sense").classList.contains("hidden");
+      try {
+        const full = await names(), fullSense = senseHidden();
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = await names(), narrowedSense = senseHidden();
+        // The picker wins over the build: tick Cultivation and both come back.
+        setSpaceProfile(["chat", "projects", "cultivation"]);
+        const restored = await names(), restoredSense = senseHidden();
+        return { full, fullSense, narrowed, narrowedSense, restored, restoredSense };
+      } finally { window.crowe.plugins.list = real; __resetSpaces(); }`,
+    expect: { full: "Crowe Skills,Crowe Sense,GitHub,Everywhere", fullSense: false,
+      narrowed: "Crowe Skills,GitHub,Everywhere", narrowedSense: true,
+      restored: "Crowe Skills,Crowe Sense,GitHub,Everywhere", restoredSense: false },
+  },
+  {
     name: "the picker cannot turn chat off",
     body: `__resetSpaces();
       renderSpacePicker();
