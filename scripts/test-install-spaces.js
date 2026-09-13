@@ -48,13 +48,19 @@ app.whenReady().then(async () => {
     // A profile left on disk by an earlier run would mask the build default, and
     // this is the real userData store rather than the preview server's origin.
     // Clear it, re-apply, and read the rail the way a user sees it.
-    const seen = await win.webContents.executeJavaScript(`(() => {
+    const seen = await win.webContents.executeJavaScript(`(async () => {
       localStorage.removeItem("crowe-spaces");
       applySpaceProfile();
       const rail = [...document.querySelectorAll('#spaces .seg-btn')]
         .filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.space);
+      // The two places the farm showed through on a narrowed build: the Home
+      // card's "growing" row and the grower's line in Deployments.
+      await refreshHome();
+      const growing = [...document.querySelectorAll("#home-routing .k")].some((k) => k.textContent === "growing");
+      await renderLane("deployments");
+      const grower = [...document.querySelectorAll("#lane-body .m-id")].some((k) => k.textContent === "crowelm-grower");
       return { bridged: window.crowe.installSpaces, profile: [...PROFILE], rail,
-               stored: localStorage.getItem("crowe-spaces") };
+               stored: localStorage.getItem("crowe-spaces"), growing, grower };
     })()`);
 
     // The value crossed main -> argv -> preload intact.
@@ -67,6 +73,12 @@ app.whenReady().then(async () => {
     // A build default is the build talking, not a choice anyone made. Writing it
     // would freeze this install's set against every version that adds a space.
     check("stored profile", seen.stored, null);
+    // The Home card names the grower through the bridge table whether or not
+    // the gateway answered, so this half holds offline in both directions.
+    check("home routing shows the grower", seen.growing, !NARROWED);
+    // Deployments needs the live catalog. Offline the lane is empty and the
+    // check is vacuous, so only the narrowed direction is asserted.
+    if (NARROWED) check("deployments list the grower", seen.grower, false);
 
     console.log(`${failures ? "not ok" : "ok    "}  ${LABEL}`);
   } catch (error) {

@@ -103,5 +103,23 @@ check("the preview harness and the web build are excluded, not shipped", () => {
   return excluded.map((f) => f.replace("renderer/", "")).join(", ");
 });
 
+check("the developer edition config narrows the app and changes nothing else", () => {
+  // Built from package.json's build section by require, so anything it does
+  // not name is the full app's. electron-builder never runs here; this is the
+  // cheap proof that the file loads and says what dist:developers relies on.
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  assert(dev.appId === `${pkg.build.appId}.developers`, `appId is ${dev.appId}`);
+  assert(dev.productName === "Crowe Logic for Developers" && dev.extraMetadata.productName === dev.productName,
+    "productName must be set on the config and in extraMetadata");
+  assert(JSON.stringify(dev.extraMetadata.croweSpaces) === '["chat","projects"]',
+    `croweSpaces is ${JSON.stringify(dev.extraMetadata.croweSpaces)}`);
+  assert(/-developers-/.test(dev.artifactName) && /-developers-/.test(dev.mac.artifactName), "artifactName does not mark the edition");
+  assert(dev.publish.every((p) => p.channel === "developers"), "the edition shares the full app's update channel");
+  assert(dev.directories.output !== pkg.build.directories.output, "the edition shares the full app's output directory");
+  assert(JSON.stringify(dev.files) === JSON.stringify(pkg.build.files) && dev.mac.identity === pkg.build.mac.identity
+    && dev.afterPack === pkg.build.afterPack && dev.afterSign === pkg.build.afterSign, "the edition drifted from package.json");
+  return `${dev.appId}, ${dev.directories.output}/`;
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall packaging checks passed");
 process.exit(failures ? 1 : 0);

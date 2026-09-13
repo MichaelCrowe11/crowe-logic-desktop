@@ -1637,6 +1637,55 @@ const tests = [
     expect: { size: 2, has: false, rail: 2 },
   },
   {
+    // Two places the farm showed through on a Chat and Projects build: the Home
+    // card's "growing" row and the grower's line in Deployments. Both read the
+    // same catalog, so both are asserted here, in both directions - a rule that
+    // simply hid the grower everywhere would pass the narrowed half alone.
+    name: "a build without Cultivation shows no grower on Home or in Deployments",
+    body: `__resetSpaces();
+      const rows = async () => {
+        await refreshHome();
+        const asks = [...$("home-routing").querySelectorAll(".k")].map((k) => k.textContent);
+        await renderLane("deployments");
+        const ids = [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent);
+        return { growing: asks.includes("growing"), grower: ids.includes("crowelm-grower"), models: ids.length };
+      };
+      const full = await rows();
+      window.crowe.installSpaces = ["chat", "projects"];
+      applySpaceProfile();
+      const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.space).join(",");
+      const narrowed = await rows();
+      __resetSpaces();
+      return { fullGrowing: full.growing, fullGrower: full.grower, rail,
+        growing: narrowed.growing, grower: narrowed.grower, dropped: full.models - narrowed.models };`,
+    expect: { fullGrowing: true, fullGrower: true, rail: "chat,projects", growing: false, grower: false, dropped: 1 },
+  },
+  {
+    // The live catalog carries no role tags: crowelm-grower is only known as
+    // the model the router resolves for cultivation, through the bridge table.
+    // A rule keyed on the tag alone would pass the shim above and leak in
+    // production, so this hands the lane a catalog shaped like the real one.
+    name: "the grower is hidden by what the router resolves, not only by a role tag",
+    body: `__resetSpaces();
+      const real = window.crowe.catalog.get;
+      const live = { models: [{ model: "crowelm", name: "CroweLM" }, { model: "crowelm-grower", name: "CroweLM Grower" }, { model: "GPT-5.6-Sol", name: "GPT 5.6 Sol" }],
+        at: Date.now(), defaultModel: "crowelm",
+        resolved: { cultivation: { model: "crowelm-grower", source: "bridge" }, coding: { model: "crowelm", source: "default" } } };
+      window.crowe.catalog.get = async () => live;
+      const ids = async () => { await renderLane("deployments"); return [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent); };
+      try {
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = (await ids()).join(",");
+        // A cultivation role that fell through to the default model names the
+        // model everything else uses. Hiding that would take the one model
+        // every install has out of the lane.
+        live.resolved.cultivation = { model: "crowelm", source: "default" };
+        const defaultKept = (await ids()).includes("crowelm");
+        return { narrowed, defaultKept };
+      } finally { window.crowe.catalog.get = real; __resetSpaces(); }`,
+    expect: { narrowed: "crowelm,GPT-5.6-Sol", defaultKept: true },
+  },
+  {
     name: "the picker cannot turn chat off",
     body: `__resetSpaces();
       renderSpacePicker();

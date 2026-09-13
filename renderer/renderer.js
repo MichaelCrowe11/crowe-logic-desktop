@@ -2657,8 +2657,13 @@ async function refreshHome() {
      "everything else" row already names. */
   const ROLE_ASKS = { cultivation: "growing", coding: "code", reasoning: "hard problems", "long-context": "long documents" };
   const hr = $("home-routing"); hr.innerHTML = "";
-  for (const [role, r] of Object.entries(cat.resolved || {}))
+  // The grower answers for the Cultivation space. An install without that space
+  // still routes a mushroom question to it, but the card does not advertise a
+  // specialist for work the install does not show.
+  for (const [role, r] of Object.entries(cat.resolved || {})) {
+    if (role === "cultivation" && !PROFILE.has("cultivation")) continue;
     hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">${esc(ROLE_ASKS[role] || role)}</span><span class="v">${esc(r.model)}${r.source === "default" ? "" : '<em class="src">expert</em>'}</span></div>`);
+  }
   hr.insertAdjacentHTML("beforeend", `<div class="kv"><span class="k">everything else</span><span class="v">${esc(cat.defaultModel || "crowelm")}</span></div>`);
   let host = cfg.baseUrl; try { host = new URL(cfg.baseUrl).host; } catch {}
   $("home-gateway").innerHTML = `
@@ -2700,8 +2705,17 @@ async function renderLane(lane) {
     learnCatalogNames(cat);
     if (gen !== laneGen) return;
     if (!cat.models.length) { body.innerHTML = '<div class="card-empty">Catalog unreachable. Check the gateway URL in Settings.</div>'; return; }
+    // Same rule as the Home card: the Cultivation expert gets no row on an
+    // install without that space. Known by its role tag, or by being what the
+    // router resolves for cultivation, because the live catalog does not tag
+    // it yet (the bridge table in harness.js does). A default-model fallback
+    // is the model everything else uses and is never hidden.
+    const cult = cat.resolved && cat.resolved.cultivation;
+    const growerId = cult && cult.source !== "default" ? cult.model : null;
+    const isGrower = (m) => m.role === "cultivation" || (growerId != null && (m.model || m.id) === growerId);
     for (const m of cat.models) {
       if (!m) continue;
+      if (!PROFILE.has("cultivation") && isGrower(m)) continue;
       const flags = [m.featured ? "featured" : "", m.role || "", m.available === false ? "offline" : "", m.gateway_tool_calling === false ? "no-tools" : ""].filter(Boolean);
       body.insertAdjacentHTML("beforeend", `<div class="mrow"><span class="m-id">${esc(m.model || m.id || "?")}</span><span class="m-name">${esc(m.display || m.display_name || "")}</span><span class="m-flags">${flags.map((f) => `<em>${esc(f)}</em>`).join("")}</span></div>`);
     }
