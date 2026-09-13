@@ -476,8 +476,8 @@ function allTools(ctx, route) {
    MCP servers (unknown side effects), no writes, and a shell only where the tier
    already allowed one - because running the project's tests is the difference
    between checking the work and admiring it. */
-function verifierTools(ctx) {
-  const tier = ctx.loadConfig().autonomy || "edit";
+function verifierTools(ctx, cap) {
+  const tier = effectiveTier(ctx, cap);
   const names = new Set(["read_file", "search", "list_dir"]);
   if (tier === "execute") names.add("run_shell");
   return [...BUILTIN_TOOLS.filter((t) => names.has(t.function.name)), VERDICT_TOOL];
@@ -603,6 +603,14 @@ function toolListDir(ctx, args) {
 // capability, never widen autonomy: its tools pass the same gate as built-ins.
 // Unmanaged (hand-configured) MCP servers keep their historic behavior.
 const TIER_RANK = { plan: 0, readonly: 0, edit: 1, execute: 2 };
+/* The lower of two tiers. A cap can only lower; an unknown cap changes nothing.
+   Rooms hand each seat a tier, and until this existed the gate read only the
+   app's autonomy, so a room labelled read-only was read-only on the label alone. */
+function capTier(tier, cap) {
+  if (!cap || !(cap in TIER_RANK)) return tier;
+  return TIER_RANK[cap] < (TIER_RANK[tier] ?? 1) ? cap : tier;
+}
+function effectiveTier(ctx, cap) { return capTier(ctx.loadConfig().autonomy || "edit", cap); }
 function pluginToolTier(ctx, fullName) {
   if (!ctx.getPlugins) return null;
   const [, id, ...rest] = String(fullName).split("__");
@@ -636,17 +644,23 @@ async function execTool(ctx, name, args, route, state) {
     if (name && name.startsWith("mcp__")) {
       const need = pluginToolTier(ctx, name);
       if (need) {
-        const tier = ctx.loadConfig().autonomy || "edit";
+        const tier = effectiveTier(ctx, route && route.tierCap);
         if ((TIER_RANK[need] ?? 1) > (TIER_RANK[tier] ?? 2))
           return `blocked: this plugin tool requires "${need}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
       }
       return await ctx.mcpCall(name, args);
     }
-    const tier = ctx.loadConfig().autonomy || "edit";
+    const appTier = ctx.loadConfig().autonomy || "edit";
+    const tier = capTier(appTier, route && route.tierCap);
+    const roomBound = tier !== appTier;   // the room, not the app setting, is what lowered it
     if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
       return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";
-    if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
-    if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
+    if (name === "run_shell" && tier !== "execute")
+      return roomBound ? `blocked: this room runs at "${tier}"; a seat may read and reason, not run commands.`
+        : `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
+    if ((name === "write_file" || name === "edit_file") && tier === "readonly")
+      return roomBound ? "blocked: this room runs read-only; a seat may read and reason, not write files."
+        : "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
       const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
@@ -930,10 +944,10 @@ function turnTokenCap(cfg) {
   if (v === 0) return 0;
   return Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : DEFAULT_TURN_TOKEN_CAP;
 }
-async function buildSystemPrompt(ctx) {
+async function buildSystemPrompt(ctx, cap) {
   const cwd = ctx.getCwd();
   const cfg = ctx.loadConfig();
-  const tier = cfg.autonomy || "edit";
+  const tier = capTier(cfg.autonomy || "edit", cap);
   const notes = workspaceNotes(cwd);
   const git = await gitBrief(cwd);
   const budget = turnBudget(cfg);
@@ -1445,7 +1459,7 @@ function normalizeVerdict(v) {
 function shouldVerify(cfg, state, deps, stop) {
   if (cfg.verifier === false) return false;
   if (!state.mutated) return false;                        // nothing to check
-  const tier = cfg.autonomy || "edit";
+  const tier = capTier(cfg.autonomy || "edit", deps.tier);
   if (tier === "plan" || tier === "readonly") return false;
   if (stop === "error" || stop === "aborted" || stop === "budget") return false;
   if (deps.isAborted() || overBudget(state)) return false;
@@ -1472,7 +1486,7 @@ async function verifyTurn(ctx, deps, route, state, request, claim, executorModel
     { role: "system", content: VERIFIER_PROMPT },
     { role: "user", content: verifierBrief(request, state.mutations, claim) },
   ], deps, vroute, vstate, {
-    tools: verifierTools(ctx), maxRounds: VERIFY_MAX_ROUNDS, stage: "verify", silent: true,
+    tools: verifierTools(ctx, route.tierCap), maxRounds: VERIFY_MAX_ROUNDS, stage: "verify", silent: true,
     ref: { model, fellBack: false }, onVerdict: (v) => { verdict = normalizeVerdict(v); },
   });
   state.stage = "execute";
@@ -1515,7 +1529,7 @@ function verdictReceipt(verdict, rollback) {
 //          setController(c), role, context, agentId }
 async function runAgent(ctx, messages, deps) {
   const cfg = ctx.loadConfig();
-  const sys = await buildSystemPrompt(ctx);
+  const sys = await buildSystemPrompt(ctx, deps.tier);
 
   // ── ROUTE ── pick the expert deployment for this block, fallback-first.
   const route = routeTurn(ctx, messages, deps.role || "");
@@ -1528,6 +1542,8 @@ async function runAgent(ctx, messages, deps) {
     route.reason = `${route.reason} · pinned ${deps.model}`;
     route.model = deps.model;
   }
+  // A room hands each seat a tier; the gate reads the lower of it and the app's autonomy.
+  if (deps.tier) route.tierCap = deps.tier;
   const state = newState(ctx, cfg, deps, route);
   // Said once, ahead of the route card, so the operator sees why this turn is
   // on the free model before the answer starts rather than after a 403.
@@ -1537,7 +1553,7 @@ async function runAgent(ctx, messages, deps) {
   }
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
   state.journal({ event_type: "TURN_STARTED",
-    output_summary: `${route.expert} · ${route.model} · tier ${cfg.autonomy || "edit"}${state.budget ? ` · ceiling $${state.budget.toFixed(2)}` : ""}` });
+    output_summary: `${route.expert} · ${route.model} · tier ${capTier(cfg.autonomy || "edit", deps.tier)}${route.tierCap ? " (room cap)" : ""}${state.budget ? ` · ceiling $${state.budget.toFixed(2)}` : ""}` });
 
   /* Situational state rides on the system message rather than being pushed into
      `messages`. Two reasons: the caller's array is what gets persisted as the
@@ -1624,6 +1640,7 @@ async function runAgent(ctx, messages, deps) {
 }
 
 module.exports = {
+  capTier, effectiveTier,
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,

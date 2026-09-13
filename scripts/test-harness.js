@@ -317,6 +317,19 @@ test("plan mode blocks every write and the shell", async () => {
     assert.match(String(await H.execTool(ctx, n, a, {})), /^blocked: Plan mode/, n);
   }
 });
+test("a room tier cap binds at the tool gate, below the app's autonomy", async () => {
+  const ctx = makeCtx({ autonomy: "execute" });
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  assert.match(String(await H.execTool(ctx, "write_file", { path: "room.txt", content: "x" }, room)), /^blocked: this room runs read-only/);
+  assert.match(String(await H.execTool(ctx, "edit_file", { path: "room.txt", old_string: "a", new_string: "b" }, room)), /^blocked: this room runs read-only/);
+  assert.match(String(await H.execTool(ctx, "run_shell", { command: "ls" }, room)), /^blocked: this room runs at "readonly"/);
+  assert.match(String(await H.execTool(ctx, "write_file", { path: "free.txt", content: "x" }, {})), /^applied edit/);
+  assert.strictEqual(H.capTier("execute", "readonly"), "readonly");
+  assert.strictEqual(H.capTier("edit", "execute"), "edit");            // a cap never raises
+  assert.strictEqual(H.capTier("plan", "readonly"), "plan");           // equal rank keeps the app's word
+  assert.strictEqual(H.capTier("execute", "bogus"), "execute");        // unknown cap changes nothing
+  assert.strictEqual(H.effectiveTier(ctx, "edit"), "edit");
+});
 test("edit tier blocks the shell but allows writes", async () => {
   const ctx = makeCtx({ autonomy: "edit" });
   assert.match(String(await H.execTool(ctx, "run_shell", { command: "ls" }, {})), /^blocked: shell execution/);
