@@ -41,7 +41,9 @@ jobs:
       # that behaves differently with nothing in this suite noticing. Rebuilds
       # mobile/www on the way through, which also covers the www transforms.
       - name: Run mobile bridge tests
-        run: node scripts/test-mobile-bridge.js
+        run: |
+          node scripts/test-mobile-bridge.js
+          node scripts/test-mobile-security.js
 
       # Same bargain as mobile, same cost, and this one is already serving real
       # traffic at /app. The renderer ships to the browser verbatim over

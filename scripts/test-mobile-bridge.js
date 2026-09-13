@@ -296,10 +296,10 @@ function methodPaths(surface) {
     delete win.croweConnectors;
     return "tools merged, call answered via the gateway, result fed back";
   });
-  await check("the vault falls back to Preferences when the Keychain refuses, instead of signing the person out", async () => {
+  await check("the native vault migrates legacy tokens and fails closed when secure storage refuses", async () => {
     // vault.js sits in front of the bridge's store for the "config" record. A
-    // rejected Keychain read must answer from Preferences and leave the key
-    // unmigrated; a rejected write must land in Preferences.
+    // rejected secure-store read must not expose the legacy plaintext record,
+    // and a rejected write must not land there.
     const load = (vaultStub) => {
       const prefs = new Map([["config", JSON.stringify({ token: "t.o.k", refreshToken: "r" })]]);
       const Preferences = { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } };
@@ -308,22 +308,26 @@ function methodPaths(surface) {
       assert(win.croweVault && win.croweVault.handles("config") && !win.croweVault.handles("grow"), "vault.js did not install croweVault for config only");
       return { vault: win.croweVault, prefs };
     };
-    // 1. Keychain refuses every read: Preferences answers, and keeps the record.
+    // 1. Secure storage refuses every read: Preferences remains available for
+    // a later migration, but its credential is not exposed to the app.
     let calls = [];
     let { vault, prefs } = load({ get: async () => { calls.push("get"); throw new Error("keychain read failed: -25300"); }, set: async () => { calls.push("set"); }, remove: async () => {} });
     const v = await vault.get("config");
-    assert(v && JSON.parse(v).token === "t.o.k", `a refused Keychain read did not fall back to Preferences: ${v}`);
-    assert(prefs.has("config"), "the fallback read removed the record from Preferences");
-    // 2. Keychain refuses the write: Preferences takes it.
+    assert(v === null, `a refused secure-store read exposed Preferences: ${v}`);
+    assert(prefs.has("config"), "the refused read removed the record needed for a later migration");
+    // 2. Secure storage refuses the write: the plaintext record is unchanged.
     ({ vault, prefs } = load({ get: async () => ({ value: null }), set: async () => { throw new Error("keychain write failed: -34018"); }, remove: async () => {} }));
-    await vault.set("config", JSON.stringify({ token: "new" }));
-    assert(JSON.parse(prefs.get("config")).token === "new", "a refused Keychain write was lost");
+    let rejected = false;
+    try { await vault.set("config", JSON.stringify({ token: "new" })); }
+    catch (e) { rejected = /keychain write failed/.test(String(e && e.message || e)); }
+    assert(rejected, "a refused secure-store write did not reject");
+    assert(JSON.parse(prefs.get("config")).token === "t.o.k", "a refused secure-store write changed Preferences");
     // 3. Healthy Keychain: the first read migrates Preferences into it and clears Preferences.
     const kc = new Map();
     ({ vault, prefs } = load({ get: async ({ key }) => ({ value: kc.has(key) ? kc.get(key) : null }), set: async ({ key, value }) => { kc.set(key, value); }, remove: async ({ key }) => { kc.delete(key); } }));
     const m = await vault.get("config");
     assert(m && JSON.parse(m).token === "t.o.k" && kc.has("config") && !prefs.has("config"), "a healthy Keychain did not take over the record on first read");
-    return "refused read -> Preferences (kept); refused write -> Preferences; healthy -> migrated once";
+    return "refused read -> hidden; refused write -> rejected; healthy -> migrated once";
   });
 
   await check("the share inbox reads the App Group natively and never switches the Preferences group", async () => {

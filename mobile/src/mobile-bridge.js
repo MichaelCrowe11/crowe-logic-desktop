@@ -56,14 +56,15 @@
   const CONTEXT_BUDGET_CHARS = 120000;
 
   // ─── Storage ───────────────────────────────────────────────────────────────
-  // Preferences on a device, localStorage in a plain browser (`npm run serve`).
-  // Both are async here so the caller cannot come to depend on the synchronous
-  // one and then break on the platform that is actually shipped.
+  // App data uses Preferences on a device and localStorage in a plain browser
+  // (`npm run serve`). vault.js intercepts the token-bearing config record on
+  // native builds. Everything is async so callers cannot depend on the browser's
+  // synchronous storage and then break on the platform that is shipped.
   const Preferences = plugin("Preferences");
   const store = {
     async get(key) {
       try {
-        // Secrets live in the Keychain when vault.js is present (see mobile/src/vault.js).
+        // Secrets live in the native vault when vault.js is present.
         if (window.croweVault && window.croweVault.handles(key)) { const v = await window.croweVault.get(key); return v ? JSON.parse(v) : null; }
         if (Preferences) { const { value } = await Preferences.get({ key }); return value ? JSON.parse(value) : null; }
         const raw = localStorage.getItem("crowe:" + key);
@@ -574,9 +575,11 @@
       // executor, which rejects sign-in before Browser.open is ever reached —
       // the browser simply never appears. Promise.resolve takes both shapes.
       Promise.resolve(App.addListener("appUrlOpen", async ({ url }) => {
-        if (!url || url.indexOf(redirect) !== 0) return;    // some other deep link
-        let params;
-        try { params = new URL(url).searchParams; } catch { return finish({ error: "sign-in returned an unreadable URL" }); }
+        let callback, expected;
+        try { callback = new URL(url); expected = new URL(redirect); } catch { return; }
+        if (callback.protocol !== expected.protocol || callback.hostname !== expected.hostname ||
+            callback.pathname !== expected.pathname) return;    // some other deep link
+        const params = callback.searchParams;
         const code = params.get("code");
         if (params.get("state") !== state) return finish({ error: "sign-in was cancelled" });
         if (!code) return finish({ error: params.get("error_description") || params.get("error") || "sign-in was cancelled" });
@@ -1542,11 +1545,10 @@
   }
 
   // ─── Provider keys ─────────────────────────────────────────────────────────
-  /* The desktop encrypts these with the OS keychain through safeStorage. There
-     is no safeStorage in a webview, so they live in Preferences — which is
-     UserDefaults on iOS and SharedPreferences on Android: private to the app
-     and included in device backups, but not hardware-encrypted. The Key
-     Manager says so on screen rather than implying a vault that is not here. */
+  /* Provider keys share the token-bearing config record, so vault.js routes
+     them to device-only Keychain storage on iOS and Android Keystore-backed
+     AES-GCM storage on Android. Browser preview mode remains localStorage and
+     reports itself as unencrypted. */
   const KEY_PROVIDERS = {
     openai: { label: "OpenAI", url: "https://api.openai.com/v1/models", header: "Bearer" },
     anthropic: { label: "Anthropic", url: "https://api.anthropic.com/v1/models", header: "x-api-key" },
@@ -2264,9 +2266,9 @@
       // { encrypted, providers } — not the bare array keyStatus() returns. The
       // Key Manager reads result.providers, and a list that answered with the
       // array drew the section with its heading, its badge and no rows at all.
-      // encrypted is false and says so: Preferences is private app storage, not
-      // the OS keychain safeStorage gives the desktop.
-      list: async () => { await ready; return { encrypted: false, providers: keyStatus() }; },
+      // Native builds keep this record in Keychain/Keystore storage. Browser
+      // preview storage remains deliberately marked as unencrypted.
+      list: async () => { await ready; return { encrypted: Boolean(window.croweVault?.secure), providers: keyStatus() }; },
       set: async (provider, key) => {
         if (!KEY_PROVIDERS[provider] || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
         const keys = { ...(config.keys || {}) };

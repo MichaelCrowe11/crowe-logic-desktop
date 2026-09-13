@@ -1,56 +1,69 @@
-/* The vault: the phone's secrets go to the Keychain, not to Preferences.
+/* The vault: the phone's secrets go to native secure storage, not Preferences.
  *
- * mobile-bridge.js keeps one record, "config", that carries the access and
- * refresh tokens. Its store asks window.croweVault first for that record; this
- * file provides it over the CroweVault plugin (ios/App/App/CroweVault.swift).
- * Anything else the bridge stores stays in Preferences, unchanged.
+ * mobile-bridge.js keeps one record, "config", that carries the access token,
+ * refresh token, remote pairing credential and provider keys. Its store asks
+ * window.croweVault first for that record; this file routes it to CroweVault
+ * (Keychain on iOS, Android Keystore-backed AES-GCM on Android).
  *
- * Migration is one-way and happens on the first read: a "config" still sitting
- * in Preferences is copied into the Keychain and then removed from Preferences,
- * so an update from 2410-era builds keeps the person signed in and leaves no
- * token behind in the plist. Without the plugin (browser, Android for now)
- * croweVault is not defined and the store behaves exactly as before.
+ * Migration is one-way and happens on the first read: a config still sitting
+ * in Preferences is copied into secure storage and then removed. A native
+ * build without the plugin fails closed. A missing registration or temporarily
+ * unavailable vault must never turn into a plaintext credential write.
  *
- * Load order: before mobile-bridge.js.
+ * The browser preview has no native store and keeps its existing localStorage
+ * behavior. Load this file before mobile-bridge.js.
  */
 (() => {
   const Cap = window.Capacitor;
-  const Vault = Cap && Cap.Plugins && Cap.Plugins.CroweVault;
-  if (!Vault || !Cap.isNativePlatform || !Cap.isNativePlatform()) return;
-  const Preferences = Cap.Plugins.Preferences;
+  if (!Cap || !Cap.isNativePlatform || !Cap.isNativePlatform()) return;
+  const Vault = Cap.Plugins && Cap.Plugins.CroweVault;
+  const Preferences = Cap.Plugins && Cap.Plugins.Preferences;
   const KEYS = new Set(["config"]);
   const migrated = new Set();
 
-  async function migrate(key) {
-    if (migrated.has(key) || !Preferences) return;
-    migrated.add(key);
-    try {
-      const { value } = await Vault.get({ key });
-      if (value) return;                                  // the Keychain already has it
-      const old = await Preferences.get({ key });
-      if (old && old.value) {
-        await Vault.set({ key, value: old.value });
-        await Preferences.remove({ key });
-      }
-    } catch { /* a failed migration leaves Preferences as the source, as before */ migrated.delete(key); }
+  if (!Vault) {
+    window.croweVault = {
+      secure: false,
+      handles: (key) => KEYS.has(key),
+      async get() { return null; },
+      async set() { throw new Error("native secure storage is unavailable"); },
+      async remove(key) { if (Preferences) await Preferences.remove({ key }); },
+    };
+    return;
   }
 
-  /* A Keychain refusal (any SecItem status other than success or not-found)
-     must not read as "signed out". The bridge asks this object first and never
-     Preferences for a handled key, so the fallback lives here: a rejected read
-     answers from Preferences and leaves the key unmigrated; a rejected write
-     lands in Preferences, where the next successful migrate() will pick it up. */
-  const fromPrefs = async (key) => { if (!Preferences) return null; const { value } = await Preferences.get({ key }); return value || null; };
+  async function migrate(key) {
+    if (migrated.has(key) || !Preferences) return;
+    const { value } = await Vault.get({ key });
+    if (!value) {
+      const old = await Preferences.get({ key });
+      if (old && old.value) await Vault.set({ key, value: old.value });
+    }
+    // Remove even an empty or stale record once the secure store has answered.
+    await Preferences.remove({ key });
+    migrated.add(key);
+  }
+
+  /* A secure-store refusal surfaces as signed-out/unavailable. Retaining a
+     legacy Preferences record for a later migration is safe; reading or
+     writing it after a vault failure is not. */
   window.croweVault = {
+    secure: true,
     handles: (key) => KEYS.has(key),
     async get(key) {
-      await migrate(key);
-      try { const { value } = await Vault.get({ key }); return value || (migrated.has(key) ? null : await fromPrefs(key)); }
-      catch { migrated.delete(key); return fromPrefs(key); }
+      try {
+        await migrate(key);
+        const { value } = await Vault.get({ key });
+        return value || null;
+      } catch {
+        migrated.delete(key);
+        return null;
+      }
     },
     async set(key, value) {
-      try { await Vault.set({ key, value }); migrated.add(key); }
-      catch { migrated.delete(key); if (Preferences) await Preferences.set({ key, value }); else throw new Error("no store accepted the write"); }
+      await Vault.set({ key, value });
+      migrated.add(key);
+      if (Preferences) await Preferences.remove({ key });
     },
     async remove(key) {
       try { await Vault.remove({ key }); } catch { /* nothing to remove is not a failure */ }
