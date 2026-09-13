@@ -96,6 +96,21 @@ path: CroweLogic-developers-0.14.0-arm64.zip
 `,
 };
 
+const DEV_LINUX = {
+  'desktop/developers/channel/linux/developers-linux.yml': `version: 0.14.0
+files:
+  - url: CroweLogic-developers-0.14.0.AppImage
+    sha512: hhh
+    size: 8
+  - url: crowe-logic-developers_0.14.0_amd64.deb
+    sha512: iii
+    size: 9
+path: CroweLogic-developers-0.14.0.AppImage
+`,
+};
+
+const description = (html) => /<meta name="description" content="([^"]*)"/.exec(html)[1];
+
 function envWith(manifests) {
   return {
     RELEASES: {
@@ -421,6 +436,89 @@ path: CroweLogic-0.14.0-x64.dmg
       'desktop/developers/channel/windows/developers.yml',
     ]) {
       assert.ok(!validIngestKey(bad), `accepted ${bad}`);
+    }
+  });
+
+  // The page's copy, held to what the published artifacts are. The macOS card
+  // used to claim the dmg container was Developer ID signed; only the app inside
+  // it is. The Windows card implied signing was in progress; the installer is
+  // unsigned. The description promised three platforms when one was published.
+  await check('the meta description names only the platforms the release includes', async () => {
+    const dev = renderPage(await catalog(envWith(DEV_MANIFESTS), 'developers'), 'developers');
+    assert.strictEqual(description(dev), 'Download Crowe Logic for Developers for macOS.');
+    const full = renderPage(await catalog(envWith(MANIFESTS)));
+    assert.strictEqual(description(full), 'Download the Crowe Logic desktop app for Windows, macOS, and Linux.');
+    const stale = { ...MANIFESTS };
+    stale['desktop/channel/win/latest.yml'] = MANIFESTS['desktop/channel/win/latest.yml'].replace(/0\.14\.0/g, '0.13.0');
+    assert.strictEqual(description(renderPage(await catalog(envWith(stale)))), 'Download the Crowe Logic desktop app for macOS and Linux.');
+    const devLinux = renderPage(await catalog(envWith({ ...DEV_MANIFESTS, ...DEV_LINUX }), 'developers'), 'developers');
+    assert.strictEqual(description(devLinux), 'Download Crowe Logic for Developers for macOS and Linux.');
+  });
+
+  await check('the Windows card says the installer is unsigned, not that signing is underway', async () => {
+    const html = renderPage(await catalog(envWith(MANIFESTS)));
+    assert.ok(html.includes('The Windows installer is not code signed yet, so Windows shows a SmartScreen warning.'));
+    assert.ok(html.includes('More info') && html.includes('Run anyway') && html.includes('verify the SHA-256 against SHA256SUMS'));
+    assert.ok(!html.includes('code-signing validation'), 'still implies signing is in progress');
+  });
+
+  await check('the macOS card claims signing for the app and only stapling for the dmg', async () => {
+    const html = renderPage(await catalog(envWith(DEV_MANIFESTS), 'developers'), 'developers');
+    assert.ok(html.includes('The app inside the dmg is Developer ID signed, notarized and stapled. The dmg is notarized and stapled.'));
+    assert.ok(!html.includes('The dmg and the app inside it are Developer ID signed'), 'still claims the dmg container is signed');
+  });
+
+  await check('the verify snippet gives each platform its own command, escaped', async () => {
+    const html = renderPage(await catalog(envWith(MANIFESTS)));
+    const pre = /<pre>([\s\S]*?)<\/pre>/.exec(html)[1];
+    assert.ok(pre.includes('# macOS\nshasum -a 256 -c SHA256SUMS --ignore-missing'), 'macOS command missing');
+    assert.ok(pre.includes('# Linux\nsha256sum -c SHA256SUMS --ignore-missing'), 'Linux command missing');
+    assert.ok(/# Windows[^\n]*\ncertutil -hashfile &lt;file&gt; SHA256/.test(pre), 'Windows command missing or unescaped');
+    assert.ok(!pre.includes('<file>'), 'the placeholder leaked as a tag');
+  });
+
+  await check('the footer contact matches the Partner Center listing', async () => {
+    for (const html of [
+      renderPage(await catalog(envWith(MANIFESTS))),
+      renderPage(await catalog(envWith(DEV_MANIFESTS), 'developers'), 'developers'),
+    ]) {
+      assert.ok(html.includes('Questions: admin@crowelogic.com'));
+      assert.ok(!html.includes('michael@crowelogic.com'));
+    }
+  });
+
+  await check('a trailing slash on /developers and /developers/<platform> is accepted', async () => {
+    const env = envWith({ ...MANIFESTS, ...DEV_MANIFESTS });
+    const page = await handler.fetch(new Request('https://x/developers/'), env);
+    assert.strictEqual(page.status, 200);
+    assert.ok((await page.text()).includes('Crowe Logic for Developers'));
+    assert.strictEqual((await handler.fetch(new Request('https://x/developers/', { method: 'HEAD' }), env)).status, 200);
+    const mac = await handler.fetch(new Request('https://x/developers/mac/'), env);
+    assert.strictEqual(mac.status, 302);
+    assert.strictEqual(mac.headers.get('location'), `https://x/desktop/developers/0.14.0/${DEV_DMG}`);
+    for (const bad of ['/developers//', '/developers/mac//', '/developers/amiga/']) {
+      assert.strictEqual((await handler.fetch(new Request(`https://x${bad}`), env)).status, 404, `${bad} did not 404`);
+    }
+  });
+
+  await check('the Linux note appears only on the developer page and only once Linux is published there', async () => {
+    const note = 'The Linux builds are new. Reports are welcome at admin@crowelogic.com.';
+    assert.ok(!renderPage(await catalog(envWith(DEV_MANIFESTS), 'developers'), 'developers').includes(note), 'shown with no Linux build');
+    const withLinux = renderPage(await catalog(envWith({ ...DEV_MANIFESTS, ...DEV_LINUX }), 'developers'), 'developers');
+    assert.ok(withLinux.includes(note), 'not shown once Linux is published');
+    assert.ok(withLinux.includes(`href="/desktop/developers/0.14.0/${encodeURIComponent('CroweLogic-developers-0.14.0.AppImage')}"`));
+    assert.ok(!renderPage(await catalog(envWith(MANIFESTS))).includes('Linux builds are new'), 'the full edition, which has shipped Linux for a while, calls it new');
+  });
+
+  await check('the rendered pages keep the brand rules: no em dashes, no emoji, no "AI"', async () => {
+    for (const html of [
+      renderPage(await catalog(envWith(MANIFESTS))),
+      renderPage(await catalog(envWith({ ...DEV_MANIFESTS, ...DEV_LINUX }), 'developers'), 'developers'),
+    ]) {
+      const text = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<svg[\s\S]*?<\/svg>/, '').replace(/<[^>]+>/g, ' ');
+      assert.ok(!text.includes('\u2014'), 'em dash in page copy');
+      assert.ok(!/[\u{1F000}-\u{1FAFF}\u{FE0F}]/u.test(text), 'emoji in page copy');
+      assert.ok(!/\bAI\b/.test(text), '"AI" in page copy');
     }
   });
 

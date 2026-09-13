@@ -38,7 +38,7 @@ const CHANNELS = {
     name: "Crowe Logic",
     tag: "releases",
     title: "Crowe Logic desktop",
-    description: "Download the Crowe Logic desktop app for Windows, macOS, and Linux.",
+    product: "the Crowe Logic desktop app",
     sub: "The operator for your workspace. Chat, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.",
   },
   developers: {
@@ -46,10 +46,14 @@ const CHANNELS = {
     name: "Crowe Logic for Developers",
     tag: "developers",
     title: "Crowe Logic for Developers",
-    description: "Download Crowe Logic for Developers for Windows, macOS, and Linux.",
+    product: "Crowe Logic for Developers",
     sub: "The coding agent for your repositories. Chat and Projects, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.",
   },
 };
+
+// Where questions and reports go. The same address as the Partner Center
+// listing's support contact.
+const CONTACT = "admin@crowelogic.com";
 
 // The feed electron-updater asks for: named after the channel, in the channel
 // directory under the edition's prefix. Windows has no os suffix.
@@ -63,6 +67,24 @@ function href(channel, version, name) {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+}
+
+// The platforms the release actually includes, read off the catalog the same
+// way the cards are, so the meta description cannot name a platform that has
+// not been published.
+function platformsOf(rel) {
+  const names = [];
+  if (rel.windows) names.push("Windows");
+  if (rel.macos || rel.macosIntel) names.push("macOS");
+  if (rel.appimage || rel.deb) names.push("Linux");
+  return names;
+}
+
+function describe(edition, rel) {
+  const p = platformsOf(rel);
+  if (p.length === 0) return `Download ${edition.product}.`;
+  const list = p.length === 1 ? p[0] : p.length === 2 ? `${p[0]} and ${p[1]}` : `${p.slice(0, -1).join(", ")}, and ${p[p.length - 1]}`;
+  return `Download ${edition.product} for ${list}.`;
 }
 
 function card(channel, title, meta, body, rel, primary, secondary, secondaryLabel) {
@@ -144,7 +166,7 @@ function renderPage(rel, channel = "latest") {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>${escapeHtml(edition.name)} releases</title>
-<meta name="description" content="${escapeHtml(edition.description)}" />
+<meta name="description" content="${escapeHtml(describe(edition, rel))}" />
 <link rel="icon" type="image/svg+xml" href="${MARK_ICON}" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -207,21 +229,26 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
     <p class="sub">${escapeHtml(edition.sub)}</p>
     <span class="ver">v${rel.version}</span>
     <div class="grid">
-      ${card(channel, "Windows", "64-bit installer", "Run the installer and follow the setup prompts. Windows may show a SmartScreen warning while code-signing validation is completed.", rel, rel.windows)}
-      ${card(channel, "macOS", "Apple Silicon dmg", `Open the dmg and drag ${edition.name} to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.`, rel, rel.macos, rel.macosIntel, "Download for Intel")}
-      ${card(channel, "Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
+      ${card(channel, "Windows", "64-bit installer", `Run the installer and follow the setup prompts. The Windows installer is not code signed yet, so Windows shows a SmartScreen warning. Choose "More info" then "Run anyway" if you trust the download, and verify the SHA-256 against SHA256SUMS.`, rel, rel.windows)}
+      ${card(channel, "macOS", "Apple Silicon dmg", `Open the dmg and drag ${edition.name} to Applications. The app inside the dmg is Developer ID signed, notarized and stapled. The dmg is notarized and stapled.`, rel, rel.macos, rel.macosIntel, "Download for Intel")}
+      ${card(channel, "Linux", "x86_64 AppImage and deb", `Mark the AppImage executable and run it, or install the deb with apt.${channel === "developers" && (rel.appimage || rel.deb) ? ` The Linux builds are new. Reports are welcome at ${CONTACT}.` : ""}`, rel, rel.appimage, rel.deb, "Download deb")}
     </div>
     <section class="checks">
       <h3>Verify your download</h3>
       <p>With <a style="color:var(--gold)" href="${href(channel, rel.version, "SHA256SUMS")}">SHA256SUMS</a> in your download folder:</p>
-      <pre>sha256sum -c SHA256SUMS --ignore-missing</pre>
+      <pre>${escapeHtml(`# macOS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+# Linux
+sha256sum -c SHA256SUMS --ignore-missing
+# Windows, then compare the printed hash with the line for your file in SHA256SUMS
+certutil -hashfile <file> SHA256`)}</pre>
     </section>
   </div>
 </main>
 <footer>
   <div class="wrap">
     <span>Crowe Logic, Inc.</span>
-    <span>Questions: michael@crowelogic.com</span>
+    <span>Questions: ${CONTACT}</span>
   </div>
 </footer>
 </body>
@@ -397,8 +424,9 @@ export default {
     // installer without the listing having to know the version: /developers/mac
     // is the Apple Silicon dmg, /developers/mac-intel the Intel one, and
     // /developers/windows, /developers/appimage and /developers/deb the rest. A
-    // platform the release does not include is a 404, not a link to nothing.
-    const dev = /^\/developers(?:\/(mac|mac-intel|windows|appimage|deb))?$/.exec(path);
+    // platform the release does not include is a 404, not a link to nothing. A
+    // trailing slash is accepted on both shapes.
+    const dev = /^\/developers(?:\/(mac|mac-intel|windows|appimage|deb))?\/?$/.exec(path);
     if (dev) {
       const rel = await catalog(env, "developers");
       if (!rel) return new Response("No developer release published yet", { status: 503 });
