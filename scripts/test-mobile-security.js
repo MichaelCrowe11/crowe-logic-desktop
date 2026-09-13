@@ -44,7 +44,8 @@ async function check(name, fn) {
     assert.match(manifest, /android:allowBackup="false"/);
     assert.doesNotMatch(paths, /<external-path\b/);
     assert.match(activity, /registerPlugin\(CroweVault\.class\)/);
-    assert.match(activity, /setWebContentsDebuggingEnabled\(BuildConfig\.DEBUG\)/);
+    assert.match(activity, /ApplicationInfo\.FLAG_DEBUGGABLE/);
+    assert.match(activity, /setWebContentsDebuggingEnabled\(debuggable\)/);
     assert.match(gradle, /minifyEnabled true/);
     assert.match(gradle, /shrinkResources true/);
   });
