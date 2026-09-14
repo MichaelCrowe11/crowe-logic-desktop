@@ -50,6 +50,15 @@
     if (pane === "browser") { const u = firstString(args, ["url", "href"]); if (u) t.url = u; }
     return t;
   }
+  // main.js emits an edit proposal's diff as rows {t: " " | "-" | "+", s: line}
+  // (lineDiff); a string is accepted too. Rows become unified-diff text so the
+  // card colours them like the Changes pane does.
+  function diffText(diff) {
+    if (diff == null) return "";
+    if (typeof diff === "string") return diff;
+    if (Array.isArray(diff)) return diff.map((r) => (r && typeof r === "object") ? `${r.t == null ? " " : r.t}${r.s == null ? "" : r.s}` : String(r)).join("\n");
+    return String(diff);
+  }
   function newActivity() { return { cards: [], seq: 0 }; }
   function pending(state, name) {
     for (let i = state.cards.length - 1; i >= 0; i--) {
@@ -86,7 +95,7 @@
       return { state, card, target };
     }
     if (ev.type === "edit_proposal") {
-      const card = push(state, { kind: "proposal", tool: "edit_file", callId: ev.id || null, verb: "proposed an edit to", detail: ev.path || "a file", args: { path: ev.path }, status: "waiting", output: String(ev.diff || ""), startedAt: now, endedAt: null, agentId: ev.agentId || "main" });
+      const card = push(state, { kind: "proposal", tool: "edit_file", callId: ev.id || null, verb: "proposed an edit to", detail: ev.path || "a file", args: { path: ev.path }, status: "waiting", output: diffText(ev.diff), startedAt: now, endedAt: null, agentId: ev.agentId || "main" });
       return { state, card, target: { pane: "git", path: ev.path || "" } };
     }
     if (ev.type === "approval_request") {
@@ -114,5 +123,5 @@
     const last = state.cards[state.cards.length - 1];
     return last ? `last: ${last.verb} ${short(last.detail, 48)}` : "idle";
   }
-  return { PANE_FOR, describeCall, targetFor, newActivity, reduceActivity, nextPane, summary, short };
+  return { PANE_FOR, describeCall, targetFor, newActivity, reduceActivity, nextPane, summary, short, diffText };
 });

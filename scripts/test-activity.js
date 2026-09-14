@@ -38,10 +38,16 @@ assert.strictEqual(r.card.status, "waiting");
 assert.strictEqual(r.card.output, "-a\n+b");
 assert.deepStrictEqual(r.target, { pane: "git", path: "cache.py" });
 
+// main.js sends the proposal diff as lineDiff rows, not a string.
+r = A.reduceActivity(s, { type: "edit_proposal", id: "p2", path: "a.py", diff: [{ t: " ", s: "def f():" }, { t: "-", s: "    return 1" }, { t: "+", s: "    return 2" }] }, 5100);
+assert.strictEqual(r.card.output, " def f():\n-    return 1\n+    return 2", "diff rows become unified text, context lines keep their leading space");
+assert.strictEqual(A.diffText(null), "");
+assert.strictEqual(A.diffText("raw"), "raw");
+
 r = A.reduceActivity(s, { type: "approval_request", id: "ap1", kind: "run_shell", title: "rm -rf build" }, 6000);
 assert.strictEqual(r.card.status, "waiting");
 assert.deepStrictEqual(r.target, { pane: "activity" }, "a pending approval is shown where the user can see it");
-assert.strictEqual(A.summary(s), "2 waiting for you");
+assert.strictEqual(A.summary(s), "3 waiting for you");
 r = A.reduceActivity(s, { type: "approval_expired", id: "ap1" }, 6500);
 assert.strictEqual(r.card.status, "expired");
 
