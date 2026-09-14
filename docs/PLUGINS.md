@@ -82,7 +82,7 @@ four places only — everything else stays closed:
 | Gateway Ops | Projects/Models | /health + /evals endpoints (Codex, in flight) |
 | R2 Storage | Projects/Data | crowe-releases + dataset buckets |
 | SWM Commerce | Projects | Shopify/Stripe read-only analytics |
-| Channel Analytics | Projects | Southwest Mushrooms YouTube data |
+| Channel Analytics | Projects | Shipped: `plugins/channel-analytics/server.js`, a read-only server over the channel manager's nightly state (snapshot, uploads, machine Shorts, hand tasks, brief, Stripe attribution); `run_collect` at edit |
 | Crowe Skills | all | crowe-skills corpus server (skill_search/show) |
 
 Third-party official (later, curated): GitHub, Slack, Notion — via the same
@@ -109,3 +109,28 @@ manifest, `official: true`, vetted commands only.
   references (the MODEL_PLAN_ACCESS lesson).
 - A plugin can add capability, never widen autonomy: tier gates and the
   secret guard apply to plugin tools with no opt-out.
+
+## Channel Analytics: the first bundled server
+
+The channel manager (`~/swm-channel-manager/manager.py`, launchd 00:02 and
+07:25) already reads the YouTube Data API, the Analytics API and Stripe every
+night and writes what it found. The plugin does not talk to YouTube; it reads
+those files. A room seat asking for the morning numbers therefore costs no
+quota, needs no credential, and sees exactly what the emailed brief saw.
+
+Tools, all read-only by manifest rule except the last: `list_snapshot_dates`,
+`get_channel_snapshot` (the brief's numbers in one read, text or json),
+`get_snapshot_section`, `list_recent_uploads` (voiced and machine flags,
+failed description checks), `list_machine_shorts` (with the hours of day they
+land), `get_video_performance`, `list_hand_tasks`, `read_daily_brief`,
+`get_stripe_attribution`, and `run_collect` at the edit tier, so a read-only
+room cannot spend quota.
+
+It is the first server that ships inside the app. The manifest names it with
+two placeholders the loader resolves and nothing else does: `${APP}` is the
+app's directory (`plugins/` is unpacked from the asar so a child process can
+read it) and `${NODE}` as the command is the app's own Electron binary run as
+plain Node, so no node is needed on the machine. Dates and video ids are
+validated before they touch a path; sections are allowlisted; the two folders
+it reads are the only two it opens, and `~/.swm-yt-creds` is never one of
+them. `scripts/test-channel-analytics.js` drives it over its own wire.

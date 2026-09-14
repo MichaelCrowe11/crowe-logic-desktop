@@ -82,6 +82,7 @@ jobs:
           node scripts/test-companion.js
           node scripts/test-qr.js
           node scripts/test-sense.js
+          node scripts/test-channel-analytics.js
           node scripts/test-repos.js
           node scripts/test-releases-worker.js
           node scripts/test-verify-release.js
