@@ -12,7 +12,15 @@
 // regenerated here with electron-builder's own blockmap builder, which produces
 // exactly the values the build would have recorded.
 //
-// Usage: node scripts/staple-dmg.js [outputDir]   (default: release)
+// Usage: node scripts/staple-dmg.js [outputDir]                          (default: release, feed latest-mac.yml)
+//        node scripts/staple-dmg.js --config electron-builder.developer.js
+//
+// The feed's name follows the update channel: electron-builder writes
+// latest-mac.yml for the default build and developers-mac.yml for the developer
+// edition, which also lands in release-developers/. Rather than a second pair
+// of names here to keep in step, --config reads the same electron-builder
+// config the build ran with and takes directories.output and publish[].channel
+// from it. A positional directory still wins over the config's, as before.
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -50,8 +58,27 @@ function patchUpdateInfo(ymlPath, dmgName, sha512, size) {
   return true;
 }
 
+// Where the artifacts are and what the feed is called, from the arguments and
+// the builder config they name. Defaults are the default edition's.
+function target(argv) {
+  const args = argv.slice(2);
+  let dir = 'release';
+  let channel = 'latest';
+  const at = args.indexOf('--config');
+  if (at !== -1) {
+    if (!args[at + 1]) throw new Error('staple-dmg: --config needs a path');
+    const cfg = require(path.resolve(args[at + 1]));
+    if (cfg.directories && cfg.directories.output) dir = cfg.directories.output;
+    const pub = [].concat(cfg.publish || []).find((p) => p && p.channel);
+    if (pub) channel = pub.channel;
+    args.splice(at, 2);
+  }
+  if (args[0]) dir = args[0];
+  return { dir: path.resolve(dir), feed: `${channel}-mac.yml` };
+}
+
 async function main() {
-  const dir = path.resolve(process.argv[2] || 'release');
+  const { dir, feed } = target(process.argv);
 
   if (process.platform !== 'darwin') return;
   if (process.env.CROWE_SKIP_NOTARIZE === '1') {
@@ -92,15 +119,19 @@ async function main() {
     run(['stapler', 'staple', dmg]);
 
     const info = await buildBlockMap(dmg, 'gzip', `${dmg}.blockmap`);
-    const yml = path.join(dir, 'latest-mac.yml');
+    const yml = path.join(dir, feed);
     if (!patchUpdateInfo(yml, name, info.sha512, info.size)) {
-      throw new Error(`staple-dmg: ${name} is not listed in latest-mac.yml`);
+      throw new Error(`staple-dmg: ${name} is not listed in ${feed}`);
     }
-    console.log(`staple-dmg: stapled ${name}, refreshed latest-mac.yml and blockmap`);
+    console.log(`staple-dmg: stapled ${name}, refreshed ${feed} and blockmap`);
   }
 }
 
-main().catch((err) => {
-  console.error(err.message || err);
-  process.exit(1);
-});
+module.exports = { target, patchUpdateInfo };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err.message || err);
+    process.exit(1);
+  });
+}

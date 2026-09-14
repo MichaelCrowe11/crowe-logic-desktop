@@ -1637,6 +1637,88 @@ const tests = [
     expect: { size: 2, has: false, rail: 2 },
   },
   {
+    // Two places the farm showed through on a Chat and Projects build: the Home
+    // card's "growing" row and the grower's line in Deployments. Both read the
+    // same catalog, so both are asserted here, in both directions - a rule that
+    // simply hid the grower everywhere would pass the narrowed half alone.
+    name: "a build without Cultivation shows no grower on Home or in Deployments",
+    body: `__resetSpaces();
+      const rows = async () => {
+        await refreshHome();
+        const asks = [...$("home-routing").querySelectorAll(".k")].map((k) => k.textContent);
+        await renderLane("deployments");
+        const ids = [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent);
+        return { growing: asks.includes("growing"), grower: ids.includes("crowelm-grower"), models: ids.length };
+      };
+      const full = await rows();
+      window.crowe.installSpaces = ["chat", "projects"];
+      applySpaceProfile();
+      const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.space).join(",");
+      const narrowed = await rows();
+      __resetSpaces();
+      return { fullGrowing: full.growing, fullGrower: full.grower, rail,
+        growing: narrowed.growing, grower: narrowed.grower, dropped: full.models - narrowed.models };`,
+    expect: { fullGrowing: true, fullGrower: true, rail: "chat,projects", growing: false, grower: false, dropped: 1 },
+  },
+  {
+    // The live catalog carries no role tags: crowelm-grower is only known as
+    // the model the router resolves for cultivation, through the bridge table.
+    // A rule keyed on the tag alone would pass the shim above and leak in
+    // production, so this hands the lane a catalog shaped like the real one.
+    name: "the grower is hidden by what the router resolves, not only by a role tag",
+    body: `__resetSpaces();
+      const real = window.crowe.catalog.get;
+      const live = { models: [{ model: "crowelm", name: "CroweLM" }, { model: "crowelm-grower", name: "CroweLM Grower" }, { model: "GPT-5.6-Sol", name: "GPT 5.6 Sol" }],
+        at: Date.now(), defaultModel: "crowelm",
+        resolved: { cultivation: { model: "crowelm-grower", source: "bridge" }, coding: { model: "crowelm", source: "default" } } };
+      window.crowe.catalog.get = async () => live;
+      const ids = async () => { await renderLane("deployments"); return [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent); };
+      try {
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = (await ids()).join(",");
+        // A cultivation role that fell through to the default model names the
+        // model everything else uses. Hiding that would take the one model
+        // every install has out of the lane.
+        live.resolved.cultivation = { model: "crowelm", source: "default" };
+        const defaultKept = (await ids()).includes("crowelm");
+        return { narrowed, defaultKept };
+      } finally { window.crowe.catalog.get = real; __resetSpaces(); }`,
+    expect: { narrowed: "crowelm,GPT-5.6-Sol", defaultKept: true },
+  },
+  {
+    // The Settings plugin list filters on a plugin's declared spaces. Handed a
+    // fixture with one plugin per shape - cultivation only, several spaces
+    // including cultivation, projects and chat, and no spaces at all - and read
+    // in both directions, since a rule that hid every cultivation mention would
+    // pass the narrowed half and take Crowe Skills out of every install. The
+    // Crowe Sense section beside it follows the same profile, and the picker
+    // path is exercised too: switching Cultivation back on brings both back.
+    name: "a build without Cultivation lists no cultivation-only plugin and hides Crowe Sense",
+    body: `__resetSpaces();
+      const real = window.crowe.plugins.list;
+      const row = (id, name, spaces) => ({ id, name, description: "", spaces, available: true, enabled: false, envPrompts: [] });
+      window.crowe.plugins.list = async () => [
+        row("crowe-skills", "Crowe Skills", ["chat", "projects", "cultivation"]),
+        row("crowe-sense", "Crowe Sense", ["cultivation"]),
+        row("github", "GitHub", ["projects", "chat"]),
+        row("everywhere", "Everywhere", []),
+      ];
+      const names = async () => { await renderPlugins(); return [...$("cfg-plugins").querySelectorAll(".plug-name")].map((n) => n.firstChild.textContent.trim()).join(","); };
+      const senseHidden = () => $("cfg-sense").classList.contains("hidden");
+      try {
+        const full = await names(), fullSense = senseHidden();
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = await names(), narrowedSense = senseHidden();
+        // The picker wins over the build: tick Cultivation and both come back.
+        setSpaceProfile(["chat", "projects", "cultivation"]);
+        const restored = await names(), restoredSense = senseHidden();
+        return { full, fullSense, narrowed, narrowedSense, restored, restoredSense };
+      } finally { window.crowe.plugins.list = real; __resetSpaces(); }`,
+    expect: { full: "Crowe Skills,Crowe Sense,GitHub,Everywhere", fullSense: false,
+      narrowed: "Crowe Skills,GitHub,Everywhere", narrowedSense: true,
+      restored: "Crowe Skills,Crowe Sense,GitHub,Everywhere", restoredSense: false },
+  },
+  {
     name: "the picker cannot turn chat off",
     body: `__resetSpaces();
       renderSpacePicker();
@@ -1666,6 +1748,182 @@ const tests = [
       $("settings").classList.add("hidden");
       return { covered: covered.join(",") };`,
     expect: { covered: "" },
+  },
+
+  // Repositories. The drawer and the three lanes read the shim's three
+  // remembered folders and four GitHub repositories; the empty states and the
+  // two actions that change the machine (open, clone) are exercised against
+  // recorders, so what is asserted is which bridge call was made and where the
+  // shell ended up, not that a folder dialog opened.
+  {
+    name: "the Projects rail carries the code lanes and the repositories drawer follows the space",
+    body: `__resetSpaces();
+      const lanes = [...document.querySelectorAll("#space-nav .sn-item")].map((b) => b.dataset.lane);
+      setSpace("projects"); const inProjects = !$("repos-drawer").classList.contains("hidden");
+      setSpace("chat"); const inChat = $("repos-drawer").classList.contains("hidden");
+      __resetSpaces();
+      return { lanes: lanes.filter((l) => ["repos", "pulls", "issues"].includes(l)).join(","), inProjects, inChat };`,
+    expect: { lanes: "repos,pulls,issues", inProjects: true, inChat: true },
+  },
+  {
+    name: "the repositories lane lists checkouts with branch and changes, and GitHub rows with PR counts and the failed-check marker",
+    body: `__resetSpaces(); projLane = "repos"; setSpace("projects"); await __settle();
+      const sections = $("lane-body").querySelectorAll(".repo-section");
+      const local = [...sections[0].querySelectorAll(".lane-repo")];
+      const gh = [...sections[1].querySelectorAll(".lane-repo")];
+      const red = gh.find((r) => r.querySelector(".repo-flag.failed"));
+      const out = {
+        locals: local.length, current: sections[0].querySelector(".lane-repo.current .repo-name span").textContent,
+        meta: local[0].querySelectorAll(".repo-meta")[1].textContent,
+        plain: local[2].querySelectorAll(".repo-meta")[1].textContent,
+        github: gh.length, failed: sections[1].querySelectorAll(".repo-flag.failed").length,
+        failedOn: red ? red.querySelector(".repo-name span").textContent : "",
+        prs: gh[0].querySelector(".repo-meta").textContent,
+        clones: gh.filter((r) => [...r.querySelectorAll("button")].some((b) => b.textContent === "Clone")).length,
+        drawerRows: $("repo-list").querySelectorAll(".repo-side").length,
+        drawerFailed: $("repo-list").querySelectorAll(".repo-flag.failed").length,
+      };
+      __resetSpaces(); return out;`,
+    expect: { locals: 3, current: "crowe-logic-desktop", meta: "main · 3 changes · opened 12m ago", plain: "not a git repository · opened 4d ago",
+      github: 4, failed: 1, failedOn: "MichaelCrowe11/crowe-logic-foundry", prs: "2 open PRs · pushed 3h ago · checked out", clones: 2,
+      drawerRows: 7, drawerFailed: 1 },
+  },
+  {
+    // The two empty states, each with its way in. The token button has to land
+    // on the GitHub plugin's own prompt in Settings, not on a second field.
+    name: "no folders and no token each show a short empty state, and Add token opens the plugin's prompt",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const orig = { recent: R.recent, githubStatus: R.githubStatus, githubRepos: R.githubRepos };
+      R.recent = async () => []; R.githubStatus = async () => ({ configured: false }); R.githubRepos = async () => ({ configured: false, repos: [] });
+      const plugList = window.crowe.plugins.list;
+      window.crowe.plugins.list = async () => [{ id: "github", name: "GitHub", description: "Repos.", spaces: ["projects"], available: true,
+        envPrompts: [{ key: "GITHUB_PERSONAL_ACCESS_TOKEN", label: "GitHub personal access token" }], enabled: false, connected: false, toolCount: 0 }];
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const empties = [...$("lane-body").querySelectorAll(".repo-empty")].map((e) => e.querySelector("span").textContent + "|" + (e.querySelector("button") ? e.querySelector("button").textContent : ""));
+      const drawerEmpties = $("repo-list").querySelectorAll(".repo-empty").length;
+      [...$("lane-body").querySelectorAll(".repo-empty button")].find((b) => b.textContent === "Add token").click();
+      await __settle();
+      const settingsOpen = !$("settings").classList.contains("hidden");
+      // The prompt is the plugin row's own password input, revealed by its
+      // Enable; a hidden test window cannot prove focus, so what is held is
+      // that the input exists, is a password field, and nothing else opened.
+      const tokenInput = document.querySelector('#cfg-plugins .plug-row[data-plugin="github"] .plug-env input');
+      const prompt = Boolean(tokenInput) && tokenInput.type === "password" && document.querySelectorAll("#cfg-plugins .plug-env").length === 1;
+      $("cfg-cancel").click(); window.crowe.plugins.list = plugList; Object.assign(R, orig); __resetSpaces();
+      return { empties: empties.join(";"), drawerEmpties, settingsOpen, prompt, exclaims: /!/.test(empties.join("")) };`,
+    expect: { empties: "No folders opened yet. Open one and its branch and changes show here.|Open folder;Connect GitHub to list your repositories, pull requests and issues.|Add token",
+      drawerEmpties: 2, settingsOpen: true, prompt: true, exclaims: false },
+  },
+  {
+    name: "clicking a checkout opens it as the workspace and lands on Changes",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const origOpen = R.open; let opened = "";
+      R.open = async (p) => { opened = p; return { ok: true, cwd: p }; };
+      const origCfg = window.crowe.getConfig; window.crowe.getConfig = async () => ({ ...(await origCfg()), cwd: opened || "/x" });
+      projLane = "repos"; setSpace("projects"); await __settle();
+      $("lane-body").querySelectorAll(".repo-section")[0].querySelectorAll(".lane-repo")[1].click(); await __settle();
+      const out = { opened, space: document.body.dataset.space, changes: $("pane-git").classList.contains("active"), cwd: $("cwd").textContent };
+      R.open = origOpen; window.crowe.getConfig = origCfg; hideLegacy(); __resetSpaces(); return out;`,
+    expect: { opened: "/Users/crowelogic/Projects/crowe-logic-foundry", space: "chat", changes: true, cwd: "/Users/crowelogic/Projects/crowe-logic-foundry" },
+  },
+  {
+    // Start task is the ordinary path: the composer's autonomy setting, a new
+    // session with a name and a brief, and send(). Read is the default, and
+    // the item is quoted as the description of the work, not as instructions.
+    name: "Start task on a pull request defaults to Read, sets the autonomy, names the session and sends the item as the first prompt",
+    body: `__resetSpaces();
+      const calls = { config: [], runs: [], updates: [] };
+      const origSet = window.crowe.setConfig; window.crowe.setConfig = async (p) => { calls.config.push(p); return { autonomy: p.autonomy }; };
+      const origUpd = window.crowe.sessions.update; window.crowe.sessions.update = async (id, patch) => { calls.updates.push({ id, ...patch }); return { ok: true, id, name: patch.name, brief: patch.brief }; };
+      const origAuth = refreshAuth; refreshAuth = async () => true;
+      const origRun = window.crowe.agent.run; window.crowe.agent.run = async (messages) => { calls.runs.push(messages[messages.length - 1].content); return { done: true, text: "ok" }; };
+      projLane = "pulls"; setSpace("projects"); await __settle();
+      const rows = $("lane-body").querySelectorAll(".work-row");
+      const sub = $("lane-sub").textContent;
+      [...rows[0].querySelectorAll("button")].find((b) => b.textContent === "Start task").click();
+      const picker = rows[0].querySelector(".task-picker");
+      const def = picker.querySelector(".seg-btn.active").dataset.tier;
+      picker.querySelector(".tp-start").click(); await __settle(); await __settle();
+      const run = calls.runs[0] || "", upd = calls.updates[0] || {};
+      const out = { rows: rows.length, sub, def, tier: calls.config.map((c) => c.autonomy).join(","), named: upd.name || "",
+        briefOk: /pull request #74/.test(upd.brief || ""), space: document.body.dataset.space, first: run.split("\\n")[0],
+        ask: /Do not change anything/.test(run), quoted: /not instructions to you/.test(run), path: /checkout is at \\/Users\\/crowelogic\\/Projects\\/crowe-logic-desktop/.test(run) };
+      window.crowe.setConfig = origSet; window.crowe.sessions.update = origUpd; refreshAuth = origAuth; window.crowe.agent.run = origRun;
+      setAutonomyBadge("edit"); transcript.innerHTML = ""; messages.length = 0; resetWelcome(); setComposerStatus("Ready"); __resetSpaces(); return out;`,
+    expect: { rows: 2, sub: "MichaelCrowe11/crowe-logic-desktop on GitHub · 2 open", def: "readonly", tier: "readonly",
+      named: "MichaelCrowe11/crowe-logic-desktop #74", briefOk: true, space: "chat",
+      first: "Pull request #74 in MichaelCrowe11/crowe-logic-desktop: Repositories in the sidebar: local checkouts, GitHub repos, PR and issue lanes",
+      ask: true, quoted: true, path: true },
+  },
+  {
+    name: "the task prompt states each tier's ask and the brief names the item",
+    body: `const item = { kind: "issue", number: 5, title: "T", url: "https://github.com/o/n/issues/5", author: "a", labels: ["bug"], body: "Do X" };
+      const repo = { full: "o/n" };
+      return { read: taskPrompt(item, repo, "readonly", "/c").includes("Do not change anything"),
+        edit: taskPrompt(item, repo, "edit", "/c").includes("reviewed edits"),
+        exec: taskPrompt(item, repo, "execute", "/c").includes("run the tests"),
+        first: taskPrompt(item, repo, "edit", "/c").split("\\n")[0], labels: /Labels: bug/.test(taskPrompt(item, repo, "edit", "/c")),
+        brief: taskBrief(item, repo, "/c") };`,
+    expect: { read: true, edit: true, exec: true, first: "Issue #5 in o/n: T", labels: true,
+      brief: "Working in o/n, checked out at /c. This session is about issue #5: T" },
+  },
+  {
+    // The clone's approval card is the transcript's card, drawn in the lane
+    // and addressed to the "repos" agent, so the chat never shows it. The
+    // listener is mounted before the call and gone after it.
+    name: "cloning from GitHub draws the approval card in the lane, not the chat, and opens the checkout when it lands",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const origClone = R.clone; let cloned = "";
+      const priorOn = window.crowe.agent.onEvent; let listeners = [];
+      window.crowe.agent.onEvent = (fn) => { listeners.push(fn); return () => { listeners = listeners.filter((f) => f !== fn); }; };
+      R.clone = async (owner, name) => {
+        cloned = owner + "/" + name;
+        listeners.slice().forEach((f) => f({ agentId: "repos", type: "approval_request", id: 501, kind: "run_shell", risk: "review",
+          why: "clones a repository over the network", detail: "git clone https://github.com/" + cloned + ".git /r/" + cloned }));
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true, cwd: "/r/" + cloned, cloned: true };
+      };
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const gh = $("lane-body").querySelectorAll(".repo-section")[1];
+      [...gh.querySelectorAll("button")].find((b) => b.textContent === "Clone").click();
+      await new Promise((r) => setTimeout(r, 10));
+      const card = gh.querySelector(".repo-gate .gatecard");
+      const drawn = Boolean(card), title = card ? card.querySelector(".ec-title").textContent : "", detail = card ? card.querySelector(".ec-diff").textContent : "";
+      const transcriptCards = transcript.querySelectorAll(".gatecard").length;
+      await __settle();
+      const out = { cloned, drawn, title, detail, transcriptCards, status: gh.querySelector(".repo-status").textContent,
+        space: document.body.dataset.space, changes: $("pane-git").classList.contains("active"), listenersLeft: listeners.length };
+      R.clone = origClone; window.crowe.agent.onEvent = priorOn; hideLegacy(); __resetSpaces(); return out;`,
+    expect: { cloned: "MichaelCrowe11/crowe-agents", drawn: true, title: "Reaches past the workspace",
+      detail: "git clone https://github.com/MichaelCrowe11/crowe-agents.git /r/MichaelCrowe11/crowe-agents", transcriptCards: 0,
+      status: "Cloned MichaelCrowe11/crowe-agents. Opened it.", space: "chat", changes: true, listenersLeft: 0 },
+  },
+  {
+    name: "Assign to room opens the room composer on the checkout, named after it",
+    body: `__resetSpaces(); await __reset();
+      const R = window.crowe.repos; const origOpen = R.open; let opened = "";
+      R.open = async (p) => { opened = p; return { ok: true, cwd: p }; };
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const row = $("lane-body").querySelectorAll(".repo-section")[0].querySelectorAll(".lane-repo")[1];
+      [...row.querySelectorAll("button")].find((b) => b.textContent === "Assign to room").click(); await __settle();
+      const panel = panelDeck.querySelector('.workspace-panel[data-id^="room-"]');
+      const base = panel ? panel.querySelector(".rc-base") : null;
+      const out = { opened, space: document.body.dataset.space, room: Boolean(panel), base: base ? base.textContent : "",
+        name: panel ? panel.querySelector(".rc-name").value : "" };
+      R.open = origOpen; await __reset(); __resetSpaces(); return out;`,
+    expect: { opened: "/Users/crowelogic/Projects/crowe-logic-foundry", space: "chat", room: true,
+      base: "Base checkout: MichaelCrowe11/crowe-logic-foundry /Users/crowelogic/Projects/crowe-logic-foundry. The room works from this workspace.",
+      name: "MichaelCrowe11/crowe-logic-foundry" },
+  },
+  {
+    name: "a workspace without a GitHub remote says so in the issue lane and points at Repositories",
+    body: `__resetSpaces(); const R = window.crowe.repos; const orig = R.remote;
+      R.remote = async () => ({ cwd: "/x", repo: true, branch: "main", remote: null });
+      projLane = "issues"; setSpace("projects"); await __settle();
+      const e = $("lane-body").querySelector(".repo-empty");
+      const out = { text: e ? e.querySelector("span").textContent : "", action: e ? e.querySelector("button").textContent : "" };
+      R.remote = orig; __resetSpaces(); return out;`,
+    expect: { text: "This workspace has no GitHub remote. Open a checkout of a GitHub repository to see its pull requests and issues.", action: "Repositories" },
   },
 ];
 

@@ -563,6 +563,55 @@
       async diff() { return "@@ -1,4 +1,4 @@\n-  --gold: #b7791f;\n+  --gold: #c49a3c;\n   --blue: #0054b2;"; },
       async stage() { return { ok: true }; }, async unstage() { return { ok: true }; }, async commit() { return { ok: true, out: "ok" }; },
     },
+    /* Repositories, as crowe:repos:* return them: three remembered folders with
+       their git state, and a token that can see four GitHub repositories. One
+       default branch is red so the marker has something to draw. Tests swap
+       githubStatus and githubRepos for the empty states. */
+    repos: {
+      async recent() {
+        const remote = { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-desktop", full: "MichaelCrowe11/crowe-logic-desktop", github: true };
+        return [
+          { path: "/Users/crowelogic/Projects/crowe-logic-desktop", name: "crowe-logic-desktop", openedAt: Date.now() - 12 * 60e3, exists: true, current: true, repo: true, branch: "main", dirty: 3, remote },
+          { path: "/Users/crowelogic/Projects/crowe-logic-foundry", name: "crowe-logic-foundry", openedAt: Date.now() - 26 * 3600e3, exists: true, current: false, repo: true, branch: "feat/control-plane", dirty: 0,
+            remote: { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-foundry", full: "MichaelCrowe11/crowe-logic-foundry", github: true } },
+          { path: "/Users/crowelogic/Notes", name: "Notes", openedAt: Date.now() - 4 * 86400e3, exists: true, current: false, repo: false, branch: "", dirty: 0, remote: null },
+        ];
+      },
+      async open(p) { return { ok: true, cwd: p }; },
+      async pick() { return { canceled: true }; },
+      async forget() { return { ok: true }; },
+      async remote() {
+        return { cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", repo: true, branch: "main",
+          remote: { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-desktop", full: "MichaelCrowe11/crowe-logic-desktop", github: true } };
+      },
+      async githubStatus() { return { configured: true }; },
+      async githubRepos() {
+        const row = (owner, name, openPulls, checks, extra = {}) => ({ owner, name, full: `${owner}/${name}`, url: `https://github.com/${owner}/${name}`,
+          private: false, archived: false, pushedAt: Date.now() - 3 * 3600e3, openPulls, defaultBranch: "main", checks, localPath: "", ...extra });
+        return { configured: true, login: "MichaelCrowe11", total: 4, warning: "", repos: [
+          row("MichaelCrowe11", "crowe-logic-desktop", 2, "passed", { localPath: "/Users/crowelogic/Projects/crowe-logic-desktop" }),
+          row("MichaelCrowe11", "crowe-logic-foundry", 1, "failed", { private: true, localPath: "/Users/crowelogic/Projects/crowe-logic-foundry", pushedAt: Date.now() - 26 * 3600e3 }),
+          row("MichaelCrowe11", "crowe-agents", 0, "none", { pushedAt: Date.now() - 6 * 86400e3 }),
+          row("crowe-logic", "crowe-x402", 4, "pending", { pushedAt: Date.now() - 40 * 60e3 }),
+        ] };
+      },
+      async githubWork(owner, name) {
+        const full = `${owner}/${name}`;
+        return { configured: true, full, url: `https://github.com/${full}`, pullCount: 2, issueCount: 3, warning: "",
+          pulls: [
+            { kind: "pull", number: 74, title: "Repositories in the sidebar: local checkouts, GitHub repos, PR and issue lanes", url: `https://github.com/${full}/pull/74`, draft: true,
+              updatedAt: Date.now() - 20 * 60e3, author: "MichaelCrowe11", head: "feat/repositories-sidebar", base: "main", body: "Local checkouts and GitHub repositories listed in the Projects sidebar." },
+            { kind: "pull", number: 72, title: "Linux: read the fuses path from the unpacked AppImage", url: `https://github.com/${full}/pull/72`, draft: false,
+              updatedAt: Date.now() - 3 * 86400e3, author: "MichaelCrowe11", head: "fix/linux-fuses-path", base: "main", body: "" },
+          ],
+          issues: [
+            { kind: "issue", number: 61, title: "Terminal panel loses scrollback after a theme switch", url: `https://github.com/${full}/issues/61`, updatedAt: Date.now() - 2 * 3600e3, author: "MichaelCrowe11", labels: ["bug"], body: "Switching Dark to Light while a terminal is open resets its buffer." },
+            { kind: "issue", number: 58, title: "Rooms: land agent worktrees one at a time", url: `https://github.com/${full}/issues/58`, updatedAt: Date.now() - 5 * 86400e3, author: "MichaelCrowe11", labels: ["rooms", "gate-4"], body: "" },
+            { kind: "issue", number: 49, title: "Deployments lane: show the routed model per role", url: `https://github.com/${full}/issues/49`, updatedAt: Date.now() - 9 * 86400e3, author: "", labels: [], body: "" },
+          ] };
+      },
+      async clone(owner, name) { return { ok: true, cwd: `/Users/crowelogic/Crowe/repos/${owner}/${name}`, cloned: true }; },
+    },
     pty: {
       async start() { return { ok: false, error: "preview" }; },
       async close() { return { ok: true }; },
@@ -802,10 +851,13 @@
     },
 
     plugins: {
-      async list() { return { plugins: [
-        { id: "crowe-skills", name: "Crowe Skills", official: true, enabled: true, tools: 6 },
-        { id: "github", name: "GitHub", official: true, enabled: false, tools: 9 },
-      ] }; },
+      // The same shape pluginList() in main.js returns: a bare array, each row
+      // carrying the manifest's spaces, which renderPlugins() filters on.
+      async list() { return [
+        { id: "crowe-skills", name: "Crowe Skills", description: "The Crowe skills corpus.", spaces: ["chat", "projects", "cultivation"], available: true, envPrompts: [], enabled: true, connected: true, toolCount: 6 },
+        { id: "crowe-sense", name: "Crowe Sense", description: "Grow-room telemetry and farmlog for the Cultivation space.", spaces: ["cultivation"], available: false, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+        { id: "github", name: "GitHub", description: "Repositories, issues and pull requests.", spaces: ["projects", "chat"], available: true, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+      ]; },
       async enable() { return { ok: true }; },
       async disable() { return { ok: true }; },
     },

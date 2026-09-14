@@ -11,6 +11,7 @@ const crypto = require("crypto");
 const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
+const Repos = require("./repos");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
   hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
@@ -68,6 +69,12 @@ const DEFAULTS = {
   // existing install. See cloud/contract.js.
   controlPlane: "off",
   tenantId: "",
+  // Folders this app has opened as the workspace, newest first, capped in
+  // repos.js. Written only from this process: the renderer opens a folder
+  // through crowe:repos:open and main records it.
+  recentWorkspaces: [],
+  // Where a GitHub repository lands when cloned from the sidebar: <root>/<owner>/<name>.
+  reposRoot: Repos.defaultReposRoot(),
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
 const PLANE_MODES = new Set(["off", "local", "remote"]);
@@ -182,6 +189,10 @@ function loadConfig() {
     // Same closed-set rule again: an unrecognised plane mode means no plane,
     // never an unmetered remote one.
     if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
+    // Same closed-set discipline for the repository list: a hand-edited or
+    // future-version store is sanitized on every read, cap included.
+    cfg.recentWorkspaces = Repos.sanitizeRecent(cfg.recentWorkspaces);
+    if (typeof cfg.reposRoot !== "string" || !cfg.reposRoot.trim()) cfg.reposRoot = DEFAULTS.reposRoot;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
@@ -1235,12 +1246,13 @@ ipcMain.handle("crowe:fs:walk", () => {
    repo can be anyone's: a file called `x & evil.cmd & y` is a legal name, and
    through cmd.exe a single-quoted argument is not a quoted argument at all.
    execFile hands git an argv and nothing interprets it on the way. */
-function gitRun(args) {
+function gitRunIn(dir, args) {
   return new Promise((resolve) => {
-    execFile("git", args.map(String), { cwd: CWD, timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
+    execFile("git", args.map(String), { cwd: dir, timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
       (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
   });
 }
+function gitRun(args) { return gitRunIn(CWD, args); }
 function gitWritesBlocked() { const t = loadConfig().autonomy || "edit"; return t === "readonly" || t === "plan"; }
 ipcMain.handle("crowe:git:status", async () => {
   const probe = await gitRun(["rev-parse", "--is-inside-work-tree"]);
@@ -1278,12 +1290,226 @@ ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBl
 ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 
+// ─── Repositories ────────────────────────────────────────────────────────────
+/* The sidebar's repository list: folders this app has opened, and what GitHub
+   knows about the ones the token can see. The rules live in repos.js; this is
+   the side of them that touches git, the folder dialog, the token and the gate.
+
+   Two things are deliberately narrow. The renderer never names a URL to clone
+   from, only owner and name, and the address is built here from those two
+   validated segments, so the approval card and the fetch cannot disagree about
+   which repository is meant. And a clone goes through the same gateAction the
+   harness puts in front of run_shell, review class with the floor raised: it
+   asks under high-risk and strict, is journaled under every setting, and the
+   command itself is an argv to execFile, never a shell string. */
+function rememberWorkspace(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return;
+    saveConfig({ recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir) });
+  } catch { /* a folder that is not there is not remembered */ }
+}
+// One place changes the workspace from the sidebar. Existence is checked here
+// because a stored path is stale input: the folder may have moved since.
+function openWorkspace(rawPath) {
+  const dir = Repos.normalizePath(rawPath);
+  if (!dir) return { error: "No folder given" };
+  let stat;
+  try { stat = fs.statSync(dir); } catch { return { error: "That folder is not there any more" }; }
+  if (!stat.isDirectory()) return { error: "That path is not a folder" };
+  CWD = dir;
+  saveConfig({ cwd: dir, recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir) });
+  return { ok: true, cwd: dir };
+}
+function isGitCheckout(dir) { return fs.existsSync(path.join(dir, ".git")); }
+async function repoSummary(dir) {
+  const probe = await gitRunIn(dir, ["rev-parse", "--is-inside-work-tree"]);
+  if (!probe.ok) return { repo: false, branch: "", dirty: 0, remote: null };
+  const [branch, status, origin] = await Promise.all([
+    gitRunIn(dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    gitRunIn(dir, ["status", "--porcelain=v1"]),
+    gitRunIn(dir, ["remote", "get-url", "origin"]),
+  ]);
+  return {
+    repo: true,
+    branch: branch.out.trim() || "(detached)",
+    dirty: status.out.split("\n").filter(Boolean).length,
+    remote: origin.ok ? Repos.parseRemote(origin.out.trim()) : null,
+  };
+}
+let lastRecentRows = [];
+async function recentRows() {
+  const cur = Repos.normalizePath(CWD);
+  const rows = await Promise.all(loadConfig().recentWorkspaces.map(async (r) => {
+    let exists = false;
+    try { exists = fs.statSync(r.path).isDirectory(); } catch { exists = false; }
+    const s = exists ? await repoSummary(r.path) : { repo: false, branch: "", dirty: 0, remote: null };
+    return { path: r.path, name: path.basename(r.path) || r.path, openedAt: r.openedAt, exists, current: r.path === cur, ...s };
+  }));
+  lastRecentRows = rows;
+  return rows;
+}
+ipcMain.handle("crowe:repos:recent", () => recentRows());
+ipcMain.handle("crowe:repos:open", (_e, { path: p } = {}) => openWorkspace(p));
+ipcMain.handle("crowe:repos:pick", async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], title: "Open a folder as the workspace" });
+  if (r.canceled || !r.filePaths.length) return { canceled: true };
+  return openWorkspace(r.filePaths[0]);
+});
+ipcMain.handle("crowe:repos:forget", (_e, { path: p } = {}) => {
+  saveConfig({ recentWorkspaces: Repos.forgetWorkspace(loadConfig().recentWorkspaces, p) });
+  return { ok: true };
+});
+ipcMain.handle("crowe:repos:remote", async () => {
+  const s = await repoSummary(CWD);
+  return { cwd: CWD, repo: s.repo, branch: s.branch, remote: s.remote };
+});
+
+/* GitHub, read-only, with the plugin's own token.
+
+   The token is the one the GitHub plugin stores at enable time, read from the
+   encrypted key store and used here for queries only. It reaches GitHub and
+   nothing else: not the renderer, not the journal, not an error message. The
+   answer is cached for a minute per query and keyed to a digest of the token,
+   so a changed token is never served another token's private repositories. */
+const GITHUB_GRAPHQL = "https://api.github.com/graphql";
+const GITHUB_CACHE_MS = 60000;
+const githubCache = new Map(); // key -> { at, tag, value | pending }
+function githubToken() { return String(pluginEnv("github").GITHUB_PERSONAL_ACCESS_TOKEN || ""); }
+function githubTag(token) { return crypto.createHash("sha256").update(token).digest("hex").slice(0, 16); }
+async function githubGraphql(query, variables) {
+  const token = githubToken();
+  if (!token) return { error: "GitHub is not connected", unconfigured: true };
+  try {
+    const r = await fetch(GITHUB_GRAPHQL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json",
+        "User-Agent": `crowe-logic-desktop/${app.getVersion()}` },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.status === 401) return { error: "GitHub rejected the token" };
+    if (r.status === 403 || r.status === 429) return { error: "GitHub is rate limiting this token. Try again in a minute" };
+    if (!r.ok) return { error: `GitHub answered HTTP ${r.status}` };
+    const j = await r.json();
+    const first = Array.isArray(j.errors) && j.errors[0] && j.errors[0].message ? String(j.errors[0].message).slice(0, 200) : "";
+    // A 200 can carry both data and errors. That is a partial answer: keep what
+    // came back and say what did not, rather than drawing nothing.
+    if (!j.data) return { error: first || "GitHub returned no data" };
+    return { data: j.data, warning: first };
+  } catch (e) {
+    return { error: e && e.name === "TimeoutError" ? "GitHub took too long to answer" : "GitHub could not be reached" };
+  }
+}
+function githubCached(key, query, variables) {
+  const tag = githubTag(githubToken());
+  const hit = githubCache.get(key);
+  if (hit && hit.tag === tag) {
+    if (hit.pending) return hit.pending;
+    if (Date.now() - hit.at < GITHUB_CACHE_MS) return Promise.resolve(hit.value);
+  }
+  const pending = githubGraphql(query, variables).then((value) => {
+    githubCache.set(key, { at: Date.now(), tag, value });
+    return value;
+  });
+  githubCache.set(key, { at: 0, tag, pending });
+  return pending;
+}
+// A GitHub repository already on this machine: at the clone target, or in the
+// recent list under any path, matched on the remote rather than the folder name.
+function localCheckoutFor(row) {
+  const target = Repos.cloneTarget(loadConfig().reposRoot, row.owner, row.name);
+  if (target && isGitCheckout(target)) return target;
+  const known = lastRecentRows.find((x) => x.exists && x.remote && x.remote.github
+    && x.remote.owner.toLowerCase() === row.owner.toLowerCase() && x.remote.name.toLowerCase() === row.name.toLowerCase());
+  return known ? known.path : "";
+}
+ipcMain.handle("crowe:repos:github-status", () => ({ configured: Boolean(githubToken()) }));
+ipcMain.handle("crowe:repos:github-repos", async () => {
+  if (!githubToken()) return { configured: false, repos: [] };
+  const r = await githubCached("repos", Repos.REPOS_QUERY, { n: 40 });
+  if (r.error) return { configured: true, repos: [], error: r.error };
+  const repos = Repos.repoRows(r.data).map((row) => ({ ...row, localPath: localCheckoutFor(row) }));
+  const viewer = r.data.viewer || {};
+  return { configured: true, repos, login: viewer.login || "", warning: r.warning || "",
+    total: (viewer.repositories && viewer.repositories.totalCount) || repos.length };
+});
+ipcMain.handle("crowe:repos:github-work", async (_e, { owner, name } = {}) => {
+  if (!Repos.safeSegment(owner) || !Repos.safeSegment(name)) return { error: "Not a repository name" };
+  if (!githubToken()) return { configured: false };
+  const r = await githubCached(`work:${owner}/${name}`, Repos.WORK_QUERY, { owner, name, n: 30 });
+  if (r.error) return { configured: true, error: r.error };
+  const work = Repos.workRows(r.data);
+  if (!work) return { configured: true, error: r.warning || "GitHub did not return that repository" };
+  return { configured: true, ...work, warning: r.warning || "" };
+});
+
+/* Cloning is a shell action and is treated as one. The renderer says which
+   repository; this builds the address and the destination, checks that the
+   destination really sits under the clone root once symlinks are followed, and
+   then asks through the harness gate before git runs. Nothing is created on
+   disk before the answer. */
+const cloning = new Set();
+const firstLine = (s) => String(s || "").trim().split("\n")[0].slice(0, 200);
+function deepestExisting(p) {
+  let cur = p;
+  for (;;) {
+    if (fs.existsSync(cur)) return cur;
+    const up = path.dirname(cur);
+    if (up === cur) return cur;
+    cur = up;
+  }
+}
+function underRoot(target, root) {
+  try {
+    const realRoot = fs.realpathSync(deepestExisting(root));
+    const realNear = fs.realpathSync(deepestExisting(path.dirname(target)));
+    return realNear === realRoot || realNear.startsWith(realRoot + path.sep);
+  } catch { return false; }
+}
+ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
+  const url = Repos.cloneUrl(owner, name);
+  const root = Repos.normalizePath(loadConfig().reposRoot || Repos.defaultReposRoot());
+  const target = Repos.cloneTarget(root, owner, name);
+  if (!url || !target) return { error: "Not a repository name" };
+  if (fs.existsSync(target)) {
+    if (isGitCheckout(target)) return { ...openWorkspace(target), existed: true };
+    return { error: "The clone folder already exists and is not a git checkout", path: target };
+  }
+  if (cloning.has(target)) return { error: "That clone is already running" };
+  if (!underRoot(target, root)) return { error: "The clone folder resolves outside the repositories root" };
+  const detail = `git clone ${url} ${target}`;
+  const hash = harness.inputHash("run_shell", { command: detail });
+  // Held from before the question is asked: a second click while the card is
+  // up is the same clone, not a second one.
+  cloning.add(target);
+  try {
+    const gate = await harness.gateAction(harnessCtx, { journal: journalWrite, agentId: "repos" }, {
+      risk: harness.RISK.REVIEW, why: "clones a repository over the network", kind: "run_shell",
+      title: "Clone a repository", detail, hash, floorReview: true,
+    });
+    if (!gate.ok) return { error: "The clone was not approved", denied: true };
+    try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch { return { error: "Could not create the clone folder" }; }
+    // Re-checked after the approval and the mkdir: the answer is bound to this
+    // destination, and the filesystem is not frozen while the card is up.
+    if (!underRoot(target, root) || fs.existsSync(target)) return { error: "The clone folder changed while waiting for approval" };
+    const r = await new Promise((resolve) => execFile("git", ["clone", "--", url, target], {
+      cwd: root, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+      env: { ...harness.safeShellEnv(), GIT_TERMINAL_PROMPT: "0" },
+    }, (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" })));
+    journalWrite({ event_type: "TOOL_CALLED", tool_id: "run_shell", input_hash: hash,
+      output_summary: r.ok ? `cloned ${owner}/${name}` : `clone failed: ${firstLine(r.err)}` });
+    if (!r.ok) return { error: firstLine(r.err) || "git clone failed", path: target };
+    return { ...openWorkspace(target), cloned: true };
+  } finally { cloning.delete(target); }
+});
+
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
+    reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
@@ -1291,7 +1517,9 @@ ipcMain.handle("crowe:get-config", () => {
 ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   const patch = sanitizeConfigPatch(rawPatch);
   const c = saveConfig(patch);
-  if (patch && patch.cwd) CWD = patch.cwd;
+  // Typing a folder into Settings is opening it, the same as picking one from
+  // the sidebar, so it lands in the same list.
+  if (patch && patch.cwd) { CWD = patch.cwd; rememberWorkspace(CWD); }
   if (patch && patch.mcpServers) await mcpConnectAll();
   if (patch && patch.sense) sensePoller().start();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
@@ -2025,6 +2253,9 @@ app.whenReady().then(async () => {
   mcpConnectAll();
   pluginsConnectAll();
   pruneArtifacts();
+  // The workspace this install boots into was opened at some point, so it
+  // belongs in the list; the untouched default (the home folder) does not.
+  if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
   // Rooms with routines speak first; the scheduler is what lets them.

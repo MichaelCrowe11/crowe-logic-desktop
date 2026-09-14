@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1789078127481" />
+  <link rel="stylesheet" href="styles.css?v=1789294520558" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -107,6 +107,10 @@
         <span class="sn-group">Operate</span>
         <button class="sn-item active" data-lane="home">Home</button>
         <button class="sn-item" data-lane="sessions">Sessions</button>
+        <span class="sn-group">Code</span>
+        <button class="sn-item" data-lane="repos">Repositories</button>
+        <button class="sn-item" data-lane="pulls">Pull requests</button>
+        <button class="sn-item" data-lane="issues">Issues</button>
         <span class="sn-group">Work</span>
         <button class="sn-item" data-lane="deepwork">Deep work</button>
         <span class="sn-group">Models</span>
@@ -149,6 +153,17 @@
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button></div>
         <div id="room-list" class="sess-list"></div>
+      </aside>
+
+      <!-- Repositories: the folders this app has opened and, once the GitHub
+           plugin has a token, the repositories it can see. Shown in Projects,
+           where a checkout is the unit of work; the lanes of the same name
+           carry the full lists and the pull request and issue rows. -->
+      <aside id="repos-drawer" class="drawer hidden">
+        <div class="drawer-head"><span>Repositories</span><button id="repo-open" class="side-icon" title="Open a folder as the workspace">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/><path d="M12 11.5v4.5M9.8 13.8h4.4"/></svg>
+        </button></div>
+        <div id="repo-list" class="sess-list"></div>
       </aside>
 
       <div class="side-foot">
@@ -375,8 +390,10 @@
         <label>Cost ceiling per turn, in dollars (0 for none) <input id="cfg-budget" type="number" min="0" step="0.25" /></label>
       </section>
       <!-- Crowe Sense. Below Guardrails for the same reason Guardrails is below
-           Spaces: the space checkboxes are hit-tested where they are drawn. -->
-      <section class="key-manager"><div class="settings-section-head"><div><b>Crowe Sense</b><span>Readings from a paired node land in Cultivation as room rows marked measured. Direct reads the node on your own network. Cloud reads it through the relay with your Crowe ID.</span></div><span id="sense-state" class="badge">Off</span></div>
+           Spaces: the space checkboxes are hit-tested where they are drawn.
+           Hidden by applySpaceProfile() when Cultivation is not in the profile,
+           which is safe here for the same reason: nothing above it moves. -->
+      <section id="cfg-sense" class="key-manager"><div class="settings-section-head"><div><b>Crowe Sense</b><span>Readings from a paired node land in Cultivation as room rows marked measured. Direct reads the node on your own network. Cloud reads it through the relay with your Crowe ID.</span></div><span id="sense-state" class="badge">Off</span></div>
         <label>Source
           <select id="cfg-sense-source">
             <option value="off">Off</option>
@@ -387,6 +404,10 @@
         <label>Node URL, for direct <input id="cfg-sense-url" type="text" placeholder="http://100.101.102.103:8078" /></label>
         <label>Node id, for cloud <input id="cfg-sense-node" type="text" placeholder="cs-a1b2c3" /></label>
       </section>
+      <!-- Below Crowe Sense for the reason Sense is below Guardrails: the space
+           checkboxes are hit-tested where they are drawn, and nothing above
+           them may move. -->
+      <label>Clone folder (GitHub repositories land here as owner/name) <input id="cfg-repos-root" type="text" placeholder="~/Crowe/repos" spellcheck="false" /></label>
       <label>Official plugins</label>
       <div id="cfg-plugins" class="plugs"></div>
       <label>MCP servers, advanced (JSON: {"name":{"command":"...","args":[...]}})
@@ -445,10 +466,10 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1789078127481"></script>
-  <script src="mark-geometry.js?v=1789078127481"></script>
-  <script src="mark.js?v=1789078127481"></script>
-  <script src="renderer.js?v=1789078127481"></script>
+  <script src="preview-shim.js?v=1789294520558"></script>
+  <script src="mark-geometry.js?v=1789294520558"></script>
+  <script src="mark.js?v=1789294520558"></script>
+  <script src="renderer.js?v=1789294520558"></script>
   <script src="plan.js"></script>
 </body>
 </html>

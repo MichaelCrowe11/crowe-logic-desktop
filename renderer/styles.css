@@ -1434,9 +1434,10 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
    without wrapping the field ran off the panel's right edge and took Go with
    it. The address takes a full second row when the first is spoken for. */
 .browser-tools { display:flex; flex-wrap:wrap; align-items:center; gap:5px; padding:5px; border-bottom:1px solid var(--line); }
-.browser-tools input { flex:1 1 180px; min-width:0; }
+.browser-tools input { flex:1 1 120px; min-width:0; }
 .browser-host { flex:1; min-height:0; }
-.browser-host webview { width:100%; height:100%; }
+.browser-host { display:flex; }
+.browser-host webview { display:flex; flex:1 1 auto; width:100%; height:100%; min-height:0; }
 .browser-history { position:absolute; z-index:8; margin:35px 8px 0; max-height:220px; max-width:420px; overflow:auto; background:var(--panel); border:1px solid var(--line); box-shadow:var(--z3); border-radius:7px; }
 .browser-history.hidden { display:none; }
 .browser-list-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px; border-bottom:1px solid var(--line); }
@@ -2366,3 +2367,51 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
    the operator thread's own card inside it: same gesture, same colours, same
    keys. */
 .rmsg.is-gate .editcard { margin: 4px 0 0 24px; max-width: 68ch; }
+/* ── Repositories: the Projects drawer and its three lanes ── */
+/* Rows read like session rows on purpose: a checkout in the sidebar is the
+   same kind of thing as a thread, something you return to. The lane rows add
+   the path and the actions; the drawer rows keep to name and state. */
+.repo-sub { display: block; padding: 12px 8px 4px; font-family: var(--mono); font-size: var(--fs-cap); font-weight: 500;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.repo-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md); cursor: pointer;
+  border: 1px solid transparent; transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.repo-row:hover { background: var(--cream); border-color: var(--line); }
+.repo-row.current { border-color: var(--gold); }
+.repo-main { flex: 1; min-width: 0; }
+.repo-name, .repo-side .sess-title { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--fs-sm); color: var(--ink); }
+.repo-name > span:first-child, .repo-side .sess-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-meta { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-flag { flex: 0 0 auto; font-style: normal; font-family: var(--mono); font-size: var(--fs-cap); line-height: 1.5; color: var(--muted);
+  border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 7px; }
+.repo-flag.failed { color: var(--err-fg); border-color: var(--err-line); background: var(--err-bg); }
+.repo-flag.current { color: var(--gold-text); border-color: var(--gold); }
+.repo-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.repo-actions .sess-del { opacity: 1; }
+.lane-repo { background: var(--panel); border-color: var(--line); box-shadow: var(--z1); margin-bottom: 6px; }
+.lane-repo:hover { background: var(--raised); border-color: var(--line-strong); }
+.repo-section { margin-bottom: 28px; }
+.repo-section-h { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.repo-section-h > span:first-child { font-family: var(--mono); font-size: var(--fs-cap); font-weight: 500; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--muted); }
+.repo-note { font-style: normal; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
+.repo-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 14px; margin: 4px 0;
+  color: var(--muted); font-size: var(--fs-sm); line-height: 1.5; background: var(--panel);
+  border: 1px dashed var(--line-strong); border-radius: var(--r-lg); }
+#repo-list .repo-empty { padding: 12px; }
+.repo-status { min-height: 1em; margin: 0 0 8px; }
+.repo-status.error { color: var(--err-fg); }
+.repo-gate .gatecard { margin: 0 0 10px; }
+.repo-all { align-self: center; margin: 8px auto 4px; display: block; }
+/* Pull request and issue rows: the picker unfolds under the row it belongs to. */
+.work-row { flex-wrap: wrap; cursor: default; }
+.work-row:hover { background: var(--panel); border-color: var(--line); }
+.task-picker { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0 2px;
+  border-top: 1px solid var(--line); margin-top: 8px; }
+.task-picker .tp-label { font-family: var(--mono); font-size: var(--fs-cap); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.task-picker .tp-hint { flex-basis: 100%; font-size: var(--fs-cap); color: var(--muted); }
+.task-picker .tp-start { margin-left: auto; }
+/* The room composer's base line, when a room is opened from a checkout. */
+.rc-base { margin: -12px 0 18px; font-size: var(--fs-sm); color: var(--muted); max-width: 62ch; }
+.rc-base b { color: var(--ink); font-weight: 600; }
+.rc-base code { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); background: var(--code-bg); padding: 1px 5px; border-radius: var(--r-xs); }

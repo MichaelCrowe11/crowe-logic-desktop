@@ -1184,6 +1184,20 @@
       commit: escalate("Git", {}), log: async () => [], branches: async () => [],
       checkout: escalate("Git", {}), pull: escalate("Git", {}), push: escalate("Git", {}),
     },
+    // The repository list is a list of local checkouts, which a browser tab has
+    // none of. Same refusal shapes as git above; the GitHub side needs the
+    // desktop's plugin token, which never reaches a browser.
+    repos: {
+      recent: async () => [],
+      open: escalate("Opening a folder", { ok: false }),
+      pick: escalate("Opening a folder", { ok: false }),
+      forget: async () => ({ ok: true }),
+      remote: escalate("Git", { cwd: "", repo: false, remote: null }),
+      githubStatus: async () => ({ configured: false }),
+      githubRepos: unsupported("GitHub repositories", { configured: false, repos: [] }),
+      githubWork: unsupported("GitHub pull requests and issues", { configured: false }),
+      clone: escalate("Cloning", { ok: false }),
+    },
 
     sessions,
 

@@ -1,0 +1,107 @@
+name: Android
+
+# Builds the Crowe Logic phone app for Android: a signed release bundle for
+# Play and a signed release APK for sideloading onto a test device. Runs on
+# GitHub's Ubuntu runners because the Pro has no JDK and no Android SDK.
+#
+# Signing: the four ANDROID_* repository secrets (upload keystore as base64,
+# its password, the key alias and password) are decoded into the runner's temp
+# dir and handed to mobile/android/app/build.gradle through the CROWE_ANDROID_*
+# variables it already reads. Without them the release build goes unsigned, on
+# purpose, so a fork or a PR from outside still proves the packaging.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["mobile/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/android.yml"]
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The secrets context is not allowed in a step's `if`, so the keystore is
+    # lifted into the job's env once and the step condition reads env instead.
+    env:
+      KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+
+      # Capacitor 8 needs Java 21. Temurin is what the electronuserland and
+      # Android images ship, so the same toolchain builds here and locally.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The www build runs from the repo root (build-www.js reads renderer/ and
+      # mobile/src/), then Capacitor copies it into the Android project.
+      - name: Install and build the web layer
+        run: |
+          npm ci --no-audit --no-fund
+          cd mobile && npm ci --no-audit --no-fund
+          npm run www
+          npx cap sync android
+
+      - name: Version under test
+        working-directory: mobile
+        run: |
+          node -e 'const v=require("./package.json").version; console.log("version", v)'
+          node scripts/sync-version.js --check
+
+      - name: Decode the upload keystore
+        if: env.KS_B64 != ''
+        run: |
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "CROWE_ANDROID_KEYSTORE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build the release bundle and APK
+        working-directory: mobile/android
+        env:
+          CROWE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          CROWE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          CROWE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon bundleRelease assembleRelease
+          ls -la app/build/outputs/bundle/release app/build/outputs/apk/release
+
+      # What Play will see: the versionCode and versionName inside the bundle,
+      # and whether the APK carries a signature. Printed rather than asserted so
+      # a signing gap reads as a warning here and a refusal at Play, not a
+      # mystery.
+      - name: Inspect the outputs
+        working-directory: mobile/android
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          "$ANDROID_HOME"/build-tools/36.0.0/aapt dump badging "$APK" | grep -E "^package:|^application-label:" || true
+          "$ANDROID_HOME"/build-tools/36.0.0/apksigner verify --print-certs "$APK" 2>&1 | head -5 || echo "APK is unsigned (no keystore secrets)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crowe-logic-android
+          path: |
+            mobile/android/app/build/outputs/bundle/release/*.aab
+            mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30

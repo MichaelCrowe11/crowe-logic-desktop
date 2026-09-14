@@ -176,6 +176,9 @@ const RISK_RULES = [
   // and whenever review of the change itself has been switched off.
   { risk: RISK.REVIEW, why: "deletes files recursively or by wildcard", re: /\brm\b[^;|&\n]*(\s-[^\s;|&]*[rR]\b|\*)/ },
   { risk: RISK.REVIEW, why: "pushes to a remote", re: /\bgit\s+push\b/ },
+  // Same class as the sidebar's own clone, so an agent asking for one is held
+  // to the rule the button is: a fetch from a remote reaches past this tree.
+  { risk: RISK.REVIEW, why: "clones a repository over the network", re: /\bgit\s+clone\b/ },
   { risk: RISK.REVIEW, why: "changes which dependency versions this project uses",
     re: /\b(npm|pnpm|yarn|bun)\s+(i|install|add|remove|uninstall|update|upgrade|dedupe)\b|\bpip3?\s+(install|uninstall)\b|\buv\s+(add|remove|pip\s+install)\b|\bcargo\s+(add|remove|update)\b|\bgo\s+get\b|\bbrew\s+(install|uninstall|upgrade)\b|\bgem\s+install\b/ },
   { risk: RISK.REVIEW, why: "rewrites local history or merges branches", re: /\bgit\s+(rebase|merge|cherry-pick|revert|stash\s+(drop|clear))\b/ },
