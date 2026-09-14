@@ -2227,3 +2227,142 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .plan-more-label { display: block; font-size: var(--fs-cap); color: var(--muted); margin-bottom: 6px; }
 .plan-more-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .plan-tier { white-space: nowrap; }
+
+/* ── Rooms as standing colleagues ──────────────────────────────────────────
+   The rail row is an inbox entry and the thread is a conversation with a
+   colleague who works out loud. Three things carry that: the avatar stack
+   (who is in the room, one mark turning while it works), the unread dot, and
+   a thread whose bubbles are short and grouped, with a question card the
+   operator answers in one tap. The side pane is where the room is set up as a
+   colleague: its brief, its routines, and a ledger of what its seats did. */
+.room-row { align-items: center; gap: 10px; padding: 8px 10px 8px 8px; }
+.room-avatars { display: flex; align-items: center; flex: 0 0 auto; min-width: 22px; }
+.room-avatar { display: block; width: 22px; height: 22px; border-radius: 50%; background: var(--raised);
+  border: 1px solid var(--line); box-shadow: 0 1px 0 rgba(255,255,255,0.35) inset; padding: 2px; }
+.room-avatar + .room-avatar, .room-avatar + .room-avatar-more { margin-left: -7px; }
+.room-avatar-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--cream); border: 1px solid var(--line); font-family: var(--mono);
+  font-size: 9px; color: var(--muted); }
+.room-row .sess-title { display: flex; align-items: center; gap: 6px; }
+.room-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-row.has-unread .room-row-title { font-weight: 600; }
+.room-row-preview { font-size: var(--fs-cap); color: var(--muted); margin-top: 2px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.room-row.has-ask .room-row-preview { color: var(--gold-text); }
+.room-row-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: transparent; }
+.room-row.has-unread .room-row-dot { background: var(--gold); }
+.room-row.is-working .room-avatars { position: relative; }
+.room-row.is-working .room-avatars::after { content: ""; position: absolute; right: -2px; bottom: -1px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--ok); border: 2px solid var(--panel); }
+.room-row { position: relative; }
+.room-row .sess-del { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: var(--panel); }
+
+/* Head: a details toggle beside the tier. */
+.room-details { margin-left: 6px; }
+.room-details[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-text); }
+
+/* Body: the thread on the left, the colleague's setup on the right. */
+.room-main { flex: 1; min-height: 0; display: flex; }
+.room-left { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.room-side { flex: 0 0 340px; max-width: 42%; border-left: 1px solid var(--line); overflow-y: auto; padding: 12px 14px 20px;
+  background: var(--panel); display: flex; flex-direction: column; gap: 18px; }
+.room-side[hidden] { display: none; }
+.room.composing > .room-main { display: none; }
+.rs-sec { display: flex; flex-direction: column; gap: 8px; }
+.rs-head b { display: block; font-family: var(--display); font-size: var(--fs-head); font-weight: 600; }
+.rs-head span { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.5; }
+.rs-title, .rs-brief, .rsa-text, .rc-brief, .rsa-agent, .rsa-every, .rsa-at, .rsa-weekday, .rsa-minutes {
+  font-family: var(--body); font-size: var(--fs-sm); color: var(--ink); background: var(--raised);
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
+.rs-brief, .rsa-text, .rc-brief { resize: vertical; line-height: 1.5; width: 100%; }
+.rc-brief { margin: 12px 0 10px; }
+.rs-title:focus, .rs-brief:focus, .rsa-text:focus, .rc-brief:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.rs-add { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.rs-add-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.rs-add-row .spacer { flex: 1; }
+.rsa-agent { flex: 1 1 120px; min-width: 0; }
+.rsa-minutes { width: 84px; }
+.rsa-note { font-size: var(--fs-cap); color: var(--err-fg); }
+.rs-routine { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; background: var(--raised); }
+.rs-routine.is-paused { opacity: .7; }
+.rs-r-head { display: flex; align-items: baseline; gap: 8px; }
+.rs-r-head b { font-size: var(--fs-sm); font-weight: 600; }
+.rs-r-sched { font-family: var(--mono); font-size: var(--fs-cap); color: var(--gold-text); }
+.rs-r-text { font-size: var(--fs-sm); line-height: 1.45; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.rs-r-meta { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
+.rs-r-actions { display: flex; gap: 6px; margin-top: 2px; }
+.rs-activity-sec { flex: 1; min-height: 160px; }
+.rs-activity { flex: 1; min-height: 120px; max-height: 42vh; overflow-y: auto; font-family: var(--mono); font-size: var(--fs-cap);
+  line-height: 1.5; border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px 8px; background: var(--raised); }
+.rs-act { display: flex; gap: 8px; color: var(--muted); }
+.rs-act-time { flex: 0 0 auto; opacity: .7; }
+.rs-act-text { min-width: 0; overflow-wrap: anywhere; }
+.rs-act.is-tool .rs-act-text { color: var(--ink); }
+.rs-act.is-blocked .rs-act-text { color: var(--gold-deep); }
+.rs-act.is-error .rs-act-text { color: var(--err-fg); }
+
+/* The thread: grouped bubbles, time dividers, a pill for what arrived below the fold. */
+.room-thread-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.room-thread-wrap .room-thread { flex: 1; }
+.room-newpill { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 2;
+  background: var(--ink); color: var(--cream); border: none; border-radius: 999px; padding: 5px 12px;
+  font-size: var(--fs-cap); font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.18); }
+.room-newpill.hidden { display: none; }
+.rmsg-divider { text-align: center; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); padding: 6px 0 2px; }
+.rmsg-time { margin-left: auto; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); opacity: 0; transition: opacity 120ms var(--ease); }
+.rmsg:hover .rmsg-time { opacity: 1; }
+.rmsg.is-continued { margin-top: -6px; }
+.rmsg.is-continued > .rmsg-head { display: none; }
+.rmsg.is-progress .rmsg-body { color: var(--muted); font-size: var(--fs-sm); }
+.rmsg.is-progress .rmsg-tag { color: var(--gold-text); }
+.rmsg-quote { margin-left: 24px; padding: 3px 8px; border-left: 2px solid var(--line-strong); color: var(--muted);
+  font-size: var(--fs-cap); line-height: 1.4; max-width: 60ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rmsg.from-operator .rmsg-quote { margin-left: 0; }
+.rmsg.from-operator .rmsg-quote::before { content: "answering: "; }
+.rmsg.is-relay .rmsg-who { color: var(--gold-text); }
+.rmsg-line { display: flex; justify-content: center; gap: 8px; align-items: baseline; font-size: var(--fs-cap); color: var(--muted); padding: 2px 0; }
+.rmsg-line-tag { font-family: var(--mono); letter-spacing: .04em; text-transform: uppercase; font-size: 10px; color: var(--gold-text); }
+.rmsg.is-note .rmsg-line-tag { color: var(--muted); }
+.rmsg-line-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70ch; }
+
+/* The question card. It sits under the seat's words, with the options as
+   chips the operator taps once; the chosen chip keeps its mark so the record
+   shows what was decided. A tap is a message, not a permission, so the card
+   does not borrow the approval card's danger colours. */
+.rmsg-ask { margin: 6px 0 2px 24px; max-width: 68ch; border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  background: var(--raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.rmsg-ask.hidden { display: none; }
+.ask-q { font-size: var(--fs-body); font-weight: 600; line-height: 1.45; }
+.ask-opts { display: flex; flex-direction: column; gap: 6px; }
+.ask-opt { display: grid; grid-template-columns: 22px 1fr 18px; align-items: center; gap: 8px; text-align: left;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--cream); color: var(--ink);
+  padding: 7px 10px; font-size: var(--fs-sm); cursor: pointer; transition: border-color 120ms var(--ease), background 120ms var(--ease); }
+.ask-opt b { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; text-align: center; padding: 1px 0; }
+.ask-opt:hover:not(:disabled) { border-color: var(--gold); }
+.ask-opt:disabled { cursor: default; opacity: .55; }
+.ask-opt.chosen { opacity: 1; border-color: var(--gold); background: var(--raised); }
+.ask-opt em { font-style: normal; color: var(--gold-text); text-align: right; }
+.ask-answered { font-size: var(--fs-cap); color: var(--muted); }
+.ask-answered i { font-style: normal; color: var(--ink); }
+.rmsg-ask[data-state="answered"] .ask-q { color: var(--muted); }
+
+/* Hover actions on a seat's message. */
+.rmsg-actions { display: flex; gap: 6px; padding-left: 24px; height: 0; overflow: hidden; opacity: 0; transition: opacity 120ms var(--ease); }
+.rmsg:hover .rmsg-actions, .rmsg:focus-within .rmsg-actions { height: auto; opacity: 1; margin-top: 4px; }
+.room-fwd { display: flex; gap: 6px; align-items: center; margin: 6px 0 0 24px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--raised); font-size: var(--fs-sm); flex-wrap: wrap; }
+.room-fwd select { font-family: var(--body); font-size: var(--fs-sm); padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--cream); color: var(--ink); }
+
+/* The composer: attach, type, dictate, send. */
+.room-composer { flex-wrap: wrap; }
+.room-attach { flex: 0 0 auto; font-size: 16px; line-height: 1; padding: 4px 10px; }
+.room-mic.active { border-color: var(--gold); color: var(--gold-text); }
+.room-mic.unavailable { opacity: .45; cursor: default; }
+.room-attached { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; }
+.room-attached.hidden { display: none; }
+.room-att { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; background: var(--raised); }
+.room-att button { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-cap); padding: 0 2px; }
+/* A seat's approval card sits in the thread under the seat that asked, with
+   the operator thread's own card inside it: same gesture, same colours, same
+   keys. */
+.rmsg.is-gate .editcard { margin: 4px 0 0 24px; max-width: 68ch; }
