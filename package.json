@@ -130,7 +130,13 @@
       "target": [
         "nsis"
       ],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "azureSignOptions": {
+        "publisherName": "Michael Crowe",
+        "endpoint": "https://eus.codesigning.azure.net/",
+        "codeSigningAccountName": "crowelogicsigning",
+        "certificateProfileName": "crowe-cortex-public"
+      }
     },
     "linux": {
       "target": [
