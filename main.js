@@ -817,13 +817,27 @@ function pluginList() {
     };
   });
 }
+/* Two placeholders a bundled manifest may use, so a server that ships inside
+   the app can be named without knowing where the app was installed. ${APP} is
+   the app's own directory, read from outside the asar (plugins/ is unpacked
+   for this), and ${NODE} as the command is this Electron binary run as plain
+   Node, so a bundled server needs no node on the machine. Both resolve here
+   and nowhere else; the manifest stays the only source of commands. */
+function resolvePluginPath(s) {
+  // main.js's own directory, not app.getAppPath(): the two agree for `electron .`
+  // and for a packaged app, but a script launched as `electron scripts/x.js` gets
+  // that script's folder as its app path. The manifest itself is read from here.
+  const appDir = __dirname.replace(/app\.asar(?=\/|$)/, "app.asar.unpacked");
+  return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
+}
 async function pluginConnect(p, env) {
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
   const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
+  const asNode = p.mcp.command === "${NODE}";
   const r = await mcpConnect(p.id, {
-    command: expandHome(p.mcp.command),
-    args: (p.mcp.args || []).map(expandHome),
-    env: { ...(p.mcp.env || {}), ...(env || {}) },
+    command: asNode ? process.execPath : resolvePluginPath(p.mcp.command),
+    args: (p.mcp.args || []).map(resolvePluginPath),
+    env: { ...(p.mcp.env || {}), ...(asNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}), ...(env || {}) },
   });
   if (PLUGIN_GEN[p.id] !== gen) {
     // Disabled (or superseded) while connecting: tear down our registration.
