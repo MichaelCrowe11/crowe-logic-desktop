@@ -246,6 +246,7 @@ const SENSITIVE_PATH_RE = /(^|\/)[^/]*(auth|login|signin|session|token|jwt|oauth
 const DELIVERY = {
   read_file: "read_only", search: "read_only", list_dir: "read_only", open_url: "read_only",
   submit_verdict: "read_only",
+  propose_options: "read_only",       // a question to the person; it changes nothing and ends the turn
   edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
   compose_workflow: "compensatable",   // a draft row in the Runbook; one click to delete
 
@@ -470,10 +471,42 @@ const VERDICT_TOOL = { type: "function", function: {
     } },
   }, required: ["status", "summary"] } } };
 
-function allTools(ctx, route) {
+/* A room seat's way of handing the decision back. The seat has done what it
+   can without the person and now needs one choice made; it puts one question
+   with a few short options and its turn ends there. The options are intent,
+   not permission: the chosen one arrives as the operator's next message, and
+   whatever the seat then does still passes the same tool gate as anything
+   else. Offered only when the caller can receive it (a room), so the plain
+   operator thread never sees a tool it has nowhere to draw. */
+const PROPOSE_TOOL = { type: "function", function: {
+  name: "propose_options",
+  description: "Put one decision to the operator and end your turn. Use this when you have done what you can and the next step is theirs to choose: one plain question, one to four short options they can pick with a tap. Say what you found before you call it; do not call it for questions you can answer yourself. The operator's choice comes back as their next message.",
+  parameters: { type: "object", properties: {
+    question: { type: "string", description: "The decision, as one plain question." },
+    options: { type: "array", items: { type: "string" }, description: "One to four short options, each a phrase the operator could say back to you." },
+  }, required: ["question", "options"] } } };
+// The shape a proposal must have to close a turn. Anything short of it is
+// answered as a blocked tool call and the turn continues, so a half-formed
+// question never becomes a card with nothing to tap.
+function normalizeProposal(a) {
+  const question = String((a && a.question) || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const seen = new Set();
+  const options = [];
+  for (const o of Array.isArray(a && a.options) ? a.options : []) {
+    const label = String(o == null ? "" : o).replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!label || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase()); options.push(label);
+    if (options.length >= 4) break;
+  }
+  if (!question || !options.length) return null;
+  return { question, options };
+}
+
+function allTools(ctx, route, deps) {
   const grow = route && route.expert === "cultivation" ? [GROW_TOOL] : [];
   const author = ctx.authorWorkflow ? [WORKFLOW_TOOL] : [];
-  return [...BUILTIN_TOOLS, ...grow, ...author, ...ctx.mcpTools()];
+  const ask = deps && typeof deps.onPropose === "function" ? [PROPOSE_TOOL] : [];
+  return [...BUILTIN_TOOLS, ...grow, ...author, ...ask, ...ctx.mcpTools()];
 }
 /* The verifier gets its own tool list, not a filtered view of the operator's: no
    MCP servers (unknown side effects), no writes, and a shell only where the tier
@@ -1424,6 +1457,19 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       if (opts.onVerdict && name === "submit_verdict") {
         opts.onVerdict(a); closed = true;
         out = { text: "verdict recorded.", status: "SUCCESS", hash: inputHash(name, a), delivery: "read_only" };
+      } else if (opts.onPropose && name === "propose_options") {
+        /* The seat is handing the decision back. A well-formed question ends
+           the block the way a verdict ends the verifier's: nothing after it in
+           this call runs, and the operator's answer is the next turn. A
+           malformed one is refused and the turn goes on, so the model can ask
+           properly or finish without asking. */
+        const ask = normalizeProposal(a);
+        if (ask) {
+          opts.onPropose(ask); closed = true;
+          out = { text: "proposal recorded; your turn ends here and the operator's choice arrives as their next message.", status: "SUCCESS", hash: inputHash(name, a), delivery: "read_only" };
+        } else {
+          out = { text: "blocked: propose_options needs one question and one to four short options.", status: "BLOCKED", hash: inputHash(name, a), delivery: "read_only" };
+        }
       } else {
         out = await callTool(ctx, name, a, route, state);
       }
@@ -1608,8 +1654,12 @@ async function runAgent(ctx, messages, deps) {
   const ref = { model: route.model, fellBack: false };
 
   // ── RETRIEVE / REASON / SYNTHESIZE ── the operator block.
+  // A room seat may end its turn on a question to the person. Only the
+  // operator block may; the verifier and a repair pass have no one to ask.
+  let proposal = null;
   const block = await runBlock(ctx, msgs, deps, route, state, {
-    tools: allTools(ctx, route), maxRounds: MAX_ROUNDS, ref, stage: "execute",
+    tools: allTools(ctx, route, deps), maxRounds: MAX_ROUNDS, ref, stage: "execute",
+    onPropose: typeof deps.onPropose === "function" ? (p) => { proposal = p; try { deps.onPropose(p); } catch { /* the caller's hook is a courtesy, not a dependency */ } } : undefined,
   });
   msgs = block.msgs;
   let text = block.text;
@@ -1665,7 +1715,7 @@ async function runAgent(ctx, messages, deps) {
       : stop === "budget" ? `reached this turn's ${budgetReason(state)}`
       : undefined,
     verdict: verdict ? verdict.status : undefined });
-  return { text, capped: stop === "rounds", stop, verdict, cost: state.meter.cost, mutations: state.mutations };
+  return { text, capped: stop === "rounds", stop, verdict, cost: state.meter.cost, mutations: state.mutations, proposal };
 }
 
 module.exports = {
@@ -1673,7 +1723,7 @@ module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  BUILTIN_TOOLS, VERDICT_TOOL, PROPOSE_TOOL, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,

@@ -1040,3 +1040,48 @@ test("reads on the same plugin are read-only: no approval, served in plan and re
   assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__read_latest", {}, "ok"), false);
   assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__request_operation", OP, "done"), true);
 });
+
+// ─── A room seat may end its turn on a question ──────────────────────────────
+test("a room seat can end its turn on a question, and the proposal comes back structured", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  let offered = null;
+  const deps = makeDeps(async (stage, n, _m, tools) => {
+    offered = (tools || []).map((t) => t.function.name);
+    if (n === 0) return reply([call("propose_options", { question: "Stop the machine Shorts job?", options: ["Stop the shorts job", "Leave it running"] })], "A live uploader is still dropping two machine Shorts a day.");
+    return reply([], "this call must never happen: the turn ended on the question");
+  });
+  const seen = [];
+  deps.onPropose = (p) => seen.push(p);
+  const out = await H.runAgent(ctx, [{ role: "user", content: "morning snapshot" }], deps);
+  assert.ok(offered.includes("propose_options"), "the tool was not offered to a caller that can receive it");
+  assert.deepStrictEqual(out.proposal, { question: "Stop the machine Shorts job?", options: ["Stop the shorts job", "Leave it running"] });
+  assert.deepStrictEqual(seen, [out.proposal]);
+  assert.strictEqual(out.text, "A live uploader is still dropping two machine Shorts a day.");
+  assert.match(deps.toolResults()[0].result, /proposal recorded/);
+  assert.strictEqual(out.stop, "done");
+});
+test("a malformed proposal is refused and the turn continues", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  const deps = makeDeps(async (stage, n) => {
+    if (n === 0) return reply([call("propose_options", { question: "", options: [] })], "");
+    return reply([], "Finished without asking.");
+  });
+  deps.onPropose = () => {};
+  const out = await H.runAgent(ctx, [{ role: "user", content: "go" }], deps);
+  assert.match(deps.toolResults()[0].result, /^blocked: propose_options/);
+  assert.strictEqual(out.proposal, null);
+  assert.match(out.text, /Finished without asking/);
+});
+test("the plain operator thread is never offered propose_options, and a hallucinated call is unknown", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  let offered = null;
+  const deps = makeDeps(async (stage, n, _m, tools) => { offered = (tools || []).map((t) => t.function.name); return reply([], "hello"); });
+  await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
+  assert.ok(!offered.includes("propose_options"), "a thread with nowhere to draw a card was offered the tool");
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  const out = await H.callTool(ctx, "propose_options", { question: "q", options: ["a"] }, {}, state);
+  assert.match(out.text, /unknown tool/);
+  assert.strictEqual(H.deliveryOf(ctx, "propose_options", {}), "read_only");
+  assert.strictEqual(H.normalizeProposal({ question: " Which? ", options: ["a", "a", "b", "", "c", "d", "e"] }).options.length, 4);
+});
+
