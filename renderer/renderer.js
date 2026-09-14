@@ -1627,7 +1627,8 @@ async function mountRoom(p, body, seed = {}) {
     const day = sameDay ? "Today" : d.toDateString() === y.toDateString() ? "Yesterday" : d.toLocaleDateString([], { month: "short", day: "numeric" });
     return `${day} ${fmtTime(ms)}`;
   };
-  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${(m.content || "").length}`;
+  // The content itself, not its length: a note rewritten to the same length must still repaint.
+  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${m.content || ""}`;
   const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 90;
   let pendingNew = 0;
 

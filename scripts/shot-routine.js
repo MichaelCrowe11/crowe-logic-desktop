@@ -78,7 +78,16 @@ app.whenReady().then(async () => {
     console.log("persisted messages:", onDisk.messages.length, "| unread:", loaded.room.unread);
     const rail = await js(`[...document.querySelectorAll('#room-list .room-row')].map(r => r.className + ' :: ' + r.textContent.replace(/\\s+/g,' ').trim())`);
     console.log("rail:", JSON.stringify(rail));
-    const ok = calls.length === 1 && kinds.includes(":routine:routine") && kinds.includes("operator:reply") && kinds.includes(":system:note");
+    const ran = loaded.room.routines.find((r) => r.at === "07:00"), stale = loaded.room.routines.find((r) => r.at === "06:00");
+    const diskKinds = onDisk.messages.map((m) => `${m.author}:${m.kind}`);
+    const routineMsg = onDisk.messages.find((m) => m.kind === "routine");
+    const ok = calls.length === 1
+      && kinds.includes(":routine:routine") && kinds.includes("operator:reply") && kinds.includes(":system:note")
+      && diskKinds.join() === kinds.join()                                   // what the window shows is what is on disk
+      && ran && ran.lastStatus === "ran" && ran.runs === 1                   // the due routine ran once
+      && routineMsg && routineMsg.routineId === ran.id                        // and it is the one that posted
+      && stale && /^skipped/.test(stale.lastStatus) && stale.runs === 0;      // the stale one did not
+    if (!ok) console.log("detail:", JSON.stringify({ diskKinds, ran: ran && ran.lastStatus, stale: stale && stale.lastStatus, routineId: routineMsg && routineMsg.routineId }));
     console.log(ok ? "SCHEDULER OK" : "SCHEDULER NOT AS EXPECTED");
     process.exitCode = ok ? 0 : 1;
   } catch (e) {

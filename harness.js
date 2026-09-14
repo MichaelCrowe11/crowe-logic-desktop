@@ -686,6 +686,15 @@ const MCP_WRITE_WORDS = new Set([
   "withdraw", "deposit", "hide", "unhide", "pin", "unpin", "flag", "ban", "block", "mute", "tag", "untag",
   "label", "convert", "transcribe", "upsert", "replace", "change", "resolve", "complete", "finish", "accept",
   "decline", "answer", "react", "vote", "rate", "review", "checkout", "checkin", "spend", "mint", "burn",
+  // Repair and control verbs, so scan_and_fix or inspect_and_repair ask like fix does.
+  "fix", "repair", "heal", "correct", "rewrite", "adjust", "tune", "configure", "migrate", "rollback", "revert",
+  "retry", "resend", "restart", "reboot", "reload", "rotate", "renew", "regenerate", "redeploy", "bump", "promote",
+  "demote", "escalate", "dispatch", "forward", "redirect", "launch", "spawn", "clone", "copy", "erase", "wipe",
+  "flush", "expire", "unlink", "attach", "detach", "mount", "unmount", "bind", "unbind", "connect", "disconnect",
+  "login", "logout", "authorize", "confirm", "acknowledge", "dismiss", "snooze", "remind", "alert", "seed",
+  "populate", "provision", "deprovision", "scale", "resize", "allocate", "release", "reserve", "claim", "queue",
+  "enqueue", "dequeue", "abort", "terminate", "suspend", "resume", "pause", "activate", "deactivate", "invoke",
+  "perform", "process", "handle", "operate", "control", "text", "sms", "tweet", "broadcast", "announce",
 ]);
 const mcpWords = (tool) => String(tool || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 function mcpReadLike(tool) {

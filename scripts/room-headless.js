@@ -66,16 +66,19 @@ const events = fs.createWriteStream(eventsPath, { flags: "a", mode: 0o600 });
 const runs = new Map();
 const stopState = { all: false, at: 0 };
 const deps = {
-  runAgent: async ({ agentId, model, systemBrief, messages, tier }) => {
+  runAgent: async ({ agentId, model, systemBrief, messages, tier, onProgress }) => {
     const run = { aborted: false, controller: null };
     runs.set(agentId, run);
     let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+    let proposal = null;
     const started = Date.now();
     try {
       const result = await harness.runAgent(ctx, messages.slice(), {
         gatewayChat: gateway.gatewayChat,
         send: (ev) => {
           if (ev && ev.type === "telemetry") usage = { usd: ev.cost || 0, promptTokens: ev.promptTokens || 0, completionTokens: ev.completionTokens || 0 };
+          // Each complete thing the seat said lands as progress, as on the desktop.
+          if (ev && ev.type === "assistant" && typeof onProgress === "function" && !run.aborted && !stopState.all) onProgress(ev.text);
           try { events.write(JSON.stringify({ at: new Date().toISOString(), roomId: room.id, seat: agentId, ...ev }) + "\n"); } catch {}
         },
         isAborted: () => run.aborted || stopState.all,
@@ -84,10 +87,12 @@ const deps = {
         persona: systemBrief,
         model: model || "",
         tier,
+        // A seat may end its turn on a question; the engine turns it into a card in the saved room.
+        onPropose: (p) => { proposal = p; },
       });
       if (run.aborted || stopState.all) return { stopped: true, usage };
-      process.stderr.write(`  ${agentId}: ${result.error ? "error " + result.error : "done"} in ${((Date.now() - started) / 1000).toFixed(1)}s, ${usage.promptTokens}+${usage.completionTokens} tok, $${usage.usd.toFixed(4)}\n`);
-      return { text: result.text || "", error: result.error, usage };
+      process.stderr.write(`  ${agentId}: ${result.error ? "error " + result.error : "done"} in ${((Date.now() - started) / 1000).toFixed(1)}s, ${usage.promptTokens}+${usage.completionTokens} tok, ${usage.usd.toFixed(4)}${proposal ? ", asked: " + proposal.question : ""}\n`);
+      return { text: result.text || "", error: result.error, usage, proposal: result.proposal || proposal };
     } finally { runs.delete(agentId); }
   },
 };
@@ -128,6 +133,7 @@ function save() {
   const p = save();
   const seats = room.agents.map((a) => `${a.agentId}: ${(room.cost[a.agentId] || {}).calls || 0} calls $${((room.cost[a.agentId] || {}).usd || 0).toFixed(4)}`).join("; ");
   process.stderr.write(`saved ${p}\n  spent $${room.spentUsd.toFixed(4)} of $${room.budgetUsd}; ${seats}\n  events ${eventsPath}\n`);
-  events.end();
+  // The event file is the evidence; exit only after it has flushed.
+  await new Promise((r) => events.end(r));
   process.exit(stopState.all ? 2 : 0);
 })().catch((e) => { process.stderr.write(`fatal: ${String(e && e.stack || e)}\n`); process.exit(1); });

@@ -410,6 +410,9 @@ async function answerAsk(room, messageId, optionId, deps) {
   if (m.ask.state !== "open") return { error: `that question was already ${m.ask.state}` };
   const opt = (m.ask.options || []).find((o) => o.id === optionId);
   if (!opt) return { error: "no such option" };
+  // A halted room cannot speak, so the card must not be marked answered: the
+  // tap would vanish and the card would say the decision was taken.
+  if (room.halted) return { error: `this room is halted (${room.halted}); raise its budget or clear the halt, then answer`, halted: room.halted, ran: [] };
   m.ask.state = "answered"; m.ask.chosen = opt.id; m.ask.answer = opt.label; m.ask.answeredAt = Date.now();
   return speak(room, opt.label, deps, { to: [m.author], quote: m.ask.question, quoteOf: m.id });
 }
@@ -647,10 +650,17 @@ function addRoutine(room, spec = {}, now = Date.now()) {
 function updateRoutine(room, routineId, patch = {}, now = Date.now()) {
   const r = (room.routines || []).find((x) => x.id === routineId);
   if (!r) return { error: "no such routine" };
-  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) r.enabled = Boolean(patch.enabled);
+  let reschedule = false;
+  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    const on = Boolean(patch.enabled);
+    // A routine paused past its due time must not fire the moment it resumes
+    // and then be skipped as "the app was not running": resuming schedules
+    // the next run from now.
+    if (on && (!r.enabled || !r.nextRunAt || r.nextRunAt <= now)) reschedule = true;
+    r.enabled = on;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "text")) { const t = String(patch.text || "").trim().slice(0, 4000); if (t) r.text = t; }
   if (Object.prototype.hasOwnProperty.call(patch, "agentId") && room.agents.some((a) => a.agentId === patch.agentId)) r.agentId = String(patch.agentId);
-  let reschedule = false;
   if (EVERY.includes(patch.every)) { r.every = patch.every; reschedule = true; }
   if (Object.prototype.hasOwnProperty.call(patch, "at") && parseAt(patch.at)) { r.at = String(patch.at).trim(); reschedule = true; }
   if (Object.prototype.hasOwnProperty.call(patch, "minutes")) { r.minutes = Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Number(patch.minutes) || 60)); reschedule = true; }

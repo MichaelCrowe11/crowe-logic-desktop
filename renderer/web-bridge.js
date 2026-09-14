@@ -836,6 +836,9 @@
     if (routineTimer || typeof setInterval !== "function") return;
     routineTimer = setInterval(() => { routineTick().catch(() => {}); }, 30 * 1000);
   }
+  // A reload must not silence routines that were saved before it: if any room
+  // on this browser carries one, the clock starts with the page.
+  try { if (readRoomRecords().some((d) => Array.isArray(d.room.routines) && d.room.routines.length)) startRoutineScheduler(); } catch (_) { /* no store yet */ }
 
   const rooms = ROOMS
     ? {
@@ -927,6 +930,7 @@
           const out = ROOMS.engine.updateRoutine(room, String(routineId || ""), patch || {});
           if (out.error) return out;
           roomChanged(room, "routine");
+          startRoutineScheduler();
           return Object.assign({}, out, { room: roomState(room) });
         },
         routineRemove: async (id, routineId) => {

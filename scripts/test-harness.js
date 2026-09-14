@@ -1112,7 +1112,8 @@ test("in a read-only room, an unmanaged connector tool that is not plainly a rea
 test("the connector name heuristic errs toward asking", () => {
   for (const read of ["get_channel_analytics", "youtube_list_videos", "getComments", "channel_stats", "search", "describe_device", "read_latest", "fetchHistory"])
     assert.ok(H.mcpReadLike(read), `${read} should read as a read`);
-  for (const ask of ["set_video_visibility", "post_comment", "delete", "upload", "get_or_create_customer", "list_and_delete", "checkout", "listen", "weather", "current", "getOrUpdate", "read_and_reply", "log_grow", "resolve_issue"])
+  for (const ask of ["set_video_visibility", "post_comment", "delete", "upload", "get_or_create_customer", "list_and_delete", "checkout", "listen", "weather", "current", "getOrUpdate", "read_and_reply", "log_grow", "resolve_issue",
+    "scan_and_fix", "inspect_and_repair", "get_and_restart", "checkAndRetry", "list_then_forward", "find_and_reply"])
     assert.ok(!H.mcpReadLike(ask), `${ask} should ask`);
   assert.ok(H.MCP_READ_WORDS.size < H.MCP_WRITE_WORDS.size, "the read list must stay the short one");
 });

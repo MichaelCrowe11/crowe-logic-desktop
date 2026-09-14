@@ -574,6 +574,22 @@ const roomOf = (ids, extra = {}) =>
     return "asked, tapped once, refused twice";
   });
 
+  await check("a tap on a halted room is refused and the card stays open", async () => {
+    const room = roomOf(["operator"], { budgetUsd: 0.02 });
+    const f = fakeRunner({ operator: () => ({ text: "Found it.", proposal: { question: "Stop it?", options: ["Stop it", "Leave it"] } }) });
+    await rooms.speak(room, "look", f);
+    const asked = room.messages.find((m) => m.ask);
+    room.halted = "budget";
+    const out = await rooms.answerAsk(room, asked.id, "a", f);
+    assert(out.error && out.halted === "budget", `expected a halted refusal, got ${JSON.stringify(out)}`);
+    assert(asked.ask.state === "open" && !asked.ask.chosen, "the card was marked answered while the room could not speak");
+    assert(f.calls.length === 1, "a halted room spent a call");
+    room.halted = ""; room.budgetUsd = 1;
+    const ok = await rooms.answerAsk(room, asked.id, "a", f);
+    assert(ok.ran && asked.ask.state === "answered", "the card could not be answered once the halt cleared");
+    return "refused while halted, answered after";
+  });
+
   await check("the fenced fallback is read only when it ends the message", () => {
     const good = rooms.extractAsk("Found it.\n\n```ask\nStop the job?\n- Stop it\n- Leave it\n```");
     assert(good.ask && good.ask.options.length === 2 && good.text === "Found it.", `trailing block not read: ${JSON.stringify(good)}`);
@@ -638,6 +654,19 @@ const roomOf = (ids, extra = {}) =>
     assert(!rooms.viewFor(room, "operator").length, "a system note reached a model");
     assert(rooms.unreadCount(room) === 0, "housekeeping counted as unread");
     return "skipped, noted, rescheduled";
+  });
+
+  await check("a paused routine resumes from now, not from the time it missed", () => {
+    const room = roomOf(["operator"]);
+    const now = AT(8, 0);
+    const { routine } = rooms.addRoutine(room, { agentId: "operator", text: "brief", every: "minutes", minutes: 30 }, now);
+    rooms.updateRoutine(room, routine.id, { enabled: false }, now + 5 * 60000);
+    const later = now + 6 * 60 * 60000;   // six hours paused
+    rooms.updateRoutine(room, routine.id, { enabled: true }, later);
+    assert(routine.enabled && routine.nextRunAt === later + 30 * 60000, `resumed routine next run ${routine.nextRunAt - later} ms out`);
+    assert(rooms.dueRoutines(room, later).length === 0, "a resumed routine was due the instant it resumed");
+    assert(!room.messages.some((m) => m.author === rooms.SYSTEM), "resuming wrote a skip note");
+    return "next run one period after resuming";
   });
 
   await check("daily routines land on the wall clock, tomorrow once today's time has passed", () => {
