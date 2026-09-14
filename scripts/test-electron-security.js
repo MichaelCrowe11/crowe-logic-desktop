@@ -167,7 +167,13 @@ check(/contextFileGrants/.test(main) && /File access was not granted by the pick
 check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
 check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
-check(/spawn\(spec\.command, spec\.args \|\| \[\], \{ env: \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\)/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+// The plugin server's environment is built by harness.pluginSpawnEnv, which
+// starts from safeShellEnv (the agent shell's filtered variables) and only adds
+// the plugin's own variables plus a login-shell PATH so npx resolves from a
+// Finder launch. Both halves are pinned: the spawn must use that env, and the
+// builder must start from the filtered environment.
+check(/const env = harness\.pluginSpawnEnv\(spec\.env \|\| \{\}\);[\s\S]{0,600}spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+check(/function pluginSpawnEnv\([^)]*\) \{\s*const env = \{ \.\.\.safeShellEnv\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "harness.js"), "utf8")), "pluginSpawnEnv must start from safeShellEnv");
 check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame" && !isSafeGuestUrl\(details\.url\)/.test(main), "guest main-frame requests must be checked at the session, since webview.src is a loadURL");
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
