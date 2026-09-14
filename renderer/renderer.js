@@ -1907,10 +1907,12 @@ async function mountRoom(p, body, seed = {}) {
       // tier is unchanged by it.
       note(`${who}: waiting on your approval: ${ev.title || ev.kind || "an action"}`, "is-blocked");
       const holder = document.createElement("div"); holder.className = "rmsg is-gate"; holder.dataset.gateFor = roomAgent;
-      holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">asks to act</span></div>`;
+      const meta = ev.meta && typeof ev.meta === "object" ? ev.meta : null;
+      holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">${meta ? "asks to act through " + esc(meta.connector || "a connector") : "asks to act"}</span></div>`;
       if (window.CroweMark) CroweMark.mount(holder.querySelector(".rmsg-mark"), { state: "reasoning", small: true });
       thread.appendChild(holder);
-      addApproval(holder, ev);
+      // The card's own label names all three: which seat, which connector, which tool.
+      addApproval(holder, meta ? { ...ev, kind: `${who} · ${meta.connector || "connector"} · ${meta.tool || ev.kind || "tool"}` } : ev);
       thread.scrollTop = thread.scrollHeight;
     }
     else if (ev.type === "approval_expired") { expireApproval(ev.id); note(`${who}: no answer in time, so the action was denied`, "is-blocked"); }

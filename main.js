@@ -947,6 +947,8 @@ function requestApproval(req) {
   mainWindow.webContents.send("crowe:agent:event", {
     type: "approval_request", id, agentId, kind: req.kind, title: req.title,
     detail: req.detail, why: req.why, risk: req.risk, hash: req.hash,
+    // Seat, connector and tool, when a room seat is the one asking.
+    meta: req.meta || undefined,
     expiresInMs: APPROVAL_TIMEOUT_MS,
   });
   journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });

@@ -291,7 +291,7 @@ async function gateAction(ctx, state, req) {
   let decision;
   try {
     decision = await ctx.requestApproval({ kind: req.kind, title: req.title, detail: req.detail,
-      why: req.why, risk: RISK_NAMES[req.risk], hash: req.hash, agentId: (state && state.agentId) || "main" });
+      why: req.why, risk: RISK_NAMES[req.risk], hash: req.hash, agentId: (state && state.agentId) || "main", meta: req.meta || undefined });
   } catch { decision = false; }
   const ok = decision === true || (decision && decision.approved === true);
   jrnl({ event_type: ok ? "APPROVAL_GRANTED" : "APPROVAL_DENIED", tool_id: req.kind, input_hash: req.hash, output_summary: req.why });
@@ -654,6 +654,43 @@ function capTier(tier, cap) {
   return TIER_RANK[cap] < (TIER_RANK[tier] ?? 1) ? cap : tier;
 }
 function effectiveTier(ctx, cap) { return capTier(ctx.loadConfig().autonomy || "edit", cap); }
+/* Connector tool names, classified for exactly one decision: whether a seat in
+   a room that may only read may call a hand-configured server's tool without
+   asking. THIS IS A HEURISTIC OVER NAMES. It knows nothing about what the tool
+   does; it knows what its author called it. It errs toward asking: a name is
+   treated as a read only when the first verb-like word in it is on the READ
+   list and no word anywhere in it is on the WRITE list. So get_analytics and
+   youtube_list_videos run, and set_visibility, get_or_create_customer
+   (misleading), checkout (no match) and weather (no verb) all ask. Words are
+   split on underscores, hyphens and capitals, so checkout is not check and
+   listen is not list. Wrong in the permissive direction costs an unasked
+   write, so the READ list is short and the WRITE list is long. */
+const MCP_READ_WORDS = new Set([
+  "get", "list", "read", "search", "fetch", "describe", "query", "find", "show", "stat", "stats", "status",
+  "analytics", "report", "lookup", "inspect", "count", "check", "view", "preview", "summarize", "summary",
+  "retrieve", "head", "browse", "scan", "history", "latest", "recent", "top", "compare", "diff", "explain",
+  "info", "details", "metrics", "insights",
+]);
+const MCP_WRITE_WORDS = new Set([
+  "create", "set", "update", "delete", "remove", "post", "send", "write", "upload", "publish", "add", "put",
+  "patch", "insert", "modify", "edit", "move", "rename", "archive", "restore", "start", "stop", "run",
+  "execute", "exec", "trigger", "cancel", "approve", "reject", "pay", "charge", "refund", "order", "book",
+  "schedule", "submit", "reply", "comment", "like", "follow", "share", "mark", "assign", "invite", "enable",
+  "disable", "toggle", "reset", "purge", "clear", "sync", "import", "export", "download", "save", "store",
+  "record", "log", "notify", "email", "message", "call", "open", "close", "merge", "push", "commit", "deploy",
+  "install", "uninstall", "kill", "destroy", "drop", "truncate", "grant", "revoke", "lock", "unlock", "make",
+  "generate", "apply", "register", "unregister", "subscribe", "unsubscribe", "buy", "sell", "transfer",
+  "withdraw", "deposit", "hide", "unhide", "pin", "unpin", "flag", "ban", "block", "mute", "tag", "untag",
+  "label", "convert", "transcribe", "upsert", "replace", "change", "resolve", "complete", "finish", "accept",
+  "decline", "answer", "react", "vote", "rate", "review", "checkout", "checkin", "spend", "mint", "burn",
+]);
+const mcpWords = (tool) => String(tool || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+function mcpReadLike(tool) {
+  const words = mcpWords(tool);
+  if (words.some((w) => MCP_WRITE_WORDS.has(w))) return false;
+  const verb = words.find((w) => MCP_READ_WORDS.has(w) || MCP_WRITE_WORDS.has(w));
+  return Boolean(verb) && MCP_READ_WORDS.has(verb);
+}
 function pluginToolRule(ctx, fullName) {
   if (!ctx.getPlugins) return null;
   const [, id, ...rest] = String(fullName).split("__");
@@ -705,6 +742,30 @@ async function execTool(ctx, name, args, route, state) {
             kind: "physical_write", title: "Operate a physical device",
             detail: `${rule.plugin} ${rule.tool} ${stableJson(args ?? {})}`,
             hash: inputHash("physical:" + name, args),
+          });
+          if (!gate.ok) return gate.text;
+        }
+      } else if (route && route.tierCap && (TIER_RANK[effectiveTier(ctx, route.tierCap)] ?? 1) < TIER_RANK.edit) {
+        /* A hand-configured server has no manifest, so its tools have no declared
+           tier and have always run ungated. In the plain thread that is the
+           operator's own choice. In a room whose seats may only read, it would
+           mean the one kind of tool the room actually needs - the channel, the
+           store, the calendar - is also the one door left open to a write the
+           room promised not to make. So a room seat's call to such a tool asks
+           first unless the tool's name says it only looks. The name test is a
+           heuristic and is said to be one; the alternative was asking about every
+           analytics read, which teaches the person to tap Allow without reading. */
+        const [, server, ...rest] = String(name).split("__");
+        const tool = rest.join("__");
+        if (!mcpReadLike(tool)) {
+          const gate = await gateAction(ctx, state, {
+            risk: RISK.REVIEW, floorReview: true,
+            why: `calls a connected server's tool (${server}: ${tool}) from a room that may only read, and the tool's name does not say it only looks`,
+            kind: "room_connector", title: "Let a room seat act through a connector",
+            detail: `${server} ${tool} ${stableJson(args ?? {})}`,
+            hash: inputHash("room-mcp:" + name, args),
+            // Who is asking, through what, for what: the card says all three.
+            meta: { seat: (state && state.agentId) || "", connector: server, tool },
           });
           if (!gate.ok) return gate.text;
         }
@@ -1719,7 +1780,7 @@ async function runAgent(ctx, messages, deps) {
 }
 
 module.exports = {
-  capTier, effectiveTier, pluginToolRule, pluginToolTier,
+  capTier, effectiveTier, pluginToolRule, pluginToolTier, mcpReadLike, MCP_READ_WORDS, MCP_WRITE_WORDS,
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,

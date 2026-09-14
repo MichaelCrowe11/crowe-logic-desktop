@@ -1085,3 +1085,55 @@ test("the plain operator thread is never offered propose_options, and a hallucin
   assert.strictEqual(H.normalizeProposal({ question: " Which? ", options: ["a", "a", "b", "", "c", "d", "e"] }).options.length, 4);
 });
 
+// ─── A room seat and an unmanaged connector ──────────────────────────────────
+test("in a read-only room, an unmanaged connector tool that is not plainly a read asks first", async () => {
+  const ctx = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: true });
+  ctx.mcpCall = async (name) => `ran ${name}`;
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  const state = H.newState(ctx, ctx.loadConfig(), { agentId: "room:r-1:operator" }, room);
+  // A read by name: no question asked.
+  assert.strictEqual(await H.execTool(ctx, "mcp__youtube__get_channel_analytics", { days: 28 }, room, state), "ran mcp__youtube__get_channel_analytics");
+  assert.strictEqual(ctx.approvalsSeen.length, 0);
+  // Not plainly a read: the person is asked, and the seat's id rides on the request so the room can draw the card.
+  assert.strictEqual(await H.execTool(ctx, "mcp__youtube__set_video_visibility", { id: "FD0hpJzKKec", visibility: "private" }, room, state), "ran mcp__youtube__set_video_visibility");
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
+  assert.strictEqual(ctx.approvalsSeen[0].kind, "room_connector");
+  assert.strictEqual(ctx.approvalsSeen[0].agentId, "room:r-1:operator");
+  assert.match(ctx.approvalsSeen[0].detail, /youtube set_video_visibility/);
+  assert.deepStrictEqual(ctx.approvalsSeen[0].meta, { seat: "room:r-1:operator", connector: "youtube", tool: "set_video_visibility" });
+  // A misleading name: starts like a read, mutates. It asks.
+  await H.execTool(ctx, "mcp__store__get_or_create_customer", { email: "x@y" }, room, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 2);
+  assert.strictEqual(ctx.approvalsSeen[1].meta.tool, "get_or_create_customer");
+  // No verb the table knows: it asks rather than guesses.
+  await H.execTool(ctx, "mcp__weather__current", { city: "Phoenix" }, room, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 3);
+});
+test("the connector name heuristic errs toward asking", () => {
+  for (const read of ["get_channel_analytics", "youtube_list_videos", "getComments", "channel_stats", "search", "describe_device", "read_latest", "fetchHistory"])
+    assert.ok(H.mcpReadLike(read), `${read} should read as a read`);
+  for (const ask of ["set_video_visibility", "post_comment", "delete", "upload", "get_or_create_customer", "list_and_delete", "checkout", "listen", "weather", "current", "getOrUpdate", "read_and_reply", "log_grow", "resolve_issue"])
+    assert.ok(!H.mcpReadLike(ask), `${ask} should ask`);
+  assert.ok(H.MCP_READ_WORDS.size < H.MCP_WRITE_WORDS.size, "the read list must stay the short one");
+});
+test("denied, the room seat's connector call is blocked; outside a room the same tool keeps its old ungated path", async () => {
+  const denied = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  denied.mcpCall = async (name) => `ran ${name}`;
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  const state = H.newState(denied, denied.loadConfig(), { agentId: "room:r-1:operator" }, room);
+  assert.match(String(await H.execTool(denied, "mcp__youtube__set_video_visibility", { id: "x" }, room, state)), /^blocked: the user DENIED/);
+  // The plain operator thread: no cap, no new question.
+  const plain = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  plain.mcpCall = async (name) => `ran ${name}`;
+  const pstate = H.newState(plain, plain.loadConfig(), {}, { expert: "operator", model: "m" });
+  assert.strictEqual(await H.execTool(plain, "mcp__youtube__set_video_visibility", { id: "x" }, {}, pstate), "ran mcp__youtube__set_video_visibility");
+  assert.strictEqual(plain.approvalsSeen.length, 0);
+  // A room that may write is not asked either: the cap is what raises the question.
+  const writing = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  writing.mcpCall = async (name) => `ran ${name}`;
+  const wroom = { expert: "operator", model: "m", tierCap: "edit" };
+  const wstate = H.newState(writing, writing.loadConfig(), {}, wroom);
+  assert.strictEqual(await H.execTool(writing, "mcp__youtube__set_video_visibility", { id: "x" }, wroom, wstate), "ran mcp__youtube__set_video_visibility");
+  assert.ok(H.mcpReadLike("list_videos") && H.mcpReadLike("getComments") && H.mcpReadLike("search"));
+  assert.ok(!H.mcpReadLike("set_visibility") && !H.mcpReadLike("post_comment") && !H.mcpReadLike("delete") && !H.mcpReadLike("upload"));
+});
