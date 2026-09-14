@@ -193,6 +193,11 @@
       if (i >= 0) listeners.splice(i, 1);
     };
   };
+  // Rooms are owned by the bridge and every panel subscribes, as on the
+  // desktop where main owns them and every window hears "changed".
+  const roomListeners = [];
+  const emitRoom = (ev) => roomListeners.forEach((fn) => { try { fn(ev); } catch (_) {} });
+  const onRoomChanged = (cb) => { roomListeners.push(cb); return () => { const i = roomListeners.indexOf(cb); if (i >= 0) roomListeners.splice(i, 1); }; };
 
   /* ------------------------------------------------------------- local store */
 
@@ -730,6 +735,8 @@
       budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
       critiqueRounds: room.critiqueRounds, maxCritiqueRounds: ROOMS.engine.MAX_CRITIQUE_ROUNDS,
       halted: room.halted,
+      brief: room.brief || "", routines: room.routines || [],
+      unread: ROOMS.engine.unreadCount(room), seq: room.seq || 0, readSeq: room.readSeq || 0,
     };
   }
 
@@ -745,7 +752,7 @@
      stream the transcript uses rather than guessing who was addressed. */
   function roomRunner(room) {
     return {
-      runAgent: async ({ agentId, model, systemBrief, messages }) => {
+      runAgent: async ({ agentId, model, systemBrief, messages, onProgress }) => {
         const seatId = roomSeatId(room.id, agentId);
         const controller = new AbortController();
         controllers.set(seatId, controller);
@@ -765,6 +772,10 @@
             send({ type: "telemetry", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, cost: 0 });
           }
           if (!out.text) { send({ type: "error", text: "The model returned no content." }); return { text: "", error: "empty answer", usage }; }
+          // The edge has no tool loop, so the whole answer is one note; the
+          // engine promotes it to the reply. The fenced ask fallback still works.
+          if (typeof onProgress === "function") onProgress(out.text);
+          send({ type: "assistant", text: out.text, streamed: true });
           send({ type: "final", text: out.text });
           return { text: out.text, usage };
         } catch (err) {
@@ -778,30 +789,67 @@
     };
   }
 
+  // One turn at a time per room, as main.js keeps it: a routine tick and a
+  // typed message must not interleave into one transcript.
+  const roomQueues = new Map();
+  function withRoom(id, fn) {
+    const prev = roomQueues.get(id) || Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    roomQueues.set(id, next);
+    next.catch(() => {}).finally(() => { if (roomQueues.get(id) === next) roomQueues.delete(id); });
+    return next;
+  }
+  function roomChanged(room, reason) { saveRoom(room); emitRoom({ id: room.id, reason, summary: ROOMS.engine.summary(room) }); }
   async function runRoomTurn(id, fn) {
     const room = loadRoom(id);
     if (!room) return { error: "no such room" };
-    room.tier = ROOMS.engine.roomTier(room, readJSON(KEY_CONFIG, {}).autonomy || "readonly");
-    const out = await fn(room, roomRunner(room));
-    saveRoom(room);
-    return Object.assign({}, out, { room: roomState(room) });
+    return withRoom(id, async () => {
+      room.tier = ROOMS.engine.roomTier(room, readJSON(KEY_CONFIG, {}).autonomy || "readonly");
+      const out = await fn(room, roomRunner(room));
+      roomChanged(room, "turn");
+      return Object.assign({}, out, { room: roomState(room) });
+    });
+  }
+  /* Routines on the web run only while the tab is open; there is no process to
+     wake at 07:00 with the tab closed, and this says so rather than pretending.
+     The rules are the engine's: claim before the call, skip and note when too
+     late, never replay. */
+  let routineTimer = null;
+  async function routineTick() {
+    const now = Date.now();
+    for (const rec of readRoomRecords()) {
+      const room = loadRoom(rec.id);
+      if (!room || !(room.routines || []).length) continue;
+      for (const r of ROOMS.engine.dueRoutines(room, now)) {
+        const claim = ROOMS.engine.claimRoutine(room, r.id, now);
+        saveRoom(room);
+        if (!claim.run) { if (claim.skip === "too late") roomChanged(room, "routine-skipped"); continue; }
+        withRoom(room.id, async () => {
+          room.tier = ROOMS.engine.roomTier(room, readJSON(KEY_CONFIG, {}).autonomy || "readonly");
+          await ROOMS.engine.runRoutine(room, r.id, roomRunner(room), Date.now());
+          roomChanged(room, "routine");
+        }).catch(() => {});
+      }
+    }
+  }
+  function startRoutineScheduler() {
+    if (routineTimer || typeof setInterval !== "function") return;
+    routineTimer = setInterval(() => { routineTick().catch(() => {}); }, 30 * 1000);
   }
 
   const rooms = ROOMS
     ? {
         agents: async () => ({ agents: ROOMS.registry.listAgents(), templates: ROOMS.registry.listTemplates() }),
         list: async () =>
-          readRoomRecords()
-            .map((d) => ({ id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
-              agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" }))
-            .sort((a, b) => b.updatedAt - a.updatedAt),
-        create: async ({ template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+          readRoomRecords().map((d) => { const room = loadRoom(d.id); return room ? ROOMS.engine.summary(room) : null; })
+            .filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt),
+        create: async ({ template = "", title = "", agentIds = [], budgetUsd, brief = "" } = {}) => {
           const room = template
-            ? ROOMS.engine.fromTemplate(template, { title, budgetUsd })
-            : ROOMS.engine.createRoom({ title, agentIds, budgetUsd });
+            ? ROOMS.engine.fromTemplate(template, { title, budgetUsd, brief })
+            : ROOMS.engine.createRoom({ title, agentIds, budgetUsd, brief });
           if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
           liveRooms.set(room.id, room);
-          saveRoom(room);
+          roomChanged(room, "create");
           return { room: roomState(room) };
         },
         load: async (id) => {
@@ -847,6 +895,57 @@
           const room = loadRoom(id);
           return room ? ROOMS.engine.projectRound(room, kind) : { error: "no such room" };
         },
+        update: async (id, patch) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const changed = ROOMS.engine.updateRoom(room, patch || {});
+          roomChanged(room, "update");
+          return { room: roomState(room), changed };
+        },
+        markRead: async (id) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          if (ROOMS.engine.unreadCount(room) === 0) return { unread: 0 };
+          ROOMS.engine.markRead(room);
+          roomChanged(room, "read");
+          return { unread: 0 };
+        },
+        answer: async (id, messageId, optionId) =>
+          runRoomTurn(id, (room, deps) => ROOMS.engine.answerAsk(room, String(messageId || ""), String(optionId || ""), deps)),
+        forward: async (fromId, messageId, toId, to) => {
+          const from = loadRoom(fromId); if (!from) return { error: "no such source room" };
+          return runRoomTurn(toId, (target, deps) => ROOMS.engine.forward(from, target, String(messageId || ""), deps, { to: Array.isArray(to) ? to : null }));
+        },
+        routineAdd: async (id, spec) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const out = ROOMS.engine.addRoutine(room, spec || {});
+          if (out.error) return out;
+          roomChanged(room, "routine");
+          startRoutineScheduler();
+          return Object.assign({}, out, { room: roomState(room), note: "Routines on the web run only while this tab is open." });
+        },
+        routineUpdate: async (id, routineId, patch) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const out = ROOMS.engine.updateRoutine(room, String(routineId || ""), patch || {});
+          if (out.error) return out;
+          roomChanged(room, "routine");
+          return Object.assign({}, out, { room: roomState(room) });
+        },
+        routineRemove: async (id, routineId) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const out = ROOMS.engine.removeRoutine(room, String(routineId || ""));
+          roomChanged(room, "routine");
+          return Object.assign({}, out, { room: roomState(room) });
+        },
+        routineRun: async (id, routineId) =>
+          runRoomTurn(id, async (room, deps) => {
+            const r = (room.routines || []).find((x) => x.id === String(routineId || ""));
+            if (!r) return { error: "no such routine" };
+            r.lastRunAt = Date.now(); r.runs = (r.runs || 0) + 1; r.lastStatus = "running";
+            return ROOMS.engine.runRoutine(room, r.id, deps, Date.now());
+          }),
+        onChanged: onRoomChanged,
+        // A notification click has nothing to open on the web; the subscription
+        // is honoured so the renderer can register it without a TypeError.
+        onOpen: () => () => {},
       }
     : {
         agents: async () => ({ agents: [], templates: [] }),
@@ -861,6 +960,16 @@
         critique: async () => ({ error: ROOMS_OFF }),
         revise: async () => ({ error: ROOMS_OFF }),
         project: async () => ({ calls: 0, agents: 0, note: ROOMS_OFF }),
+        update: async () => ({ error: ROOMS_OFF }),
+        markRead: async () => ({ unread: 0 }),
+        answer: async () => ({ error: ROOMS_OFF }),
+        forward: async () => ({ error: ROOMS_OFF }),
+        routineAdd: async () => ({ error: ROOMS_OFF }),
+        routineUpdate: async () => ({ error: ROOMS_OFF }),
+        routineRemove: async () => ({ removed: false, error: ROOMS_OFF }),
+        routineRun: async () => ({ error: ROOMS_OFF }),
+        onChanged: () => () => {},
+        onOpen: () => () => {},
       };
 
   /* ----------------------------------------------------------------- config */

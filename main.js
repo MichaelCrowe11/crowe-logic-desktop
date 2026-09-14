@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -1366,14 +1366,16 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
 });
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────
-/* Several named agents and the operator in one thread.
+/* Several named agents and the operator in one thread, kept as standing
+   colleagues: each room has an inbox, a brief, and routines that let it speak
+   first.
 
    The orchestration is in rooms/engine.js, which takes its model call as an
    injected dependency; this file supplies the real one. That seam is why
    scripts/test-rooms.js can prove addressing, concurrency, attribution, the
-   budget and the critique loop without a gateway.
+   budget, the critique loop, questions and routines without a gateway.
 
-   Two things are deliberately wired through the machinery that already exists
+   Four things are deliberately wired through the machinery that already exists
    rather than beside it:
 
      stop      every room seat registers its run in `agentRuns` under a
@@ -1383,7 +1385,15 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
                written when there was only ever one agent.
      storage   a room is a session with kind:"room". It inherits listing,
                deletion and backup, and a session written before rooms existed
-               still loads as an ordinary thread. */
+               still loads as an ordinary thread.
+     order     one turn at a time per room. The engine mutates a room's
+               transcript and seat states as it runs, and a routine firing in
+               the middle of the operator's turn would interleave two rounds
+               into one transcript. A per-room queue makes that impossible;
+               stop does not wait in it.
+     delivery  main owns the room and every window is a subscriber. A routine
+               that fires with no panel open still lands, persists and notifies;
+               a window that closed mid-turn loses nothing. */
 const roomsEngine = require("./rooms/engine");
 const roomsRegistry = require("./rooms/registry");
 
@@ -1394,8 +1404,14 @@ function roomPath(id) {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) throw new Error("invalid room id");
   return path.join(sessionsDir(), id + ".json");
 }
+// Written whole then renamed into place, so a crash mid-write leaves the last
+// good transcript rather than half of a new one.
 function saveRoom(room) {
-  try { fs.writeFileSync(roomPath(room.id), JSON.stringify(roomsEngine.toSession(room), null, 2)); } catch {}
+  try {
+    const p = roomPath(room.id);
+    fs.writeFileSync(p + ".tmp", JSON.stringify(roomsEngine.toSession(room), null, 2));
+    fs.renameSync(p + ".tmp", p);
+  } catch {}
 }
 function loadRoom(id) {
   if (liveRooms.has(id)) return liveRooms.get(id);
@@ -1405,19 +1421,54 @@ function loadRoom(id) {
     return room;
   } catch { return null; }
 }
+function listRoomIds() {
+  try { return fs.readdirSync(sessionsDir()).filter((f) => f.startsWith("r-") && f.endsWith(".json")).map((f) => f.slice(0, -5)); }
+  catch { return []; }
+}
+
+// Every window hears about a room, not only the one that asked: a room is
+// main's, and the rail in a second window is as entitled to the unread mark.
+function broadcast(channel, payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch { /* window gone */ }
+  }
+}
+function roomChanged(room, reason, { save = true } = {}) {
+  if (save) saveRoom(room);
+  broadcast("crowe:rooms:changed", { id: room.id, reason, summary: roomsEngine.summary(room) });
+}
+
+/* One turn at a time per room. Chained promises, so a routine that fires
+   while the operator's message is being answered waits its turn instead of
+   writing into the same transcript. A failed turn does not poison the queue. */
+const roomQueues = new Map();
+function withRoom(id, fn) {
+  const prev = roomQueues.get(id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  roomQueues.set(id, next);
+  next.catch(() => {}).finally(() => { if (roomQueues.get(id) === next) roomQueues.delete(id); });
+  return next;
+}
 
 /* The real runner. One room seat, one harness turn.
 
    The seat's persona and pinned model ride the two additive deps the harness
    grew for this; everything else about the turn is the ordinary operator path,
-   which is what keeps a one-agent room honestly identical to today's thread. */
-function roomRunner(sender, room) {
+   which is what keeps a one-agent room honestly identical to today's thread.
+
+   Two more things ride along. Each complete thing the seat says between tool
+   rounds is handed to the engine as progress the moment it arrives, so the
+   thread shows a seat working rather than a seat silent for a minute and then
+   an essay. And a question the seat puts through propose_options comes back
+   structured, for the engine to turn into a card. */
+function roomRunner(room) {
   return {
-    runAgent: async ({ agentId, model, systemBrief, messages, tier }) => {
+    runAgent: async ({ agentId, runId, model, systemBrief, messages, tier, onProgress }) => {
       const seatId = roomSeatId(room.id, agentId);
       const run = { aborted: false, controller: null };
       agentRuns.set(seatId, run);
       let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+      let proposal = null;
       try {
         const result = await harness.runAgent(harnessCtx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
@@ -1428,7 +1479,10 @@ function roomRunner(sender, room) {
             if (ev.type === "telemetry") {
               usage = { usd: ev.cost || 0, promptTokens: ev.promptTokens || 0, completionTokens: ev.completionTokens || 0 };
             }
-            try { sender.send("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId }); } catch {}
+            if (ev.type === "assistant" && typeof onProgress === "function" && !run.aborted) {
+              if (onProgress(ev.text)) roomChanged(room, "progress", { save: false });
+            }
+            broadcast("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId, runId });
           },
           isAborted: () => run.aborted,
           setController: (c) => { run.controller = c; },
@@ -1436,9 +1490,10 @@ function roomRunner(sender, room) {
           persona: systemBrief,
           model: model || "",
           tier,
+          onPropose: (p) => { proposal = p; },
         });
         if (run.aborted) return { stopped: true, usage };
-        return { text: result.text || "", error: result.error, usage };
+        return { text: result.text || "", error: result.error, usage, proposal: result.proposal || proposal };
       } finally {
         agentRuns.delete(seatId);
       }
@@ -1452,26 +1507,21 @@ ipcMain.handle("crowe:rooms:agents", () => ({
   templates: roomsRegistry.listTemplates(),
 }));
 
+// The rail's view: who is in each room, the last thing said, what is unread,
+// who is working. Live rooms answer from memory so a seat mid-turn reads as
+// working; the rest are read off disk.
 ipcMain.handle("crowe:rooms:list", () => {
-  try {
-    return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
-      try {
-        const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8"));
-        if (d.kind !== "room" || !d.room) return null;
-        return { id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
-          agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" };
-      } catch { return null; }
-    }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch { return []; }
+  return listRoomIds().map((id) => { const room = loadRoom(id); return room ? roomsEngine.summary(room) : null; })
+    .filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
 });
 
-ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd, brief = "" } = {}) => {
   const room = template
-    ? roomsEngine.fromTemplate(template, { title, budgetUsd })
-    : roomsEngine.createRoom({ title, agentIds, budgetUsd });
+    ? roomsEngine.fromTemplate(template, { title, budgetUsd, brief })
+    : roomsEngine.createRoom({ title, agentIds, budgetUsd, brief });
   if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
   liveRooms.set(room.id, room);
-  saveRoom(room);
+  roomChanged(room, "create");
   return { room: roomState(room) };
 });
 
@@ -1484,6 +1534,7 @@ ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
   liveRooms.delete(id);
   try { fs.unlinkSync(roomPath(id)); } catch {}
+  broadcast("crowe:rooms:changed", { id, reason: "delete" });
   return { ok: true };
 });
 
@@ -1494,7 +1545,7 @@ ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
   if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
   room.agents.push({ agentId, model: (roomsRegistry.getAgent(agentId) || {}).model || "", state: "idle" });
   if (!room.defaultAgent) room.defaultAgent = agentId;
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1502,7 +1553,7 @@ ipcMain.handle("crowe:rooms:leave", (_e, { id, agentId } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   room.agents = room.agents.filter((a) => a.agentId !== agentId);
   if (room.defaultAgent === agentId) room.defaultAgent = room.agents[0] ? room.agents[0].agentId : "";
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1510,18 +1561,36 @@ ipcMain.handle("crowe:rooms:set-agent-model", (_e, { id, agentId, model } = {}) 
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   const seat = room.agents.find((a) => a.agentId === agentId);
   if (!seat) return { error: "that agent is not in this room" };
-  seat.model = String(model || "");
-  saveRoom(room);
+  seat.model = String(model || "").slice(0, 80);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
+});
+
+// Title, standing brief, budget, default seat. The engine holds the caps.
+ipcMain.handle("crowe:rooms:update", (_e, { id, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const changed = roomsEngine.updateRoom(room, patch || {});
+  roomChanged(room, "update");
+  return { room: roomState(room), changed };
+});
+
+// The operator has seen everything up to now. Answered from memory; the
+// broadcast is what clears the dot in every rail.
+ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (roomsEngine.unreadCount(room) === 0) return { unread: 0 };
+  roomsEngine.markRead(room);
+  roomChanged(room, "read");
+  return { unread: 0 };
 });
 
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
-   back later still believing it may write. */
+   back and run at Execute after the operator moved the app down. */
 function roomState(room) {
   const cfg = loadConfig();
   return {
-    id: room.id, title: room.title, template: room.template,
+    id: room.id, title: room.title, template: room.template, brief: room.brief || "",
     agents: room.agents.map((a) => {
       const meta = roomsRegistry.getAgent(a.agentId) || {};
       return { agentId: a.agentId, name: meta.name || a.agentId, domain: meta.domain || "",
@@ -1533,35 +1602,141 @@ function roomState(room) {
     budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
     critiqueRounds: room.critiqueRounds, maxCritiqueRounds: roomsEngine.MAX_CRITIQUE_ROUNDS,
     halted: room.halted,
+    routines: room.routines || [],
+    unread: roomsEngine.unreadCount(room), seq: room.seq || 0, readSeq: room.readSeq || 0,
   };
 }
 
-async function runRoomTurn(evt, id, fn) {
+async function runRoomTurn(id, fn) {
   const room = loadRoom(id);
   if (!room) return { error: "no such room" };
-  room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-  const deps = roomRunner(evt.sender, room);
-  const out = await fn(room, deps);
-  saveRoom(room);
-  return { ...out, room: roomState(room) };
+  return withRoom(id, async () => {
+    room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
+    const out = await fn(room, roomRunner(room));
+    roomChanged(room, "turn");
+    return { ...out, room: roomState(room) };
+  });
 }
 
-ipcMain.handle("crowe:rooms:say", (evt, { id, text } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
+ipcMain.handle("crowe:rooms:say", (_e, { id, text } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
 
-ipcMain.handle("crowe:rooms:critique", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.critique(room, deps)));
+// A tap on an option. The engine checks the card is still open before it
+// speaks, and the queue means two taps from two windows arrive in order.
+ipcMain.handle("crowe:rooms:answer", (_e, { id, messageId, optionId } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.answerAsk(room, String(messageId || ""), String(optionId || ""), deps)));
 
-ipcMain.handle("crowe:rooms:revise", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.revise(room, deps)));
+ipcMain.handle("crowe:rooms:critique", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.critique(room, deps)));
 
-// What a round is about to cost, so the operator can decline it. Calls rather
-// than dollars: the price depends on a transcript nobody has generated yet, and
-// a projected figure with a decimal point in it would be a guess wearing a suit.
+ipcMain.handle("crowe:rooms:revise", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.revise(room, deps)));
+
+/* A message carried into another room by the operator. Both rooms are
+   touched: the source only to read, the target to append and to answer, so
+   only the target's queue is taken. */
+ipcMain.handle("crowe:rooms:forward", (_e, { fromId, messageId, toId, to } = {}) => {
+  const from = loadRoom(fromId); if (!from) return { error: "no such source room" };
+  return runRoomTurn(toId, (target, deps) => roomsEngine.forward(from, target, String(messageId || ""), deps, { to: Array.isArray(to) ? to : null }));
+});
+
+// Calls, not dollars: see engine.projectRound for why the honest unit is calls.
 ipcMain.handle("crowe:rooms:project", (_e, { id, kind = "critique" } = {}) => {
   const room = loadRoom(id);
   return room ? roomsEngine.projectRound(room, kind) : { error: "no such room" };
 });
+
+// ─── Routines: a room speaks first ───────────────────────────────────────────
+/* Recurring messages a room sends itself on a schedule, each addressed to one
+   seat. The rules (when a run is due, when a late run is skipped, that a claim
+   is written before the model is called) are in the engine and tested there;
+   this is the clock and the delivery.
+
+   Timers wake the scheduler; they are not the schedule. Every tick compares
+   the wall clock against the persisted due times, so a laptop that slept
+   through 07:00 runs the brief on waking if it is still within the grace
+   window, and says so and moves on if it is not. Nothing is replayed. */
+ipcMain.handle("crowe:rooms:routine-add", (_e, { id, spec } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.addRoutine(room, spec || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  startRoutineScheduler();
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-update", (_e, { id, routineId, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.updateRoutine(room, String(routineId || ""), patch || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-remove", (_e, { id, routineId } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.removeRoutine(room, String(routineId || ""));
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+// Run it now, in the room's queue, exactly as the clock would have.
+ipcMain.handle("crowe:rooms:routine-run", (_e, { id, routineId } = {}) =>
+  runRoomTurn(id, async (room, deps) => {
+    const r = (room.routines || []).find((x) => x.id === String(routineId || ""));
+    if (!r) return { error: "no such routine" };
+    r.lastRunAt = Date.now(); r.runs = (r.runs || 0) + 1; r.lastStatus = "running";
+    return roomsEngine.runRoutine(room, r.id, deps, Date.now());
+  }));
+
+const ROUTINE_TICK_MS = 30 * 1000;
+let routineTimer = null;
+let routineTicking = false;
+async function routineTick() {
+  if (routineTicking) return;
+  routineTicking = true;
+  try {
+    const now = Date.now();
+    for (const id of listRoomIds()) {
+      const room = loadRoom(id);
+      if (!room || !(room.routines || []).length) continue;
+      for (const r of roomsEngine.dueRoutines(room, now)) {
+        const claim = roomsEngine.claimRoutine(room, r.id, now);
+        // The claim is on disk before the model is called, so a crash mid-run
+        // cannot fire the same scheduled instant again on restart.
+        saveRoom(room);
+        if (!claim.run) { if (claim.skip === "too late") roomChanged(room, "routine-skipped"); continue; }
+        withRoom(room.id, async () => {
+          room.tier = roomsEngine.roomTier(room, loadConfig().autonomy || "edit");
+          const out = await roomsEngine.runRoutine(room, r.id, roomRunner(room), Date.now());
+          roomChanged(room, "routine");
+          notifyRoom(room, r, out);
+        }).catch(() => {});
+      }
+    }
+  } finally { routineTicking = false; }
+}
+/* A routine that posted is worth a knock on the door: the whole point of a
+   room speaking first is that the person was not looking at it. One
+   notification per run, carrying the room's name and the last thing said;
+   clicking it opens the room. */
+function notifyRoom(room, routine, out) {
+  try {
+    if (!Notification.isSupported()) return;
+    const body = out && out.skip ? String(routine.lastStatus || "skipped") : roomsEngine.preview(room);
+    const n = new Notification({ title: room.title, body: String(body || "").slice(0, 200) });
+    n.on("click", () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.show(); mainWindow.focus();
+      mainWindow.webContents.send("crowe:rooms:open", { id: room.id });
+    });
+    n.show();
+  } catch { /* a notification is a courtesy, never a dependency */ }
+}
+function startRoutineScheduler() {
+  if (routineTimer) return;
+  routineTimer = setInterval(() => { routineTick().catch(() => {}); }, ROUTINE_TICK_MS);
+  setTimeout(() => { routineTick().catch(() => {}); }, 5000);
+  // A laptop that slept through a due time checks the moment it is back.
+  try { powerMonitor.on("resume", () => { routineTick().catch(() => {}); }); } catch {}
+}
 
 // ─── Cultivation records ─────────────────────────────────────────────────────
 /* The farm's own notebook, on disk beside the sessions. No gateway and no
@@ -1850,6 +2025,8 @@ app.whenReady().then(async () => {
   pruneArtifacts();
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
+  // Rooms with routines speak first; the scheduler is what lets them.
+  startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.
   setInterval(() => {
