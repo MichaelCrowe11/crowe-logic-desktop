@@ -40,6 +40,10 @@ const MAX_PATH_CHARS = 2048;
 // from Finder inherits the login shell's PATH only partially, so these are
 // consulted after PATH rather than instead of it.
 const EXTRA_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
+// The app's own sign-in callback listener (main.js, signIn: `const PORTS`).
+// Forwarding it would publish the OAuth redirect to the internet for no
+// reason anyone has; scripts/test-share-preview.js holds the two in step.
+const OWN_LOOPBACK_PORTS = [8765, 9275];
 const TUNNEL_HOST = ".trycloudflare.com";
 /* Only a quick-tunnel host. cloudflared's first log line carries two other
    https://...cloudflare.com URLs (terms of use, the docs) and the line before
@@ -207,6 +211,44 @@ function createStaticServer(root, { port = 0, refuse, platform } = {}) {
   });
 }
 
+// ─── cloudflared's config file ───────────────────────────────────────────────
+/* cloudflared reads a YAML config file before it decides what kind of tunnel
+   to run, and with no --config it reads ~/.cloudflared/config.yml when one
+   exists. A `name:` in that file is dispatched before the --url quick-tunnel
+   branch (cmd/cloudflared/tunnel/cmd.go, TunnelCommand, read from master and
+   the 2026.6.1 tag), so an ambient config would turn the approved account-less
+   quick tunnel into a named tunnel created and routed on the user's own
+   Cloudflare account with their origin certificate, an effect no card covered
+   and one that killing the child does not undo. The child is therefore always
+   pointed at a config this module wrote: an empty mapping in a private temp
+   directory, checked before every spawn. Two facts about cloudflared make this
+   a pin and not a preference: an explicitly named file that is missing is a
+   hard exit, not a fall back to the default path, so a lost file fails the
+   share rather than widening it; and `{}` parses as a real empty config,
+   where a zero-byte file is logged as "Configuration file ... was empty" at
+   ERR and leaves the config source unset. Both were run against 2026.6.1. */
+const PINNED_CONFIG = [
+  "# Written by Crowe Logic desktop before each share_preview tunnel.",
+  "# Empty on purpose: cloudflared reads this file instead of ~/.cloudflared/config.yml,",
+  "# so a name: there cannot turn the quick tunnel into a named tunnel on the user's account.",
+  "{}",
+  "",
+].join("\n");
+let pinnedDir = null;
+function pinnedConfigPath() {
+  let st = null; try { st = pinnedDir && fs.statSync(pinnedDir); } catch {}
+  if (!st || !st.isDirectory()) pinnedDir = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-preview-cloudflared-"));
+  const file = path.join(pinnedDir, "config.yml");
+  let have = null; try { have = fs.readFileSync(file, "utf8"); } catch {}
+  if (have !== PINNED_CONFIG) fs.writeFileSync(file, PINNED_CONFIG, { mode: 0o600 });
+  return file;
+}
+function removePinnedConfig() {
+  if (!pinnedDir) return;
+  try { fs.rmSync(pinnedDir, { recursive: true, force: true }); } catch {}
+  pinnedDir = null;
+}
+
 // ─── The tunnel process ──────────────────────────────────────────────────────
 /* Resolves once cloudflared has printed a quick-tunnel URL, then waits a little
    longer for "Registered tunnel connection", which is the point the link starts
@@ -216,7 +258,10 @@ function createStaticServer(root, { port = 0, refuse, platform } = {}) {
    handlers stay attached after success so a later failure has context too. */
 function startTunnel({ bin, port, spawn = nodeSpawn, env, urlTimeoutMs = URL_TIMEOUT_MS, registerWaitMs = REGISTER_WAIT_MS }) {
   return new Promise((resolve, reject) => {
-    const args = ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`];
+    let configFile;
+    try { configFile = pinnedConfigPath(); }
+    catch (e) { return reject(new Error(`could not write the config file cloudflared is pinned to: ${String((e && e.message) || e)}`)); }
+    const args = ["tunnel", "--config", configFile, "--no-autoupdate", "--url", `http://127.0.0.1:${port}`];
     let proc;
     try { proc = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); }
     catch (e) { return reject(new Error(`could not start cloudflared: ${String((e && e.message) || e)}`)); }
@@ -325,6 +370,7 @@ async function planShare(ctx, args, over) {
   const hasPort = a.port !== undefined && a.port !== null && a.port !== "";
   const port = hasPort ? intArg(a.port) : null;
   if (hasPort && (port === null || port < 1 || port > 65535)) return { error: "port must be a whole number from 1 to 65535" };
+  if (hasPort && OWN_LOOPBACK_PORTS.includes(port)) return { error: `refusing port ${port}: it is the app's own sign-in callback port (${OWN_LOOPBACK_PORTS.join(" and ")} are reserved for that); pick another port` };
   const hasDir = a.dir !== undefined && a.dir !== null && a.dir !== "";
   if (hasDir) {
     if (typeof a.dir !== "string" || /\0/.test(a.dir)) return { error: "dir must be a path" };
@@ -405,7 +451,8 @@ function stopPreview(entry, reason, deps) {
 }
 function stopAll(reason) {
   const deps = withDefaults();
-  return Promise.all([...previews.values()].map((e) => stopPreview(e, reason || "the app is quitting", deps)));
+  return Promise.all([...previews.values()].map((e) => stopPreview(e, reason || "the app is quitting", deps)))
+    .then((r) => { if (!previews.size) removePinnedConfig(); return r; });
 }
 
 function successText(e) {
@@ -476,6 +523,10 @@ async function startShare(ctx, state, plan, over) {
         later({ event_type: "PREVIEW_STOPPED", tool_id: "share_preview", output_summary: `${entry.id} ${entry.url}: expired after ${plan.minutes} minutes` }));
     }, ttl);
     if (entry.timer.unref) entry.timer.unref();
+    /* The link is the only credential an unauthenticated preview has. It goes
+       to the local journal, which stays on this machine, and back to the
+       model, which the user asked for. It is not diagnostic text: nothing
+       here or downstream may forward it into shared telemetry. */
     now({ event_type: "PREVIEW_STARTED", tool_id: "share_preview",
       output_summary: `${entry.id} ${plan.mode === "dir" ? plan.dir : `port ${plan.port}`} -> ${entry.url}${entry.connected ? "" : " (not yet connected)"}, ${plan.minutes} min` });
     return successText(entry);
@@ -506,7 +557,7 @@ async function stopShares(ctx, state, args, over) {
 
 module.exports = {
   parseTunnelUrl, findCloudflared, searchDirs, isExecutable, installHint, childEnv,
-  createStaticServer, resolveRequest, neverServed, startTunnel, portOpen,
+  createStaticServer, resolveRequest, neverServed, startTunnel, portOpen, pinnedConfigPath,
   planShare, startShare, stopShares, stopAll, listShares,
-  TUNNEL_URL_RE, MAX_PREVIEWS, DEFAULT_MINUTES, MAX_MINUTES, EXTRA_BIN_DIRS,
+  TUNNEL_URL_RE, MAX_PREVIEWS, DEFAULT_MINUTES, MAX_MINUTES, EXTRA_BIN_DIRS, OWN_LOOPBACK_PORTS, PINNED_CONFIG,
 };

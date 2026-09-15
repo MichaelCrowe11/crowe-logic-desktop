@@ -39,12 +39,30 @@ const BANNER = [
   "2026-09-14T00:40:14Z INF Registered tunnel connection connIndex=0 connection=9b9b9b9b-3c3c-4d4d-8e8e-1f1f1f1f1f1f event=0 ip=198.41.200.13 location=lax01 protocol=quic",
 ];
 
+/* What the real binary prints when a config file names a tunnel: it creates
+   and routes a named tunnel on the account behind cert.pem and never prints
+   a trycloudflare link. Representative lines, kept so the fixture's named
+   path is recognisable in a failure's tail. */
+const NAMED_TUNNEL_LINES = [
+  "2026-09-14T00:40:12Z INF Tunnel credentials written to ~/.cloudflared/7a7a7a7a-1b1b-4c4c-8d8d-2e2e2e2e2e2e.json. Keep this file secret. To revoke these credentials, delete the tunnel.",
+  "2026-09-14T00:40:12Z INF Created tunnel crowe-share-preview-regression-check with id 7a7a7a7a-1b1b-4c4c-8d8d-2e2e2e2e2e2e",
+  "2026-09-14T00:40:13Z INF Registered tunnel connection connIndex=0 connection=9b9b9b9b-3c3c-4d4d-8e8e-1f1f1f1f1f1f event=0 ip=198.41.200.13 location=lax01 protocol=quic",
+];
+
 /* A cloudflared that never runs: an EventEmitter with the surface the code
    touches. Lines go out on stderr the way the real binary logs, one chunk per
    line unless the test hands over its own chunks. kill() records the signal
    and exits on the next tick, so the stop path can be checked for what was
    sent and in what order; ignoreTerm makes it sit through SIGTERM so the
-   SIGKILL fallback has something to do. */
+   SIGKILL fallback has something to do.
+
+   The one thing it does read is its config file, the way the binary does
+   (cmd/cloudflared/tunnel/cmd.go, config/configuration.go): the --config
+   argument when there is one, where a missing file is exit 1 before anything
+   else; otherwise <home>/.cloudflared/config.yml when the test gave it a
+   home. A config carrying name: takes the named-tunnel path, which is
+   dispatched before the --url quick-tunnel branch and prints no link.
+   configRead says which file it settled on. */
 function fakeSpawn(lines, opts = {}) {
   const calls = [];
   const spawn = (bin, args, options) => {
@@ -58,9 +76,19 @@ function fakeSpawn(lines, opts = {}) {
       if (!child.exited) { child.exited = true; setImmediate(() => child.emit("exit", null, sig)); }
       return true;
     };
+    const ci = args.indexOf("--config");
+    const cfgPath = ci >= 0 ? args[ci + 1] : opts.home ? path.join(opts.home, ".cloudflared", "config.yml") : null;
+    let cfg = null; if (cfgPath) { try { cfg = fs.readFileSync(cfgPath, "utf8"); } catch {} }
+    child.configRead = cfg === null ? null : cfgPath;
+    let chunks, exitCode;
+    if (ci >= 0 && cfg === null) { chunks = [`open ${cfgPath}: no such file or directory\n`]; exitCode = 1; }
+    else if (cfg !== null && /^name:\s*\S/m.test(cfg)) chunks = NAMED_TUNNEL_LINES.map((l) => l + "\n");
+    else chunks = opts.chunks || lines.map((l) => l + "\n");
     calls.push({ bin, args, options, child });
-    const chunks = opts.chunks || lines.map((l) => l + "\n");
-    setImmediate(() => { for (const c of chunks) if (!child.exited) child.stderr.emit("data", Buffer.from(c)); });
+    setImmediate(() => {
+      for (const c of chunks) if (!child.exited) child.stderr.emit("data", Buffer.from(c));
+      if (exitCode !== undefined && !child.exited) { child.exited = true; child.emit("exit", exitCode, null); }
+    });
     return child;
   };
   spawn.calls = calls;
@@ -270,11 +298,25 @@ test("an approved dir share serves the folder on loopback, spawns cloudflared at
     assert.strictEqual(share.url, LINK);
     assert.ok(Number.isInteger(share.port) && share.port > 0);
 
-    // The child: the fixed argument list, aimed at the loopback port the server took.
+    // The child: the fixed argument list, aimed at the loopback port the server
+    // took, with cloudflared pinned to a config this module wrote rather than
+    // whatever ~/.cloudflared/config.yml says.
     assert.strictEqual(ctx.spawn.calls.length, 1);
     const call = ctx.spawn.calls[0];
     assert.strictEqual(call.bin, "/fake/bin/cloudflared");
-    assert.deepStrictEqual(call.args, ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${share.port}`]);
+    assert.deepStrictEqual(call.args.slice(0, 2), ["tunnel", "--config"]);
+    const cfg = call.args[2];
+    assert.deepStrictEqual(call.args.slice(3), ["--no-autoupdate", "--url", `http://127.0.0.1:${share.port}`]);
+    assert.ok(path.isAbsolute(cfg) && fs.statSync(cfg).isFile(), "the pinned config exists when the child starts");
+    if (process.platform !== "win32") assert.strictEqual(fs.statSync(cfg).mode & 0o777, 0o600, "readable by this user only");
+    assert.strictEqual(fs.readFileSync(cfg, "utf8"), S.PINNED_CONFIG);
+    assert.deepStrictEqual(S.PINNED_CONFIG.split("\n").filter((l) => l && !l.startsWith("#")), ["{}"],
+      "an empty mapping and nothing else: no name, no tunnel, no credentials-file, no ingress");
+    for (const d of ["~/.cloudflared", "~/.cloudflare-warp", "~/cloudflare-warp", "/etc/cloudflared", "/usr/local/etc/cloudflared"]) {
+      const abs = d.replace(/^~/, os.homedir());
+      assert.ok(cfg !== path.join(abs, "config.yml") && !cfg.startsWith(abs + path.sep), `the pinned config is not under cloudflared's default search dir ${d}`);
+    }
+    assert.strictEqual(call.child.configRead, cfg, "what the child read as its config is that file");
     assert.deepStrictEqual(call.options.stdio, ["ignore", "pipe", "pipe"]);
     // Its environment: the harness's filtered shell env, minus cloudflared's own switches, plus the extra bins.
     assert.ok(!Object.hasOwn(call.options.env, "CROWE_TEST_API_TOKEN"), "token-shaped variables do not reach the child");
@@ -353,11 +395,15 @@ test("quitting the app signals every tunnel before anything is awaited", async (
   try {
     await run(ctx, { dir: "dist" });
     const { port } = S.listShares()[0];
+    const cfg = ctx.spawn.calls[0].args[2];
+    assert.ok(fs.existsSync(cfg));
     const pending = S.stopAll("the app is quitting");
     assert.deepStrictEqual(ctx.spawn.calls[0].child.signals, ["SIGTERM"], "sent synchronously, before the first await");
     assert.strictEqual(S.listShares().length, 0, "unlisted synchronously too");
     await pending;
     assert.strictEqual(await refused(port), true);
+    assert.strictEqual(fs.existsSync(cfg), false, "the pinned config is removed once nothing is running");
+    assert.strictEqual(fs.existsSync(path.dirname(cfg)), false);
   } finally { await S.stopAll("test cleanup"); }
 });
 
@@ -399,6 +445,53 @@ test("a port share forwards a server that is already listening and refuses a por
     await S.stopAll("test cleanup");
     await new Promise((r) => upstream.close(r));
   }
+});
+
+test("an ambient ~/.cloudflared/config.yml carrying name: does not turn the quick tunnel into a named one", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-preview-home-"));
+  fs.mkdirSync(path.join(home, ".cloudflared"));
+  const ambient = path.join(home, ".cloudflared", "config.yml");
+  fs.writeFileSync(ambient, "name: crowe-share-preview-regression-check\n");
+  const spawn = fakeSpawn(BANNER, { home });
+  const ctx = makeCtx({}, { approve: true, spawn });
+  process.env.TUNNEL_NAME = "crowe-share-preview-regression-check";
+  try {
+    // First, that the fixture bites: the same cloudflared with no --config
+    // reads the ambient file and runs a named tunnel, which prints no link.
+    const loose = spawn("/fake/bin/cloudflared", ["tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:1"], {});
+    let said = ""; loose.stderr.on("data", (c) => { said += c; });
+    await tick();
+    assert.strictEqual(loose.configRead, ambient);
+    assert.match(said, /Created tunnel crowe-share-preview-regression-check/);
+    assert.strictEqual(S.parseTunnelUrl(said), null, "a named tunnel prints no trycloudflare link");
+    // Then, that the tool's own spawn never gets there.
+    const out = await run(ctx, { dir: "dist" });
+    assert.match(out, new RegExp(`^preview live at ${LINK.replace(/\./g, "\\.")}`), out);
+    const call = ctx.spawn.calls[1];
+    const cfg = call.args[call.args.indexOf("--config") + 1];
+    assert.ok(cfg && cfg !== ambient, "--config names the module's file, not the ambient one");
+    assert.strictEqual(call.child.configRead, cfg);
+    assert.doesNotMatch(fs.readFileSync(cfg, "utf8"), /^name:/m);
+    assert.ok(!Object.hasOwn(call.options.env, "TUNNEL_NAME"), "the flag's environment alias does not reach the child either");
+  } finally {
+    delete process.env.TUNNEL_NAME;
+    await S.stopAll("test cleanup");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the app's own sign-in callback ports are refused in both modes, before any card, and match main.js", async () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+  const m = /const PORTS = \[([0-9, ]+)\];/.exec(src);
+  assert.ok(m, "main.js declares the sign-in callback ports as `const PORTS = [...]`");
+  assert.deepStrictEqual(m[1].split(",").map((x) => Number(x.trim())), S.OWN_LOOPBACK_PORTS);
+  const ctx = makeCtx({}, { approve: true, previewDeps: { portOpen: async () => true } });
+  for (const port of S.OWN_LOOPBACK_PORTS) {
+    assert.match(await run(ctx, { port }), /^error: refusing port \d+: it is the app's own sign-in callback port/);
+    assert.match(await run(ctx, { dir: "dist", port }), /^error: refusing port \d+/);
+  }
+  assert.strictEqual(ctx.approvalsSeen.length, 0);
+  assert.strictEqual(ctx.spawn.calls.length, 0);
 });
 
 test("a link split across two chunks is still found", async () => {
@@ -485,9 +578,14 @@ test("the registry is capped, and the cap is reported with the ids to stop", asy
   } finally { await S.stopAll("test cleanup"); }
 });
 
-test("the prompt tells the model what the tool is and that it asks first", () => {
+test("the prompt tells the model what the tool is and that it asks first, without promising a card in a mode that draws none", () => {
   assert.match(H.TIER_LINES.execute, /share_preview/);
-  assert.match(H.TIER_LINES.execute, /asks the user first every time/);
+  assert.match(H.TIER_LINES.execute, /asks the user first in every mode that asks/);
+  const fn = H.BUILTIN_TOOLS.find((t) => t.function.name === "share_preview").function;
+  assert.match(fn.description, /approval in every mode that asks/);
+  assert.doesNotMatch(fn.description, /every time/, "approvals: off skips the card, so the description does not claim one");
+  assert.match(fn.parameters.properties.dir.description, /build output, not at the workspace/);
+  assert.match(fn.parameters.properties.dir.description, /files written after approval are published too/);
 });
 
 // ─── Runner ──────────────────────────────────────────────────────────────────

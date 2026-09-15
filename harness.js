@@ -403,9 +403,9 @@ const BUILTIN_TOOLS = [
     description: "Open a URL in the in-app browser pane for the user to see.",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
   { type: "function", function: { name: "share_preview",
-    description: "Publish a temporary public link to something you built, for the user to send to someone else. Pass dir to serve a folder of static files (index.html at /), or port alone to forward a local server that is already listening, through a Cloudflare quick tunnel; the result carries the https://<random>.trycloudflare.com address. No account is needed. This exposes those files or that port to anyone who has the link, so it needs Execute autonomy and pauses for the user's approval every time: call it only when the user asked for a link other people can open. The link stops after minutes (default 120), when the app quits, or when you call this tool with stop: true, with the id from an earlier result to stop one preview or no id to stop them all.",
+    description: "Publish a temporary public link to something you built, for the user to send to someone else. Pass dir to serve a folder of static files (index.html at /), or port alone to forward a local server that is already listening, through a Cloudflare quick tunnel; the result carries the https://<random>.trycloudflare.com address. No account is needed. This exposes those files or that port to anyone who has the link, so it needs Execute autonomy and pauses for the user's approval in every mode that asks: call it only when the user asked for a link other people can open. The link stops after minutes (default 120), when the app quits, or when you call this tool with stop: true, with the id from an earlier result to stop one preview or no id to stop them all.",
     parameters: { type: "object", properties: {
-      dir: { type: "string", description: "Folder of static files to serve, relative to the workspace. Dotfiles, source maps, and credential files under it are never served." },
+      dir: { type: "string", description: "The built site's output folder (dist, build, out, public), relative to the workspace, with index.html at its root. Point this at the build output, not at the workspace: every file under the folder is published except dotfiles, source maps, and credential files, and files written after approval are published too." },
       port: { type: "number", description: "With dir: the local port to serve on (default: any free port). Without dir: the local port a server is already listening on, forwarded as-is." },
       minutes: { type: "number", description: "How long the link stays up, 1 to 720 (default 120)." },
       stop: { type: "boolean", description: "Stop a running preview instead of starting one." },
@@ -765,8 +765,10 @@ async function execTool(ctx, name, args, route, state) {
         detail: plan.detail, hash: inputHash("share_preview", plan.key),
       });
       if (!gate.ok) return gate.text;
+      // deps first, so the seam can stand in for the binary, the spawn, and the
+      // clock, and can never replace the filtered environment or the secret filter.
       return await SharePreview.startShare(ctx, state, plan, {
-        cloudflared: bin, env: safeShellEnv(), refuse: (rel) => isSecretPath(rel), ...deps,
+        ...deps, cloudflared: bin, env: safeShellEnv(), refuse: (rel) => isSecretPath(rel),
       });
     }
     /* No tier gate: authoring writes a draft into the Runbook and nothing runs
@@ -956,7 +958,7 @@ const TIER_LINES = {
   plan: "PLAN: read-only exploration. Inspect freely (read_file, search, list_dir, open_url) but change nothing. Investigate the task, then finish by writing a short numbered plan of the changes you would make, and ask the user to approve by switching to Edit or Execute. Do not call run_shell, write_file, or edit_file.",
   readonly: "READ-ONLY: you may inspect (read_file, search, list_dir, open_url) but shell and all writes are blocked. Say what tier a blocked action needs instead of retrying it.",
   edit: "EDIT: you may inspect and change files (edit_file/write_file, each reviewed by the user before applying). Shell is blocked; suggest commands for the user instead of retrying run_shell.",
-  execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive. share_preview can publish a folder or a local port at a temporary public link, and asks the user first every time.",
+  execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive. share_preview can publish a folder or a local port at a temporary public link, and asks the user first in every mode that asks.",
 };
 const APPROVAL_LINES = {
   off: "",
