@@ -1,13 +1,21 @@
-// Headless tests for the generate_image tool. Pure Node, no Electron, no
-// network: the provider is a stubbed fetch handed in through ctx.fetch, the
-// key comes from a stubbed ctx.imageCredential, and the workspace is a temp
-// directory. What is pinned here: the file lands under assets/generated in the
-// workspace, the tool sits at the Edit tier and the Review risk class, and the
-// key never appears in anything the tool hands back.
+// Headless tests for the generate_image tool. Pure Node, no Electron, and no
+// network past the loopback interface: the provider is a stubbed fetch handed in
+// through ctx.fetch, or the real fetch pointed at a local socket where the shape
+// of a failure is the thing under test; the key comes from a stubbed
+// ctx.imageCredential, and the workspace is a temp directory. What is pinned
+// here: the file lands under assets/generated in the workspace, the tool sits at
+// the Edit tier, every call asks the user first in every approval mode but "off"
+// and a denial leaves nothing behind, not even the directory,
+// a failure names the code or the timeout the way Node's fetch really throws it,
+// the saved file is on the rollback list by name, and the key never appears in
+// anything the tool hands back.
 //
 //   node scripts/test-generate-image.js
+//   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron scripts/test-generate-image.js
 const assert = require("assert");
 const fs = require("fs");
+const http = require("http");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const H = require("../harness");
@@ -18,6 +26,7 @@ function test(name, fn) { tests.push({ name, fn }); }
 const SECRET = "sk-test-KEEP-OUT-OF-OUTPUT-4f9c";
 // A 1x1 PNG, the smallest valid one.
 const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const ROUTER = () => ({ provider: "openrouter", secret: SECRET });
 
 function workspace() { return fs.mkdtempSync(path.join(os.tmpdir(), "crowe-image-")); }
 // A fetch stub that records what it was asked and answers with `answer`.
@@ -32,8 +41,26 @@ function stubFetch(answer) {
   f.calls = calls;
   return f;
 }
+// The real fetch, pointed at a local socket instead of the provider. The init,
+// signal included, goes through untouched, so what the tool catches is exactly
+// what Node's fetch throws.
+function localFetch(port) {
+  const f = (url, init) => { f.calls.push({ url, init }); return globalThis.fetch(`http://127.0.0.1:${port}${new URL(url).pathname}`, init); };
+  f.calls = [];
+  return f;
+}
+function listen(handler) { return new Promise((resolve) => { const srv = http.createServer(handler); srv.listen(0, "127.0.0.1", () => resolve(srv)); }); }
+function stop(srv) { return new Promise((resolve) => { srv.closeAllConnections(); srv.close(() => resolve()); }); }
+async function closedPort() {
+  const s = net.createServer();
+  await new Promise((r) => s.listen(0, "127.0.0.1", r));
+  const port = s.address().port;
+  await new Promise((r) => s.close(r));
+  return port;
+}
 function makeCtx(cfgPatch = {}, hooks = {}) {
-  const dir = hooks.dir || workspace();
+  const { approve, ...rest } = hooks;
+  const dir = rest.dir || workspace();
   const cfg = { autonomy: "edit", approvals: "high-risk", verifier: false, turnBudgetUsd: 0, autoApprove: true, ...cfgPatch };
   const ctx = {
     dir, journalEvents: [], approvalsSeen: [],
@@ -45,19 +72,26 @@ function makeCtx(cfgPatch = {}, hooks = {}) {
     artifactDir: () => path.join(dir, ".artifacts"),
     imageCredential: () => ({ provider: "openai", secret: SECRET }),
     fetch: stubFetch({ body: { data: [{ b64_json: PNG_1x1 }] } }),
-    ...hooks,
+    ...rest,
   };
-  if (hooks.approve !== undefined) ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: hooks.approve }; };
+  // The tool asks before every call, so the fixture says yes unless a test says
+  // otherwise: approve false denies, approve null is a build with no way to ask.
+  if (approve !== null) ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: approve !== false }; };
   return ctx;
 }
 const state = (ctx) => H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
 const run = (ctx, args, route = {}) => H.callTool(ctx, "generate_image", args, route, state(ctx));
-// Everything the tool let out of the function: result text plus the journal.
+// Everything the tool let out of the function: result text, the journal, and the approval cards.
 const everything = (ctx, out) => out.text + JSON.stringify(ctx.journalEvents) + JSON.stringify(ctx.approvalsSeen);
+const generatedDir = (ctx) => path.join(ctx.dir, "assets", "generated");
+const nothingSaved = (ctx) => !fs.existsSync(generatedDir(ctx)) || fs.readdirSync(generatedDir(ctx)).length === 0;
 
-test("the tool is offered to the operator, not to the verifier, and is classed compensatable", () => {
+test("the tool is offered to the operator, not to the verifier, is classed compensatable, and says it asks first", () => {
   const ctx = makeCtx({ autonomy: "execute" });
-  assert.ok(H.BUILTIN_TOOLS.some((t) => t.function.name === "generate_image"));
+  const spec = H.BUILTIN_TOOLS.find((t) => t.function.name === "generate_image");
+  assert.ok(spec);
+  assert.match(spec.function.description, /billed to the user's key and asked about first/);
+  assert.match(H.TIER_LINES.edit, /generate_image, which asks the user before each call/);
   assert.ok(H.allTools(ctx, {}).some((t) => t.function.name === "generate_image"));
   assert.ok(!H.verifierTools(ctx).some((t) => t.function.name === "generate_image"));
   assert.strictEqual(H.deliveryOf(ctx, "generate_image", { prompt: "x" }), "compensatable");
@@ -73,18 +107,21 @@ test("saves the PNG under assets/generated in the workspace and reports path, si
   const abs = path.join(ctx.dir, rel);
   assert.ok(fs.existsSync(abs), "file written");
   assert.strictEqual(fs.readFileSync(abs).toString("base64"), PNG_1x1);
+  assert.strictEqual(ctx.approvalsSeen.length, 1, "asked once, in the default approval mode");
   const call = ctx.fetch.calls[0];
   assert.strictEqual(call.url, "https://api.openai.com/v1/images/generations");
   assert.strictEqual(call.init.headers.Authorization, `Bearer ${SECRET}`, "the key rides in the one header");
   assert.strictEqual(call.init.redirect, "error");
+  assert.ok(call.init.signal instanceof AbortSignal, "a timeout signal is handed to fetch");
   const body = JSON.parse(call.init.body);
   assert.deepStrictEqual(body, { model: "gpt-image-1", prompt: "a spore print on black card", n: 1, size: "1024x1024", output_format: "png" });
 });
 
 test("the key appears nowhere in the result, the journal, or the approval request", async () => {
-  const ctx = makeCtx({ approvals: "strict" }, { approve: true });
+  const ctx = makeCtx({ approvals: "strict" });
   const out = await run(ctx, { prompt: "a tiny mushroom" });
   assert.strictEqual(out.status, "SUCCESS");
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
   assert.ok(!everything(ctx, out).includes(SECRET));
   assert.ok(!everything(ctx, out).includes("KEEP-OUT"));
 });
@@ -95,16 +132,54 @@ test("a provider error body is never quoted, even when it echoes the key", async
   assert.strictEqual(out.status, "FAIL");
   assert.strictEqual(out.text, "error: OpenAI answered HTTP 401 (invalid_api_key). The key was refused; test it in Settings > Keys. No file was written.");
   assert.ok(!everything(ctx, out).includes(SECRET));
-  assert.ok(!fs.existsSync(path.join(ctx.dir, "assets", "generated")) || fs.readdirSync(path.join(ctx.dir, "assets", "generated")).length === 0);
+  assert.ok(nothingSaved(ctx));
 });
 
-test("a network failure names only the error code, and a timeout says the provider may still have billed", async () => {
-  const dropped = makeCtx({}, { fetch: stubFetch({ throws: Object.assign(new Error(`connect ECONNREFUSED ${SECRET}`), { code: "ECONNREFUSED" }) }) });
-  const out = await run(dropped, { prompt: "x" });
+test("a failure is named the way Node's fetch throws it: the code from the cause chain, the timeout from the signal or the name", async () => {
+  // Node's fetch does not throw the socket error. It throws TypeError("fetch
+  // failed") and keeps the socket error in cause, inside an AggregateError when
+  // more than one address was tried.
+  const refused = new TypeError("fetch failed", { cause: Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:443 ${SECRET}`), { code: "ECONNREFUSED" }) });
+  const a = makeCtx({}, { fetch: stubFetch({ throws: refused }) });
+  const out = await run(a, { prompt: "x" });
   assert.strictEqual(out.text, "error: OpenAI could not be reached (ECONNREFUSED). No file was written.");
-  const slow = makeCtx({}, { fetch: stubFetch({ throws: Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }) }) });
-  const out2 = await run(slow, { prompt: "x" });
-  assert.match(out2.text, /^error: OpenAI did not answer within 120s\. No file was written; the provider may still have billed/);
+  assert.ok(!everything(a, out).includes(SECRET));
+  const many = new TypeError("fetch failed", { cause: new AggregateError([Object.assign(new Error("::1"), { code: "ECONNREFUSED" }), Object.assign(new Error("127.0.0.1"), { code: "ECONNREFUSED" })], "") });
+  assert.strictEqual((await run(makeCtx({}, { fetch: stubFetch({ throws: many }) }), { prompt: "x" })).text, "error: OpenAI could not be reached (ECONNREFUSED). No file was written.");
+  assert.strictEqual(H.errCode(new TypeError("fetch failed", { cause: Object.assign(new Error("x"), { code: "ENOTFOUND" }) })), "ENOTFOUND");
+  assert.strictEqual(H.errCode(new TypeError("fetch failed")), "TypeError");
+  assert.strictEqual(H.errCode(Object.assign(new Error("x"), { code: "weird code; rm -rf /" })), "weirdcoderm-rf");
+  // A timeout is a DOMException named TimeoutError whose code is the number 23,
+  // which a string comparison on code never matched.
+  const late = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  assert.strictEqual(late.code, 23);
+  const b = makeCtx({}, { fetch: stubFetch({ throws: late }) });
+  assert.strictEqual((await run(b, { prompt: "x" })).text, "error: OpenAI did not answer within 120s. No file was written; the provider may still have billed the request.");
+  const wrapped = new TypeError("fetch failed", { cause: late });
+  assert.strictEqual((await run(makeCtx({}, { fetch: stubFetch({ throws: wrapped }) }), { prompt: "x" })).text, "error: OpenAI did not answer within 120s. No file was written; the provider may still have billed the request.");
+});
+
+test("against a real socket: a closed port is ECONNREFUSED, a provider that never answers or never finishes is a timeout, and nothing is written", async () => {
+  const port = await closedPort();
+  const refused = makeCtx({}, { fetch: localFetch(port) });
+  const out = await run(refused, { prompt: "x" });
+  assert.strictEqual(out.text, "error: OpenAI could not be reached (ECONNREFUSED). No file was written.");
+  assert.ok(!everything(refused, out).includes(SECRET));
+  const silent = await listen(() => { /* accept the request and never answer it */ });
+  const slow = makeCtx({}, { fetch: localFetch(silent.address().port), imageTimeoutMs: 200 });
+  try {
+    const out2 = await run(slow, { prompt: "x" });
+    assert.strictEqual(out2.text, "error: OpenAI did not answer within 200 ms. No file was written; the provider may still have billed the request.");
+    assert.ok(!everything(slow, out2).includes(SECRET));
+    assert.ok(nothingSaved(slow));
+  } finally { await stop(silent); }
+  const half = await listen((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.write('{"data":[{"b64_json":"'); });
+  const cut = makeCtx({}, { fetch: localFetch(half.address().port), imageTimeoutMs: 200 });
+  try {
+    const out3 = await run(cut, { prompt: "x" });
+    assert.strictEqual(out3.text, "error: OpenAI did not finish answering within 200 ms. No file was written; the provider may still have billed the request.");
+    assert.ok(nothingSaved(cut));
+  } finally { await stop(half); }
 });
 
 test("no key configured: a plain message naming Settings > Keys, and no request is sent", async () => {
@@ -112,6 +187,7 @@ test("no key configured: a plain message naming Settings > Keys, and no request 
   const out = await run(ctx, { prompt: "x" });
   assert.strictEqual(out.text, "No image provider key is configured. Ask the user to add an OpenAI or OpenRouter key in Settings > Keys, then try again.");
   assert.strictEqual(ctx.fetch.calls.length, 0);
+  assert.strictEqual(ctx.approvalsSeen.length, 0);
   const noHook = makeCtx(); delete noHook.imageCredential;
   assert.match((await run(noHook, { prompt: "x" })).text, /^No image provider key is configured/);
 });
@@ -123,6 +199,7 @@ test("Edit is the floor: plan and readonly block it before any request, edit and
     assert.strictEqual(out.status, "BLOCKED", tier);
     assert.match(out.text, tier === "plan" ? /Plan mode is read-only/ : /read-only autonomy blocks writes\. Ask the user to switch to Edit/);
     assert.strictEqual(ctx.fetch.calls.length, 0, `${tier} must not spend`);
+    assert.strictEqual(ctx.approvalsSeen.length, 0, `${tier} refuses before asking`);
   }
   for (const tier of ["edit", "execute"]) {
     const ctx = makeCtx({ autonomy: tier });
@@ -130,39 +207,65 @@ test("Edit is the floor: plan and readonly block it before any request, edit and
   }
 });
 
-test("Review risk: runs unasked in the default approval mode, asks in strict mode, and a denial sends nothing", async () => {
-  const dflt = makeCtx({ approvals: "high-risk" }, { approve: false });
-  assert.strictEqual((await run(dflt, { prompt: "a plain prompt" })).status, "SUCCESS");
-  assert.strictEqual(dflt.approvalsSeen.length, 0);
-  const strict = makeCtx({ approvals: "strict" }, { approve: false });
-  const out = await run(strict, { prompt: "a plain prompt" });
+test("every call asks first: the default mode and strict both ask, a denial sends nothing, only approvals off runs unasked, and a build that cannot ask is blocked", async () => {
+  for (const approvals of ["high-risk", "strict"]) {
+    const no = makeCtx({ approvals }, { approve: false });
+    const out = await run(no, { prompt: "a plain prompt", filename: "poster" });
+    assert.strictEqual(out.status, "BLOCKED", approvals);
+    assert.match(out.text, /DENIED/);
+    assert.strictEqual(no.approvalsSeen.length, 1, approvals);
+    const req = no.approvalsSeen[0];
+    assert.strictEqual(req.kind, "generate_image");
+    assert.strictEqual(req.risk, "review");
+    assert.strictEqual(req.why, "sends a prompt to OpenAI, off this machine and billed to the user's key");
+    assert.strictEqual(req.detail, "OpenAI gpt-image-1, 1024x1024, file assets/generated/poster: a plain prompt");
+    assert.strictEqual(no.fetch.calls.length, 0, "a denied call must not spend");
+    assert.ok(!fs.existsSync(generatedDir(no)), "a denied call leaves no directory behind");
+    assert.ok(no.journalEvents.some((e) => e.event_type === "APPROVAL_REQUESTED"));
+    assert.ok(no.journalEvents.some((e) => e.event_type === "APPROVAL_DENIED"));
+    const yes = makeCtx({ approvals }, { approve: true });
+    assert.strictEqual((await run(yes, { prompt: "a plain prompt" })).status, "SUCCESS", approvals);
+    assert.strictEqual(yes.approvalsSeen.length, 1);
+    assert.ok(yes.journalEvents.some((e) => e.event_type === "APPROVAL_GRANTED"));
+  }
+  const off = makeCtx({ approvals: "off" }, { approve: false });
+  assert.strictEqual((await run(off, { prompt: "a plain prompt" })).status, "SUCCESS");
+  assert.strictEqual(off.approvalsSeen.length, 0);
+  assert.ok(off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED" && /approvals off/.test(e.output_summary)));
+  const mute = makeCtx({}, { approve: null });
+  const out = await run(mute, { prompt: "a plain prompt" });
   assert.strictEqual(out.status, "BLOCKED");
-  assert.match(out.text, /DENIED/);
-  assert.strictEqual(strict.approvalsSeen.length, 1);
-  assert.strictEqual(strict.approvalsSeen[0].kind, "generate_image");
-  assert.strictEqual(strict.approvalsSeen[0].risk, "review");
-  assert.match(strict.approvalsSeen[0].why, /billed to the user's key/);
-  assert.strictEqual(strict.fetch.calls.length, 0, "a denied call must not spend");
+  assert.match(out.text, /no way to ask for it/);
+  assert.strictEqual(mute.fetch.calls.length, 0);
+  assert.ok(!fs.existsSync(generatedDir(mute)));
 });
 
-test("a long or pasted prompt is asked about in every mode; a prompt carrying a credential is Strict", async () => {
-  const long = makeCtx({}, { approve: false });
-  const out = await run(long, { prompt: "line\n".repeat(5) + "draw this" });
-  assert.strictEqual(out.status, "BLOCKED");
-  assert.strictEqual(long.approvalsSeen[0].risk, "review");
-  assert.match(long.approvalsSeen[0].why, /long or pasted prompt/);
-  assert.strictEqual(long.fetch.calls.length, 0);
+test("a prompt that carries a credential is Strict, the card names the kind, and the value is cut from the card and the journal", async () => {
   const leaky = makeCtx({}, { approve: false });
-  const out2 = await run(leaky, { prompt: "put this on a poster: AKIAIOSFODNN7EXAMPLE" });
-  assert.strictEqual(out2.status, "BLOCKED");
-  assert.strictEqual(leaky.approvalsSeen[0].risk, "strict");
-  assert.match(leaky.approvalsSeen[0].why, /sends what looks like .* to OpenAI/);
+  const out = await run(leaky, { prompt: "put this on a poster: AKIAIOSFODNN7EXAMPLE", filename: "poster" });
+  assert.strictEqual(out.status, "BLOCKED");
+  const req = leaky.approvalsSeen[0];
+  assert.strictEqual(req.risk, "strict");
+  assert.strictEqual(req.why, "sends what looks like an AWS access key id to OpenAI, billed to the user's key");
+  assert.strictEqual(req.detail, "OpenAI gpt-image-1, 1024x1024, file assets/generated/poster: put this on a poster: [an AWS access key id]");
+  assert.ok(!everything(leaky, out).includes("AKIAIOSFODNN7EXAMPLE"));
   assert.strictEqual(leaky.fetch.calls.length, 0);
+  assert.ok(!fs.existsSync(generatedDir(leaky)), "a denied call leaves no directory behind");
+  // The card is cut to 600 characters after redaction, so a key that straddles
+  // the cut cannot leave a fragment of itself on the card.
+  const edge = makeCtx({}, { approve: false });
+  await run(edge, { prompt: "x".repeat(592) + " AKIAIOSFODNN7EXAMPLE and more", filename: "edge" });
+  assert.ok(!edge.approvalsSeen[0].detail.includes("AKIA"), edge.approvalsSeen[0].detail.slice(-40));
+  // redactSecrets itself: the kind stays, the value goes, a key block goes header to footer.
+  assert.strictEqual(H.redactSecrets("key sk-ant-abcdefghijklmnopqrstuvwxyz here"), "key [an Anthropic API key] here");
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\nabc\n-----END RSA PRIVATE KEY-----";
+  assert.strictEqual(H.redactSecrets(`before ${pem} after`), "before [a private key block] after");
+  assert.strictEqual(H.redactSecrets("nothing here"), "nothing here");
 });
 
 test("OpenRouter is used when there is no OpenAI key, at its own endpoint, and the provider's cost figure is reported", async () => {
   const ctx = makeCtx({}, {
-    imageCredential: () => ({ provider: "openrouter", secret: SECRET }),
+    imageCredential: ROUTER,
     fetch: stubFetch({ body: { data: [{ b64_json: PNG_1x1, media_type: "image/png" }], usage: { cost: 0.04 } } }),
   });
   const out = await run(ctx, { prompt: "a hex tile", size: "1536x1024" });
@@ -171,19 +274,36 @@ test("OpenRouter is used when there is no OpenAI key, at its own endpoint, and t
   const body = JSON.parse(ctx.fetch.calls[0].init.body);
   assert.deepStrictEqual(body, { model: "google/gemini-2.5-flash-image", prompt: "a hex tile", n: 1, size: "1536x1024", output_format: "png" });
   assert.match(out.text, /OpenRouter google\/gemini-2\.5-flash-image, \$0\.0400 billed by the provider, not in the turn meter/);
+  assert.match(ctx.approvalsSeen[0].why, /to OpenRouter, off this machine/);
   assert.ok(!everything(ctx, out).includes(SECRET));
 });
 
-test("imageModel in config overrides the default; a malformed id falls back; DALL-E gets response_format instead", async () => {
-  const ctx = makeCtx({ imageModel: "dall-e-3" });
-  await run(ctx, { prompt: "x" });
-  const body = JSON.parse(ctx.fetch.calls[0].init.body);
-  assert.strictEqual(body.model, "dall-e-3");
-  assert.strictEqual(body.response_format, "b64_json");
-  assert.strictEqual(body.output_format, undefined);
+test("imageModel in config: overrides the default, a malformed or other-provider id falls back, DALL-E gets its own sizes and response_format", async () => {
+  const d3 = makeCtx({ imageModel: "dall-e-3" });
+  const out = await run(d3, { prompt: "x", size: "1536x1024" });
+  assert.deepStrictEqual(JSON.parse(d3.fetch.calls[0].init.body), { model: "dall-e-3", prompt: "x", n: 1, size: "1792x1024", response_format: "b64_json" });
+  assert.match(out.text, /OpenAI dall-e-3/);
+  assert.match(d3.approvalsSeen[0].detail, /^OpenAI dall-e-3, 1792x1024, /, "the card shows the size that will be sent");
+  const d2 = makeCtx({ imageModel: "dall-e-2" });
+  assert.strictEqual((await run(d2, { prompt: "x", size: "1024x1536" })).text, "rejected: dall-e-2 accepts 1024x1024 only. No request was sent.");
+  assert.strictEqual(d2.fetch.calls.length, 0);
+  assert.strictEqual(d2.approvalsSeen.length, 0, "refused before asking");
+  await run(d2, { prompt: "x" });
+  assert.strictEqual(JSON.parse(d2.fetch.calls[0].init.body).size, "1024x1024");
   const bad = makeCtx({ imageModel: "not a model id!" });
   await run(bad, { prompt: "x" });
   assert.strictEqual(JSON.parse(bad.fetch.calls[0].init.body).model, "gpt-image-1");
+  // An OpenAI id is bare and an OpenRouter id is vendor/model. The wrong shape
+  // for the selected provider could only 400, so it falls back to the default.
+  const slugOnOpenai = makeCtx({ imageModel: "openai/gpt-image-1" });
+  await run(slugOnOpenai, { prompt: "x" });
+  assert.strictEqual(JSON.parse(slugOnOpenai.fetch.calls[0].init.body).model, "gpt-image-1");
+  const bareOnRouter = makeCtx({ imageModel: "gpt-image-1" }, { imageCredential: ROUTER });
+  await run(bareOnRouter, { prompt: "x" });
+  assert.strictEqual(JSON.parse(bareOnRouter.fetch.calls[0].init.body).model, "google/gemini-2.5-flash-image");
+  const slugOnRouter = makeCtx({ imageModel: "openai/gpt-image-1" }, { imageCredential: ROUTER });
+  await run(slugOnRouter, { prompt: "x" });
+  assert.deepStrictEqual(JSON.parse(slugOnRouter.fetch.calls[0].init.body), { model: "openai/gpt-image-1", prompt: "x", n: 1, size: "1024x1024", output_format: "png" });
 });
 
 test("filenames are one clean segment, never overwrite, and default to an opaque stamp rather than the prompt", async () => {
@@ -208,7 +328,21 @@ test("an assets/generated that resolves outside the workspace is refused before 
   assert.strictEqual(out.status, "BLOCKED");
   assert.match(out.text, /resolves outside the workspace/);
   assert.strictEqual(ctx.fetch.calls.length, 0);
-  assert.strictEqual(fs.readdirSync(outside).length, 0);
+  assert.strictEqual(ctx.approvalsSeen.length, 0);
+  assert.deepStrictEqual(fs.readdirSync(outside), []);
+});
+
+test("a symlinked assets/ pointing out of the workspace is refused before the directory is made, so nothing appears outside", async () => {
+  const ctx = makeCtx();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-image-outside-"));
+  fs.symlinkSync(outside, path.join(ctx.dir, "assets"));
+  const out = await run(ctx, { prompt: "x" });
+  assert.strictEqual(out.status, "BLOCKED");
+  assert.match(out.text, /resolves outside the workspace/);
+  assert.strictEqual(ctx.fetch.calls.length, 0);
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "refused before asking");
+  assert.ok(!fs.existsSync(path.join(outside, "generated")), "no generated/ made outside the workspace");
+  assert.deepStrictEqual(fs.readdirSync(outside), []);
 });
 
 test("bad arguments and bad provider payloads are rejected without writing", async () => {
@@ -220,14 +354,20 @@ test("bad arguments and bad provider payloads are rejected without writing", asy
   const junk = makeCtx({}, { fetch: stubFetch({ body: { data: [{ b64_json: Buffer.from("not an image at all, just text bytes").toString("base64") }] } }) });
   assert.match((await run(junk, { prompt: "x" })).text, /not a PNG, JPEG, or WebP image/);
   assert.strictEqual(ctx.fetch.calls.length, 0);
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "bad arguments are refused before asking");
 });
 
-test("a saved image counts as a mutation, so the change list and the verifier see it, and the verifier itself may not call it", async () => {
+test("a saved image is a mutation that the change list, the rollback list, a rejection, and the receipt all name by file", async () => {
   const ctx = makeCtx();
   const st = state(ctx);
   await H.callTool(ctx, "generate_image", { prompt: "x", filename: "one" }, {}, st);
+  await H.callTool(ctx, "generate_image", { prompt: "y", filename: "one" }, {}, st);
   assert.strictEqual(st.mutated, true);
-  assert.deepStrictEqual(st.mutations, ["generate_image assets/generated/"]);
+  assert.deepStrictEqual(st.mutations, ["generate_image assets/generated/one.png", "generate_image assets/generated/one-2.png"]);
+  assert.deepStrictEqual(st.rollback.map((r) => r.path), ["assets/generated/one.png", "assets/generated/one-2.png"]);
+  assert.strictEqual(st.rollback[0].before, "(absent before this turn; delete the file to undo)");
+  assert.match(H.rejectionPrompt({ summary: "wrong picture" }, st.rollback), /^- assets\/generated\/one\.png -> \(absent before this turn; delete the file to undo\)$/m);
+  assert.match(H.verdictReceipt({ status: "fail", summary: "wrong picture", checks: [] }, st.rollback), /- assets\/generated\/one-2\.png -> \(absent before this turn/);
   const out = await H.execTool(ctx, "generate_image", { prompt: "x" }, { verify: true }, st);
   assert.match(out, /^blocked: the verifier does not change anything/);
 });
@@ -246,6 +386,8 @@ test("end to end through runAgent: the tool_result event carries the path and no
   const tr = events.find((e) => e.type === "tool_result");
   assert.ok(tr && tr.name === "generate_image");
   assert.match(tr.result, /^generated assets\/generated\/logo\.png /);
+  assert.strictEqual(ctx.approvalsSeen.length, 1, "asked once on the way");
+  assert.deepStrictEqual(result.mutations, ["generate_image assets/generated/logo.png"]);
   assert.ok(!JSON.stringify(events).includes(SECRET));
   assert.ok(!JSON.stringify(result).includes(SECRET));
   assert.ok(fs.existsSync(path.join(ctx.dir, "assets", "generated", "logo.png")));
