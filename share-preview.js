@@ -255,8 +255,15 @@ function removePinnedConfig() {
    answering; `connected` says which of the two happened. Rejects if the process
    exits or errors first, or prints nothing usable in time, and in every failure
    the child is killed and the last log lines travel with the error. The log
-   handlers stay attached after success so a later failure has context too. */
-function startTunnel({ bin, port, spawn = nodeSpawn, env, urlTimeoutMs = URL_TIMEOUT_MS, registerWaitMs = REGISTER_WAIT_MS }) {
+   handlers stay attached after success so a later failure has context too.
+
+   onSpawn, when given, receives the child and its exit promise the moment it
+   exists, before any of that waiting: the caller then owns the child's
+   shutdown, so a stop that arrives while the link is still pending signals a
+   process the registry knows about, and a failed start is torn down with the
+   same bounded SIGTERM-then-SIGKILL as a running one. Without onSpawn the
+   failure path does that escalation itself, over stopGraceMs. */
+function startTunnel({ bin, port, spawn = nodeSpawn, env, urlTimeoutMs = URL_TIMEOUT_MS, registerWaitMs = REGISTER_WAIT_MS, stopGraceMs = STOP_GRACE_MS, onSpawn = null }) {
   return new Promise((resolve, reject) => {
     let configFile;
     try { configFile = pinnedConfigPath(); }
@@ -266,14 +273,18 @@ function startTunnel({ bin, port, spawn = nodeSpawn, env, urlTimeoutMs = URL_TIM
     try { proc = spawn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); }
     catch (e) { return reject(new Error(`could not start cloudflared: ${String((e && e.message) || e)}`)); }
     const lines = [];
-    let tail = "", partial = "", url = null, registered = false, settled = false;
+    let tail = "", partial = "", url = null, registered = false, settled = false, gone = false;
     let urlTimer = null, regTimer = null;
     let exitResolve; const exited = new Promise((r) => { exitResolve = r; });
     const clear = () => { if (urlTimer) clearTimeout(urlTimer); if (regTimer) clearTimeout(regTimer); urlTimer = regTimer = null; };
     const logs = () => lines.slice();
     const fail = (msg) => {
       if (settled) return; settled = true; clear();
-      try { proc.kill("SIGTERM"); } catch {}
+      if (!onSpawn && !gone) {
+        try { proc.kill("SIGTERM"); } catch {}
+        const t = setTimeout(() => { if (!gone) { try { proc.kill("SIGKILL"); } catch {} } }, stopGraceMs);
+        if (t.unref) t.unref();
+      }
       const last = lines.slice(-6).filter(Boolean).join("\n");
       reject(new Error(msg + (last ? `\ncloudflared said:\n${last}` : "")));
     };
@@ -302,12 +313,19 @@ function startTunnel({ bin, port, spawn = nodeSpawn, env, urlTimeoutMs = URL_TIM
     if (proc.stderr) proc.stderr.on("data", onData);
     proc.on("error", (e) => {
       lines.push(`process error: ${String((e && e.message) || e)}`);
+      // A spawn that never happened (no pid) emits error and no exit, so the
+      // owner would otherwise wait out both grace periods for nothing.
+      if (!proc.pid && !gone) { gone = true; exitResolve({ code: null, signal: null }); }
       fail(`cloudflared could not be started: ${String((e && e.message) || e)}`);
     });
     proc.on("exit", (code, signal) => {
+      gone = true;
       exitResolve({ code, signal });
-      fail(`cloudflared exited (${signal ? `signal ${signal}` : `code ${code}`}) before it printed a tunnel URL`);
+      const how = signal ? `signal ${signal}` : `code ${code}`;
+      fail(url ? `cloudflared exited (${how}) after printing ${url}, before the tunnel registered`
+               : `cloudflared exited (${how}) before it printed a tunnel URL`);
     });
+    if (onSpawn) onSpawn(proc, exited);
     urlTimer = setTimeout(() => fail(`cloudflared did not print a tunnel URL within ${Math.round(urlTimeoutMs / 1000)}s`), urlTimeoutMs);
     if (urlTimer.unref) urlTimer.unref();
   });
@@ -350,7 +368,7 @@ function portOpen(port, ms = PORT_PROBE_MS) {
 }
 function withDefaults(over) {
   return {
-    spawn: nodeSpawn, env: process.env, platform: process.platform, portOpen, refuse: null, cloudflared: null,
+    spawn: nodeSpawn, env: process.env, platform: process.platform, portOpen, refuse: null, cloudflared: null, createStaticServer,
     urlTimeoutMs: URL_TIMEOUT_MS, registerWaitMs: REGISTER_WAIT_MS, stopGraceMs: STOP_GRACE_MS, exitWaitMs: EXIT_WAIT_MS,
     minuteMs: 60000, maxPreviews: MAX_PREVIEWS,
     ...(over || {}),
@@ -434,6 +452,10 @@ async function teardown(entry, deps) {
   const srv = entry.server; entry.server = null;
   const closing = srv ? srv.close() : Promise.resolve();
   previews.delete(entry.id);
+  // The last preview out takes the pinned config with it. cloudflared read the
+  // file at boot and never again (no watcher in TunnelCommand), so a child
+  // still winding down does not miss it, and the next spawn writes it afresh.
+  if (!previews.size) removePinnedConfig();
   if (proc && !entry.exited) {
     if (!(await raceExit(entry, deps.stopGraceMs))) {
       try { proc.kill("SIGKILL"); } catch {}
@@ -452,6 +474,8 @@ function stopPreview(entry, reason, deps) {
 function stopAll(reason) {
   const deps = withDefaults();
   return Promise.all([...previews.values()].map((e) => stopPreview(e, reason || "the app is quitting", deps)))
+    // teardown already removed the file with the last entry; this sweeps the
+    // case where startTunnel was used on its own and nothing was registered.
     .then((r) => { if (!previews.size) removePinnedConfig(); return r; });
 }
 
@@ -470,20 +494,29 @@ function successText(e) {
 }
 /* Runs an approved plan. The checks that decided the approval are made again
    here, because the folder or the listener can change while the card is open,
-   and the answer is bound to what is there now. */
+   and the answer is bound to what is there now. For a folder that means the
+   same resolved path the card named and the same refusals, not only "still a
+   directory": a symlink dropped in its place while the card was open would
+   otherwise be followed by the file server to wherever it points. */
 async function startShare(ctx, state, plan, over) {
   const deps = withDefaults(over);
   const now = (ev) => { try { if (state && state.journal) state.journal(ev); else if (ctx && ctx.journal) ctx.journal(ev); } catch {} };
   const later = (ev) => { try { if (ctx && ctx.journal) ctx.journal(ev); } catch {} };
-  if (previews.size >= deps.maxPreviews)
-    return `error: ${previews.size} previews are already running (${[...previews.keys()].join(", ")}); stop one with share_preview {stop: true, id} before starting another`;
+  const full = () => `error: ${previews.size} previews are already running (${[...previews.keys()].join(", ")}); stop one with share_preview {stop: true, id} before starting another`;
+  if (previews.size >= deps.maxPreviews) return full();
   if (!deps.cloudflared) return installHint(deps.platform);
   if (plan.mode === "dir") {
-    let ok = false; try { ok = fs.statSync(plan.dir).isDirectory(); } catch {}
-    if (!ok) return `error: ${plan.dir} is no longer a directory`;
+    let real = null; try { if (fs.statSync(plan.dir).isDirectory()) real = fs.realpathSync(plan.dir); } catch {}
+    if (!real) return `error: ${plan.dir} is no longer a directory`;
+    if (real !== plan.dir) return `error: ${plan.dir} now leads to ${real}, which is not the folder the card named; nothing was published. Ask again with the folder you mean`;
+    const refused = refuseDir(real, ctx);
+    if (refused) return `error: ${refused}`;
   } else if (!(await deps.portOpen(plan.port))) {
     return `error: nothing is listening on 127.0.0.1:${plan.port} any more`;
   }
+  // The port probe awaited, and another start in this process may have taken
+  // the last slot meanwhile; the slot is claimed on the line after this check.
+  if (previews.size >= deps.maxPreviews) return full();
   const entry = {
     id: `p${++seq}`, state: "starting", mode: plan.mode, dir: plan.dir || null, port: plan.port || null,
     url: null, proc: null, server: null, exited: false, exitPromise: null, connected: false, logs: () => [],
@@ -494,26 +527,39 @@ async function startShare(ctx, state, plan, over) {
   try {
     if (plan.mode === "dir") {
       let srv;
-      try { srv = await createStaticServer(plan.dir, { port: plan.listenPort, refuse: deps.refuse, platform: deps.platform }); }
+      try { srv = await deps.createStaticServer(plan.dir, { port: plan.listenPort, refuse: deps.refuse, platform: deps.platform }); }
       catch (e) {
         throw new Error(e && e.code === "EADDRINUSE"
           ? `port ${plan.listenPort} is already in use; to expose the server that is running there, call share_preview with port only and no dir`
           : `could not start the file server: ${String((e && e.message) || e)}`);
       }
       entry.server = srv; entry.port = srv.port;
+      // A stop that landed while the listener was binding found no server and
+      // no child; nothing is spawned for an entry that is already unlisted.
+      if (entry.state === "stopping") throw new Error("the preview was stopped while it was starting");
     }
     const tun = await startTunnel({ bin: deps.cloudflared, port: entry.port, spawn: deps.spawn, env: childEnv(deps.env),
-      urlTimeoutMs: deps.urlTimeoutMs, registerWaitMs: deps.registerWaitMs });
-    entry.proc = tun.proc; entry.url = tun.url; entry.connected = tun.connected; entry.logs = tun.logs; entry.exitPromise = tun.exited;
-    tun.exited.then((x) => {
-      entry.exited = true;
-      if (entry.state === "stopping") return;
-      // The child went away on its own: network, a crash, a kill from outside.
-      // The listener behind it is closed too, so nothing keeps serving to a
-      // tunnel that no longer exists, and the registry says so.
-      later({ event_type: "PREVIEW_ENDED", tool_id: "share_preview", output_summary: `${entry.id} ${entry.url || ""}: cloudflared exited (${x && x.signal ? `signal ${x.signal}` : `code ${x && x.code}`})` });
-      stopPreview(entry, "the tunnel process exited", deps);
+      urlTimeoutMs: deps.urlTimeoutMs, registerWaitMs: deps.registerWaitMs, stopGraceMs: deps.stopGraceMs,
+      /* The child is on the entry from the moment it exists, so a stop that
+         lands while the link is pending signals it at once, and a start that
+         fails is torn down below with the same SIGTERM-then-SIGKILL as a
+         running preview. */
+      onSpawn: (proc, exited) => {
+        entry.proc = proc; entry.exitPromise = exited;
+        exited.then((x) => {
+          entry.exited = true;
+          // Starting: startTunnel rejects and the catch below tears down.
+          // Stopping: teardown is already under way. Running: the child went
+          // away on its own (network, a crash, a kill from outside); the
+          // listener behind it is closed too, so nothing keeps serving to a
+          // tunnel that no longer exists, and the registry says so.
+          if (entry.state !== "running") return;
+          later({ event_type: "PREVIEW_ENDED", tool_id: "share_preview", output_summary: `${entry.id} ${entry.url || ""}: cloudflared exited (${x && x.signal ? `signal ${x.signal}` : `code ${x && x.code}`})` });
+          stopPreview(entry, "the tunnel process exited", deps);
+        });
+      },
     });
+    entry.url = tun.url; entry.connected = tun.connected; entry.logs = tun.logs;
     if (entry.state === "stopping") throw new Error("the preview was stopped while it was starting");
     entry.state = "running";
     const ttl = plan.minutes * deps.minuteMs;
@@ -531,7 +577,13 @@ async function startShare(ctx, state, plan, over) {
       output_summary: `${entry.id} ${plan.mode === "dir" ? plan.dir : `port ${plan.port}`} -> ${entry.url}${entry.connected ? "" : " (not yet connected)"}, ${plan.minutes} min` });
     return successText(entry);
   } catch (e) {
+    // A stop already in flight owns the child's shutdown; wait for it rather
+    // than signalling the same process twice with two escalation clocks. The
+    // teardown after it only picks up what was acquired since (a listener
+    // that bound after the stop looked), and finds nothing else to do.
+    if (entry.stopping) { try { await entry.stopping; } catch {} }
     await teardown(entry, deps);
+    if (entry.stopReason) return `error: the preview was stopped while it was starting (${entry.stopReason}); nothing was published`;
     return `error: ${String((e && e.message) || e)}`;
   }
 }

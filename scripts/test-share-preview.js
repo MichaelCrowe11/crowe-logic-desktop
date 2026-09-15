@@ -69,6 +69,15 @@ function fakeSpawn(lines, opts = {}) {
     const child = new EventEmitter();
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
     child.pid = 40000 + calls.length; child.signals = []; child.exited = false;
+    // spawnError: the binary could not be started at all. Node then emits
+    // error with no pid and no exit event.
+    if (opts.spawnError) {
+      child.pid = undefined;
+      child.kill = (sig) => { child.signals.push(sig || "SIGTERM"); return false; };
+      calls.push({ bin, args, options, child });
+      setImmediate(() => child.emit("error", Object.assign(new Error(`spawn ${bin} EACCES`), { code: "EACCES" })));
+      return child;
+    }
     child.kill = (sig) => {
       sig = sig || "SIGTERM";
       child.signals.push(sig);
@@ -354,9 +363,60 @@ test("an approved dir share serves the folder on loopback, spawns cloudflared at
     assert.strictEqual(await refused(port), true, "the loopback server is gone with the tunnel");
     assert.strictEqual(events(ctx, "PREVIEW_STOPPED").length, 1);
     assert.strictEqual(ctx.approvalsSeen.length, 1, "stopping asks nothing");
+    assert.strictEqual(fs.existsSync(cfg), false, "the pinned config goes with the last preview, not only at quit");
+    assert.strictEqual(fs.existsSync(path.dirname(cfg)), false);
   } finally {
     delete process.env.CROWE_TEST_API_TOKEN; delete process.env.TUNNEL_ORIGIN_CERT;
     await S.stopAll("test cleanup");
+  }
+});
+
+test("a folder replaced while the card is open is checked again before anything is served", async () => {
+  // The card named the resolved dist/. While it was open, dist/ became a
+  // symlink to the home folder. "Still a directory" would pass; the start
+  // re-resolves the path and requires the folder the card named.
+  const ctx = makeCtx();
+  const dist = path.join(ctx.dir, "dist");
+  const named = fs.realpathSync(dist);
+  ctx.requestApproval = async (req) => {
+    ctx.approvalsSeen.push(req);
+    fs.renameSync(dist, dist + ".moved");
+    fs.symlinkSync(os.homedir(), dist);
+    return { approved: true };
+  };
+  try {
+    const out = await run(ctx, { dir: "dist" });
+    assert.match(out, new RegExp(`^error: ${named.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} now leads to .*not the folder the card named; nothing was published`), out);
+    assert.strictEqual(ctx.approvalsSeen.length, 1);
+    assert.strictEqual(ctx.spawn.calls.length, 0, "no tunnel was spawned");
+    assert.strictEqual(S.listShares().length, 0);
+    assert.strictEqual(events(ctx, "PREVIEW_STARTED").length, 0);
+    // A fresh card, drawn for the folder as it now is, is honoured: the
+    // refusal was about the swap, not the path.
+    fs.unlinkSync(dist); fs.mkdirSync(dist); fs.writeFileSync(path.join(dist, "index.html"), "other");
+    ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: true }; };
+    const again = await run(ctx, { dir: "dist" });
+    assert.match(again, /^preview live at/, again);
+    assert.strictEqual(ctx.approvalsSeen.length, 2);
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("two starts racing for the last slot cannot both take it", async () => {
+  const upstream = http.createServer((_q, res) => res.end("upstream"));
+  await new Promise((r) => upstream.listen(0, "127.0.0.1", r));
+  const port = upstream.address().port;
+  // A slow port probe, so both starts pass the capacity check before either
+  // has claimed a slot; the check is repeated after the await.
+  const ctx = makeCtx({}, { approve: true, previewDeps: { maxPreviews: 1, portOpen: () => new Promise((r) => setTimeout(() => r(true), 40)) } });
+  try {
+    const outs = await Promise.all([run(ctx, { port }), run(ctx, { port })]);
+    assert.strictEqual(outs.filter((o) => /^preview live at/.test(o)).length, 1, outs.join("\n---\n"));
+    assert.strictEqual(outs.filter((o) => /^error: 1 previews are already running \(p\d+\)/.test(o)).length, 1, outs.join("\n---\n"));
+    assert.strictEqual(ctx.spawn.calls.length, 1, "the loser was never spawned");
+    assert.strictEqual(S.listShares().length, 1);
+  } finally {
+    await S.stopAll("test cleanup");
+    await new Promise((r) => upstream.close(r));
   }
 });
 
@@ -524,6 +584,114 @@ test("a cloudflared that never prints a link is killed and reported with its las
   assert.deepStrictEqual(ctx.spawn.calls[0].child.signals, ["SIGTERM"]);
   assert.strictEqual(S.listShares().length, 0);
   assert.strictEqual(events(ctx, "PREVIEW_STARTED").length, 0);
+});
+
+test("a failed start whose child ignores SIGTERM still gets SIGKILL, because the child is on the entry before the link arrives", async () => {
+  const ctx = makeCtx({}, { approve: true,
+    spawn: fakeSpawn(["2026-09-14T00:40:12Z INF Requesting new quick Tunnel on trycloudflare.com..."], { ignoreTerm: true }),
+    previewDeps: { urlTimeoutMs: 80 } });
+  const t0 = Date.now();
+  const out = await run(ctx, { dir: "dist" });
+  assert.match(out, /^error: cloudflared did not print a tunnel URL within \ds/);
+  assert.deepStrictEqual(ctx.spawn.calls[0].child.signals, ["SIGTERM", "SIGKILL"], "the failure path escalates the way a stop does");
+  assert.ok(Date.now() - t0 >= 80 + FAST.stopGraceMs - 10, "SIGKILL waited out the grace period");
+  assert.strictEqual(S.listShares().length, 0);
+});
+
+test("startTunnel on its own escalates to SIGKILL when a failed start's SIGTERM is ignored", async () => {
+  const spawn = fakeSpawn([], { chunks: [], ignoreTerm: true });
+  await assert.rejects(S.startTunnel({ bin: "/fake/bin/cloudflared", port: 1, spawn, env: {}, urlTimeoutMs: 50, stopGraceMs: 60 }), /did not print a tunnel URL/);
+  const child = spawn.calls[0].child;
+  assert.deepStrictEqual(child.signals, ["SIGTERM"]);
+  await new Promise((r) => setTimeout(r, 130));
+  assert.deepStrictEqual(child.signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("quitting while a tunnel is still starting signals the child at once and the start reports the stop", async () => {
+  const spawn = fakeSpawn([], { chunks: [] });
+  const ctx = makeCtx({}, { approve: true, spawn, previewDeps: { urlTimeoutMs: 5000 } });
+  try {
+    const pending = run(ctx, { dir: "dist" });
+    await tick();
+    assert.strictEqual(S.listShares()[0].state, "starting");
+    const child = spawn.calls[0].child;
+    const quit = S.stopAll("the app is quitting");
+    assert.deepStrictEqual(child.signals, ["SIGTERM"], "the child is known to the registry before the link arrives");
+    assert.strictEqual(S.listShares().length, 0);
+    await quit;
+    const out = await pending;
+    assert.match(out, /^error: the preview was stopped while it was starting \(the app is quitting\); nothing was published/);
+    assert.deepStrictEqual(child.signals, ["SIGTERM"], "the failure path did not signal it a second time");
+    assert.strictEqual(events(ctx, "PREVIEW_STARTED").length, 0);
+    assert.strictEqual(events(ctx, "PREVIEW_ENDED").length, 0, "a stop is not an unexpected exit");
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("quitting while the listener is still binding spawns nothing, and the listener is closed", async () => {
+  // The server takes a while to bind; the quit lands in that window, when the
+  // entry has neither a server nor a child. The start must notice on its way
+  // out rather than spawn a cloudflared that no registry entry names.
+  let release; const gate = new Promise((r) => { release = r; });
+  let made = null;
+  const slow = async (root, o) => { await gate; made = await S.createStaticServer(root, o); return made; };
+  const ctx = makeCtx({}, { approve: true, previewDeps: { createStaticServer: slow } });
+  try {
+    const pending = run(ctx, { dir: "dist" });
+    await tick();
+    assert.strictEqual(S.listShares()[0].state, "starting");
+    const quit = S.stopAll("the app is quitting");
+    assert.strictEqual(S.listShares().length, 0);
+    await quit;
+    release();
+    const out = await pending;
+    assert.match(out, /^error: the preview was stopped while it was starting \(the app is quitting\); nothing was published/);
+    assert.strictEqual(ctx.spawn.calls.length, 0, "nothing was spawned after the stop");
+    assert.ok(made, "the listener did bind, late");
+    assert.strictEqual(await refused(made.port), true, "and was closed on the way out");
+    assert.strictEqual(S.listShares().length, 0);
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("a failure that lands while a stop is already in flight does not signal the child a second time", async () => {
+  // The child ignores SIGTERM and never prints a link. The stop's grace clock
+  // and the start's URL timeout both run; the start must join the stop, not
+  // start its own SIGTERM-then-SIGKILL alongside it.
+  const spawn = fakeSpawn(["2026-09-14T00:40:12Z INF Requesting new quick Tunnel on trycloudflare.com..."], { ignoreTerm: true });
+  const ctx = makeCtx({}, { approve: true, spawn, previewDeps: { urlTimeoutMs: 60, stopGraceMs: 150 } });
+  try {
+    const pending = run(ctx, { dir: "dist" });
+    await tick();
+    const child = spawn.calls[0].child;
+    const stop = run(ctx, { stop: true });
+    await tick();
+    assert.deepStrictEqual(child.signals, ["SIGTERM"]);
+    const [out] = await Promise.all([pending, stop]);
+    assert.match(out, /^error: the preview was stopped while it was starting \(stopped by the agent\); nothing was published/);
+    assert.deepStrictEqual(child.signals, ["SIGTERM", "SIGKILL"], "one SIGTERM, one SIGKILL, in that order");
+    assert.strictEqual(S.listShares().length, 0);
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("a cloudflared that cannot be started at all is reported at once, without waiting out a grace period", async () => {
+  const ctx = makeCtx({}, { approve: true, spawn: fakeSpawn([], { spawnError: true }) });
+  const t0 = Date.now();
+  const out = await run(ctx, { dir: "dist" });
+  assert.match(out, /^error: cloudflared could not be started: spawn .* EACCES/);
+  assert.ok(Date.now() - t0 < FAST.stopGraceMs, "no grace period was waited for a process that never existed");
+  assert.deepStrictEqual(ctx.spawn.calls[0].child.signals, [], "nothing is signalled at a process that never started");
+  assert.strictEqual(S.listShares().length, 0);
+});
+
+test("a cloudflared that prints the link and then exits before registering says so, not that it never printed one", async () => {
+  const spawn = fakeSpawn(BANNER.slice(0, 6), { ignoreTerm: false });
+  const ctx = makeCtx({}, { approve: true, spawn, previewDeps: { registerWaitMs: 5000 } });
+  const pending = run(ctx, { dir: "dist" });
+  await tick();
+  const child = spawn.calls[0].child;
+  child.exited = true; child.emit("exit", 2, null);
+  const out = await pending;
+  assert.match(out, new RegExp(`^error: cloudflared exited \\(code 2\\) after printing ${LINK.replace(/\./g, "\\.")}, before the tunnel registered`), out);
+  assert.strictEqual(S.listShares().length, 0);
 });
 
 test("a cloudflared that exits before printing a link is reported as such", async () => {
