@@ -280,11 +280,14 @@ async function gateAction(ctx, state, req) {
   const mode = cfg.approvals || "high-risk";       // off | high-risk | strict
   const jrnl = (ev) => { if (state && state.journal) state.journal(ev); };
   if (req.risk === RISK.AUTO) return { ok: true };
-  if (mode === "off") {
+  /* alwaysAsk: the action spends the user's money, opens a public link or sends
+     mail, none of which a diff review can show afterwards. Approvals "off" spares
+     the user the local prompts; it does not make the card for those disappear. */
+  if (mode === "off" && !req.alwaysAsk) {
     jrnl({ event_type: "APPROVAL_SKIPPED", tool_id: req.kind, input_hash: req.hash, output_summary: `approvals off: ${req.why}` });
     return { ok: true };
   }
-  const floor = mode === "strict" || req.floorReview ? RISK.REVIEW : RISK.STRICT;
+  const floor = mode === "strict" || req.floorReview || req.alwaysAsk ? RISK.REVIEW : RISK.STRICT;
   if (req.risk < floor) return { ok: true };
   if (typeof ctx.requestApproval !== "function")
     return { ok: false, text: `blocked: this action ${req.why}, which needs the user's explicit approval, and this build has no way to ask for it. Tell the user exactly what you wanted to run and let them run it themselves.` };
@@ -761,7 +764,7 @@ async function execTool(ctx, name, args, route, state) {
       const plan = await SharePreview.planShare(ctx, a, deps);
       if (plan.error) return `error: ${plan.error}`;
       const gate = await gateAction(ctx, state, {
-        risk: RISK.STRICT, why: plan.why, kind: "share_preview", title: plan.title,
+        risk: RISK.STRICT, why: plan.why, kind: "share_preview", title: plan.title, alwaysAsk: true,
         detail: plan.detail, hash: inputHash("share_preview", plan.key),
       });
       if (!gate.ok) return gate.text;

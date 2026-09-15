@@ -232,6 +232,18 @@ test("the verifier cannot publish", async () => {
   assert.strictEqual(ctx.approvalsSeen.length, 0);
 });
 
+test("approvals off still asks: a public link leaves the machine, so the card stays", async () => {
+  const off = makeCtx({ approvals: "off" }, { approve: false });
+  const out = await run(off, { dir: "dist", minutes: 45 });
+  assert.match(out, /^blocked: the user DENIED this action/);
+  assert.strictEqual(off.approvalsSeen.length, 1, "approvals off drew the card anyway");
+  assert.ok(!off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED"), "nothing was skipped");
+  assert.strictEqual(off.spawn.calls.length, 0, "nothing started");
+  const offYes = makeCtx({ approvals: "off" }, { approve: true });
+  const ok = await run(offYes, { dir: "dist", minutes: 45 });
+  assert.ok(!/^blocked:/.test(ok), ok);
+  assert.strictEqual(offYes.approvalsSeen.length, 1);
+});
 test("in Execute it pauses for a strict approval card bound to the folder and the duration, and a denial starts nothing", async () => {
   const ctx = makeCtx({}, { approve: false });
   const out = await run(ctx, { dir: "dist", minutes: 45 });
