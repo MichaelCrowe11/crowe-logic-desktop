@@ -293,11 +293,14 @@ async function gateAction(ctx, state, req) {
   const mode = cfg.approvals || "high-risk";       // off | high-risk | strict
   const jrnl = (ev) => { if (state && state.journal) state.journal(ev); };
   if (req.risk === RISK.AUTO) return { ok: true };
-  if (mode === "off") {
+  /* alwaysAsk: the action spends the user's money, opens a public link or sends
+     mail, none of which a diff review can show afterwards. Approvals "off" spares
+     the user the local prompts; it does not make the card for those disappear. */
+  if (mode === "off" && !req.alwaysAsk) {
     jrnl({ event_type: "APPROVAL_SKIPPED", tool_id: req.kind, input_hash: req.hash, output_summary: `approvals off: ${req.why}` });
     return { ok: true };
   }
-  const floor = mode === "strict" || req.floorReview ? RISK.REVIEW : RISK.STRICT;
+  const floor = mode === "strict" || req.floorReview || req.alwaysAsk ? RISK.REVIEW : RISK.STRICT;
   if (req.risk < floor) return { ok: true };
   if (typeof ctx.requestApproval !== "function")
     return { ok: false, text: `blocked: this action ${req.why}, which needs the user's explicit approval, and this build has no way to ask for it. Tell the user exactly what you wanted to run and let them run it themselves.` };
@@ -760,9 +763,9 @@ async function toolGenerateImage(ctx, args, state) {
   const found = scanForSecrets(prompt);
   const shown = redactSecrets(prompt);
   const gate = await gateAction(ctx, state, {
-    // Every call asks, in every approval mode but "off": it is a charge on the
-    // user's account, and no diff review will show it to them afterwards.
-    risk: found.length ? RISK.STRICT : RISK.REVIEW, floorReview: true,
+    // Every call asks, in every approval mode, "off" included: it is a charge on
+    // the user's account, and no diff review will show it to them afterwards.
+    risk: found.length ? RISK.STRICT : RISK.REVIEW, floorReview: true, alwaysAsk: true,
     kind: "generate_image", title: "Generate an image",
     why: found.length ? `sends what looks like ${found.join(" and ")} to ${spec.label}, billed to the user's key`
       : `sends a prompt to ${spec.label}, off this machine and billed to the user's key`,

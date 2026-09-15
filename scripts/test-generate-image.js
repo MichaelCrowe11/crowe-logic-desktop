@@ -4,7 +4,7 @@
 // of a failure is the thing under test; the key comes from a stubbed
 // ctx.imageCredential, and the workspace is a temp directory. What is pinned
 // here: the file lands under assets/generated in the workspace, the tool sits at
-// the Edit tier, every call asks the user first in every approval mode but "off"
+// the Edit tier, every call asks the user first in every approval mode, "off" included
 // and a denial leaves nothing behind, not even the directory,
 // a failure names the code or the timeout the way Node's fetch really throws it,
 // the saved file is on the rollback list by name, and the key never appears in
@@ -234,10 +234,15 @@ test("every call asks first: the default mode and strict both ask, a denial send
     assert.strictEqual(yes.approvalsSeen.length, 1);
     assert.ok(yes.journalEvents.some((e) => e.event_type === "APPROVAL_GRANTED"));
   }
+  // Approvals "off" spares the local prompts; a charge on the user's account still asks.
   const off = makeCtx({ approvals: "off" }, { approve: false });
-  assert.strictEqual((await run(off, { prompt: "a plain prompt" })).status, "SUCCESS");
-  assert.strictEqual(off.approvalsSeen.length, 0);
-  assert.ok(off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED" && /approvals off/.test(e.output_summary)));
+  assert.strictEqual((await run(off, { prompt: "a plain prompt" })).status, "BLOCKED");
+  assert.strictEqual(off.approvalsSeen.length, 1);
+  assert.ok(!off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED"));
+  assert.strictEqual(off.fetch.calls.length, 0);
+  const offYes = makeCtx({ approvals: "off" }, { approve: true });
+  assert.strictEqual((await run(offYes, { prompt: "a plain prompt" })).status, "SUCCESS");
+  assert.strictEqual(offYes.approvalsSeen.length, 1);
   const mute = makeCtx({}, { approve: null });
   const out = await run(mute, { prompt: "a plain prompt" });
   assert.strictEqual(out.status, "BLOCKED");
