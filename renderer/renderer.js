@@ -236,6 +236,7 @@ function stageLabel(name) {
   if (name === "run_shell") return "executing";
   if (name === "write_file" || name === "edit_file") return "editing";
   if (name === "open_url") return "browsing";
+  if (name === "export_document") return "exporting";
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
   return "retrieving";
 }
@@ -404,6 +405,7 @@ function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
   const arg = ev.name === "run_shell" ? (ev.args.command || "")
     : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "export_document" ? `${ev.args.filename || "document"}.${ev.args.format || ""}`
     : ev.name === "search" ? (ev.args.pattern || "")
     : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;

@@ -269,7 +269,7 @@ test("the secret scanner knows a key from a mention of one", () => {
 test("the harness and these tests do not trip the scanner they define", () => {
   // A scanner that flags the file declaring its own patterns teaches the user to
   // approve without reading, which costs more than it saves.
-  for (const f of ["harness.js", "scripts/test-harness.js", "main.js"])
+  for (const f of ["harness.js", "export-document.js", "scripts/test-harness.js", "scripts/test-export-document.js", "main.js"])
     assert.deepStrictEqual(H.scanForSecrets(fs.readFileSync(path.join(__dirname, "..", f), "utf8")), [], f);
 });
 test("writing outside the workspace asks, even at the edit tier", async () => {
