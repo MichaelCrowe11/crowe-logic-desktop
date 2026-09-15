@@ -637,15 +637,20 @@ test("an approved send hands exactly the normalized message to main and reports 
   assert.match(called.output_summary, /^SUCCESS: sent to/);
   assert.ok(ctx.journalEvents.some((e) => e.event_type === "APPROVAL_GRANTED"));
 });
-test("strict approvals also stop it; approvals off skips the card and says so in the journal", async () => {
+test("strict approvals also stop it; approvals off still asks, since mail cannot be recalled", async () => {
   const strict = harnessCtx({ approvals: "strict" }, { approve: false });
   assert.match(await H.execTool(strict, "send_email", MSG, OP, stateFor(strict)), /^blocked:/);
   assert.strictEqual(strict.sent.length, 0);
+  // Approvals "off" spares the local prompts; mail leaves the machine, so the card stays.
   const off = harnessCtx({ approvals: "off" }, { approve: false });
   const out = await H.execTool(off, "send_email", MSG, OP, stateFor(off));
-  assert.match(out, /^sent to/);
-  assert.strictEqual(off.approvalsSeen.length, 0);
-  assert.ok(off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED" && e.tool_id === "send_email"));
+  assert.match(out, /^blocked:/);
+  assert.strictEqual(off.approvalsSeen.length, 1);
+  assert.strictEqual(off.sent.length, 0);
+  assert.ok(!off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED"));
+  const offYes = harnessCtx({ approvals: "off" }, { approve: true });
+  assert.match(await H.execTool(offYes, "send_email", MSG, OP, stateFor(offYes)), /^sent to/);
+  assert.strictEqual(offYes.approvalsSeen.length, 1);
 });
 test("a malformed message is refused before any card is shown", async () => {
   const ctx = harnessCtx({}, { approve: true });
