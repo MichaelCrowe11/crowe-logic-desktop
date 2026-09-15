@@ -187,6 +187,26 @@ function main() {
   fs.writeFileSync(path.join(www, "build.json"),
     JSON.stringify({ version, builtFor: "capacitor", stamp }, null, 2) + "\n");
 
+  /* The shell's script tags are the other allowlist. A renderer module added to
+     index.html with a <script> tag but not to COPY above ships as a tag that
+     points at nothing: the phone's webview logs a 404, the feature is silently
+     absent on the phone, and every desktop test passes because from the
+     checkout the file is right there. Three branches did exactly that in one
+     week (activity.js, messages.js, first-run.js). So the page this build wrote
+     is read back, and every local script and stylesheet it names must be a
+     file in www. Same bargain as scripts/test-packaging.js, one layer down. */
+  const built = fs.readFileSync(path.join(www, "index.html"), "utf8");
+  const missing = [];
+  for (const m of built.matchAll(/<(?:script\b[^>]*\ssrc|link\b[^>]*\shref)="([^"]+)"/g)) {
+    const ref = m[1].split("?")[0];
+    if (/^(https?:)?\/\//.test(ref) || ref.startsWith("data:") || !/\.(m?js|css)$/.test(ref)) continue;
+    if (!fs.existsSync(path.join(www, ref))) missing.push(ref);
+  }
+  if (missing.length) {
+    throw new Error(`index.html loads ${missing.join(", ")} but nothing copies ${missing.length === 1 ? "it" : "them"} into www. ` +
+      "Add each to COPY (and BUSTED) in mobile/scripts/build-www.js, or strip the tag in buildIndex().");
+  }
+
   const files = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
