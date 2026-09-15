@@ -1070,6 +1070,18 @@ const harnessCtx = {
   // indistinguishable from a hand-logged one and both are equally correctable.
   growWrite: (type, record) => growWrite(type, record),
   growRead: (type) => growRead(type),
+  // The image tool's key, read at call time from the same encrypted store the
+  // Key Manager writes, and handed over as a value the harness keeps inside one
+  // request header. OpenAI first because it is the native images endpoint,
+  // OpenRouter otherwise. Null means no key, which the tool answers in words.
+  imageCredential: () => {
+    const store = readKeyStore();
+    for (const provider of ["openai", "openrouter"]) {
+      const secret = store[provider] && store[provider].value;
+      if (typeof secret === "string" && secret) return { provider, secret };
+    }
+    return null;
+  },
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();

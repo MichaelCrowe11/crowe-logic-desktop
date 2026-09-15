@@ -104,7 +104,9 @@ function sanitizeConfigPatch(raw) {
     const url = parsedUrl(patch.baseUrl.trim());
     if (url && isSafeGuestUrl(url.toString())) out.baseUrl = url.toString().replace(/\/$/, "").slice(0, 2048);
   }
-  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId"]) {
+  // imageModel overrides the image tool's per-provider default; the harness
+  // checks the id's shape again before it is sent.
+  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId", "imageModel"]) {
     if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" || key === "reposRoot" ? 4096 : 256);
   }
   // No token. Sign-in writes it in main; nothing in the renderer has a reason
