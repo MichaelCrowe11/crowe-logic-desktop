@@ -149,7 +149,12 @@ function resolveRequest(rootReal, encodedPath, refuse, platform = process.platfo
   let st; try { st = fs.statSync(joined); } catch { return { status: 404 }; }
   let target = joined;
   if (st.isDirectory()) {
-    if (!encodedPath.endsWith("/")) return { status: 301, location: encodedPath + "/" };
+    /* The redirect echoes the path as it was sent, so runs of slashes are
+       collapsed first: a Location of "//assets/" is read by a browser as a
+       protocol-relative URL to a host called assets, not as a path here. Empty
+       segments were already dropped from the lookup above, so this changes
+       only where the client is sent, never what was found. */
+    if (!encodedPath.endsWith("/")) return { status: 301, location: encodedPath.replace(/\/{2,}/g, "/") + "/" };
     target = path.join(joined, "index.html");
   }
   let real; try { real = fs.realpathSync(target); } catch { return { status: 404 }; }
@@ -521,7 +526,9 @@ function stopAllForQuit(reason, holdMs = STOP_GRACE_MS + EXIT_WAIT_MS + 1000) {
   // was already winding down when the quit landed.
   const pending = [...inFlight];
   if (!pending.length) return null;
-  const settled = Promise.all(pending).then(() => undefined, () => undefined);
+  // allSettled, not all: a teardown that rejected would otherwise release the
+  // hold while the others were still bringing their children down.
+  const settled = Promise.allSettled(pending).then(() => undefined);
   let t = null;
   const bound = new Promise((r) => { t = setTimeout(r, holdMs); });
   return Promise.race([settled, bound]).then(() => { clearTimeout(t); });

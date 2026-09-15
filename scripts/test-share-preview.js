@@ -354,6 +354,14 @@ test("an approved dir share serves the folder on loopback, spawns cloudflared at
     assert.match(await raw(port, "GET /assets/../index.html"), /^HTTP\/1\.1 404/, "a dot-dot segment is refused even when following it would land in the tree");
     assert.match(await raw(port, "GET /assets/%2e%2e/index.html"), /^HTTP\/1\.1 404/, "and so is its percent-encoded spelling");
     assert.match(await raw(port, "GET /./index.html"), /^HTTP\/1\.1 404/, "a single-dot segment likewise");
+    // The raw target is also what the directory redirect echoes. A browser
+    // reads "Location: //assets/" as a protocol-relative URL to a host called
+    // assets, so runs of slashes are collapsed in the redirect and nowhere else.
+    const doubled = await raw(port, "GET //assets");
+    assert.match(doubled, /^HTTP\/1\.1 301/, "empty segments are dropped, so a doubled slash still finds the folder");
+    assert.match(doubled, /^Location: \/assets\/\r?$/m, "and the redirect is a path on this origin, not //assets/");
+    assert.match(await raw(port, "GET ///assets"), /^Location: \/assets\/\r?$/m, "however many slashes were sent");
+    assert.match(await raw(port, "GET /%2f/assets"), /^Location: \/%2f\/assets\/\r?$/m, "an encoded slash is not a slash and is left as sent");
     assert.match(await raw(port, "GET http://preview.invalid/index.html"), /^HTTP\/1\.1 400/, "an absolute-form target is for a proxy, not this server");
     assert.match(await raw(port, "GET /index.html?v=1"), /^HTTP\/1\.1 200/, "the query string is not part of the path");
     assert.match(await raw(port, "GET /assets%5c..%5c..%5csecret.txt"), /^HTTP\/1\.1 400/, "a backslash in the path is refused outright");
