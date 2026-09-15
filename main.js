@@ -1135,9 +1135,14 @@ const ptyProcs = new Map();
    environment, the same one Terminal.app would give them, and the gateway token
    is not in it - it lives in the auth store. */
 function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
+/* The autonomy tier is the agent's leash, not the operator's. A terminal the
+   user opens is the user typing, the same as Terminal.app, and gating it by the
+   agent's tier made the default layout open a terminal that refused to start.
+   The gate stays for panels that hand the shell to an agent (kind "agent"),
+   where the tier's "no shell" promise is the point. */
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
   ptyProcs.set(id, proc);
@@ -1456,7 +1461,7 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     reposRoot: c.reposRoot,

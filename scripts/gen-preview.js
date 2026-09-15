@@ -31,6 +31,7 @@ const BUSTED = [
   "styles.css",
   "mark-geometry.js",
   "mark.js",
+  "first-run.js",
   "renderer.js",
   "preview-shim.js",
 ];
