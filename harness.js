@@ -192,6 +192,24 @@ function classifyCommand(command) {
   return { risk: RISK.AUTO, why: "", readOnly: READ_ONLY_CMD_RE.test(c) };
 }
 
+/* run_shell runs every command in its own one-shot process, so a `cd` alone on
+   its line is the one command the harness interprets itself: it moves the
+   workspace cwd. Only a bare one. `cd X && cmd`, `cd X; cmd`, `cd X | cmd` are
+   commands for the shell, which applies the cd to that process, which is what
+   the line means; they return null here and run like any other command.
+   `dir` is the literal folder (quotes and backslash escapes removed). `dynamic`
+   marks a bare cd this handler cannot resolve on its own: $HOME, $(pwd), a
+   backtick, a redirect, or no folder at all. */
+const BARE_CD_RE = /^\s*cd\s+(?:"([^"$`\\]*)"|'([^']*)'|((?:\\.|[^\s"';&|<>()`$\\])+))\s*$/;
+function parseBareCd(command) {
+  const s = String(command || "");
+  if (!/^\s*cd(?:\s|$)/.test(s)) return null;
+  const m = BARE_CD_RE.exec(s);
+  if (m) return { dir: m[1] ?? m[2] ?? m[3].replace(/\\(.)/g, "$1") };
+  if (/[;&|\n]/.test(s)) return null;
+  return { dynamic: true, token: s.trim().slice(2).trim() };
+}
+
 /* Values that must not be written into a file. The blocklist above stops the agent
    opening a credentials file; it does nothing about the opposite direction, an
    agent putting a live key into ordinary source, which is how a secret ends up in
@@ -652,9 +670,19 @@ async function execTool(ctx, name, args, route, state) {
     if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
-      const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
-      if (m) {
-        const t = resolvePath(ctx, m[1].trim().replace(/^["']|["']$/g, ""));
+      /* Only a bare `cd <dir>`, alone on its line, moves the workspace cwd. A
+         compound line such as `cd X && node y` is a command for the shell, which
+         applies the cd to that one process, which is what the line means. The
+         earlier handler took every line that began with cd as a directory name
+         and answered "no such directory: X && node y", twice, on camera. */
+      const cd = parseBareCd(args.command);
+      if (cd) {
+        if (cd.dynamic) {
+          return cd.token
+            ? `cd: the working folder moves only for a literal path alone on its line; \`${cd.token}\` needs the shell to expand it. Give the path itself, or run the command on one line: cd ${cd.token} && <command>.`
+            : `cd: name the folder. The working folder is ${ctx.getCwd()}.`;
+        }
+        const t = resolvePath(ctx, cd.dir);
         if (fs.existsSync(t) && fs.statSync(t).isDirectory()) { ctx.setCwd(t); return `cwd -> ${t}`; }
         return `cd: no such directory: ${t}`;
       }
@@ -1631,7 +1659,7 @@ module.exports = {
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
   BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
-  RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
+  RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, parseBareCd, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,
   gateOutsideWorkspace, gateSecretContent,
