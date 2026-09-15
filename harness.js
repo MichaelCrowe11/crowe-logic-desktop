@@ -640,7 +640,10 @@ function toolListDir(ctx, args) {
    path; export-document.js decides what it may be. */
 async function toolExportDocument(ctx, state, args) {
   const format = String(args.format ?? "").trim().toLowerCase();
-  if (!Object.hasOwn(Doc.FORMATS, format)) return `rejected: format must be pdf, html, or md (got ${JSON.stringify(args.format ?? null)})`;
+  // The rejected value is not repeated: the result line becomes a tool_result
+  // event and the journal row's output_summary, and a credential-shaped string
+  // handed in as the format would otherwise be persisted by both.
+  if (!Object.hasOwn(Doc.FORMATS, format)) return "rejected: format must be pdf, html, or md";
   const markdown = String(args.markdown ?? "");
   if (!markdown.trim()) return "rejected: markdown is empty, so there is nothing to export";
   if (markdown.length > Doc.MAX_MARKDOWN_CHARS) return `rejected: the document is ${markdown.length} characters and the limit is ${Doc.MAX_MARKDOWN_CHARS}. Split it into parts.`;

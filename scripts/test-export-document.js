@@ -271,6 +271,18 @@ test("a credential in the document asks first, and the value is never repeated",
   const yes = makeCtx({}, { approve: true });
   assert.match((await exportDoc(yes, { markdown: `key ${key}`, filename: "keys", format: "md" })).text, /^saved keys\.md/);
 });
+test("a rejected format is named by rule, never by value", async () => {
+  // The result line becomes a tool_result event and the journal row's output_summary,
+  // so a credential-shaped string handed in as the format must not come back in it.
+  const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+  const ctx = makeCtx({}, { approve: true });
+  const out = await exportDoc(ctx, { markdown: "x", filename: "notes", format: key });
+  assert.strictEqual(out.text, "rejected: format must be pdf, html, or md");
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "an invalid format asks nothing");
+  for (const s of [out.text, JSON.stringify(ctx.journalEvents)]) assert.ok(!s.includes(key), "the format value must not be echoed");
+  assert.ok(!fs.existsSync(exportsDir(ctx)));
+  assert.strictEqual(ctx.printed.length, 0);
+});
 test("a credential-shaped file name is refused before anything asks, and the name is never repeated", async () => {
   // Refused rather than gated: the path is what the approval card, the journal and
   // the result would all repeat, so a gate naming the path would echo the value.
