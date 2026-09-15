@@ -31,9 +31,9 @@ jobs:
     env:
       KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -43,16 +43,16 @@ jobs:
 
       # Capacitor 8 needs Java 21. Temurin is what the electronuserland and
       # Android images ship, so the same toolchain builds here and locally.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # The www build runs from the repo root (build-www.js reads renderer/ and
       # mobile/src/), then Capacitor copies it into the Android project.
@@ -97,7 +97,7 @@ jobs:
           "$ANDROID_HOME"/build-tools/36.0.0/aapt dump badging "$APK" | grep -E "^package:|^application-label:" || true
           "$ANDROID_HOME"/build-tools/36.0.0/apksigner verify --print-certs "$APK" 2>&1 | head -5 || echo "APK is unsigned (no keystore secrets)"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: crowe-logic-android
           path: |
