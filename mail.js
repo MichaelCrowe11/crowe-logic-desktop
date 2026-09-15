@@ -100,6 +100,30 @@ function accountFromEnv(env) {
   return { host: endpoint.host, port: endpoint.port, implicitTls: endpoint.port === IMPLICIT_TLS_PORT, user, password, from: user };
 }
 function isConfigured(env) { return accountFromEnv(env) !== null; }
+/* The pair a parsed account holds, checked again by whoever is about to name
+   it on a card or send with it: a bare host name or IP (IPv6 without
+   brackets) and an integer port in range. It goes back through parseEndpoint
+   so a scheme, a path, sign-in details, or a second port inside the host are
+   refused by the same grammar the settings field is held to. */
+function isEndpoint(host, port) {
+  if (typeof host !== "string" || !Number.isInteger(port) || port < 1 || port > 65535) return false;
+  const ep = parseEndpoint(net.isIP(host) === 6 ? `[${host}]:${port}` : `${host}:${port}`);
+  return ep !== null && ep.host === host && ep.port === port;
+}
+function endpointString(host, port) { return net.isIP(host) === 6 ? `[${host}]:${port}` : `${host}:${port}`; }
+/* What may be said about an account outside this module: the sender and the
+   server, never the password. Null unless every piece has the right shape,
+   so a caller holding one can show it and compare it without re-checking. */
+function accountIdentity(account) {
+  if (!account || typeof account !== "object" || !isAddress(account.from) || !isEndpoint(account.host, account.port)) return null;
+  return { from: account.from, host: account.host, port: account.port };
+}
+/* Is the account in hand the one the user approved? Either side may be a full
+   account or an identity; a side that is missing or malformed never matches. */
+function sameIdentity(a, b) {
+  const x = accountIdentity(a), y = accountIdentity(b);
+  return Boolean(x && y) && x.from === y.from && x.host === y.host && x.port === y.port;
+}
 
 // ─── The message ─────────────────────────────────────────────────────────────
 /* Normalize the tool's arguments into exactly what will be sent, or say why it
@@ -468,9 +492,18 @@ async function sendMail(account, message, io = {}) {
     submitted = conv.writeRaw(`${dotStuff(built.raw)}.\r\n`);
     if (!submitted) throw new SmtpError("the connection was gone before the message was written");
     const fin = await conv.read();
-    // Only 250 is acceptance. A 4xx or 5xx is a refusal; any other code is a
-    // server speaking outside the grammar, and the message's fate is unknown.
-    if (fin.code !== 250) throw new SmtpError(`the server did not accept the message (${fin.code} ${redact(fin.text)})`, { code: fin.code, outcome: fin.code >= 400 ? "not_sent" : "unknown" });
+    // Only 250 is acceptance. A 4xx or 5xx is a refusal and the message did
+    // not go. Any other code arrives after the server holds the whole message
+    // and is not a verdict RFC 5321 defines, 6xx to 9xx included, so the fate
+    // is unknown and is worded that way rather than as a refusal, which would
+    // invite a second copy.
+    if (fin.code !== 250) {
+      const refused = fin.code >= 400 && fin.code < 600;
+      throw new SmtpError(refused
+        ? `the server did not accept the message (${fin.code} ${redact(fin.text)})`
+        : `the server answered the message with a code that is not a verdict (${fin.code} ${redact(fin.text)})`,
+      { code: fin.code, outcome: refused ? "not_sent" : "unknown" });
+    }
     confirmed = true;
     // Accepted is accepted: a QUIT that goes wrong, or is never answered,
     // changes nothing about it and gets two seconds, not the whole deadline.
@@ -499,7 +532,7 @@ async function sendMail(account, message, io = {}) {
 module.exports = {
   PLUGIN_ID, TOOLS, ENV, ENV_KEYS: Object.values(ENV),
   DEFAULT_PORT, IMPLICIT_TLS_PORT, MAX_RECIPIENTS, MAX_SUBJECT_CHARS, MAX_BODY_CHARS,
-  isAddress, parseEndpoint, accountFromEnv, isConfigured,
+  isAddress, parseEndpoint, accountFromEnv, isConfigured, isEndpoint, endpointString, accountIdentity, sameIdentity,
   normalizeMessage, buildMessage, dotStuff, subjectHeader, addressHeader, rfc5322Date, parseExtensions, clientNameFor,
   sendMail, SmtpError,
 };

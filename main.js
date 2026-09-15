@@ -1097,8 +1097,17 @@ const harnessCtx = {
      only the server's verdict goes back. No IPC handler sends mail; the one
      road to sendMail is the harness gate in front of send_email. */
   mailConfigured: () => PLUGIN_MANAGED.has(mail.PLUGIN_ID) && mail.isConfigured(pluginEnv(mail.PLUGIN_ID)),
-  mailFrom: () => { const a = mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID)); return a ? a.from : null; },
-  sendMail: (message) => mail.sendMail(mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID)), message, { mailer: `Crowe Logic ${app.getVersion()}` }),
+  // The sender and the server for the approval card; the password stays here.
+  mailAccount: () => mail.accountIdentity(mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID))),
+  /* Pinned to the account the card showed: the store is read once, and if the
+     sender or the server it holds is not what the user approved, nothing
+     goes. The harness makes the same check a moment earlier; this one stands
+     where the credentials are actually in hand. */
+  sendMail: (message, approved) => {
+    const account = mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID));
+    if (!mail.sameIdentity(account, approved)) return Promise.reject(new mail.SmtpError("the Mail account is not the one the approval card showed"));
+    return mail.sendMail(account, message, { mailer: `Crowe Logic ${app.getVersion()}` });
+  },
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();

@@ -85,7 +85,7 @@ Each item names the file that holds it.
 - Phone pairing over a QR code with per-device tokens that survive a restart. `companion.js`, `qr.js`, tested in `scripts/test-companion.js` and `scripts/test-qr.js`.
 - Cultivation records and a poller for Crowe Sense readings. `grow-schema.js`, `sense.js`, tested in `scripts/test-sense.js`.
 - Plugins declared in `plugins.builtin.json`, described in `docs/PLUGINS.md`.
-- Mail: a `send_email` tool that submits over SMTP with STARTTLS or implicit TLS and an app password, offered only while the Mail plugin is on, gated at Execute behind an approval card that shows the whole message. `mail.js`, tested in `scripts/test-mail.js`.
+- Mail: a `send_email` tool that submits over SMTP with STARTTLS or implicit TLS and an app password, offered only while the Mail plugin is on, gated at Execute behind an approval card that shows the whole message and names the sender and the SMTP server, both re-checked at send time. `mail.js`, tested in `scripts/test-mail.js`.
 - Install-time choice of spaces through `CROWE_SPACES` or `croweSpaces` in the packaged `package.json`. `main.js`.
 - Update checks through `electron-updater` against the release feeds named under `build.publish` in `package.json`. `main.js`.
 - A phone build of the same renderer in a Capacitor shell. `mobile/`.

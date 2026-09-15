@@ -8,8 +8,10 @@
 // STARTTLS upgrade and a real implicit-TLS listener under a certificate minted
 // for this run (openssl is required; CI runs on ubuntu, where it is present).
 // The harness: send_email is offered only while Mail is on, refused below
-// Execute, stopped at an approval card whose hash is bound to the message, and
-// reported as "possibly sent" when the server's verdict never arrives.
+// Execute, stopped at an approval card whose hash is bound to the message and
+// to the sender and server it names (both re-checked for shape before the card
+// and again after it), and reported as "possibly sent" when the server's
+// verdict never arrives or is not one RFC 5321 defines.
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -93,6 +95,8 @@ function smtpServer(opts = {}) {
           if (opts.afterData === "echo") { send(`550 5.7.1 rejected, you sent ${password} as the password`); continue; }
           if (opts.afterData === "odd") { send("354 go on"); continue; }
           if (opts.afterData === "reject") { send("552 5.3.4 message too big"); continue; }
+          // Any literal reply line stands in for a server verdict of that code.
+          if (/^\d{3}[ -]/.test(String(opts.afterData || ""))) { send(opts.afterData); if (opts.closeAfterVerdict) sock.end(); continue; }
           send("250 2.0.0 OK queued as ABC123"); continue;
         }
         log.push(line);
@@ -115,8 +119,17 @@ function smtpServer(opts = {}) {
           send(pass === password ? "235 2.7.0 Accepted" : "535 5.7.8 Username and Password not accepted"); continue;
         }
         if (up.startsWith("MAIL FROM:")) { send("250 2.1.0 OK"); continue; }
-        if (up.startsWith("RCPT TO:")) { const addr = line.slice(8).replace(/[<>\s]/g, ""); send(opts.rcpt ? opts.rcpt(addr) : "250 2.1.5 OK"); continue; }
-        if (up === "DATA") { inData = true; dataBuf = ""; send("354 Go ahead"); continue; }
+        if (up.startsWith("RCPT TO:")) {
+          if (opts.dropOnRcpt) { sock.destroy(); return; }
+          const addr = line.slice(8).replace(/[<>\s]/g, ""); send(opts.rcpt ? opts.rcpt(addr) : "250 2.1.5 OK"); continue;
+        }
+        if (up === "DATA") {
+          inData = true; dataBuf = "";
+          // The 354 is flushed before the line is cut, so the client has been
+          // told to go ahead and then loses the server mid-message.
+          if (opts.dropOn354) { try { sock.write("354 Go ahead\r\n", () => sock.destroy()); } catch {} return; }
+          send("354 Go ahead"); continue;
+        }
         if (up === "QUIT") { send("221 2.0.0 Bye"); sock.end(); continue; }
         send("502 5.5.2 Command not implemented");
       }
@@ -220,7 +233,10 @@ test("main.js wires Mail as a built-in plugin with no IPC road to sending", () =
   const main = read("main.js");
   assert.match(main, /const BUILTIN_PLUGIN_TOOLS = \{ \[mail\.PLUGIN_ID\]: mail\.TOOLS \}/, "tool names come from mail.js, not the manifest");
   assert.match(main, /function pluginBuiltinTools\(p\) \{ return p && !p\.mcp && BUILTIN_PLUGIN_TOOLS\[p\.id\]/, "an entry that names a server is never a built-in");
-  assert.match(main, /sendMail: \(message\) => mail\.sendMail\(mail\.accountFromEnv\(pluginEnv\(mail\.PLUGIN_ID\)\)/, "credentials are read from the encrypted store at send time");
+  assert.match(main, /sendMail: \(message, approved\) => \{\s*const account = mail\.accountFromEnv\(pluginEnv\(mail\.PLUGIN_ID\)\);\s*if \(!mail\.sameIdentity\(account, approved\)\) return Promise\.reject\(/, "credentials are read from the encrypted store at send time and the send is pinned to the identity the card showed");
+  assert.match(main, /return mail\.sendMail\(account, message, \{ mailer:/, "the pinned account is the one that sends");
+  assert.match(main, /mailAccount: \(\) => mail\.accountIdentity\(mail\.accountFromEnv\(pluginEnv\(mail\.PLUGIN_ID\)\)\)/, "the card gets the sender and server, never the password");
+  assert.ok(!/mailFrom/.test(main), "the sender-only read is gone");
   assert.match(main, /mailConfigured: \(\) => PLUGIN_MANAGED\.has\(mail\.PLUGIN_ID\) && mail\.isConfigured/, "the tool is offered only while Mail is on");
   assert.ok(!/ipcMain\.handle\("crowe:mail/.test(main), "no renderer channel sends mail; the harness gate is the only road");
   const pkg = JSON.parse(read("package.json"));
@@ -246,6 +262,34 @@ test("parseEndpoint reads host, host:port, IPv4 and bracketed IPv6, and refuses 
   assert.deepStrictEqual(mail.parseEndpoint("[::1]:2525"), { host: "::1", port: 2525 });
   for (const bad of ["smtp://x.example.com", "x.example.com/path", "user@x.example.com", "x.example.com:0", "x.example.com:70000", "x example.com", "", null])
     assert.strictEqual(mail.parseEndpoint(bad), null, `refuses ${JSON.stringify(bad)}`);
+});
+test("isEndpoint, endpointString, accountIdentity and sameIdentity re-check the pair an account holds and never carry the password", () => {
+  assert.ok(mail.isEndpoint("smtp.example.com", 587));
+  assert.ok(mail.isEndpoint("localhost", 25));
+  assert.ok(mail.isEndpoint("10.0.0.5", 465));
+  assert.ok(mail.isEndpoint("::1", 465));
+  for (const [h, port] of [["smtp://smtp.example.com", 587], ["user:pw@smtp.example.com", 587], ["smtp.example.com/relay", 587],
+    ["smtp.example.com:25", 587], ["[::1]", 587], [" smtp.example.com", 587], ["smtp.example.com", 0], ["smtp.example.com", 65536],
+    ["smtp.example.com", "587"], ["smtp.example.com", 587.5], ["smtp.example.com", NaN], ["", 587], [null, 587], [undefined, undefined]])
+    assert.strictEqual(mail.isEndpoint(h, port), false, `${h}:${port}`);
+  assert.strictEqual(mail.endpointString("smtp.example.com", 587), "smtp.example.com:587");
+  assert.strictEqual(mail.endpointString("::1", 465), "[::1]:465");
+  const acct = mail.accountFromEnv({ SMTP_HOST: "smtp.example.com", SMTP_USER: "me@example.com", SMTP_PASSWORD: "s3cret-pass" });
+  const id = mail.accountIdentity(acct);
+  assert.deepStrictEqual(id, { from: "me@example.com", host: "smtp.example.com", port: 587 });
+  assert.ok(!JSON.stringify(id).includes("s3cret"), "the identity carries no secret");
+  assert.strictEqual(mail.accountIdentity(null), null);
+  assert.strictEqual(mail.accountIdentity("me@example.com"), null);
+  assert.strictEqual(mail.accountIdentity({ from: "Me <me@example.com>", host: "smtp.example.com", port: 587 }), null);
+  assert.strictEqual(mail.accountIdentity({ from: "me@example.com", host: "smtp://smtp.example.com", port: 587 }), null);
+  assert.strictEqual(mail.accountIdentity({ from: "me@example.com", host: "smtp.example.com", port: "587" }), null);
+  assert.ok(mail.sameIdentity(acct, id));
+  assert.ok(mail.sameIdentity(id, acct));
+  assert.ok(!mail.sameIdentity(acct, { ...id, port: 465 }));
+  assert.ok(!mail.sameIdentity(acct, { ...id, host: "smtp.example.org" }));
+  assert.ok(!mail.sameIdentity(acct, { ...id, from: "other@example.com" }));
+  assert.ok(!mail.sameIdentity(acct, null) && !mail.sameIdentity(null, id) && !mail.sameIdentity(null, null));
+  assert.ok(!mail.sameIdentity(acct, { ...id, host: "user:pw@smtp.example.com" }), "a malformed side never matches");
 });
 test("accountFromEnv needs all three pieces and a sender that is a full address", () => {
   const ok = { SMTP_HOST: "smtp.example.com", SMTP_USER: "me@example.com", SMTP_PASSWORD: "pw" };
@@ -419,6 +463,46 @@ test("a final reply that is neither 250 nor a refusal is unknown; a 5xx after th
     assert.match(e.message, /did not accept the message \(552/);
   });
 });
+test("the verdict after the terminator: 250 is accepted, 421 and 550 are not sent, a 6xx code is unknown, and a dropped line is unknown", async () => {
+  const run = (opts) => withServer({ password: PASS, ...opts }, async (srv) => {
+    try { return await mail.sendMail(accountFor(srv), MSG, ioFor(srv)); } catch (e) { return e; }
+  });
+  const ok = await run({});
+  assert.strictEqual(ok.outcome, "accepted");
+  assert.strictEqual(ok.response, "2.0.0 OK queued as ABC123");
+  assert.deepStrictEqual(ok.accepted, ["a@example.com", "b@example.com"]);
+  // 421 is how a server says "not now" and then hangs up; the hang-up after a
+  // 4xx does not turn a refusal into an unknown.
+  const busy = await run({ afterData: "421 4.3.2 service shutting down", closeAfterVerdict: true });
+  assert.strictEqual(busy.outcome, "not_sent");
+  assert.strictEqual(busy.code, 421);
+  assert.match(busy.message, /^the server did not accept the message \(421 4\.3\.2 service shutting down\)$/);
+  const refused = await run({ afterData: "550 5.7.1 message rejected by policy" });
+  assert.strictEqual(refused.outcome, "not_sent");
+  assert.strictEqual(refused.code, 550);
+  assert.match(refused.message, /^the server did not accept the message \(550 5\.7\.1 message rejected by policy\)$/);
+  // A code RFC 5321 does not define arrives after the server holds the whole
+  // message. Calling it "not sent" would invite a retry and a second copy.
+  for (const code of [600, 650, 999]) {
+    const odd = await run({ afterData: `${code} ${code / 100 | 0}.0.0 not a verdict` });
+    assert.strictEqual(odd.outcome, "unknown", `code ${code}`);
+    assert.strictEqual(odd.code, code);
+    assert.match(odd.message, /^the message was submitted and the server never confirmed it \(the server answered the message with a code that is not a verdict \(\d{3} .*\)\)\. It may have been sent\.$/);
+    assert.ok(!/did not accept/.test(odd.message), "an unknown fate is not worded as a refusal");
+  }
+  for (const drop of [{ afterData: "drop" }, { dropOn354: true }]) {
+    const e = await run(drop);
+    assert.strictEqual(e.outcome, "unknown", JSON.stringify(drop));
+    assert.strictEqual(e.code, 0, JSON.stringify(drop));
+    assert.match(e.message, /submitted and the server never confirmed it .* It may have been sent\./);
+  }
+});
+test("a line that dies before DATA is accepted is not sent, because nothing of the message has left", () => withServer({ password: PASS, dropOnRcpt: true }, async (srv) => {
+  const e = await rejects(mail.sendMail(accountFor(srv), MSG, ioFor(srv)));
+  assert.strictEqual(e.outcome, "not_sent");
+  assert.match(e.message, /the server closed the connection|connection error/);
+  assert.strictEqual(srv.seen.data, null, "no message body reached the server");
+}));
 test("a server that stops answering times out, and the time is bounded", () => withServer({ password: PASS, hangAfterEhlo: true }, async (srv) => {
   const t0 = Date.now();
   const e = await rejects(mail.sendMail(accountFor(srv), MSG, ioFor(srv, { timeoutMs: 400 })));
@@ -461,7 +545,7 @@ function harnessCtx(cfgPatch = {}, hooks = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-mail-harness-"));
   const cfg = { autonomy: "execute", approvals: "high-risk", verifier: false, turnBudgetUsd: 0, autoApprove: true, model: "test-model", ...cfgPatch };
   const ctx = {
-    dir, sent: [], journalEvents: [], approvalsSeen: [],
+    dir, sent: [], approvedWith: [], journalEvents: [], approvalsSeen: [],
     getCwd: () => dir, setCwd: noop,
     loadConfig: () => cfg,
     proposeEdit: async () => "applied edit",
@@ -471,8 +555,8 @@ function harnessCtx(cfgPatch = {}, hooks = {}) {
     artifactDir: () => path.join(dir, ".artifacts"),
     rateIn: 0, rateOut: 0,
     mailConfigured: () => true,
-    mailFrom: () => "me@example.com",
-    sendMail: async (m) => { ctx.sent.push(m); return { outcome: "accepted", accepted: [...m.to, ...m.cc], messageId: "id-1@example.com" }; },
+    mailAccount: () => ({ from: "me@example.com", host: "smtp.example.com", port: 587 }),
+    sendMail: async (m, approved) => { ctx.sent.push(m); ctx.approvedWith.push(approved); return { outcome: "accepted", accepted: [...m.to, ...m.cc], messageId: "id-1@example.com" }; },
     ...hooks,
   };
   if (hooks.approve !== undefined) ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: hooks.approve }; };
@@ -488,6 +572,8 @@ test("send_email is offered only while Mail is on with a complete account, and n
   assert.ok(!names(H.allTools(harnessCtx({}, { mailConfigured: () => false }), OP)).includes("send_email"));
   const noSender = harnessCtx(); delete noSender.sendMail;
   assert.ok(!names(H.allTools(noSender, OP)).includes("send_email"));
+  const noAccount = harnessCtx(); delete noAccount.mailAccount;
+  assert.ok(!names(H.allTools(noAccount, OP)).includes("send_email"), "no way to name the account on the card, no tool");
   assert.ok(!names(H.verifierTools(harnessCtx())).includes("send_email"), "the verifier never gets it");
 });
 test("below Execute the call is refused and nothing is sent or asked", async () => {
@@ -523,12 +609,14 @@ test("at Execute the message stops at an approval card that carries the whole me
   assert.strictEqual(req.risk, "strict");
   assert.strictEqual(req.title, "Send an email");
   assert.ok(req.detail.includes("From: me@example.com"));
+  assert.ok(req.detail.includes("Server: smtp.example.com:587"), "the server the message goes through is on the card");
   assert.ok(req.detail.includes("To: a@example.com"));
   assert.ok(req.detail.includes("Cc: b@example.com"));
   assert.ok(req.detail.includes("Subject: Hello there"));
   assert.ok(req.detail.includes(MSG.body), "the full body is on the card");
-  assert.ok(req.why.includes("a@example.com, b@example.com") && req.why.includes("cannot be recalled"));
-  assert.strictEqual(req.hash, H.inputHash("send_email", { from: "me@example.com", to: MSG.to, cc: MSG.cc, subject: MSG.subject, text: MSG.body }));
+  assert.ok(req.why.includes("a@example.com, b@example.com") && req.why.includes("from me@example.com through smtp.example.com:587") && req.why.includes("cannot be recalled"));
+  assert.strictEqual(req.hash, H.inputHash("send_email", { from: "me@example.com", host: "smtp.example.com", port: 587, to: MSG.to, cc: MSG.cc, subject: MSG.subject, text: MSG.body }));
+  assert.notStrictEqual(req.hash, H.inputHash("send_email", { from: "me@example.com", host: "smtp.example.com", port: 465, to: MSG.to, cc: MSG.cc, subject: MSG.subject, text: MSG.body }), "a different port is a different approval");
   assert.ok(ctx.journalEvents.some((e) => e.event_type === "APPROVAL_REQUESTED" && e.tool_id === "send_email"));
   assert.ok(ctx.journalEvents.some((e) => e.event_type === "APPROVAL_DENIED"));
 });
@@ -541,6 +629,7 @@ test("an approved send hands exactly the normalized message to main and reports 
   assert.strictEqual(r.status, "SUCCESS");
   assert.strictEqual(r.delivery, "irreversible");
   assert.deepStrictEqual(ctx.sent, [{ to: ["a@example.com"], cc: ["b@example.com"], subject: "Hello there", text: MSG.body }]);
+  assert.deepStrictEqual(ctx.approvedWith, [{ from: "me@example.com", host: "smtp.example.com", port: 587 }], "main is told which account the card showed");
   assert.strictEqual(H.didMutate(ctx, "send_email", MSG, out), true);
   assert.strictEqual(st.mutated, true, "the turn is marked as having mutated");
   const called = ctx.journalEvents.find((e) => e.event_type === "TOOL_CALLED");
@@ -571,11 +660,45 @@ test("a build with no way to ask blocks the send", async () => {
   assert.match(out, /^blocked: this action sends mail to .* and this build has no way to ask for it/);
   assert.strictEqual(ctx.sent.length, 0);
 });
-test("an account that changed, or a plugin switched off, while the card was open sends nothing", async () => {
-  let from = "me@example.com";
-  const changed = harnessCtx({}, { mailFrom: () => from, requestApproval: async () => { from = "other@example.com"; return { approved: true }; } });
-  assert.match(await H.execTool(changed, "send_email", MSG, OP, stateFor(changed)), /^error: the Mail account changed while the approval was open, so nothing was sent/);
-  assert.strictEqual(changed.sent.length, 0);
+test("a sender or server that is not valid stops the send before any card is shown", async () => {
+  const cases = [
+    [{ from: "me@example.com", host: "smtp://smtp.example.com", port: 587 }, /SMTP host is not a host name or IP address/],
+    [{ from: "me@example.com", host: "user:pw@smtp.example.com", port: 587 }, /SMTP host/],
+    [{ from: "me@example.com", host: "smtp.example.com/relay", port: 587 }, /SMTP host/],
+    [{ from: "me@example.com", host: "smtp.example.com", port: 0 }, /SMTP host/],
+    [{ from: "me@example.com", host: "smtp.example.com", port: 65536 }, /SMTP host/],
+    [{ from: "me@example.com", host: "smtp.example.com", port: "587" }, /SMTP host/],
+    [{ from: "Me <me@example.com>", host: "smtp.example.com", port: 587 }, /sending address is not a bare mail address/],
+    [{ host: "smtp.example.com", port: 587 }, /sending address/],
+    [null, /no complete account/],
+    ["me@example.com", /no complete account/],
+  ];
+  for (const [acct, re] of cases) {
+    const ctx = harnessCtx({}, { approve: true, mailAccount: () => acct });
+    const out = await H.execTool(ctx, "send_email", MSG, OP, stateFor(ctx));
+    assert.match(out, /^blocked: the Mail /, JSON.stringify(acct));
+    assert.match(out, re, JSON.stringify(acct));
+    assert.match(out, /so nothing was sent\. Ask the user to correct the Mail settings\.$/);
+    assert.strictEqual(ctx.approvalsSeen.length, 0, "no card for an account that cannot be named");
+    assert.strictEqual(ctx.sent.length, 0);
+  }
+});
+test("a sender or server that changed or went bad, or a plugin switched off, while the card was open sends nothing", async () => {
+  const drift = async (after, re) => {
+    let acct = { from: "me@example.com", host: "smtp.example.com", port: 587 };
+    const ctx = harnessCtx({}, { mailAccount: () => acct, requestApproval: async () => { acct = after; return { approved: true }; } });
+    assert.match(await H.execTool(ctx, "send_email", MSG, OP, stateFor(ctx)), re);
+    assert.strictEqual(ctx.sent.length, 0, JSON.stringify(after));
+  };
+  await drift({ from: "other@example.com", host: "smtp.example.com", port: 587 },
+    /^error: the Mail account changed while the approval was open \(the sending address is now other@example\.com\), so nothing was sent\. Ask again/);
+  await drift({ from: "me@example.com", host: "smtp.example.org", port: 587 },
+    /^error: the Mail account changed while the approval was open \(the server is now smtp\.example\.org:587\), so nothing was sent/);
+  await drift({ from: "me@example.com", host: "smtp.example.com", port: 465 },
+    /^error: the Mail account changed while the approval was open \(the server is now smtp\.example\.com:465\), so nothing was sent/);
+  await drift({ from: "me@example.com", host: "smtp://smtp.example.com", port: 587 },
+    /^error: the Mail account changed while the approval was open \(the Mail account's SMTP host is not a host name or IP address/);
+  await drift(null, /^error: the Mail account changed while the approval was open \(the Mail plugin has no complete account\), so nothing was sent/);
   let on = true;
   const off = harnessCtx({}, { mailConfigured: () => on, requestApproval: async () => { on = false; return { approved: true }; } });
   assert.match(await H.execTool(off, "send_email", MSG, OP, stateFor(off)), /^blocked: the Mail plugin was disabled while the approval was open/);
@@ -590,6 +713,23 @@ test("a send whose verdict never arrived is reported as possibly sent, with an i
   const out2 = await H.execTool(failed, "send_email", MSG, OP, stateFor(failed));
   assert.match(out2, /^error: the message was not sent: the server refused recipient/);
   assert.strictEqual(H.didMutate(failed, "send_email", MSG, out2), false);
+});
+test("through the real client, a 6xx after the terminator reads as possibly sent and a 4xx as not sent", async () => {
+  const run = (afterData) => withServer({ password: PASS, afterData }, async (srv) => {
+    const ctx = harnessCtx({}, { approve: true,
+      mailAccount: () => mail.accountIdentity(accountFor(srv)),
+      sendMail: (m, approved) => {
+        assert.ok(mail.sameIdentity(accountFor(srv), approved), "the harness hands main the identity it showed");
+        return mail.sendMail(accountFor(srv), m, ioFor(srv));
+      } });
+    const out = await H.execTool(ctx, "send_email", MSG, OP, stateFor(ctx));
+    assert.ok(ctx.approvalsSeen[0].detail.includes("Server: localhost:587"));
+    return out;
+  });
+  assert.match(await run("650 6.0.0 not a verdict"),
+    /^possibly sent to a@example\.com, b@example\.com: the message was submitted and the server never confirmed it \(the server answered the message with a code that is not a verdict \(650 6\.0\.0 not a verdict\)\)\. It may have been sent\. Do not send it again\./);
+  assert.match(await run("421 4.3.2 shutting down"), /^error: the message was not sent: the server did not accept the message \(421 4\.3\.2 shutting down\)$/);
+  assert.match(await run(undefined), /^sent to a@example\.com, b@example\.com with subject "Hello there": the server accepted it for delivery as <fixed-id@example\.com>\.$/);
 });
 test("the system prompt carries the Mail rule only while the tool is offered", async () => {
   const on = await H.buildSystemPrompt(harnessCtx());

@@ -11,8 +11,8 @@
 //   growWrite(type, record): { ok, id } | { ok: false, error },  // grower's store
 //   growRead(type): row[],
 //   mailConfigured(): boolean,   // the Mail plugin is on with a complete account
-//   mailFrom(): string|null,     // the sending address, for the approval card
-//   sendMail({to,cc,subject,text}): Promise<{outcome,accepted,messageId}>,  // credentials stay in main
+//   mailAccount(): {from,host,port}|null,   // the sender and server for the approval card; never the password
+//   sendMail({to,cc,subject,text}, approved): Promise<{outcome,accepted,messageId}>,  // credentials stay in main; approved is the identity the card showed
 //   journal(event): void,      // append-only audit stream; never read back as state
 //   artifactDir(): string,     // where spooled tool output is content-addressed
 //   appVersion: string,
@@ -491,7 +491,21 @@ const MAIL_TOOL = { type: "function", function: {
     body: { type: "string", description: "Plain text. Line breaks are kept." },
   }, required: ["to", "subject", "body"] } } };
 function mailOffered(ctx) {
-  return typeof ctx.sendMail === "function" && typeof ctx.mailConfigured === "function" && ctx.mailConfigured() === true;
+  return typeof ctx.sendMail === "function" && typeof ctx.mailAccount === "function"
+    && typeof ctx.mailConfigured === "function" && ctx.mailConfigured() === true;
+}
+/* The account the card will name, read once and checked here rather than
+   trusted. main.js reads it from the encrypted store, but the store holds
+   whatever the settings field was given, and a field is where
+   "smtp://user:pw@host" arrives. The sender must be one bare address and the
+   server a host name or IP with a port in range, nothing else in either.
+   Returns the identity, or { error } naming the piece that failed. */
+function mailAccountOf(ctx) {
+  const a = typeof ctx.mailAccount === "function" ? ctx.mailAccount() : null;
+  if (!a || typeof a !== "object") return { error: "the Mail plugin has no complete account" };
+  if (!mail.isAddress(a.from)) return { error: "the Mail account's sending address is not a bare mail address" };
+  if (!mail.isEndpoint(a.host, a.port)) return { error: "the Mail account's SMTP host is not a host name or IP address with a port from 1 to 65535, or it carries a scheme, a path, or sign-in details" };
+  return { from: a.from, host: a.host, port: a.port };
 }
 
 function allTools(ctx, route) {
@@ -687,22 +701,33 @@ async function execTool(ctx, name, args, route, state) {
       if (!mailOffered(ctx)) return "blocked: the Mail plugin is not enabled. Ask the user to enable Mail in Settings and enter their SMTP host, mail address, and app password.";
       const m = mail.normalizeMessage(args);
       if (m.error) return `error: ${m.error}`;
-      const from = typeof ctx.mailFrom === "function" ? ctx.mailFrom() : null;
+      // The sender and the server go on the card and into the hash: the user
+      // approves a message from this address through this server, and a
+      // malformed or altered either is a reason to stop, not a detail.
+      const acct = mailAccountOf(ctx);
+      if (acct.error) return `blocked: ${acct.error}, so nothing was sent. Ask the user to correct the Mail settings.`;
+      const server = mail.endpointString(acct.host, acct.port);
       const rcpts = [...m.to, ...m.cc];
       const gate = await gateAction(ctx, state, {
-        risk: RISK.STRICT, why: `sends mail to ${rcpts.join(", ")} from ${from || "the user's account"}, which cannot be recalled once it leaves`,
+        risk: RISK.STRICT, why: `sends mail to ${rcpts.join(", ")} from ${acct.from} through ${server}, which cannot be recalled once it leaves`,
         kind: "send_email", title: "Send an email",
-        detail: [`From: ${from || "(the Mail account)"}`, `To: ${m.to.join(", ")}`, m.cc.length ? `Cc: ${m.cc.join(", ")}` : null,
+        detail: [`From: ${acct.from}`, `Server: ${server}`, `To: ${m.to.join(", ")}`, m.cc.length ? `Cc: ${m.cc.join(", ")}` : null,
           `Subject: ${m.subject}`, `Body: ${m.text.length} characters, shown in full`, "", m.text].filter((l) => l !== null).join("\n"),
-        hash: inputHash("send_email", { from, to: m.to, cc: m.cc, subject: m.subject, text: m.text }),
+        hash: inputHash("send_email", { from: acct.from, host: acct.host, port: acct.port, to: m.to, cc: m.cc, subject: m.subject, text: m.text }),
       });
       if (!gate.ok) return gate.text;
-      // The card was open for a while. If Mail was switched off or the account
-      // changed underneath it, what the user approved is not what would go.
+      // The card was open for a while. If Mail was switched off, or the sender
+      // or the server changed or stopped being valid underneath it, what the
+      // user approved is not what would go. The same three values are checked
+      // again, and handed to main.js so the send is pinned to them there too.
       if (!mailOffered(ctx)) return "blocked: the Mail plugin was disabled while the approval was open, so nothing was sent.";
-      if (typeof ctx.mailFrom === "function" && ctx.mailFrom() !== from) return "error: the Mail account changed while the approval was open, so nothing was sent. Ask again if the message should go from the new account.";
+      const now = mailAccountOf(ctx);
+      const drift = now.error ? now.error
+        : now.from !== acct.from ? `the sending address is now ${now.from}`
+        : now.host !== acct.host || now.port !== acct.port ? `the server is now ${mail.endpointString(now.host, now.port)}` : null;
+      if (drift) return `error: the Mail account changed while the approval was open (${drift}), so nothing was sent. Ask again if the message should go through the new account.`;
       try {
-        const r = await ctx.sendMail({ to: m.to, cc: m.cc, subject: m.subject, text: m.text });
+        const r = await ctx.sendMail({ to: m.to, cc: m.cc, subject: m.subject, text: m.text }, acct);
         return `sent to ${((r && r.accepted) || rcpts).join(", ")} with subject "${m.subject}": the server accepted it for delivery${r && r.messageId ? ` as <${r.messageId}>` : ""}.`;
       } catch (e) {
         const why = String((e && e.message) || e).slice(0, 400);

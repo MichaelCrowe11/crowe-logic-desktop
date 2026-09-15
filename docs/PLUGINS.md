@@ -93,8 +93,10 @@ on a host or an address so it is typed in the clear) and the tier rules, and
 enable and disable travel the same road as every other plugin. Mail is the
 first: `send_email` in `mail.js`, offered only while the plugin is on with a
 complete account, gated at Execute behind an approval card that shows the whole
-message. It exists as a built-in because no maintained MCP email server was
-found on npm to trust with a password (see the header of `mail.js`).
+message and names the sender and the SMTP server it goes through; both are
+checked for shape before the card and again at send time, so what leaves is
+what was approved. It exists as a built-in because no maintained MCP email
+server was found on npm to trust with a password (see the header of `mail.js`).
 
 ## Phases
 
