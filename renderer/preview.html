@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1789423720613" />
+  <link rel="stylesheet" href="styles.css?v=1789512965656" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -297,6 +297,7 @@
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 12h5M16 9l3 3-3 3"/></svg>
           </button>
           <div id="dock-tabs" class="dock-tabs">
+            <button class="dock-tab" data-pane="activity" title="What the agent is doing right now">Activity</button>
             <button class="dock-tab" data-pane="git" title="Version control">Changes</button>
             <button class="dock-tab" data-pane="files" title="Files">Files</button>
             <button class="dock-tab" data-pane="output" title="Agent event stream">Output</button>
@@ -323,6 +324,16 @@
 
         <div class="pane legacy-pane-view" id="pane-files">
           <div id="files-tree"></div><pre id="files-view"></pre>
+        </div>
+        <div class="pane legacy-pane-view" id="pane-activity">
+          <div class="activity-head">
+            <label class="activity-follow" title="Bring the pane forward that shows what the agent is doing"><input type="checkbox" id="follow-agent" checked /> Follow the agent</label>
+            <span id="activity-status" class="activity-status">idle</span>
+            <button id="activity-clear" type="button" class="ghost sm" title="Clear the list">Clear</button>
+          </div>
+          <div id="activity-log" class="activity-log" aria-live="polite">
+            <div class="activity-empty">When the agent reads, edits, runs or opens something, it shows up here as it happens. Commands stream their output; landed edits open as a diff in Changes; pages open in the browser.</div>
+          </div>
         </div>
         <div class="pane legacy-pane-view" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
         <div class="pane legacy-pane-view" id="pane-git">
@@ -466,11 +477,12 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1789423720613"></script>
-  <script src="mark-geometry.js?v=1789423720613"></script>
-  <script src="mark.js?v=1789423720613"></script>
-  <script src="first-run.js?v=1789423720613"></script>
-<script src="renderer.js?v=1789423720613"></script>
+  <script src="preview-shim.js?v=1789512965656"></script>
+  <script src="mark-geometry.js?v=1789512965656"></script>
+  <script src="mark.js?v=1789512965656"></script>
+  <script src="first-run.js?v=1789512965656"></script>
+  <script src="activity.js?v=1789512965656"></script>
+<script src="renderer.js?v=1789512965656"></script>
   <script src="plan.js"></script>
 </body>
 </html>

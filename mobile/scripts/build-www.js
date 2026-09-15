@@ -35,6 +35,7 @@ const COPY = [
   ["renderer/mark-geometry.js", "mark-geometry.js"],
   ["renderer/mark.js", "mark.js"],
   ["renderer/first-run.js", "first-run.js"],
+  ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
@@ -60,7 +61,7 @@ const COPY = [
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "first-run.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -193,7 +194,6 @@ function main() {
      points at nothing: the phone's webview logs a 404, the feature is silently
      absent on the phone, and every desktop test passes because from the
      checkout the file is right there. Three branches did exactly that in one
-     week (activity.js, messages.js, first-run.js). So the page this build wrote
      is read back, and every local script and stylesheet it names must be a
      file in www. Same bargain as scripts/test-packaging.js, one layer down. */
   const built = fs.readFileSync(path.join(www, "index.html"), "utf8");
