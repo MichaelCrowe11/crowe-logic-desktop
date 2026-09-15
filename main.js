@@ -457,13 +457,20 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
+/* One sign-in at a time. The loopback listener holds its port for up to five
+   minutes while the browser page waits, so a second click used to open a second
+   listener, collide with the first on EADDRINUSE, and blame the ports. A click
+   while one is pending now brings that page back up and joins its promise. */
+let pendingSignIn = null;
 function signIn() {
-  return new Promise((resolve) => {
+  if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const pending = { promise: null, authUrl: "" };
+  pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
     let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
     const server = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
@@ -488,7 +495,7 @@ function signIn() {
     let pIdx = 0;
     server.on("error", (e) => {
       if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
-      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+      finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
@@ -496,11 +503,14 @@ function signIn() {
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
         redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
       }).toString();
+      pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
     server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
+  pendingSignIn = pending;
+  return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
