@@ -328,6 +328,7 @@ const SENSITIVE_PATH_RE = /(^|\/)[^/]*(auth|login|signin|session|token|jwt|oauth
 const DELIVERY = {
   read_file: "read_only", search: "read_only", list_dir: "read_only", open_url: "read_only",
   submit_verdict: "read_only",
+  propose_options: "read_only",       // a question to the person; it changes nothing and ends the turn
   edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
   compose_workflow: "compensatable",   // a draft row in the Runbook; one click to delete
 
@@ -340,7 +341,9 @@ function deliveryOf(ctx, name, args) {
     return c.risk === RISK.STRICT ? "irreversible" : "compensatable";
   }
   if (String(name || "").startsWith("mcp__")) {
-    const tier = pluginToolTier(ctx, name);
+    const rule = pluginToolRule(ctx, name);
+    if (rule && rule.physical) return "irreversible";   // never replayed, never retried on its own
+    const tier = rule ? rule.tier : null;
     return tier === "readonly" || tier === "plan" ? "read_only" : "compensatable";
   }
   return DELIVERY[name] || "compensatable";
@@ -357,19 +360,20 @@ async function gateAction(ctx, state, req) {
   const mode = cfg.approvals || "high-risk";       // off | high-risk | strict
   const jrnl = (ev) => { if (state && state.journal) state.journal(ev); };
   if (req.risk === RISK.AUTO) return { ok: true };
-  if (mode === "off") {
+  // `always` is the physical-write flag: no mode and no floor waves it through.
+  if (mode === "off" && !req.always) {
     jrnl({ event_type: "APPROVAL_SKIPPED", tool_id: req.kind, input_hash: req.hash, output_summary: `approvals off: ${req.why}` });
     return { ok: true };
   }
   const floor = mode === "strict" || req.floorReview ? RISK.REVIEW : RISK.STRICT;
-  if (req.risk < floor) return { ok: true };
+  if (!req.always && req.risk < floor) return { ok: true };
   if (typeof ctx.requestApproval !== "function")
     return { ok: false, text: `blocked: this action ${req.why}, which needs the user's explicit approval, and this build has no way to ask for it. Tell the user exactly what you wanted to run and let them run it themselves.` };
   jrnl({ event_type: "APPROVAL_REQUESTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${RISK_NAMES[req.risk]}: ${req.why}` });
   let decision;
   try {
     decision = await ctx.requestApproval({ kind: req.kind, title: req.title, detail: req.detail,
-      why: req.why, risk: RISK_NAMES[req.risk], hash: req.hash, agentId: (state && state.agentId) || "main" });
+      why: req.why, risk: RISK_NAMES[req.risk], hash: req.hash, agentId: (state && state.agentId) || "main", meta: req.meta || undefined });
   } catch { decision = false; }
   const ok = decision === true || (decision && decision.approved === true);
   jrnl({ event_type: ok ? "APPROVAL_GRANTED" : "APPROVAL_DENIED", tool_id: req.kind, input_hash: req.hash, output_summary: req.why });
@@ -549,17 +553,49 @@ const VERDICT_TOOL = { type: "function", function: {
     } },
   }, required: ["status", "summary"] } } };
 
-function allTools(ctx, route) {
+/* A room seat's way of handing the decision back. The seat has done what it
+   can without the person and now needs one choice made; it puts one question
+   with a few short options and its turn ends there. The options are intent,
+   not permission: the chosen one arrives as the operator's next message, and
+   whatever the seat then does still passes the same tool gate as anything
+   else. Offered only when the caller can receive it (a room), so the plain
+   operator thread never sees a tool it has nowhere to draw. */
+const PROPOSE_TOOL = { type: "function", function: {
+  name: "propose_options",
+  description: "Put one decision to the operator and end your turn. Use this when you have done what you can and the next step is theirs to choose: one plain question, one to four short options they can pick with a tap. Say what you found before you call it; do not call it for questions you can answer yourself. The operator's choice comes back as their next message.",
+  parameters: { type: "object", properties: {
+    question: { type: "string", description: "The decision, as one plain question." },
+    options: { type: "array", items: { type: "string" }, description: "One to four short options, each a phrase the operator could say back to you." },
+  }, required: ["question", "options"] } } };
+// The shape a proposal must have to close a turn. Anything short of it is
+// answered as a blocked tool call and the turn continues, so a half-formed
+// question never becomes a card with nothing to tap.
+function normalizeProposal(a) {
+  const question = String((a && a.question) || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const seen = new Set();
+  const options = [];
+  for (const o of Array.isArray(a && a.options) ? a.options : []) {
+    const label = String(o == null ? "" : o).replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!label || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase()); options.push(label);
+    if (options.length >= 4) break;
+  }
+  if (!question || !options.length) return null;
+  return { question, options };
+}
+
+function allTools(ctx, route, deps) {
   const grow = route && route.expert === "cultivation" ? [GROW_TOOL] : [];
   const author = ctx.authorWorkflow ? [WORKFLOW_TOOL] : [];
-  return [...BUILTIN_TOOLS, ...grow, ...author, ...ctx.mcpTools()];
+  const ask = deps && typeof deps.onPropose === "function" ? [PROPOSE_TOOL] : [];
+  return [...BUILTIN_TOOLS, ...grow, ...author, ...ask, ...ctx.mcpTools()];
 }
 /* The verifier gets its own tool list, not a filtered view of the operator's: no
    MCP servers (unknown side effects), no writes, and a shell only where the tier
    already allowed one - because running the project's tests is the difference
    between checking the work and admiring it. */
-function verifierTools(ctx) {
-  const tier = ctx.loadConfig().autonomy || "edit";
+function verifierTools(ctx, cap) {
+  const tier = effectiveTier(ctx, cap);
   const names = new Set(["read_file", "search", "list_dir"]);
   if (tier === "execute") names.add("run_shell");
   return [...BUILTIN_TOOLS.filter((t) => names.has(t.function.name)), VERDICT_TOOL];
@@ -684,8 +720,69 @@ function toolListDir(ctx, args) {
 // Official plugins declare per-tool tiers in their manifest. A plugin can add
 // capability, never widen autonomy: its tools pass the same gate as built-ins.
 // Unmanaged (hand-configured) MCP servers keep their historic behavior.
+//
+// A rule may also say `physical: true`. That marks a tool that changes something in
+// the world outside the machine - a device, a relay, a motor - and it is the one
+// class of action the harness will not run on a standing setting: it asks, every
+// time, with the exact arguments, even when approvals are off. A file can be put
+// back and a shell command can be read before it runs; a valve cannot be un-opened
+// from a transcript.
 const TIER_RANK = { plan: 0, readonly: 0, edit: 1, execute: 2 };
-function pluginToolTier(ctx, fullName) {
+/* The lower of two tiers. A cap can only lower; an unknown cap changes nothing.
+   Rooms hand each seat a tier, and until this existed the gate read only the
+   app's autonomy, so a room labelled read-only was read-only on the label alone. */
+function capTier(tier, cap) {
+  if (!cap || !(cap in TIER_RANK)) return tier;
+  return TIER_RANK[cap] < (TIER_RANK[tier] ?? 1) ? cap : tier;
+}
+function effectiveTier(ctx, cap) { return capTier(ctx.loadConfig().autonomy || "edit", cap); }
+/* Connector tool names, classified for exactly one decision: whether a seat in
+   a room that may only read may call a hand-configured server's tool without
+   asking. THIS IS A HEURISTIC OVER NAMES. It knows nothing about what the tool
+   does; it knows what its author called it. It errs toward asking: a name is
+   treated as a read only when the first verb-like word in it is on the READ
+   list and no word anywhere in it is on the WRITE list. So get_analytics and
+   youtube_list_videos run, and set_visibility, get_or_create_customer
+   (misleading), checkout (no match) and weather (no verb) all ask. Words are
+   split on underscores, hyphens and capitals, so checkout is not check and
+   listen is not list. Wrong in the permissive direction costs an unasked
+   write, so the READ list is short and the WRITE list is long. */
+const MCP_READ_WORDS = new Set([
+  "get", "list", "read", "search", "fetch", "describe", "query", "find", "show", "stat", "stats", "status",
+  "analytics", "report", "lookup", "inspect", "count", "check", "view", "preview", "summarize", "summary",
+  "retrieve", "head", "browse", "scan", "history", "latest", "recent", "top", "compare", "diff", "explain",
+  "info", "details", "metrics", "insights",
+]);
+const MCP_WRITE_WORDS = new Set([
+  "create", "set", "update", "delete", "remove", "post", "send", "write", "upload", "publish", "add", "put",
+  "patch", "insert", "modify", "edit", "move", "rename", "archive", "restore", "start", "stop", "run",
+  "execute", "exec", "trigger", "cancel", "approve", "reject", "pay", "charge", "refund", "order", "book",
+  "schedule", "submit", "reply", "comment", "like", "follow", "share", "mark", "assign", "invite", "enable",
+  "disable", "toggle", "reset", "purge", "clear", "sync", "import", "export", "download", "save", "store",
+  "record", "log", "notify", "email", "message", "call", "open", "close", "merge", "push", "commit", "deploy",
+  "install", "uninstall", "kill", "destroy", "drop", "truncate", "grant", "revoke", "lock", "unlock", "make",
+  "generate", "apply", "register", "unregister", "subscribe", "unsubscribe", "buy", "sell", "transfer",
+  "withdraw", "deposit", "hide", "unhide", "pin", "unpin", "flag", "ban", "block", "mute", "tag", "untag",
+  "label", "convert", "transcribe", "upsert", "replace", "change", "resolve", "complete", "finish", "accept",
+  "decline", "answer", "react", "vote", "rate", "review", "checkout", "checkin", "spend", "mint", "burn",
+  // Repair and control verbs, so scan_and_fix or inspect_and_repair ask like fix does.
+  "fix", "repair", "heal", "correct", "rewrite", "adjust", "tune", "configure", "migrate", "rollback", "revert",
+  "retry", "resend", "restart", "reboot", "reload", "rotate", "renew", "regenerate", "redeploy", "bump", "promote",
+  "demote", "escalate", "dispatch", "forward", "redirect", "launch", "spawn", "clone", "copy", "erase", "wipe",
+  "flush", "expire", "unlink", "attach", "detach", "mount", "unmount", "bind", "unbind", "connect", "disconnect",
+  "login", "logout", "authorize", "confirm", "acknowledge", "dismiss", "snooze", "remind", "alert", "seed",
+  "populate", "provision", "deprovision", "scale", "resize", "allocate", "release", "reserve", "claim", "queue",
+  "enqueue", "dequeue", "abort", "terminate", "suspend", "resume", "pause", "activate", "deactivate", "invoke",
+  "perform", "process", "handle", "operate", "control", "text", "sms", "tweet", "broadcast", "announce",
+]);
+const mcpWords = (tool) => String(tool || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+function mcpReadLike(tool) {
+  const words = mcpWords(tool);
+  if (words.some((w) => MCP_WRITE_WORDS.has(w))) return false;
+  const verb = words.find((w) => MCP_READ_WORDS.has(w) || MCP_WRITE_WORDS.has(w));
+  return Boolean(verb) && MCP_READ_WORDS.has(verb);
+}
+function pluginToolRule(ctx, fullName) {
   if (!ctx.getPlugins) return null;
   const [, id, ...rest] = String(fullName).split("__");
   const tool = rest.join("__");
@@ -693,9 +790,13 @@ function pluginToolTier(ctx, fullName) {
   if (!p || !Array.isArray(p.tools)) return null;
   for (const r of p.tools) {
     const rx = new RegExp("^" + String(r.match || "*").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
-    if (rx.test(tool)) return r.tier || "edit";
+    if (rx.test(tool)) return { tier: r.tier || "edit", physical: r.physical === true, plugin: id, tool };
   }
-  return "edit";
+  return { tier: "edit", physical: false, plugin: id, tool };
+}
+function pluginToolTier(ctx, fullName) {
+  const r = pluginToolRule(ctx, fullName);
+  return r ? r.tier : null;
 }
 /* `route` is the expert this turn resolved to. It is a second gate, not a
    convenience: leaving a tool out of allTools() only stops a well-behaved model
@@ -716,19 +817,63 @@ async function execTool(ctx, name, args, route, state) {
         return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
     }
     if (name && name.startsWith("mcp__")) {
-      const need = pluginToolTier(ctx, name);
-      if (need) {
-        const tier = ctx.loadConfig().autonomy || "edit";
-        if ((TIER_RANK[need] ?? 1) > (TIER_RANK[tier] ?? 2))
-          return `blocked: this plugin tool requires "${need}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
+      const rule = pluginToolRule(ctx, name);
+      if (rule) {
+        const tier = effectiveTier(ctx, route && route.tierCap);
+        if ((TIER_RANK[rule.tier] ?? 1) > (TIER_RANK[tier] ?? 2))
+          return `blocked: this plugin tool requires "${rule.tier}" autonomy but the current mode is "${tier}". Ask the user to raise autonomy if they want this.`;
+        /* A physical write is asked about every time, bound to the exact plugin, tool
+           and arguments, and the approvals setting cannot switch the question off. The
+           device enforces its own limits on its side of the wire; this gate is the
+           person's side, and it exists because the harness cannot see the room. */
+        if (rule.physical) {
+          const gate = await gateAction(ctx, state, {
+            risk: RISK.STRICT, always: true,
+            why: `operates a physical device (${rule.plugin}: ${rule.tool}), which cannot be undone from here`,
+            kind: "physical_write", title: "Operate a physical device",
+            detail: `${rule.plugin} ${rule.tool} ${stableJson(args ?? {})}`,
+            hash: inputHash("physical:" + name, args),
+          });
+          if (!gate.ok) return gate.text;
+        }
+      } else if (route && route.tierCap && (TIER_RANK[effectiveTier(ctx, route.tierCap)] ?? 1) < TIER_RANK.edit) {
+        /* A hand-configured server has no manifest, so its tools have no declared
+           tier and have always run ungated. In the plain thread that is the
+           operator's own choice. In a room whose seats may only read, it would
+           mean the one kind of tool the room actually needs - the channel, the
+           store, the calendar - is also the one door left open to a write the
+           room promised not to make. So a room seat's call to such a tool asks
+           first unless the tool's name says it only looks. The name test is a
+           heuristic and is said to be one; the alternative was asking about every
+           analytics read, which teaches the person to tap Allow without reading. */
+        const [, server, ...rest] = String(name).split("__");
+        const tool = rest.join("__");
+        if (!mcpReadLike(tool)) {
+          const gate = await gateAction(ctx, state, {
+            risk: RISK.REVIEW, floorReview: true,
+            why: `calls a connected server's tool (${server}: ${tool}) from a room that may only read, and the tool's name does not say it only looks`,
+            kind: "room_connector", title: "Let a room seat act through a connector",
+            detail: `${server} ${tool} ${stableJson(args ?? {})}`,
+            hash: inputHash("room-mcp:" + name, args),
+            // Who is asking, through what, for what: the card says all three.
+            meta: { seat: (state && state.agentId) || "", connector: server, tool },
+          });
+          if (!gate.ok) return gate.text;
+        }
       }
       return await ctx.mcpCall(name, args);
     }
-    const tier = ctx.loadConfig().autonomy || "edit";
+    const appTier = ctx.loadConfig().autonomy || "edit";
+    const tier = capTier(appTier, route && route.tierCap);
+    const roomBound = tier !== appTier;   // the room, not the app setting, is what lowered it
     if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
       return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";
-    if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
-    if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
+    if (name === "run_shell" && tier !== "execute")
+      return roomBound ? `blocked: this room runs at "${tier}"; a seat may read and reason, not run commands.`
+        : `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
+    if ((name === "write_file" || name === "edit_file") && tier === "readonly")
+      return roomBound ? "blocked: this room runs read-only; a seat may read and reason, not write files."
+        : "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
       /* Only a bare `cd <dir>`, alone on its line, moves the workspace cwd. A
@@ -875,6 +1020,7 @@ function snapshotBefore(ctx, relPath) {
 function mutationLabel(name, args) {
   if (name === "run_shell") return `run_shell ${String(args.command || "").slice(0, 120)}`;
   if (name === "log_grow") return `log_grow ${args.type || ""}`;
+  if (String(name || "").startsWith("mcp__")) return `${name} ${stableJson(args ?? {}).slice(0, 120)}`;
   if (args && args.path) return `${name} ${args.path}`;
   return name;
 }
@@ -1022,10 +1168,10 @@ function turnTokenCap(cfg) {
   if (v === 0) return 0;
   return Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : DEFAULT_TURN_TOKEN_CAP;
 }
-async function buildSystemPrompt(ctx) {
+async function buildSystemPrompt(ctx, cap) {
   const cwd = ctx.getCwd();
   const cfg = ctx.loadConfig();
-  const tier = cfg.autonomy || "edit";
+  const tier = capTier(cfg.autonomy || "edit", cap);
   const notes = workspaceNotes(cwd);
   const git = await gitBrief(cwd);
   const budget = turnBudget(cfg);
@@ -1473,6 +1619,19 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       if (opts.onVerdict && name === "submit_verdict") {
         opts.onVerdict(a); closed = true;
         out = { text: "verdict recorded.", status: "SUCCESS", hash: inputHash(name, a), delivery: "read_only" };
+      } else if (opts.onPropose && name === "propose_options") {
+        /* The seat is handing the decision back. A well-formed question ends
+           the block the way a verdict ends the verifier's: nothing after it in
+           this call runs, and the operator's answer is the next turn. A
+           malformed one is refused and the turn goes on, so the model can ask
+           properly or finish without asking. */
+        const ask = normalizeProposal(a);
+        if (ask) {
+          opts.onPropose(ask); closed = true;
+          out = { text: "proposal recorded; your turn ends here and the operator's choice arrives as their next message.", status: "SUCCESS", hash: inputHash(name, a), delivery: "read_only" };
+        } else {
+          out = { text: "blocked: propose_options needs one question and one to four short options.", status: "BLOCKED", hash: inputHash(name, a), delivery: "read_only" };
+        }
       } else {
         out = await callTool(ctx, name, a, route, state);
       }
@@ -1537,7 +1696,7 @@ function normalizeVerdict(v) {
 function shouldVerify(cfg, state, deps, stop) {
   if (cfg.verifier === false) return false;
   if (!state.mutated) return false;                        // nothing to check
-  const tier = cfg.autonomy || "edit";
+  const tier = capTier(cfg.autonomy || "edit", deps.tier);
   if (tier === "plan" || tier === "readonly") return false;
   if (stop === "error" || stop === "aborted" || stop === "budget") return false;
   if (deps.isAborted() || overBudget(state)) return false;
@@ -1564,7 +1723,7 @@ async function verifyTurn(ctx, deps, route, state, request, claim, executorModel
     { role: "system", content: VERIFIER_PROMPT },
     { role: "user", content: verifierBrief(request, state.mutations, claim) },
   ], deps, vroute, vstate, {
-    tools: verifierTools(ctx), maxRounds: VERIFY_MAX_ROUNDS, stage: "verify", silent: true,
+    tools: verifierTools(ctx, route.tierCap), maxRounds: VERIFY_MAX_ROUNDS, stage: "verify", silent: true,
     ref: { model, fellBack: false }, onVerdict: (v) => { verdict = normalizeVerdict(v); },
   });
   state.stage = "execute";
@@ -1607,7 +1766,7 @@ function verdictReceipt(verdict, rollback) {
 //          setController(c), role, context, agentId }
 async function runAgent(ctx, messages, deps) {
   const cfg = ctx.loadConfig();
-  const sys = await buildSystemPrompt(ctx);
+  const sys = await buildSystemPrompt(ctx, deps.tier);
 
   // ── ROUTE ── pick the expert deployment for this block, fallback-first.
   const route = routeTurn(ctx, messages, deps.role || "");
@@ -1620,6 +1779,8 @@ async function runAgent(ctx, messages, deps) {
     route.reason = `${route.reason} · pinned ${deps.model}`;
     route.model = deps.model;
   }
+  // A room hands each seat a tier; the gate reads the lower of it and the app's autonomy.
+  if (deps.tier) route.tierCap = deps.tier;
   const state = newState(ctx, cfg, deps, route);
   // Said once, ahead of the route card, so the operator sees why this turn is
   // on the free model before the answer starts rather than after a 403.
@@ -1629,7 +1790,7 @@ async function runAgent(ctx, messages, deps) {
   }
   deps.send({ type: "route", expert: route.expert, model: route.model, reason: route.reason });
   state.journal({ event_type: "TURN_STARTED",
-    output_summary: `${route.expert} · ${route.model} · tier ${cfg.autonomy || "edit"}${state.budget ? ` · ceiling $${state.budget.toFixed(2)}` : ""}` });
+    output_summary: `${route.expert} · ${route.model} · tier ${capTier(cfg.autonomy || "edit", deps.tier)}${route.tierCap ? " (room cap)" : ""}${state.budget ? ` · ceiling $${state.budget.toFixed(2)}` : ""}` });
 
   /* Situational state rides on the system message rather than being pushed into
      `messages`. Two reasons: the caller's array is what gets persisted as the
@@ -1655,8 +1816,12 @@ async function runAgent(ctx, messages, deps) {
   const ref = { model: route.model, fellBack: false };
 
   // ── RETRIEVE / REASON / SYNTHESIZE ── the operator block.
+  // A room seat may end its turn on a question to the person. Only the
+  // operator block may; the verifier and a repair pass have no one to ask.
+  let proposal = null;
   const block = await runBlock(ctx, msgs, deps, route, state, {
-    tools: allTools(ctx, route), maxRounds: MAX_ROUNDS, ref, stage: "execute",
+    tools: allTools(ctx, route, deps), maxRounds: MAX_ROUNDS, ref, stage: "execute",
+    onPropose: typeof deps.onPropose === "function" ? (p) => { proposal = p; try { deps.onPropose(p); } catch { /* the caller's hook is a courtesy, not a dependency */ } } : undefined,
   });
   msgs = block.msgs;
   let text = block.text;
@@ -1712,14 +1877,15 @@ async function runAgent(ctx, messages, deps) {
       : stop === "budget" ? `reached this turn's ${budgetReason(state)}`
       : undefined,
     verdict: verdict ? verdict.status : undefined });
-  return { text, capped: stop === "rounds", stop, verdict, cost: state.meter.cost, mutations: state.mutations };
+  return { text, capped: stop === "rounds", stop, verdict, cost: state.meter.cost, mutations: state.mutations, proposal };
 }
 
 module.exports = {
+  capTier, effectiveTier, pluginToolRule, pluginToolTier, mcpReadLike, MCP_READ_WORDS, MCP_WRITE_WORDS,
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  BUILTIN_TOOLS, VERDICT_TOOL, PROPOSE_TOOL, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, parseBareCd, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,

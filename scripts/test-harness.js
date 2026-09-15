@@ -386,6 +386,19 @@ test("plan mode blocks every write and the shell", async () => {
     assert.match(String(await H.execTool(ctx, n, a, {})), /^blocked: Plan mode/, n);
   }
 });
+test("a room tier cap binds at the tool gate, below the app's autonomy", async () => {
+  const ctx = makeCtx({ autonomy: "execute" });
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  assert.match(String(await H.execTool(ctx, "write_file", { path: "room.txt", content: "x" }, room)), /^blocked: this room runs read-only/);
+  assert.match(String(await H.execTool(ctx, "edit_file", { path: "room.txt", old_string: "a", new_string: "b" }, room)), /^blocked: this room runs read-only/);
+  assert.match(String(await H.execTool(ctx, "run_shell", { command: "ls" }, room)), /^blocked: this room runs at "readonly"/);
+  assert.match(String(await H.execTool(ctx, "write_file", { path: "free.txt", content: "x" }, {})), /^applied edit/);
+  assert.strictEqual(H.capTier("execute", "readonly"), "readonly");
+  assert.strictEqual(H.capTier("edit", "execute"), "edit");            // a cap never raises
+  assert.strictEqual(H.capTier("plan", "readonly"), "plan");           // equal rank keeps the app's word
+  assert.strictEqual(H.capTier("execute", "bogus"), "execute");        // unknown cap changes nothing
+  assert.strictEqual(H.effectiveTier(ctx, "edit"), "edit");
+});
 test("edit tier blocks the shell but allows writes", async () => {
   const ctx = makeCtx({ autonomy: "edit" });
   assert.match(String(await H.execTool(ctx, "run_shell", { command: "ls" }, {})), /^blocked: shell execution/);
@@ -1055,3 +1068,165 @@ test("a compose_workflow with nothing usable authors nothing", async () => {
   }
   console.log(`harness: ${passed} tests passed`);
 })();
+
+// ─── Physical writes through a plugin ────────────────────────────────────────
+const SENSE_PLUGIN = { id: "crowe-sense", tools: [
+  { match: "describe_*", tier: "readonly" }, { match: "read_*", tier: "readonly" }, { match: "list_*", tier: "readonly" },
+  { match: "request_operation", tier: "execute", physical: true }, { match: "*", tier: "execute", physical: true },
+] };
+function senseCtx(cfgPatch, hooks) {
+  const calls = [];
+  const ctx = makeCtx(cfgPatch, { mcpCall: async (name, args) => { calls.push({ name, args }); return "indicator.identify op-1: done."; }, ...hooks });
+  ctx.getPlugins = () => [SENSE_PLUGIN];
+  ctx.calls = calls;
+  return ctx;
+}
+const OP = { operation: "indicator.identify", args: { seconds: 5 } };
+test("a physical plugin tool asks every time, bound to plugin, tool and arguments, and runs only on yes", async () => {
+  const ctx = senseCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: true });
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "cultivation", model: "m" });
+  const out = await H.callTool(ctx, "mcp__crowe-sense__request_operation", OP, {}, state);
+  assert.strictEqual(out.status, "SUCCESS", out.text);
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
+  const a = ctx.approvalsSeen[0];
+  assert.strictEqual(a.kind, "physical_write"); assert.strictEqual(a.risk, "strict");
+  assert.match(a.why, /physical device/); assert.match(a.detail, /crowe-sense request_operation .*indicator\.identify/);
+  assert.strictEqual(a.hash, H.inputHash("physical:mcp__crowe-sense__request_operation", OP), "the approval is bound to these exact arguments");
+  assert.notStrictEqual(a.hash, H.inputHash("physical:mcp__crowe-sense__request_operation", { ...OP, args: { seconds: 30 } }));
+  assert.deepStrictEqual(ctx.calls, [{ name: "mcp__crowe-sense__request_operation", args: OP }]);
+  // The same call again is asked about again: nothing about a physical write is standing.
+  await H.callTool(ctx, "mcp__crowe-sense__request_operation", OP, {}, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 2); assert.strictEqual(ctx.calls.length, 2);
+  assert.ok(ctx.journalEvents.some((e) => e.event_type === "APPROVAL_GRANTED" && e.tool_id === "physical_write"));
+});
+test("a declined physical write never reaches the server, and approvals off does not silence the question", async () => {
+  const denied = senseCtx({ autonomy: "execute" }, { approve: false });
+  const out = await H.callTool(denied, "mcp__crowe-sense__request_operation", OP, {}, H.newState(denied, denied.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.strictEqual(out.status, "BLOCKED"); assert.match(out.text, /DENIED/); assert.deepStrictEqual(denied.calls, []);
+  const off = senseCtx({ autonomy: "execute", approvals: "off" }, { approve: true });
+  await H.callTool(off, "mcp__crowe-sense__request_operation", OP, {}, H.newState(off, off.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.strictEqual(off.approvalsSeen.length, 1, "approvals off still asks about a device");
+  assert.strictEqual(off.calls.length, 1);
+  assert.ok(!off.journalEvents.some((e) => e.event_type === "APPROVAL_SKIPPED"), "nothing was skipped");
+  const noWay = senseCtx({ autonomy: "execute", approvals: "off" });   // no requestApproval at all
+  const out2 = await H.callTool(noWay, "mcp__crowe-sense__request_operation", OP, {}, H.newState(noWay, noWay.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out2.text, /^blocked:/); assert.deepStrictEqual(noWay.calls, []);
+});
+test("the tier is checked before the question: edit mode and a read-only room block a physical write without asking", async () => {
+  const edit = senseCtx({ autonomy: "edit" }, { approve: true });
+  const out = await H.callTool(edit, "mcp__crowe-sense__request_operation", OP, {}, H.newState(edit, edit.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out.text, /requires "execute"/); assert.strictEqual(edit.approvalsSeen.length, 0); assert.deepStrictEqual(edit.calls, []);
+  const room = senseCtx({ autonomy: "execute" }, { approve: true });
+  const out2 = await H.callTool(room, "mcp__crowe-sense__request_operation", OP, { tierCap: "readonly" }, H.newState(room, room.loadConfig(), {}, { expert: "cultivation", model: "m" }));
+  assert.match(out2.text, /requires "execute"/); assert.strictEqual(room.approvalsSeen.length, 0);
+  // An unknown tool on this plugin falls to the catch-all: execute and physical, never a quiet edit.
+  assert.deepStrictEqual(H.pluginToolRule(room, "mcp__crowe-sense__set_valve"), { tier: "execute", physical: true, plugin: "crowe-sense", tool: "set_valve" });
+});
+test("reads on the same plugin are read-only: no approval, served in plan and read-only modes, replayable", async () => {
+  const ctx = senseCtx({ autonomy: "readonly" }, { approve: false });
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "cultivation", model: "m" });
+  const out = await H.callTool(ctx, "mcp__crowe-sense__read_latest", { zone: "tent-1" }, {}, state);
+  assert.strictEqual(out.status, "SUCCESS"); assert.strictEqual(ctx.approvalsSeen.length, 0); assert.strictEqual(ctx.calls.length, 1);
+  assert.strictEqual(H.deliveryOf(ctx, "mcp__crowe-sense__read_latest", {}), "read_only");
+  assert.strictEqual(H.deliveryOf(ctx, "mcp__crowe-sense__request_operation", OP), "irreversible");
+  assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__read_latest", {}, "ok"), false);
+  assert.strictEqual(H.didMutate(ctx, "mcp__crowe-sense__request_operation", OP, "done"), true);
+});
+
+// ─── A room seat may end its turn on a question ──────────────────────────────
+test("a room seat can end its turn on a question, and the proposal comes back structured", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  let offered = null;
+  const deps = makeDeps(async (stage, n, _m, tools) => {
+    offered = (tools || []).map((t) => t.function.name);
+    if (n === 0) return reply([call("propose_options", { question: "Stop the machine Shorts job?", options: ["Stop the shorts job", "Leave it running"] })], "A live uploader is still dropping two machine Shorts a day.");
+    return reply([], "this call must never happen: the turn ended on the question");
+  });
+  const seen = [];
+  deps.onPropose = (p) => seen.push(p);
+  const out = await H.runAgent(ctx, [{ role: "user", content: "morning snapshot" }], deps);
+  assert.ok(offered.includes("propose_options"), "the tool was not offered to a caller that can receive it");
+  assert.deepStrictEqual(out.proposal, { question: "Stop the machine Shorts job?", options: ["Stop the shorts job", "Leave it running"] });
+  assert.deepStrictEqual(seen, [out.proposal]);
+  assert.strictEqual(out.text, "A live uploader is still dropping two machine Shorts a day.");
+  assert.match(deps.toolResults()[0].result, /proposal recorded/);
+  assert.strictEqual(out.stop, "done");
+});
+test("a malformed proposal is refused and the turn continues", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  const deps = makeDeps(async (stage, n) => {
+    if (n === 0) return reply([call("propose_options", { question: "", options: [] })], "");
+    return reply([], "Finished without asking.");
+  });
+  deps.onPropose = () => {};
+  const out = await H.runAgent(ctx, [{ role: "user", content: "go" }], deps);
+  assert.match(deps.toolResults()[0].result, /^blocked: propose_options/);
+  assert.strictEqual(out.proposal, null);
+  assert.match(out.text, /Finished without asking/);
+});
+test("the plain operator thread is never offered propose_options, and a hallucinated call is unknown", async () => {
+  const ctx = makeCtx({ autonomy: "readonly" });
+  let offered = null;
+  const deps = makeDeps(async (stage, n, _m, tools) => { offered = (tools || []).map((t) => t.function.name); return reply([], "hello"); });
+  await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
+  assert.ok(!offered.includes("propose_options"), "a thread with nowhere to draw a card was offered the tool");
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  const out = await H.callTool(ctx, "propose_options", { question: "q", options: ["a"] }, {}, state);
+  assert.match(out.text, /unknown tool/);
+  assert.strictEqual(H.deliveryOf(ctx, "propose_options", {}), "read_only");
+  assert.strictEqual(H.normalizeProposal({ question: " Which? ", options: ["a", "a", "b", "", "c", "d", "e"] }).options.length, 4);
+});
+
+// ─── A room seat and an unmanaged connector ──────────────────────────────────
+test("in a read-only room, an unmanaged connector tool that is not plainly a read asks first", async () => {
+  const ctx = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: true });
+  ctx.mcpCall = async (name) => `ran ${name}`;
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  const state = H.newState(ctx, ctx.loadConfig(), { agentId: "room:r-1:operator" }, room);
+  // A read by name: no question asked.
+  assert.strictEqual(await H.execTool(ctx, "mcp__youtube__get_channel_analytics", { days: 28 }, room, state), "ran mcp__youtube__get_channel_analytics");
+  assert.strictEqual(ctx.approvalsSeen.length, 0);
+  // Not plainly a read: the person is asked, and the seat's id rides on the request so the room can draw the card.
+  assert.strictEqual(await H.execTool(ctx, "mcp__youtube__set_video_visibility", { id: "FD0hpJzKKec", visibility: "private" }, room, state), "ran mcp__youtube__set_video_visibility");
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
+  assert.strictEqual(ctx.approvalsSeen[0].kind, "room_connector");
+  assert.strictEqual(ctx.approvalsSeen[0].agentId, "room:r-1:operator");
+  assert.match(ctx.approvalsSeen[0].detail, /youtube set_video_visibility/);
+  assert.deepStrictEqual(ctx.approvalsSeen[0].meta, { seat: "room:r-1:operator", connector: "youtube", tool: "set_video_visibility" });
+  // A misleading name: starts like a read, mutates. It asks.
+  await H.execTool(ctx, "mcp__store__get_or_create_customer", { email: "x@y" }, room, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 2);
+  assert.strictEqual(ctx.approvalsSeen[1].meta.tool, "get_or_create_customer");
+  // No verb the table knows: it asks rather than guesses.
+  await H.execTool(ctx, "mcp__weather__current", { city: "Phoenix" }, room, state);
+  assert.strictEqual(ctx.approvalsSeen.length, 3);
+});
+test("the connector name heuristic errs toward asking", () => {
+  for (const read of ["get_channel_analytics", "youtube_list_videos", "getComments", "channel_stats", "search", "describe_device", "read_latest", "fetchHistory"])
+    assert.ok(H.mcpReadLike(read), `${read} should read as a read`);
+  for (const ask of ["set_video_visibility", "post_comment", "delete", "upload", "get_or_create_customer", "list_and_delete", "checkout", "listen", "weather", "current", "getOrUpdate", "read_and_reply", "log_grow", "resolve_issue",
+    "scan_and_fix", "inspect_and_repair", "get_and_restart", "checkAndRetry", "list_then_forward", "find_and_reply"])
+    assert.ok(!H.mcpReadLike(ask), `${ask} should ask`);
+  assert.ok(H.MCP_READ_WORDS.size < H.MCP_WRITE_WORDS.size, "the read list must stay the short one");
+});
+test("denied, the room seat's connector call is blocked; outside a room the same tool keeps its old ungated path", async () => {
+  const denied = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  denied.mcpCall = async (name) => `ran ${name}`;
+  const room = { expert: "operator", model: "m", tierCap: "readonly" };
+  const state = H.newState(denied, denied.loadConfig(), { agentId: "room:r-1:operator" }, room);
+  assert.match(String(await H.execTool(denied, "mcp__youtube__set_video_visibility", { id: "x" }, room, state)), /^blocked: the user DENIED/);
+  // The plain operator thread: no cap, no new question.
+  const plain = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  plain.mcpCall = async (name) => `ran ${name}`;
+  const pstate = H.newState(plain, plain.loadConfig(), {}, { expert: "operator", model: "m" });
+  assert.strictEqual(await H.execTool(plain, "mcp__youtube__set_video_visibility", { id: "x" }, {}, pstate), "ran mcp__youtube__set_video_visibility");
+  assert.strictEqual(plain.approvalsSeen.length, 0);
+  // A room that may write is not asked either: the cap is what raises the question.
+  const writing = makeCtx({ autonomy: "execute", approvals: "high-risk" }, { approve: false });
+  writing.mcpCall = async (name) => `ran ${name}`;
+  const wroom = { expert: "operator", model: "m", tierCap: "edit" };
+  const wstate = H.newState(writing, writing.loadConfig(), {}, wroom);
+  assert.strictEqual(await H.execTool(writing, "mcp__youtube__set_video_visibility", { id: "x" }, wroom, wstate), "ran mcp__youtube__set_video_visibility");
+  assert.ok(H.mcpReadLike("list_videos") && H.mcpReadLike("getComments") && H.mcpReadLike("search"));
+  assert.ok(!H.mcpReadLike("set_visibility") && !H.mcpReadLike("post_comment") && !H.mcpReadLike("delete") && !H.mcpReadLike("upload"));
+});
