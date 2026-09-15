@@ -24,6 +24,14 @@ function check(value, message) { assert(value, message); checks++; }
 
 const appUrl = pathToFileURL(entry).toString();
 check(isAppDocument(appUrl, entry), "the packaged renderer must remain navigable");
+
+// Sign-in: one loopback listener at a time. A second click while a sign-in waits in the
+// browser joins the pending attempt instead of opening a second listener on the same ports.
+const mainSrc = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+check(/let pendingSignIn = null;/.test(mainSrc), "sign-in must track the pending attempt");
+check(/if \(pendingSignIn\) \{ if \(pendingSignIn\.authUrl\) shell\.openExternal\(pendingSignIn\.authUrl\); return pendingSignIn\.promise; \}/.test(mainSrc), "a click during a pending sign-in must reopen its page and join its promise");
+check(/if \(pendingSignIn === pending\) pendingSignIn = null;/.test(mainSrc), "finishing a sign-in must clear the pending attempt");
+check(/pending\.authUrl = authUrl;/.test(mainSrc), "the pending attempt must remember its page so a second click can reopen it");
 check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remain navigable");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
