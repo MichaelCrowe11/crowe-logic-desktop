@@ -3,7 +3,7 @@
 
    Boots the app on an isolated profile, enables Channel Analytics through the
    same IPC the Settings switch uses (so the manifest placeholders, the
-   Electron-as-node spawn and the tools/list handshake all run for real),
+   utility-process fork and the tools/list handshake all run for real),
    opens a one-seat room, and drives a turn in which the seat calls
    get_channel_snapshot, then tries run_collect, then answers. Reads the
    machine's real channel-manager state, read-only; the gateway is stubbed.

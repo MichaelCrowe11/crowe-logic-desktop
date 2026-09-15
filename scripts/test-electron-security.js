@@ -167,7 +167,11 @@ check(/contextFileGrants/.test(main) && /File access was not granted by the pick
 check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
 check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
-check(/spawn\(spec\.command, spec\.args \|\| \[\], \{ env: \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\)/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+check(/const env = \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\), \.\.\.\(spec\.env \|\| \{\}\) \};/.test(main) && /spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio: \["pipe", "pipe", "pipe"\]/.test(main) && /utilityProcess\.fork\(spec\.fork, spec\.args \|\| \[\], \{ env, stdio: \["ignore", "pipe", "pipe"\]/.test(main), "MCP servers, spawned or forked, must inherit the filtered shell environment, not the app's");
+// The packaged binary has the RunAsNode fuse off (pinned below), so ELECTRON_RUN_AS_NODE
+// on it does not make a Node: it starts a second copy of the app. A server that ships
+// inside the app runs in a utility process, the one Node runtime a packaged build has.
+check(!/ELECTRON_RUN_AS_NODE:/.test(main) && /p\.mcp\.command === "\$\{NODE\}"/.test(main) && /\{ fork: args\[0\], args: args\.slice\(1\), env: merged \}/.test(main), "a bundled ${NODE} server must be forked as a utility process, never spawned through ELECTRON_RUN_AS_NODE");
 check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame" && !isSafeGuestUrl\(details\.url\)/.test(main), "guest main-frame requests must be checked at the session, since webview.src is a loadURL");
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
