@@ -874,6 +874,10 @@ syncComposerInput();
 let atHome = false;
 function applyWelcomeChips() {
   const F = window.CroweFirstRun; if (!F) return;
+  // The phone and web shells rewrite the welcome for a device that has no folder
+  // to open; once they have, the desktop's chips must not come back over theirs.
+  const welcome = transcript.querySelector(".welcome");
+  if (welcome && (welcome.dataset.mobile === "1" || welcome.dataset.web === "1")) return;
   const chips = transcript.querySelectorAll(".welcome .chips .chip");
   const model = F.welcomeChips(atHome);
   chips.forEach((c, i) => { if (!model[i]) return; c.textContent = model[i].text; c.dataset.action = model[i].action; });

@@ -385,13 +385,18 @@
     // swap runs on every change to the transcript rather than once at load.
     // innerHTML rewriting would drop the card's buttons and their handlers, so
     // it is confined to the nodes that carry prose.
+    // A phone has no local folder to open; the desktop's button would promise one.
+    // Stripped here as well as on the event below, because the card can be built
+    // before this script has registered its listener, and then the event is gone.
+    const stripFolderButton = (root) => root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+    stripFolderButton(transcript);
     new MutationObserver((records) => {
       mobiliseWelcome(transcript);
       if (!records.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1))) return;
       // The card is appended empty and filled a statement later, so the pass
       // waits a turn. Only direct children are observed, so streaming text —
       // which lands inside a message that already exists — never triggers it.
-      setTimeout(() => transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy), 0);
+      setTimeout(() => { transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy); stripFolderButton(transcript); }, 0);
     }).observe(transcript, { childList: true });
     // The onboarding card is filled after its empty message node is appended.
     // Listen for the completed card as well as the DOM mutation so the phone
@@ -399,8 +404,7 @@
     window.addEventListener("crowe:onboarding-shown", (event) => {
       const root = event.detail && event.detail.root;
       if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(mobiliseCopy);
-      // A phone has no local folder to open; the desktop's button would promise one.
-      if (root && root.querySelectorAll) root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+      if (root && root.querySelectorAll) stripFolderButton(root);
     });
   }
 

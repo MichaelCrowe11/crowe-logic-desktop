@@ -123,13 +123,18 @@
       // that offers to would be a promise this shell cannot keep.
       const root = event && event.detail && event.detail.root;
       if (!root || !root.querySelectorAll) return;
-      root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+      stripFolderButton(root);
       root.querySelectorAll(".said").forEach(webCopy);
     });
+    // A browser cannot open a local folder; the desktop's button would promise one.
+    // Stripped in the mutation pass as well as on the event, because the card can
+    // be built before this script has registered its listener.
+    const stripFolderButton = (root) => root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+    stripFolderButton(transcript);
     new MutationObserver((records) => {
       webWelcome(transcript);
       if (!records.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1))) return;
-      setTimeout(() => transcript.querySelectorAll(".msg .said").forEach(webCopy), 0);
+      setTimeout(() => { transcript.querySelectorAll(".msg .said").forEach(webCopy); stripFolderButton(transcript); }, 0);
     }).observe(transcript, { childList: true });
   }
 
