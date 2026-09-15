@@ -271,6 +271,36 @@ test("a credential in the document asks first, and the value is never repeated",
   const yes = makeCtx({}, { approve: true });
   assert.match((await exportDoc(yes, { markdown: `key ${key}`, filename: "keys", format: "md" })).text, /^saved keys\.md/);
 });
+test("a key glued to a word is still a key: snake_case names, prefixed titles, suffixed content", async () => {
+  const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+  // notes_<key> as a file name: refused, the value never repeated.
+  const snake = makeCtx({}, { approve: true });
+  const o1 = await exportDoc(snake, { markdown: "x", filename: "notes_" + key, format: "md" });
+  assert.match(o1.text, /^rejected: the file name looks like a live Stripe secret key/);
+  assert.ok(!o1.text.includes(key) && !JSON.stringify(snake.journalEvents).includes(key));
+  assert.ok(!fs.existsSync(exportsDir(snake)));
+  // x<key> as a file name: the same.
+  const glued = makeCtx({}, { approve: true });
+  assert.match((await exportDoc(glued, { markdown: "x", filename: "x" + key, format: "md" })).text, /^rejected: the file name looks like/);
+  // notes_<key> as a title: the title is content, so it asks, and the value is redacted everywhere.
+  const titled = makeCtx({}, { approve: true });
+  const o3 = await exportDoc(titled, { markdown: "x", filename: "notes", format: "md", title: "notes_" + key });
+  for (const s of [o3.text, JSON.stringify(titled.approvalsSeen), JSON.stringify(titled.journalEvents)]) assert.ok(!s.includes(key), "a prefixed title must not be echoed");
+  // <key>_ in the document: the content gate still asks.
+  const suffixed = makeCtx({}, { approve: false });
+  const o4 = await exportDoc(suffixed, { markdown: `use ${key}_ here`, filename: "notes", format: "md" });
+  assert.match(o4.text, /^blocked:/);
+  assert.strictEqual(suffixed.approvalsSeen.length, 1);
+  assert.ok(!fs.existsSync(exportsDir(suffixed)));
+  // Ordinary text with a hyphenated slug is not a key.
+  assert.deepStrictEqual(H.scanForSecrets("task-" + "a".repeat(40) + " is a slug"), []);
+});
+test("the tool card redacts a key hidden in a non-string argument", () => {
+  const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+  const shown = H.shownArgs("export_document", { markdown: "x", filename: [key], format: { k: key }, extra: [key] });
+  for (const v of Object.values(shown)) assert.ok(!String(v).includes(key), "no argument shape may show the value");
+  assert.match(String(shown.filename), /\[redacted: a live Stripe secret key\]/);
+});
 test("a rejected format is named by rule, never by value", async () => {
   // The result line becomes a tool_result event and the journal row's output_summary,
   // so a credential-shaped string handed in as the format must not come back in it.

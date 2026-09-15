@@ -206,15 +206,20 @@ const SECRET_VALUE_RES = [
   { name: "a private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
     // The header is enough to know one is there; taking it out means the body too, to the END line or the end of the text.
     span: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/ },
-  { name: "an AWS access key id", re: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: "a live Stripe secret key", re: /\bsk_live_[0-9a-zA-Z]{16,}\b/ },
-  { name: "a live Stripe restricted key", re: /\brk_live_[0-9a-zA-Z]{16,}\b/ },
-  { name: "a GitHub token", re: /\bgh[pousr]_[0-9A-Za-z]{20,}\b/ },
-  { name: "a Slack token", re: /\bxox[abposr]-[0-9A-Za-z-]{12,}\b/ },
-  { name: "an Anthropic API key", re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "an OpenAI-style API key", re: /\bsk-[A-Za-z0-9]{32,}\b/ },
-  { name: "a Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
-  { name: "a signed token (JWT)", re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  // No word boundaries around the distinctive prefixes: a key glued to a word,
+  // as in notes_sk_live_... or x<key> or <key>_, is still that key, and the
+  // export_document name refusal and redaction lean on this list. The prefixes
+  // are specific enough on their own; only the generic sk- shape keeps a guard
+  // against the letter before it, since task-<32 chars> is ordinary text.
+  { name: "an AWS access key id", re: /AKIA[0-9A-Z]{16}/ },
+  { name: "a live Stripe secret key", re: /sk_live_[0-9a-zA-Z]{16,}/ },
+  { name: "a live Stripe restricted key", re: /rk_live_[0-9a-zA-Z]{16,}/ },
+  { name: "a GitHub token", re: /gh[pousr]_[0-9A-Za-z]{20,}/ },
+  { name: "a Slack token", re: /xox[abposr]-[0-9A-Za-z-]{12,}/ },
+  { name: "an Anthropic API key", re: /sk-ant-[A-Za-z0-9_-]{20,}/ },
+  { name: "an OpenAI-style API key", re: /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{32,}/ },
+  { name: "a Google API key", re: /AIza[0-9A-Za-z_-]{35}/ },
+  { name: "a signed token (JWT)", re: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
 ];
 function scanForSecrets(content) {
   const s = String(content ?? "");
@@ -886,7 +891,12 @@ function snapshotBefore(ctx, relPath) {
 function shownArgs(name, a) {
   if (name !== "export_document" || !a || typeof a !== "object") return a;
   const out = { ...a };
-  for (const k of Object.keys(out)) if (typeof out[k] === "string") out[k] = redactSecrets(out[k]);
+  // A value the schema did not ask for (an array, an object) is shown as its
+  // JSON, redacted the same way, so a key hidden in a list is not shown either.
+  for (const k of Object.keys(out)) {
+    if (typeof out[k] === "string") out[k] = redactSecrets(out[k]);
+    else if (out[k] && typeof out[k] === "object") out[k] = redactSecrets(JSON.stringify(out[k]));
+  }
   return out;
 }
 function mutationLabel(name, args) {
