@@ -24,6 +24,14 @@ function check(value, message) { assert(value, message); checks++; }
 
 const appUrl = pathToFileURL(entry).toString();
 check(isAppDocument(appUrl, entry), "the packaged renderer must remain navigable");
+
+// Sign-in: one loopback listener at a time. A second click while a sign-in waits in the
+// browser joins the pending attempt instead of opening a second listener on the same ports.
+const mainSrc = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+check(/let pendingSignIn = null;/.test(mainSrc), "sign-in must track the pending attempt");
+check(/if \(pendingSignIn\) \{ if \(pendingSignIn\.authUrl\) shell\.openExternal\(pendingSignIn\.authUrl\); return pendingSignIn\.promise; \}/.test(mainSrc), "a click during a pending sign-in must reopen its page and join its promise");
+check(/if \(pendingSignIn === pending\) pendingSignIn = null;/.test(mainSrc), "finishing a sign-in must clear the pending attempt");
+check(/pending\.authUrl = authUrl;/.test(mainSrc), "the pending attempt must remember its page so a second click can reopen it");
 check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remain navigable");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
@@ -167,7 +175,13 @@ check(/contextFileGrants/.test(main) && /File access was not granted by the pick
 check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
 check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
-check(/const env = \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\), \.\.\.\(spec\.env \|\| \{\}\) \};/.test(main) && /spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio: \["pipe", "pipe", "pipe"\]/.test(main) && /utilityProcess\.fork\(spec\.fork, spec\.args \|\| \[\], \{ env, stdio: \["ignore", "pipe", "pipe"\]/.test(main), "MCP servers, spawned or forked, must inherit the filtered shell environment, not the app's");
+// The plugin server's environment is built by harness.pluginSpawnEnv, which
+// starts from safeShellEnv (the agent shell's filtered variables) and only adds
+// the plugin's own variables plus a login-shell PATH so npx resolves from a
+// Finder launch. Both halves are pinned, for a spawned server and a forked one:
+// each must use that env, and the builder must start from the filtered environment.
+check(/const env = harness\.pluginSpawnEnv\(spec\.env \|\| \{\}\);/.test(main) && /spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio: \["pipe", "pipe", "pipe"\]/.test(main) && /utilityProcess\.fork\(spec\.fork, spec\.args \|\| \[\], \{ env, stdio: \["ignore", "pipe", "pipe"\]/.test(main), "MCP servers, spawned or forked, must inherit the filtered shell environment, not the app's");
+check(/function pluginSpawnEnv\([^)]*\) \{\s*const env = \{ \.\.\.safeShellEnv\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "harness.js"), "utf8")), "pluginSpawnEnv must start from safeShellEnv");
 // The packaged binary has the RunAsNode fuse off (pinned below), so ELECTRON_RUN_AS_NODE
 // on it does not make a Node: it starts a second copy of the app. A server that ships
 // inside the app runs in a utility process, the one Node runtime a packaged build has.
