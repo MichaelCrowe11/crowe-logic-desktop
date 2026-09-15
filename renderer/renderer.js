@@ -1802,7 +1802,7 @@ function mountOperator(p, body) {
 function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
-  if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
+  if(["files","git","output","activity"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
   const type = name === "term" ? "terminal" : name;
   hideLegacy();
   const found = [...panels].reverse().find((p)=>p.type===type);
@@ -4065,6 +4065,60 @@ function appendOutput(line) {
   if (lines.length > OUTPUT_MAX) log.textContent = lines.slice(lines.length - OUTPUT_MAX).join("\n");
   log.scrollTop = log.scrollHeight;
 }
+// ── Activity: what the agent is doing, live, beside the chat ──
+// The Output pane keeps the full log. This is the view: one card per tool
+// call, commands streaming their output, landed edits opening as a diff in
+// Changes, pages opening in the browser. "Follow the agent" brings the right
+// pane forward; off, the user's pane stays put. renderer/activity.js holds the
+// pure half and its tests.
+const activity = window.CroweActivity ? window.CroweActivity.newActivity() : null;
+const FOLLOW_KEY = "crowe.followAgent";
+function followOn() { const el = $("follow-agent"); return el ? el.checked : true; }
+(function initFollow() {
+  const el = $("follow-agent"); if (!el) return;
+  const saved = localStorage.getItem(FOLLOW_KEY);
+  el.checked = saved == null ? true : saved === "1";
+  el.addEventListener("change", () => localStorage.setItem(FOLLOW_KEY, el.checked ? "1" : "0"));
+  const clear = $("activity-clear");
+  if (clear) clear.addEventListener("click", () => { if (activity) { activity.cards.length = 0; renderActivity(); } });
+})();
+function activityCardHtml(c) {
+  const dur = c.endedAt ? ` · ${Math.max(0, Math.round((c.endedAt - c.startedAt) / 100) / 10)}s` : "";
+  const status = c.status === "running" ? "running" : c.status === "waiting" ? "waiting" : c.status === "error" ? "failed" : c.status;
+  const isTerm = c.tool === "run_shell";
+  const body = c.kind === "proposal" ? `<div class="act-diff">${colorizeDiff(c.output)}</div>`
+    : isTerm ? `<pre class="act-term"><span class="act-prompt">$ </span>${esc(c.detail)}\n${esc(c.output || (c.status === "running" ? "…" : ""))}</pre>`
+    : c.output ? `<pre class="act-out">${esc(window.CroweActivity.short(c.output, 1200))}</pre>` : "";
+  const link = (c.args && (c.args.path || c.args.file)) ? ` data-path="${esc(c.args.path || c.args.file)}"` : (c.args && c.args.url ? ` data-url="${esc(c.args.url)}"` : "");
+  return `<div class="act-card ${c.status}" data-id="${esc(c.id)}"${link}>`
+    + `<div class="act-line"><span class="act-dot" aria-hidden="true"></span><span class="act-verb">${esc(c.verb)}</span> <span class="act-detail" title="${esc(c.detail)}">${esc(window.CroweActivity.short(c.detail, 90))}</span><span class="act-status">${esc(status)}${dur}</span></div>`
+    + body + `</div>`;
+}
+function renderActivity() {
+  const log = $("activity-log"); if (!log || !activity) return;
+  if (!activity.cards.length) { log.innerHTML = `<div class="activity-empty">When the agent reads, edits, runs or opens something, it shows up here as it happens.</div>`; }
+  else log.innerHTML = activity.cards.slice(-60).map(activityCardHtml).join("");
+  const st = $("activity-status"); if (st) st.textContent = window.CroweActivity.summary(activity);
+  log.scrollTop = log.scrollHeight;
+}
+const activityLogEl = $("activity-log");
+if (activityLogEl) activityLogEl.addEventListener("click", (e) => {
+  const card = e.target.closest(".act-card"); if (!card) return;
+  if (card.dataset.path) { switchPane("git"); showDiff({ path: card.dataset.path, staged: false }); }
+  else if (card.dataset.url) { setSpace("chat"); navigate(card.dataset.url); }
+});
+function followAgent(ev) {
+  if (!activity) return;
+  const { card, target } = window.CroweActivity.reduceActivity(activity, ev);
+  if (card) renderActivity();
+  const pane = window.CroweActivity.nextPane(target, followOn());
+  if (!pane) return;
+  if (pane === "browser") { if (target.url) { setSpace("chat"); navigate(target.url); } return; }
+  switchPane(pane);
+  if (pane === "git" && target.path && ev.type !== "tool_call") showDiff({ path: target.path, staged: false });
+}
+window.crowe.agent.onEvent((ev) => { try { followAgent(ev); } catch (e) { appendOutput("activity view: " + (e && e.message)); } });
+
 window.crowe.agent.onEvent((ev) => {
   if (ev.type === "assistant_delta") return; // too chatty for a log
   const brief = ev.type === "tool_call" ? `${ev.name} ${JSON.stringify(ev.args || {}).slice(0, 120)}`
