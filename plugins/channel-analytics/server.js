@@ -217,13 +217,18 @@ async function call(name, args) {
     }
     case "list_machine_shorts": {
       const s = loadSnapshot();
-      let rows = Array.isArray(s.machine_shorts) ? s.machine_shorts.slice() : [];
-      if (a.days) { const since = Date.now() - Math.max(1, Number(a.days)) * 864e5; rows = rows.filter((m) => Date.parse(m.published || "") >= since); }
-      rows.sort((x, y) => String(y.published).localeCompare(String(x.published)));
-      const last14 = rows.filter((m) => Date.parse(m.published || "") >= Date.now() - 14 * 864e5);
+      const all = Array.isArray(s.machine_shorts) ? s.machine_shorts.slice() : [];
+      const when = (m) => Date.parse(m.published || "");
+      const days = a.days ? Math.max(1, Number(a.days)) : null;
+      const rows = (days ? all.filter((m) => when(m) >= Date.now() - days * 864e5) : all)
+        .sort((x, y) => String(y.published).localeCompare(String(x.published)));
+      // The cadence is always the last 14 days of everything the manager knows,
+      // whatever window the caller asked to list; a 7-day list must not report a
+      // 7-day count under a 14-day name.
+      const last14 = all.filter((m) => when(m) >= Date.now() - 14 * 864e5).length;
       const hours = {};
       for (const m of rows) { const h = String(m.published || "").slice(11, 13); if (h) hours[h] = (hours[h] || 0) + 1; }
-      return { count: rows.length, last_14_days: last14.length, latest: rows[0] || null, publish_hours_utc: hours, shorts: rows.slice(0, 60) };
+      return { count: rows.length, days, last_14_days: last14, latest: rows[0] || null, publish_hours_utc: hours, shorts: rows.slice(0, 60) };
     }
     case "get_video_performance": {
       const id = String(a.id || "");
@@ -291,30 +296,47 @@ const render = (out) => {
   return cut(text, typeof out === "string" ? MAX_SECTION : MAX_TEXT);
 };
 
-let buf = "";
+/* One request, one reply, whichever wire carried it. A notification (no id)
+   wants no answer. */
 let inflight = 0, ended = false;
 const maybeExit = () => { if (ended && inflight === 0) process.exit(0); };
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", async (chunk) => {
-  buf += chunk;
-  let i;
-  while ((i = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-    if (!line) continue;
-    let msg; try { msg = JSON.parse(line); } catch { continue; }
-    if (msg.id === undefined || msg.id === null) continue;   // a notification wants no answer
-    const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\n");
-    if (msg.method === "initialize") reply({ protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "channel-analytics", version: "0.1.0" } });
-    else if (msg.method === "tools/list") reply({ tools: TOOLS });
-    else if (msg.method === "tools/call") {
-      inflight++;
-      try { const out = await call((msg.params || {}).name, (msg.params || {}).arguments || {}); reply({ content: [{ type: "text", text: render(out) }] }); }
-      catch (e) { reply({ content: [{ type: "text", text: "error: " + String((e && e.message) || e) }], isError: true }); }
-      finally { inflight--; maybeExit(); }
-    } else if (msg.method === "ping") reply({});
-    else reply({});
-  }
-});
-process.stdin.on("end", () => { ended = true; maybeExit(); });
+async function handle(msg, reply) {
+  if (!msg || typeof msg !== "object" || msg.id === undefined || msg.id === null) return;
+  const answer = (result) => reply({ jsonrpc: "2.0", id: msg.id, result });
+  if (msg.method === "initialize") answer({ protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "channel-analytics", version: "0.1.0" } });
+  else if (msg.method === "tools/list") answer({ tools: TOOLS });
+  else if (msg.method === "tools/call") {
+    inflight++;
+    try { const out = await call((msg.params || {}).name, (msg.params || {}).arguments || {}); answer({ content: [{ type: "text", text: render(out) }] }); }
+    catch (e) { answer({ content: [{ type: "text", text: "error: " + String((e && e.message) || e) }], isError: true }); }
+    finally { inflight--; maybeExit(); }
+  } else if (msg.method === "ping") answer({});
+  else answer({});
+}
+
+if (process.parentPort) {
+  /* Inside the app: an Electron utility process, the Node runtime a packaged
+     build carries (its binary has the RunAsNode fuse off, so it will not run a
+     script as plain Node). Such a process has no stdin to read (Electron only
+     lets it be ignored), so requests arrive as objects on the port to the
+     parent and the replies go back the same way. */
+  process.parentPort.on("message", (e) => { handle(e.data, (m) => process.parentPort.postMessage(m)); });
+} else if (require.main === module) {
+  /* Plain node (the wire test, a hand run): newline-delimited JSON on stdio,
+     the same wire mcp-demo-server.js speaks. */
+  let buf = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line) continue;
+      let msg; try { msg = JSON.parse(line); } catch { continue; }
+      handle(msg, (m) => process.stdout.write(JSON.stringify(m) + "\n"));
+    }
+  });
+  process.stdin.on("end", () => { ended = true; maybeExit(); });
+}
 
 module.exports = { TOOLS, call, summarize, snapshotDates };

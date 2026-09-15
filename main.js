@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -466,13 +466,20 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
+/* One sign-in at a time. The loopback listener holds its port for up to five
+   minutes while the browser page waits, so a second click used to open a second
+   listener, collide with the first on EADDRINUSE, and blame the ports. A click
+   while one is pending now brings that page back up and joins its promise. */
+let pendingSignIn = null;
 function signIn() {
-  return new Promise((resolve) => {
+  if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const pending = { promise: null, authUrl: "" };
+  pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
     let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
     const server = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
@@ -497,7 +504,7 @@ function signIn() {
     let pIdx = 0;
     server.on("error", (e) => {
       if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
-      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+      finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
@@ -505,11 +512,14 @@ function signIn() {
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
         redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
       }).toString();
+      pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
     server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
+  pendingSignIn = pending;
+  return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
@@ -693,37 +703,64 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
 
-// ─── MCP client (stdio, newline-delimited JSON-RPC) ──────────────────────────
+// ─── MCP client: newline-delimited JSON-RPC over stdio, or the same messages over a utility process's port ──
 const MCP = {}; // name -> { proc, tools, send, pending, nextId }
 function mcpConnect(name, spec) {
   return new Promise((resolve) => {
-    let proc;
+    let proc, send;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
-    catch (e) { return resolve({ error: String(e) }); }
-    const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
-    const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+    const harness = require("./harness");
+    const env = harness.pluginSpawnEnv(spec.env || {});
+    const srv = { proc: null, tools: [], pending: new Map(), nextId: 1, buf: "" };
+    const receive = (msg) => {
+      if (!msg || !msg.id || !srv.pending.has(msg.id)) return;
+      const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
+      msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
+    };
+    try {
+      if (spec.fork) {
+        /* A server that ships inside the app runs in an Electron utility process:
+           the Node runtime the app carries, so no node is needed on the machine.
+           Not ELECTRON_RUN_AS_NODE on this binary: a packaged build has the
+           RunAsNode fuse off, so that variable is ignored and the "server" would
+           come up as a second copy of the app. A utility process has no stdin to
+           give it, so requests and replies cross its message port as objects. */
+        proc = utilityProcess.fork(spec.fork, spec.args || [], { env, stdio: ["ignore", "pipe", "pipe"], serviceName: `crowe-plugin-${name}` });
+        // Drained, not read: a server that writes to its stdio must never block on a full pipe.
+        proc.stdout.on("data", () => {});
+        proc.stderr.on("data", () => {});
+        proc.on("message", receive);
+        send = (msg) => proc.postMessage(msg);
+      } else {
+        // Resolve the binary ourselves so the failure names it. A Finder launch has
+        // no npx on PATH, and "spawn failed" told nobody that.
+        if (!harness.findOnPath(spec.command, env.PATH)) {
+          return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+        }
+        proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] });
+        proc.stdout.on("data", (chunk) => {
+          srv.buf += chunk.toString();
+          let i;
+          while ((i = srv.buf.indexOf("\n")) >= 0) {
+            const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
+            if (!line) continue;
+            let msg; try { msg = JSON.parse(line); } catch { continue; }
+            receive(msg);
+          }
+        });
+        send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+      }
+    } catch (e) { return resolve({ error: String(e) }); }
+    srv.proc = proc;
     srv.request = (method, params) => new Promise((res, rej) => {
       const id = srv.nextId++; srv.pending.set(id, { res, rej });
-      send({ jsonrpc: "2.0", id, method, params });
+      try { send({ jsonrpc: "2.0", id, method, params }); } catch (e) { srv.pending.delete(id); return rej(e); }
       setTimeout(() => { if (srv.pending.has(id)) { srv.pending.delete(id); rej(new Error("timeout")); } }, 15000);
     });
-    srv.notify = (method, params) => send({ jsonrpc: "2.0", method, params });
-    proc.stdout.on("data", (chunk) => {
-      srv.buf += chunk.toString();
-      let i;
-      while ((i = srv.buf.indexOf("\n")) >= 0) {
-        const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
-        if (!line) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id && srv.pending.has(msg.id)) {
-          const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
-          msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
-        }
-      }
-    });
-    proc.on("error", () => resolve({ error: "spawn failed" }));
+    srv.notify = (method, params) => { try { send({ jsonrpc: "2.0", method, params }); } catch {} };
+    proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
+    // Both report the code first: child_process as (code, signal), a utility process as (code).
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
@@ -820,25 +857,29 @@ function pluginList() {
 /* Two placeholders a bundled manifest may use, so a server that ships inside
    the app can be named without knowing where the app was installed. ${APP} is
    the app's own directory, read from outside the asar (plugins/ is unpacked
-   for this), and ${NODE} as the command is this Electron binary run as plain
-   Node, so a bundled server needs no node on the machine. Both resolve here
-   and nowhere else; the manifest stays the only source of commands. */
+   for this), and ${NODE} as the command runs the named script in an Electron
+   utility process, the Node runtime the app carries, so a bundled server needs
+   no node on the machine and starts under a packaged build's fuses (RunAsNode
+   is off there, so this binary will not run a script as plain Node). Both
+   resolve here and nowhere else; the manifest stays the only source of commands. */
 function resolvePluginPath(s) {
   // main.js's own directory, not app.getAppPath(): the two agree for `electron .`
   // and for a packaged app, but a script launched as `electron scripts/x.js` gets
   // that script's folder as its app path. The manifest itself is read from here.
-  const appDir = __dirname.replace(/app\.asar(?=\/|$)/, "app.asar.unpacked");
+  // Either separator: on Windows the archive is spelled C:\...\app.asar\main.js.
+  const appDir = __dirname.replace(/app\.asar(?=[\\/]|$)/, "app.asar.unpacked");
   return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
 }
 async function pluginConnect(p, env) {
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
-  const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
   const asNode = p.mcp.command === "${NODE}";
-  const r = await mcpConnect(p.id, {
-    command: asNode ? process.execPath : resolvePluginPath(p.mcp.command),
-    args: (p.mcp.args || []).map(resolvePluginPath),
-    env: { ...(p.mcp.env || {}), ...(asNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}), ...(env || {}) },
-  });
+  const args = (p.mcp.args || []).map(resolvePluginPath);
+  if (asNode && !args.length) return { error: "the manifest names ${NODE} but no server script" };
+  const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
+  const merged = { ...(p.mcp.env || {}), ...(env || {}) };
+  const r = await mcpConnect(p.id, asNode
+    ? { fork: args[0], args: args.slice(1), env: merged }
+    : { command: resolvePluginPath(p.mcp.command), args, env: merged });
   if (PLUGIN_GEN[p.id] !== gen) {
     // Disabled (or superseded) while connecting: tear down our registration.
     const srv = MCP[p.id];
@@ -1199,9 +1240,14 @@ const ptyProcs = new Map();
    environment, the same one Terminal.app would give them, and the gateway token
    is not in it - it lives in the auth store. */
 function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
+/* The autonomy tier is the agent's leash, not the operator's. A terminal the
+   user opens is the user typing, the same as Terminal.app, and gating it by the
+   agent's tier made the default layout open a terminal that refused to start.
+   The gate stays for panels that hand the shell to an agent (kind "agent"),
+   where the tier's "no shell" promise is the point. */
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
   ptyProcs.set(id, proc);
@@ -1520,7 +1566,7 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     reposRoot: c.reposRoot,

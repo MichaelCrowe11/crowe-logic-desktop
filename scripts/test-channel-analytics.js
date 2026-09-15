@@ -54,7 +54,11 @@ const snapshot = {
   playlists: [], quota_units_used: 812,
   sweeps: {}, memberships: { csv_imported: true, imports: [] }, fourthwall: { walled: true },
   stripe: { account: "acct_x", business: "Crowe Logic", paid_7d: { count: 2, usd: 158 }, yt_7d: { count: 2, usd: 158 }, paid_24h: { count: 0, usd: 0 }, yt_24h: { count: 0, usd: 0 }, yt_recent: [{ amount: 79, via: "yt-lm-substrate-desc", when: iso(daysAgo(1)) }] },
-  machine_shorts: [{ id: "machine0001", title: "Contamination control is best treated as", published: iso(daysAgo(0.5)).slice(0, 16), views: 1194 }],
+  machine_shorts: [
+    { id: "machine0001", title: "Contamination control is best treated as", published: iso(daysAgo(0.5)).slice(0, 16), views: 1194 },
+    // Same hour of day, three weeks back: outside any 14-day cadence, inside a 30-day list.
+    { id: "machine0000", title: "Mycelium is best understood as", published: iso(daysAgo(20.5)).slice(0, 16), views: 402 },
+  ],
 };
 fs.writeFileSync(path.join(manager, "state", "snapshot-latest.json"), JSON.stringify(snapshot));
 fs.writeFileSync(path.join(manager, "state", `snapshot-${snapshot.date}.json`), JSON.stringify(snapshot));
@@ -113,8 +117,13 @@ function serve(env) {
       const un = await srv.tool("list_recent_uploads", { days: 14, shorts_only: true, unvoiced_only: true });
       assert(un.json.count === 1 && un.json.uploads[0].id === "machine0001", `unvoiced shorts: ${JSON.stringify(un.json.uploads.map((u) => u.id))}`);
       const ms = await srv.tool("list_machine_shorts", {});
-      assert(ms.json.count === 1 && ms.json.last_14_days === 1 && Object.keys(ms.json.publish_hours_utc).length === 1, "machine shorts cadence missing");
-      return "3 uploads, 1 machine, 1 voiced";
+      assert(ms.json.count === 2 && ms.json.last_14_days === 1 && ms.json.days === null && Object.keys(ms.json.publish_hours_utc).length === 1, `machine shorts cadence: ${JSON.stringify(ms.json)}`);
+      // The 14-day count names a fixed window; a narrower or wider list must not move it.
+      const week = await srv.tool("list_machine_shorts", { days: 7 });
+      assert(week.json.count === 1 && week.json.days === 7 && week.json.last_14_days === 1, `a 7-day list changed the 14-day count: ${JSON.stringify(week.json)}`);
+      const month = await srv.tool("list_machine_shorts", { days: 30 });
+      assert(month.json.count === 2 && month.json.last_14_days === 1 && month.json.latest.id === "machine0001", `a 30-day list: ${JSON.stringify(month.json)}`);
+      return "3 uploads, 2 machine (1 in 14 days), 1 voiced";
     });
 
     await check("a video's performance joins the upload, the 28-day table and the rank", async () => {

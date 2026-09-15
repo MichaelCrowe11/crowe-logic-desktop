@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
-const { exec, execFile } = require("child_process");
+const { exec, execFile, execFileSync } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
@@ -67,6 +67,67 @@ function safeShellEnv(source = process.env) {
   try { fs.mkdirSync(rcDir, { recursive: true, mode: 0o700 }); } catch {}
   clean.ZDOTDIR = rcDir;
   return clean;
+}
+
+/* A packaged app opened from Finder or the Dock inherits launchd's PATH,
+   /usr/bin:/bin:/usr/sbin:/sbin, so everything Homebrew, nvm or volta installed
+   is invisible to spawn(). MCP plugin servers run through npx, exactly such a
+   binary, and the failure surfaced as "could not start: spawn failed" with no
+   further word. Ask the user's login shell for its PATH once (interactive and
+   login, so .zprofile and .zshrc both count) and keep the usual install
+   directories as a fallback for a shell that prints nothing. */
+// Windows ships too (Trusted Signing landed in 0.24.8's successor), and it has
+// no login shell to ask: the PATH a Windows app inherits is already the user's.
+// Directories are joined with the platform delimiter, and a command on Windows
+// may be node.exe or npx.cmd, so PATHEXT is tried the way cmd.exe would.
+const IS_WIN = process.platform === "win32";
+const KNOWN_TOOL_DIRS = IS_WIN ? [
+  path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs"),
+  path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm"),
+  path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".bun", "bin"),
+] : [
+  "/opt/homebrew/bin", "/usr/local/bin",
+  path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".local", "bin"),
+  path.join(os.homedir(), ".bun", "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+];
+let loginPathCache = null;
+function loginShellPath({ shell = process.env.SHELL || "/bin/zsh", timeoutMs = 4000, fresh = false } = {}) {
+  if (loginPathCache !== null && !fresh) return loginPathCache;
+  let out = "";
+  if (!IS_WIN) {
+    try {
+      out = execFileSync(shell, ["-ilc", 'printf "%s" "$PATH"'], {
+        encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"],
+        env: { HOME: os.homedir(), USER: os.userInfo().username, SHELL: shell, TERM: "dumb", LANG: process.env.LANG || "en_US.UTF-8" },
+      });
+    } catch { out = ""; }
+  }
+  const parts = [];
+  for (const dir of [...String(out).split(path.delimiter), ...String(process.env.PATH || "").split(path.delimiter), ...KNOWN_TOOL_DIRS]) {
+    if (dir && !parts.includes(dir)) parts.push(dir);
+  }
+  loginPathCache = parts.join(path.delimiter);
+  return loginPathCache;
+}
+function findOnPath(command, PATH = process.env.PATH || "") {
+  if (!command) return null;
+  if (command.includes("/") || (IS_WIN && command.includes("\\"))) { try { return fs.statSync(command).isFile() ? command : null; } catch { return null; } }
+  const exts = IS_WIN && !path.extname(command) ? ["", ...String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  for (const dir of String(PATH).split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
+  }
+  return null;
+}
+// The environment a plugin server gets: the agent shell's filtered variables,
+// the plugin's own, and a PATH the user would recognise from their terminal.
+function pluginSpawnEnv(extra = {}) {
+  const env = { ...safeShellEnv(), ...(extra || {}) };
+  env.PATH = loginShellPath();
+  return env;
 }
 
 // ─── Output shaping ──────────────────────────────────────────────────────────
@@ -190,6 +251,24 @@ function classifyCommand(command) {
   const c = String(command || "");
   for (const r of RISK_RULES) if (r.re.test(c)) return { risk: r.risk, why: r.why, readOnly: false };
   return { risk: RISK.AUTO, why: "", readOnly: READ_ONLY_CMD_RE.test(c) };
+}
+
+/* run_shell runs every command in its own one-shot process, so a `cd` alone on
+   its line is the one command the harness interprets itself: it moves the
+   workspace cwd. Only a bare one. `cd X && cmd`, `cd X; cmd`, `cd X | cmd` are
+   commands for the shell, which applies the cd to that process, which is what
+   the line means; they return null here and run like any other command.
+   `dir` is the literal folder (quotes and backslash escapes removed). `dynamic`
+   marks a bare cd this handler cannot resolve on its own: $HOME, $(pwd), a
+   backtick, a redirect, or no folder at all. */
+const BARE_CD_RE = /^\s*cd\s+(?:"([^"$`\\]*)"|'([^']*)'|((?:\\.|[^\s"';&|<>()`$\\])+))\s*$/;
+function parseBareCd(command) {
+  const s = String(command || "");
+  if (!/^\s*cd(?:\s|$)/.test(s)) return null;
+  const m = BARE_CD_RE.exec(s);
+  if (m) return { dir: m[1] ?? m[2] ?? m[3].replace(/\\(.)/g, "$1") };
+  if (/[;&|\n]/.test(s)) return null;
+  return { dynamic: true, token: s.trim().slice(2).trim() };
 }
 
 /* Values that must not be written into a file. The blocklist above stops the agent
@@ -797,9 +876,19 @@ async function execTool(ctx, name, args, route, state) {
         : "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
-      const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
-      if (m) {
-        const t = resolvePath(ctx, m[1].trim().replace(/^["']|["']$/g, ""));
+      /* Only a bare `cd <dir>`, alone on its line, moves the workspace cwd. A
+         compound line such as `cd X && node y` is a command for the shell, which
+         applies the cd to that one process, which is what the line means. The
+         earlier handler took every line that began with cd as a directory name
+         and answered "no such directory: X && node y", twice, on camera. */
+      const cd = parseBareCd(args.command);
+      if (cd) {
+        if (cd.dynamic) {
+          return cd.token
+            ? `cd: the working folder moves only for a literal path alone on its line; \`${cd.token}\` needs the shell to expand it. Give the path itself, or run the command on one line: cd ${cd.token} && <command>.`
+            : `cd: name the folder. The working folder is ${ctx.getCwd()}.`;
+        }
+        const t = resolvePath(ctx, cd.dir);
         if (fs.existsSync(t) && fs.statSync(t).isDirectory()) { ctx.setCwd(t); return `cwd -> ${t}`; }
         return `cd: no such directory: ${t}`;
       }
@@ -1796,8 +1885,8 @@ module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, PROPOSE_TOOL, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
-  RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
+  BUILTIN_TOOLS, VERDICT_TOOL, PROPOSE_TOOL, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, parseBareCd, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,
   gateOutsideWorkspace, gateSecretContent,
