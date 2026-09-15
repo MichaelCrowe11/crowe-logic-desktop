@@ -314,7 +314,7 @@ body:not(.mobile) #workbench.chat-collapsed #chat-restore { display: grid; }
 
 .msg { margin: 0 0 18px; display: flex; gap: 10px; }
 .msg .who { flex: 0 0 26px; }
-.msg .who .cl-mark { width: 26px; height: 26px; border-radius: 50%; padding: 3.5px; box-sizing: border-box;
+.msg .who .cl-mark, .msg .who .wm-host { width: 26px; height: 26px; border-radius: 50%; padding: 3.5px; box-sizing: border-box;
   background: var(--raised); border: 1px solid var(--line); box-shadow: var(--z1); display: block; }
 .msg .who .u { width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: var(--cream);
   display: grid; place-items: center; font-size: var(--fs-cap); font-weight: 600; }
@@ -2457,3 +2457,98 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .rap-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .rap-main .rap-name { font-weight: 500; }
 .rap-main .rap-role { font-family: var(--body); font-size: var(--fs-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Worker marks: eight motions, one per worker ──
+   The CLI's eight thinking marks (cli/pui/marks.py) as vector, drawn by
+   renderer/marks.js. Each worker in the registry carries one, so a row in the
+   rail, a seat in a room, a bubble and the chat avatar wear that worker's own
+   mark rather than a repeated whorl. Motion runs only under
+   data-state="reasoning"; the un-animated attributes in the markup are the
+   rest frame, so rest and reduced-motion need no rules of their own. Periods
+   are the terminal's: 2.4s over .83s, 2.0, 1.8, 1.2, 1.6, 1.0, 2.0, 2.2.
+   Colours are the signature palette, gold breathing toward the blue, with the
+   soft gold as the bright accent. No inline styles: the shells' CSP forbids
+   them, so every delay below is a nth-of-type rule. */
+.wm-mark { display: block; width: 100%; height: 100%; overflow: visible;
+  --wm-primary: var(--gold); --wm-counter: var(--blue); --wm-accent: var(--gold-soft); }
+.wm-host { display: block; }
+.wm-g { fill: var(--wm-primary); } .wm-b { fill: var(--wm-counter); } .wm-a { fill: var(--wm-accent); }
+.wm-gs { stroke: var(--wm-primary); } .wm-bs { stroke: var(--wm-counter); }
+.wm-root, .wm-slow, .wm-fast, .wm-core, .wm-bloom, .wm-ring, .wm-blade, .wm-pupil, .wm-rotor, .wm-teeth,
+.wm-orbit, .wm-particle, .wm-halo { transform-box: view-box; transform-origin: 50% 50%; }
+.wm-mark[data-state="failed"] { opacity: .5; filter: grayscale(1); }
+
+/* Mycelial Pulse: two breaths on periods that do not divide. */
+@keyframes wmBreatheSlow { 0%, 100% { transform: scale(.84); } 50% { transform: scale(1.04); } }
+@keyframes wmBreatheFast { 0%, 100% { transform: scale(.97); } 50% { transform: scale(1.03); } }
+@keyframes wmMycelialTone { 0%, 100% { fill: var(--wm-counter); } 55% { fill: var(--wm-primary); } 80% { fill: var(--wm-accent); } }
+@keyframes wmHypha { 0%, 100% { opacity: .2; } 50% { opacity: .85; } }
+.wm-mark[data-state="reasoning"].wm-mycelial .wm-slow { animation: wmBreatheSlow 2.4s ease-in-out infinite; }
+.wm-mark[data-state="reasoning"].wm-mycelial .wm-fast { animation: wmBreatheFast .83s ease-in-out infinite; }
+.wm-mark[data-state="reasoning"].wm-mycelial .wm-core { animation: wmMycelialTone 2.4s ease-in-out infinite; }
+.wm-mark[data-state="reasoning"].wm-mycelial .wm-hypha { animation: wmHypha .83s ease-in-out infinite; }
+
+/* Hexbloom: the fill opens out to the ring and back on a triangle wave. */
+@keyframes wmBloom { 0%, 100% { transform: scale(.3); fill: var(--wm-primary); } 50% { transform: scale(1.8); fill: var(--wm-accent); } }
+@keyframes wmBloomRing { 0%, 100% { transform: scale(.72); opacity: .35; } 50% { transform: scale(1); opacity: .9; } }
+.wm-mark[data-state="reasoning"].wm-hexbloom .wm-bloom { animation: wmBloom 2s linear infinite; }
+.wm-mark[data-state="reasoning"].wm-hexbloom .wm-ring { animation: wmBloomRing 2s linear infinite; }
+
+/* Hex Iris: six clicks per cycle, stepped, never eased. */
+@keyframes wmIris {
+  0% { transform: scale(.3); fill: var(--wm-counter); } 16.66% { transform: scale(.8); fill: var(--wm-primary); }
+  33.33% { transform: scale(1.4); fill: var(--wm-primary); } 50% { transform: scale(1.8); fill: var(--wm-accent); }
+  66.66% { transform: scale(1.4); fill: var(--wm-primary); } 83.33% { transform: scale(.8); fill: var(--wm-primary); }
+  100% { transform: scale(.3); fill: var(--wm-counter); } }
+@keyframes wmBlade { 0% { opacity: .85; } 16.66% { opacity: .6; } 33.33% { opacity: .3; } 50% { opacity: .12; } 66.66% { opacity: .3; } 83.33% { opacity: .6; } 100% { opacity: .85; } }
+.wm-mark[data-state="reasoning"].wm-iris .wm-pupil { animation: wmIris 1.8s step-end infinite; }
+.wm-mark[data-state="reasoning"].wm-iris .wm-blade { animation: wmBlade 1.8s step-end infinite; }
+
+/* Meshwork: constant rate, constant tone. The teeth tick the other way. */
+@keyframes wmSpin { to { transform: rotate(360deg); } }
+@keyframes wmSpinBack { to { transform: rotate(-360deg); } }
+.wm-mark[data-state="reasoning"].wm-meshwork .wm-rotor { animation: wmSpin 1.2s linear infinite; }
+.wm-mark[data-state="reasoning"].wm-meshwork .wm-teeth { animation: wmSpinBack 4.8s steps(8, end) infinite; }
+
+/* Facet-Fold: one quadrant lit at a time, lower right first, then round. */
+@keyframes wmFacet { 0% { opacity: 1; } 25%, 100% { opacity: 0; } }
+/* The delays sit under the reasoning selector because the shorthand above
+   resets animation-delay; a lower-specificity delay rule would lose to it
+   and light all four faces at once. */
+.wm-mark[data-state="reasoning"].wm-facet .wm-face { animation: wmFacet 1.6s step-end infinite; }
+.wm-mark[data-state="reasoning"].wm-facet .wm-face:nth-of-type(2) { animation-delay: -1.2s; }
+.wm-mark[data-state="reasoning"].wm-facet .wm-face:nth-of-type(3) { animation-delay: -.8s; }
+.wm-mark[data-state="reasoning"].wm-facet .wm-face:nth-of-type(4) { animation-delay: -.4s; }
+
+/* Convergent: one orbit a second, the satellite breathing accent to gold. */
+@keyframes wmSatTone { 0%, 100% { fill: var(--wm-accent); } 50% { fill: var(--wm-primary); } }
+.wm-mark[data-state="reasoning"].wm-convergent .wm-orbit { animation: wmSpin 1s linear infinite; }
+.wm-mark[data-state="reasoning"].wm-convergent .wm-sat { animation: wmSatTone 1s ease-in-out infinite; }
+
+/* Meridian: the head passes each bar .4s after the last and wraps. */
+@keyframes wmSweep { 0% { opacity: 1; fill: var(--wm-accent); } 35% { opacity: .3; fill: var(--wm-counter); } 80% { opacity: .3; fill: var(--wm-counter); } 100% { opacity: 1; fill: var(--wm-accent); } }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar { animation: wmSweep 2s linear infinite; }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar:nth-of-type(1) { animation-delay: -2s; }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar:nth-of-type(2) { animation-delay: -1.6s; }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar:nth-of-type(3) { animation-delay: -1.2s; }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar:nth-of-type(4) { animation-delay: -.8s; }
+.wm-mark[data-state="reasoning"].wm-meridian .wm-bar:nth-of-type(5) { animation-delay: -.4s; }
+
+/* Coalesce: in from both edges by three quarters, land, hold, let go. */
+@keyframes wmFlyL { 0% { transform: translateX(-5px); opacity: .45; } 75%, 92% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(-5px); opacity: .45; } }
+@keyframes wmFlyR { 0% { transform: translateX(5px); opacity: .45; } 75%, 92% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(5px); opacity: .45; } }
+@keyframes wmLand { 0%, 70% { transform: scale(.82); fill: var(--wm-counter); opacity: .65; } 75% { transform: scale(1.14); fill: var(--wm-accent); opacity: 1; }
+  90% { transform: scale(1); fill: var(--wm-primary); opacity: 1; } 100% { transform: scale(.82); fill: var(--wm-counter); opacity: .65; } }
+.wm-mark[data-state="reasoning"].wm-coalesce .wm-p-l { animation: wmFlyL 2.2s cubic-bezier(.37,0,.32,1) infinite; }
+.wm-mark[data-state="reasoning"].wm-coalesce .wm-p-r { animation: wmFlyR 2.2s cubic-bezier(.37,0,.32,1) infinite; }
+.wm-mark[data-state="reasoning"].wm-coalesce .wm-core { animation: wmLand 2.2s cubic-bezier(.37,0,.32,1) infinite; }
+
+/* Done: the landing. One beat of the whole mark and a ring that leaves. */
+@keyframes wmDone { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.16); } }
+@keyframes wmHalo { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.18); opacity: 0; } }
+.wm-mark[data-state="done"] .wm-root { animation: wmDone .64s var(--ease); }
+.wm-mark[data-state="done"] .wm-halo { animation: wmHalo .64s var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wm-mark, .wm-mark * { animation: none !important; }
+}

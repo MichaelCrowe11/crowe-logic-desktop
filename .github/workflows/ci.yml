@@ -87,6 +87,7 @@ jobs:
           node scripts/test-releases-worker.js
           node scripts/test-verify-release.js
           node scripts/test-messages.js
+          node scripts/test-marks.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
