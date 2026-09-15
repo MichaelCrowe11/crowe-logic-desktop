@@ -228,6 +228,75 @@ test("high-risk mode does not ask about dependency changes", async () => {
   assert.strictEqual(ctx.approvalsSeen.length, 0);
   assert.doesNotMatch(out.text, /^blocked:/);
 });
+// ─── The workspace cd ────────────────────────────────────────────────────────
+/* run_shell runs each command in a one-shot process, so a bare `cd` is the one
+   command the harness interprets itself: it moves the workspace cwd. Only a bare
+   one. `cd X && cmd` is a command for the shell, and the shell applies the cd to
+   that process, which is what the line means. Pinned because the earlier handler
+   took every line beginning with cd as a directory name and answered
+   "no such directory: X && cmd", twice on camera. */
+test("a bare cd moves the workspace cwd, quoted or escaped, never asks, and refuses a missing folder", async () => {
+  const ctx = makeCtx({}, { approve: false });
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  const sub = path.join(ctx.dir, "sub"), spaced = path.join(ctx.dir, "with space");
+  fs.mkdirSync(sub); fs.mkdirSync(spaced);
+  let out = await H.callTool(ctx, "run_shell", { command: "  cd sub  " }, {}, state);
+  assert.strictEqual(out.text, `cwd -> ${sub}`);
+  assert.strictEqual(ctx.getCwd(), sub);
+  await H.callTool(ctx, "run_shell", { command: 'cd "../with space"' }, {}, state);
+  assert.strictEqual(ctx.getCwd(), spaced, "double quotes");
+  await H.callTool(ctx, "run_shell", { command: "cd ../sub" }, {}, state);
+  await H.callTool(ctx, "run_shell", { command: "cd '../with space'" }, {}, state);
+  assert.strictEqual(ctx.getCwd(), spaced, "single quotes");
+  await H.callTool(ctx, "run_shell", { command: "cd ../sub" }, {}, state);
+  await H.callTool(ctx, "run_shell", { command: "cd ../with\\ space" }, {}, state);
+  assert.strictEqual(ctx.getCwd(), spaced, "a backslash-escaped space");
+  out = await H.callTool(ctx, "run_shell", { command: "cd nope" }, {}, state);
+  assert.match(out.text, /^cd: no such directory: /);
+  assert.strictEqual(ctx.getCwd(), spaced, "a failed cd leaves the cwd alone");
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "a cd is never an approval question");
+});
+test("a compound line beginning with cd goes to the shell, which applies the cd to that command only", async () => {
+  const ctx = makeCtx();
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  fs.mkdirSync(path.join(ctx.dir, "sub"));
+  fs.writeFileSync(path.join(ctx.dir, "sub", "here.txt"), "");
+  for (const command of ["cd sub && ls", "cd sub; ls", "cd sub || echo fail; ls"]) {
+    const out = await H.callTool(ctx, "run_shell", { command }, {}, state);
+    assert.doesNotMatch(out.text, /no such directory/, command);
+    assert.match(out.text, /here\.txt/, command);
+    assert.strictEqual(ctx.getCwd(), ctx.dir, `${command}: the workspace cwd does not move`);
+  }
+  // The shell, not the harness, reports a bad folder in a compound line.
+  const out = await H.callTool(ctx, "run_shell", { command: "cd nope && ls" }, {}, state);
+  assert.doesNotMatch(out.text, /^cd: no such directory: /);
+  assert.match(out.text, /\(exit 1\)$/);
+  assert.strictEqual(ctx.getCwd(), ctx.dir);
+});
+test("a bare cd the harness cannot resolve says so instead of silently doing nothing", async () => {
+  const ctx = makeCtx();
+  const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
+  for (const command of ["cd $HOME", 'cd "$HOME"', "cd $(pwd)/sub", "cd sub > /dev/null"]) {
+    const out = await H.callTool(ctx, "run_shell", { command }, {}, state);
+    assert.match(out.text, /^cd: the working folder moves only for a literal path/, command);
+    assert.match(out.text, /&& <command>/, command);
+    assert.strictEqual(ctx.getCwd(), ctx.dir, command);
+  }
+  const out = await H.callTool(ctx, "run_shell", { command: "cd" }, {}, state);
+  assert.match(out.text, /^cd: name the folder\./);
+  assert.ok(out.text.includes(ctx.dir));
+});
+test("parseBareCd draws the line where the shell would", () => {
+  assert.deepStrictEqual(H.parseBareCd("cd a/b"), { dir: "a/b" });
+  assert.deepStrictEqual(H.parseBareCd("cd\t~/x"), { dir: "~/x" });
+  assert.deepStrictEqual(H.parseBareCd("cd 'a b'"), { dir: "a b" });
+  assert.deepStrictEqual(H.parseBareCd("cd a\\ b"), { dir: "a b" });
+  for (const c of ["cd a && b", "cd a; b", "cd a | b", "cd a || b", "cd a\nb", "cdx", "ls", "", undefined])
+    assert.strictEqual(H.parseBareCd(c), null, String(c));
+  assert.deepStrictEqual(H.parseBareCd("cd $X"), { dynamic: true, token: "$X" });
+  assert.deepStrictEqual(H.parseBareCd("cd"), { dynamic: true, token: "" });
+});
+
 test("auto-approve does not extend to build and deploy files", async () => {
   const ctx = makeCtx({ autoApprove: true }, { approve: false });
   const state = H.newState(ctx, ctx.loadConfig(), {}, { expert: "operator", model: "m" });
@@ -340,6 +409,29 @@ test("execute mode refuses shell commands that name credential paths", async () 
     assert.ok(H.commandTouchesSecret(command), command);
     assert.match(String(await H.execTool(ctx, "run_shell", { command }, {})), /^blocked:/, command);
   }
+});
+
+test("only a bare cd moves the cwd; a compound cd line runs in the shell", async () => {
+  const ctx = makeCtx({ approvals: "off" });
+  const sub = path.join(ctx.dir, "sub"); fs.mkdirSync(sub);
+  assert.match(String(await H.execTool(ctx, "run_shell", { command: "cd sub" }, {})), /^cwd -> /);
+  assert.strictEqual(ctx.getCwd(), sub);
+  ctx.setCwd(ctx.dir);
+  assert.match(String(await H.execTool(ctx, "run_shell", { command: `cd "${sub}"` }, {})), /^cwd -> /);
+  assert.strictEqual(ctx.getCwd(), sub);
+  ctx.setCwd(ctx.dir);
+  // `cd X && cmd` is a shell line, not a directory called "X && cmd": it runs
+  // in a one-shot shell and leaves the workspace cwd where it was.
+  const out = String(await H.execTool(ctx, "run_shell", { command: "cd sub && pwd" }, {}));
+  assert.ok(!/no such directory/.test(out), out);
+  assert.match(out, /\/sub\s*$/m, out);
+  assert.strictEqual(ctx.getCwd(), ctx.dir, "a compound line must not move the workspace cwd");
+  for (const command of ["cd sub; pwd", "cd sub | cat", "cd $HOME"]) {
+    assert.ok(!/^cwd -> |^cd: no such directory/.test(String(await H.execTool(ctx, "run_shell", { command }, {}))), command);
+    assert.strictEqual(ctx.getCwd(), ctx.dir, command);
+  }
+  assert.match(String(await H.execTool(ctx, "run_shell", { command: "cd nowhere" }, {})), /^cd: no such directory/);
+  assert.strictEqual(ctx.getCwd(), ctx.dir);
 });
 
 // ─── Replay, staleness, loops ────────────────────────────────────────────────
