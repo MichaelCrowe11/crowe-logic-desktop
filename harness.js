@@ -76,7 +76,16 @@ function safeShellEnv(source = process.env) {
    further word. Ask the user's login shell for its PATH once (interactive and
    login, so .zprofile and .zshrc both count) and keep the usual install
    directories as a fallback for a shell that prints nothing. */
-const KNOWN_TOOL_DIRS = [
+// Windows ships too (Trusted Signing landed in 0.24.8's successor), and it has
+// no login shell to ask: the PATH a Windows app inherits is already the user's.
+// Directories are joined with the platform delimiter, and a command on Windows
+// may be node.exe or npx.cmd, so PATHEXT is tried the way cmd.exe would.
+const IS_WIN = process.platform === "win32";
+const KNOWN_TOOL_DIRS = IS_WIN ? [
+  path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs"),
+  path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm"),
+  path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".bun", "bin"),
+] : [
   "/opt/homebrew/bin", "/usr/local/bin",
   path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".local", "bin"),
   path.join(os.homedir(), ".bun", "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin",
@@ -85,26 +94,31 @@ let loginPathCache = null;
 function loginShellPath({ shell = process.env.SHELL || "/bin/zsh", timeoutMs = 4000, fresh = false } = {}) {
   if (loginPathCache !== null && !fresh) return loginPathCache;
   let out = "";
-  try {
-    out = execFileSync(shell, ["-ilc", 'printf "%s" "$PATH"'], {
-      encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"],
-      env: { HOME: os.homedir(), USER: os.userInfo().username, SHELL: shell, TERM: "dumb", LANG: process.env.LANG || "en_US.UTF-8" },
-    });
-  } catch { out = ""; }
+  if (!IS_WIN) {
+    try {
+      out = execFileSync(shell, ["-ilc", 'printf "%s" "$PATH"'], {
+        encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"],
+        env: { HOME: os.homedir(), USER: os.userInfo().username, SHELL: shell, TERM: "dumb", LANG: process.env.LANG || "en_US.UTF-8" },
+      });
+    } catch { out = ""; }
+  }
   const parts = [];
-  for (const dir of [...String(out).split(":"), ...String(process.env.PATH || "").split(":"), ...KNOWN_TOOL_DIRS]) {
+  for (const dir of [...String(out).split(path.delimiter), ...String(process.env.PATH || "").split(path.delimiter), ...KNOWN_TOOL_DIRS]) {
     if (dir && !parts.includes(dir)) parts.push(dir);
   }
-  loginPathCache = parts.join(":");
+  loginPathCache = parts.join(path.delimiter);
   return loginPathCache;
 }
 function findOnPath(command, PATH = process.env.PATH || "") {
   if (!command) return null;
-  if (command.includes("/")) { try { return fs.statSync(command).isFile() ? command : null; } catch { return null; } }
-  for (const dir of String(PATH).split(":")) {
+  if (command.includes("/") || (IS_WIN && command.includes("\\"))) { try { return fs.statSync(command).isFile() ? command : null; } catch { return null; } }
+  const exts = IS_WIN && !path.extname(command) ? ["", ...String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  for (const dir of String(PATH).split(path.delimiter)) {
     if (!dir) continue;
-    const candidate = path.join(dir, command);
-    try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
   }
   return null;
 }
