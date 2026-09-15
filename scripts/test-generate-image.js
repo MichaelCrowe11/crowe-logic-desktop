@@ -8,7 +8,10 @@
 // and a denial leaves nothing behind, not even the directory,
 // a failure names the code or the timeout the way Node's fetch really throws it,
 // the saved file is on the rollback list by name, and the key never appears in
-// anything the tool hands back.
+// anything the tool hands back. Also: a prompt over the limit is refused rather
+// than cut, the tool card the renderer draws gets a credential's value cut the
+// way the approval card does, and a response over the body cap stops the
+// download rather than buffering it.
 //
 //   node scripts/test-generate-image.js
 //   ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron scripts/test-generate-image.js
@@ -36,7 +39,10 @@ function stubFetch(answer) {
     calls.push({ url, init });
     if (answer.throws) throw answer.throws;
     const status = answer.status || 200;
-    return { ok: status >= 200 && status < 300, status, json: async () => answer.body };
+    // A stream, as fetch hands one over: the tool reads the body through a byte
+    // cap rather than through json().
+    const bytes = Buffer.from(JSON.stringify(answer.body === undefined ? null : answer.body));
+    return { ok: status >= 200 && status < 300, status, body: new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } }) };
   };
   f.calls = calls;
   return f;
@@ -391,6 +397,70 @@ test("end to end through runAgent: the tool_result event carries the path and no
   assert.ok(!JSON.stringify(events).includes(SECRET));
   assert.ok(!JSON.stringify(result).includes(SECRET));
   assert.ok(fs.existsSync(path.join(ctx.dir, "assets", "generated", "logo.png")));
+});
+
+test("a prompt over the limit is refused before asking or sending, never cut, and the limit is the model's where that is lower", async () => {
+  const ctx = makeCtx();
+  const long = await run(ctx, { prompt: "x".repeat(4001) });
+  assert.strictEqual(long.text, "rejected: the prompt is 4001 characters and gpt-image-1 takes 4000 at most. Shorten it. No request was sent.");
+  assert.strictEqual(ctx.fetch.calls.length, 0);
+  assert.strictEqual(ctx.approvalsSeen.length, 0, "refused before the user is asked");
+  assert.ok(nothingSaved(ctx));
+  // At the limit the whole prompt goes, none of it cut.
+  const full = await run(ctx, { prompt: "y".repeat(4000) });
+  assert.strictEqual(full.status, "SUCCESS");
+  assert.strictEqual(JSON.parse(ctx.fetch.calls[0].init.body).prompt.length, 4000);
+  const d2 = makeCtx({ imageModel: "dall-e-2" });
+  assert.strictEqual((await run(d2, { prompt: "z".repeat(1001) })).text, "rejected: the prompt is 1001 characters and dall-e-2 takes 1000 at most. Shorten it. No request was sent.");
+  assert.strictEqual(d2.fetch.calls.length, 0);
+  // The card shows the first 600 characters and says that is what it shows.
+  const card = makeCtx({}, { approve: false });
+  await run(card, { prompt: "w".repeat(700) });
+  assert.ok(card.approvalsSeen[0].detail.endsWith(`${"w".repeat(600)} [first 600 of 700 characters]`), card.approvalsSeen[0].detail.slice(-60));
+  const short = makeCtx({}, { approve: false });
+  await run(short, { prompt: "v".repeat(600) });
+  assert.ok(short.approvalsSeen[0].detail.endsWith("v".repeat(600)), "a prompt that fits is shown whole, with no note");
+});
+
+test("the tool card gets the prompt with a credential's value cut, the provider gets it as the user approved it, and the result line does not echo it", async () => {
+  const ctx = makeCtx();
+  const events = [];
+  let n = 0;
+  const deps = {
+    gatewayChat: async () => n++ === 0
+      ? { content: "", tool_calls: [{ id: "c1", function: { name: "generate_image", arguments: JSON.stringify({ prompt: "put this on a poster: AKIAIOSFODNN7EXAMPLE", filename: "poster" }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
+      : { content: "done", tool_calls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+    send: (ev) => events.push(ev), isAborted: () => false, setController: () => {},
+  };
+  await H.runAgent(ctx, [{ role: "user", content: "make a poster" }], deps);
+  const call = events.find((e) => e.type === "tool_call");
+  assert.strictEqual(call.args.prompt, "put this on a poster: [an AWS access key id]");
+  assert.strictEqual(call.args.filename, "poster", "the other arguments pass through untouched");
+  assert.strictEqual(ctx.approvalsSeen.length, 1);
+  assert.strictEqual(ctx.approvalsSeen[0].risk, "strict");
+  assert.strictEqual(JSON.parse(ctx.fetch.calls[0].init.body).prompt, "put this on a poster: AKIAIOSFODNN7EXAMPLE", "the user said yes to sending it, so it is sent as written");
+  const result = events.find((e) => e.type === "tool_result");
+  assert.match(result.result, /^generated assets\/generated\/poster\.png .*\nput this on a poster: \[an AWS access key id\]$/s);
+  assert.ok(!JSON.stringify(events.filter((e) => e.type === "tool_call" || e.type === "tool_result")).includes("AKIAIOSFODNN7EXAMPLE"));
+  assert.ok(fs.existsSync(path.join(ctx.dir, "assets", "generated", "poster.png")));
+});
+
+test("a response over the body cap stops the download instead of buffering it, and the image size is checked on the decoded bytes", async () => {
+  // A provider that streams a megabyte a pull and never stops. The reader gives
+  // up at the cap, so the pulls stop there rather than running to the end.
+  let pulls = 0;
+  const endless = makeCtx({}, { fetch: async () => ({ ok: true, status: 200, body: new ReadableStream({ pull(c) { pulls += 1; if (pulls > 400) c.close(); else c.enqueue(new Uint8Array(1 << 20)); } }) }) });
+  const out = await run(endless, { prompt: "x" });
+  // 32 MiB of image is 42.67 MiB of base64, plus the megabyte allowed for the JSON around it.
+  assert.strictEqual(out.text, "error: OpenAI sent more than 43 MB, so the download was stopped. No file was written.");
+  assert.ok(pulls < 60, `stopped after ${pulls} pulls`);
+  assert.ok(nothingSaved(endless));
+  // Just over 32 MB once decoded, while its base64 fits under the body cap: the
+  // old check on the string's length let this through.
+  const big = makeCtx({}, { fetch: stubFetch({ body: { data: [{ b64_json: Buffer.alloc(32 * 1024 * 1024 + 1, 0x89).toString("base64") }] } }) });
+  const out2 = await run(big, { prompt: "x" });
+  assert.strictEqual(out2.text, "error: the image from OpenAI is over 32 MB and was not saved.");
+  assert.ok(nothingSaved(big));
 });
 
 (async () => {

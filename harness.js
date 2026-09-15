@@ -44,9 +44,10 @@ const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;   // largest file worth keeping a be
 const TRANSIENT_RETRIES = 2;           // gateway retries before falling back
 const RETRY_BASE_MS = 400;
 const CACHE_POINTER_AFTER = 3;         // identical calls before we stop resending the body
-const IMAGE_PROMPT_MAX = 4000;         // chars of prompt sent to an image provider
+const IMAGE_PROMPT_MAX = 4000;         // longest prompt sent to an image provider; longer is refused, never cut
 const IMAGE_TIMEOUT_MS = 120000;       // image models take tens of seconds
-const IMAGE_MAX_BYTES = 32 * 1024 * 1024;
+const IMAGE_MAX_BYTES = 32 * 1024 * 1024;              // largest image saved, measured on the decoded bytes
+const IMAGE_BODY_MAX = Math.ceil(IMAGE_MAX_BYTES * 4 / 3) + 1024 * 1024; // its base64 plus the JSON around it; reading stops here
 
 // Secrets the agent must never read or edit through its own tools.
 const SECRET_FILE_RE = /(^|\/)\.env($|\.|-)|\.pem$|\.key$|\.p12$|\.keystore$|(^|\/)id_(rsa|ed25519|ecdsa)(\.|$)|(^|\/)(auth|credentials?|secrets?)\.json$|(^|\/)\.(netrc|npmrc|pypirc)$|(^|\/)\.aws\/credentials$|(^|\/)\.docker\/config\.json$|(^|\/)\.kube\/config$|(^|\/)\.config\/(gcloud|gh)\/|\.keychain(-db)?$/i;
@@ -417,7 +418,7 @@ const BUILTIN_TOOLS = [
   { type: "function", function: { name: "generate_image",
     description: "Generate a picture from a text prompt with the image model behind the user's own OpenAI or OpenRouter key (Settings > Keys) and save it as a file under assets/generated/ in the workspace. Returns the saved path and a one-line description. It is a write, so it needs Edit autonomy or higher, and every call is billed to the user's key and asked about first: call it once per picture the user actually asked for. It cannot edit an existing image; describe the whole picture you want.",
     parameters: { type: "object", properties: {
-      prompt: { type: "string", description: "What the picture shows, in plain words: subject, composition, style, lighting, and any text to render." },
+      prompt: { type: "string", description: "What the picture shows, in plain words: subject, composition, style, lighting, and any text to render. Up to 4000 characters; a longer prompt is refused, not cut." },
       size: { type: "string", enum: ["1024x1024", "1536x1024", "1024x1536", "auto"], description: "Pixel size, default 1024x1024. 1536x1024 is landscape, 1024x1536 is portrait." },
       filename: { type: "string", description: "Optional file name without extension, one path segment. Omit for an opaque generated name." },
     }, required: ["prompt"] } } },
@@ -639,7 +640,12 @@ function toolListDir(ctx, args) {
    asks before every call: Review risk with the floor lowered on each call, which
    means the default approval mode asks, strict mode asks, and only approvals set
    to "off" (the mode that skips every prompt in this harness, journaled as such)
-   lets it run unasked. A prompt that carries what looks like a credential is
+   lets it run unasked. That last case is a chosen policy, not an oversight: a
+   review asked for Strict here, and Strict would change nothing, because "off"
+   skips Strict too (git push at Execute runs unasked under it in the same way)
+   and every other mode already asks. Edit is the floor because the write stays
+   inside the workspace; the charge is what the ask is for, and "off" is the
+   user saying no asks. A prompt that carries what looks like a credential is
    Strict, the same class as writing a credential into a file, and the value is
    cut out of the approval card the way gateSecretContent names only the kind.
 
@@ -659,6 +665,9 @@ const DALLE_SIZES = {
   "dall-e-3": { "1024x1024": "1024x1024", "1536x1024": "1792x1024", "1024x1536": "1024x1792", auto: "1024x1024" },
   "dall-e-2": { "1024x1024": "1024x1024" },
 };
+// The one model whose own prompt limit is under the tool's: refused before the
+// request, like a size it lacks, rather than as the provider's 400 afterwards.
+const DALLE_PROMPT_MAX = { "dall-e-2": 1000 };
 const IMAGE_MAGIC = [
   { ext: "png", test: (b) => b.length > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
   { ext: "jpg", test: (b) => b.length > 4 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
@@ -691,6 +700,22 @@ function timedOut(e, signal) {
     if (cur.name === "TimeoutError" || cur.name === "AbortError") return true;
   return false;
 }
+/* The body is read through a byte cap. resp.json() holds whatever the socket
+   sends until it ends, which made the size check after it a check on disk use
+   only; this stops reading at the cap, and leaving the loop closes the stream.
+   A body cut off by the timeout rejects here with the signal already aborted,
+   which is the fact the caller reads first. */
+async function readBody(resp, cap) {
+  if (!resp.body) return "";
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of resp.body) {
+    total += chunk.byteLength;
+    if (total > cap) throw Object.assign(new Error("response body over the cap"), { code: "EBODYCAP" });
+    chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 function imageFileName(raw) {
   const name = String(raw || "").split(/[\\/]/).pop().replace(/\.(png|jpe?g|webp)$/i, "")
     .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 64);
@@ -710,7 +735,7 @@ function imageModelOf(cfg, provider) {
 // under assets/generated, so it never holds a space.
 function imageResultPath(text) { const m = /^generated (\S+) \(/.exec(String(text || "")); return m ? m[1] : ""; }
 async function toolGenerateImage(ctx, args, state) {
-  const prompt = String(args.prompt || "").trim().slice(0, IMAGE_PROMPT_MAX);
+  const prompt = String(args.prompt || "").trim();
   if (!prompt) return "rejected: prompt is required";
   const asked = args.size ? String(args.size) : "1024x1024";
   if (!IMAGE_SIZES.includes(asked)) return `rejected: size must be one of ${IMAGE_SIZES.join(", ")}`;
@@ -722,6 +747,10 @@ async function toolGenerateImage(ctx, args, state) {
   const table = DALLE_SIZES[model];
   const size = table ? table[asked] : asked;
   if (!size) return `rejected: ${model} accepts ${Object.keys(table).join(", ")} only. No request was sent.`;
+  // Over the limit is refused, not cut: a prompt trimmed in silence would draw a
+  // different picture from the one the user approved and the model described.
+  const promptMax = DALLE_PROMPT_MAX[model] || IMAGE_PROMPT_MAX;
+  if (prompt.length > promptMax) return `rejected: the prompt is ${prompt.length} characters and ${model} takes ${promptMax} at most. Shorten it. No request was sent.`;
   // Everything that can refuse the write runs before anything is spent, and the
   // containment check runs before the directory exists: a symlinked assets/ must
   // not gain an empty generated/ outside the workspace on the way to a refusal.
@@ -729,6 +758,7 @@ async function toolGenerateImage(ctx, args, state) {
   if (escapesWorkspace(ctx, dir)) return `blocked: ${dir} resolves outside the workspace, so no image was made. Point assets/generated back inside the workspace or remove the link.`;
   const base = imageFileName(args.filename);
   const found = scanForSecrets(prompt);
+  const shown = redactSecrets(prompt);
   const gate = await gateAction(ctx, state, {
     // Every call asks, in every approval mode but "off": it is a charge on the
     // user's account, and no diff review will show it to them afterwards.
@@ -736,7 +766,7 @@ async function toolGenerateImage(ctx, args, state) {
     kind: "generate_image", title: "Generate an image",
     why: found.length ? `sends what looks like ${found.join(" and ")} to ${spec.label}, billed to the user's key`
       : `sends a prompt to ${spec.label}, off this machine and billed to the user's key`,
-    detail: `${spec.label} ${model}, ${size}, file assets/generated/${base}: ${redactSecrets(prompt).slice(0, 600)}`,
+    detail: `${spec.label} ${model}, ${size}, file assets/generated/${base}: ${shown.slice(0, 600)}${shown.length > 600 ? ` [first 600 of ${shown.length} characters]` : ""}`,
     hash: inputHash("generate_image", { prompt, size, filename: args.filename || "", provider, model }),
   });
   if (!gate.ok) return gate.text;
@@ -767,13 +797,14 @@ async function toolGenerateImage(ctx, args, state) {
   }
   if (!resp.ok) {
     let code = "";
-    try { const j = await resp.json(); const c = j && j.error && (j.error.code || j.error.type); if (typeof c === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(c)) code = c; } catch { /* body not quoted either way */ }
+    try { const j = JSON.parse(await readBody(resp, 64 * 1024)); const c = j && j.error && (j.error.code || j.error.type); if (typeof c === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(c)) code = c; } catch { /* body not quoted either way */ }
     const hint = resp.status === 401 || resp.status === 403 ? " The key was refused; test it in Settings > Keys." : resp.status === 429 ? " Rate limited or out of credit." : "";
     return `error: ${spec.label} answered HTTP ${resp.status}${code ? ` (${code})` : ""}.${hint} No file was written.`;
   }
   let json;
-  try { json = await resp.json(); }
+  try { json = JSON.parse(await readBody(resp, IMAGE_BODY_MAX)); }
   catch (e) {
+    if (e && e.code === "EBODYCAP") return `error: ${spec.label} sent more than ${Math.floor(IMAGE_BODY_MAX / 1048576)} MB, so the download was stopped. No file was written.`;
     return timedOut(e, signal)
       ? `error: ${spec.label} did not finish answering within ${within}. No file was written; the provider may still have billed the request.`
       : `error: ${spec.label} returned a response that was not JSON. No file was written.`;
@@ -781,8 +812,10 @@ async function toolGenerateImage(ctx, args, state) {
   const item = json && Array.isArray(json.data) ? json.data[0] : null;
   const b64 = item && typeof item.b64_json === "string" ? item.b64_json : "";
   if (!b64) return `error: ${spec.label} returned no image data. No file was written.`;
-  if (b64.length > IMAGE_MAX_BYTES * 1.4) return `error: the image from ${spec.label} is over ${IMAGE_MAX_BYTES / 1048576} MB and was not saved.`;
   const buf = Buffer.from(b64, "base64");
+  // Measured on the decoded bytes: base64 grows by four thirds, so the string's
+  // length was only an estimate of the file's.
+  if (buf.length > IMAGE_MAX_BYTES) return `error: the image from ${spec.label} is over ${IMAGE_MAX_BYTES / 1048576} MB and was not saved.`;
   const kind = IMAGE_MAGIC.find((m) => m.test(buf));
   if (!kind) return `error: ${spec.label} returned bytes that are not a PNG, JPEG, or WebP image. No file was written.`;
   // Exclusive create: an existing name gets a suffix instead of being replaced.
@@ -798,7 +831,7 @@ async function toolGenerateImage(ctx, args, state) {
   const meta = [dims, `${spec.label} ${model}`,
     cost != null ? `$${cost.toFixed(4)} billed by the provider, not in the turn meter` : "billed to the user's key, not in the turn meter",
     kind.ext !== "png" ? `saved as ${kind.ext} because the provider returned that format` : ""].filter(Boolean).join(", ");
-  const said = (item.revised_prompt && typeof item.revised_prompt === "string" ? item.revised_prompt : prompt).replace(/\s+/g, " ").trim().slice(0, 160);
+  const said = redactSecrets(item.revised_prompt && typeof item.revised_prompt === "string" ? item.revised_prompt : prompt).replace(/\s+/g, " ").trim().slice(0, 160);
   return `generated ${rel} (${meta})\n${said}`;
 }
 
@@ -1589,7 +1622,11 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       if (deps.isAborted()) break;
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
       const name = tc.function?.name;
-      deps.send({ type: "tool_call", name, args: a, stage: opts.stage });
+      // The renderer draws its tool card from these arguments before the tool
+      // runs, so a prompt reaches it the way the approval card shows it, with
+      // the value of anything that looks like a credential cut. The tool itself
+      // gets the arguments as the model sent them.
+      deps.send({ type: "tool_call", name, args: name === "generate_image" && typeof a.prompt === "string" ? { ...a, prompt: redactSecrets(a.prompt) } : a, stage: opts.stage });
       let out;
       if (opts.onVerdict && name === "submit_verdict") {
         opts.onVerdict(a); closed = true;
