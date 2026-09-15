@@ -466,13 +466,20 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
+/* One sign-in at a time. The loopback listener holds its port for up to five
+   minutes while the browser page waits, so a second click used to open a second
+   listener, collide with the first on EADDRINUSE, and blame the ports. A click
+   while one is pending now brings that page back up and joins its promise. */
+let pendingSignIn = null;
 function signIn() {
-  return new Promise((resolve) => {
+  if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const pending = { promise: null, authUrl: "" };
+  pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
     let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
     const server = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
@@ -497,7 +504,7 @@ function signIn() {
     let pIdx = 0;
     server.on("error", (e) => {
       if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
-      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+      finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
@@ -505,11 +512,14 @@ function signIn() {
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
         redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
       }).toString();
+      pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
     server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
+  pendingSignIn = pending;
+  return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
@@ -700,7 +710,14 @@ function mcpConnect(name, spec) {
     let proc;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
+    const harness = require("./harness");
+    const env = harness.pluginSpawnEnv(spec.env || {});
+    // Resolve the binary ourselves so the failure names it. A Finder launch has
+    // no npx on PATH, and "spawn failed" told nobody that.
+    if (!harness.findOnPath(spec.command, env.PATH)) {
+      return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+    }
+    try { proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { return resolve({ error: String(e) }); }
     const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
     const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
@@ -723,7 +740,7 @@ function mcpConnect(name, spec) {
         }
       }
     });
-    proc.on("error", () => resolve({ error: "spawn failed" }));
+    proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
@@ -1185,9 +1202,14 @@ const ptyProcs = new Map();
    environment, the same one Terminal.app would give them, and the gateway token
    is not in it - it lives in the auth store. */
 function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
+/* The autonomy tier is the agent's leash, not the operator's. A terminal the
+   user opens is the user typing, the same as Terminal.app, and gating it by the
+   agent's tier made the default layout open a terminal that refused to start.
+   The gate stays for panels that hand the shell to an agent (kind "agent"),
+   where the tier's "no shell" promise is the point. */
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
   ptyProcs.set(id, proc);
@@ -1506,7 +1528,7 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     reposRoot: c.reposRoot,
