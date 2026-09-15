@@ -267,12 +267,144 @@ test("a credential in the document asks first, and the value is never repeated",
   for (const s of [out.text, JSON.stringify(ctx.approvalsSeen), JSON.stringify(ctx.journalEvents)])
     assert.ok(!s.includes(key), "the secret value must not be echoed anywhere");
   assert.ok(!fs.existsSync(exportsDir(ctx)));
-  // The file name is the model's too, and it is scanned with the rest.
-  const named = makeCtx({}, { approve: false });
-  assert.match((await exportDoc(named, { markdown: "x", filename: key, format: "md" })).text, /^blocked:/);
   // Approved, it is written: the user said yes to exactly this.
   const yes = makeCtx({}, { approve: true });
   assert.match((await exportDoc(yes, { markdown: `key ${key}`, filename: "keys", format: "md" })).text, /^saved keys\.md/);
+});
+test("a credential-shaped file name is refused before anything asks, and the name is never repeated", async () => {
+  // Refused rather than gated: the path is what the approval card, the journal and
+  // the result would all repeat, so a gate naming the path would echo the value.
+  const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+  const named = makeCtx({}, { approve: true });
+  const out = await exportDoc(named, { markdown: "x", filename: key, format: "md" });
+  assert.match(out.text, /^rejected: the file name looks like a live Stripe secret key\. Give the document a plain name/);
+  assert.strictEqual(out.status, "FAIL");
+  assert.strictEqual(named.approvalsSeen.length, 0, "a refused name asks nothing");
+  for (const s of [out.text, JSON.stringify(named.journalEvents)]) assert.ok(!s.includes(key), "the name must not be echoed");
+  assert.ok(!fs.existsSync(exportsDir(named)));
+  // The value inside a longer name, and a different kind of key, are the same case; nothing prints.
+  const aws = "AKIA" + "IOSFODNN7EXAMPLE";
+  const inside = makeCtx({}, { approve: true });
+  const o2 = await exportDoc(inside, { markdown: "x", filename: `q3 ${aws} notes.pdf`, format: "pdf" });
+  assert.match(o2.text, /^rejected: the file name looks like an AWS access key id\./);
+  assert.ok(!o2.text.includes(aws) && !JSON.stringify(inside.journalEvents).includes(aws));
+  assert.strictEqual(inside.printed.length, 0);
+  // Approvals off would skip a gate; a refusal is not a gate, so it still refuses.
+  const off = makeCtx({ approvals: "off" });
+  assert.match((await exportDoc(off, { markdown: "x", filename: key, format: "md" })).text, /^rejected: the file name looks like/);
+  assert.ok(!JSON.stringify(off.journalEvents).includes(key));
+  assert.ok(!fs.existsSync(exportsDir(off)));
+});
+test("a credential in the title goes into the document only as approved, and nothing said about the file repeats it", async () => {
+  const key = "AKIA" + "IOSFODNN7EXAMPLE";
+  const yes = makeCtx({}, { approve: true });
+  const out = await exportDoc(yes, { markdown: "# Access\n\ntext", filename: "access", title: key, format: "html" });
+  assert.match(out.text, /^saved access\.html to .* titled "\[redacted: an AWS access key id\]"\)$/);
+  assert.strictEqual(yes.approvalsSeen.length, 1);
+  assert.match(yes.approvalsSeen[0].why, /AWS access key id/);
+  for (const s of [out.text, JSON.stringify(yes.approvalsSeen), JSON.stringify(yes.journalEvents)])
+    assert.ok(!s.includes(key), "the title value must not be echoed anywhere");
+  assert.ok(fs.readFileSync(path.join(exportsDir(yes), "access.html"), "utf8").includes(`<title>${key}</title>`), "the document carries the title the user said yes to");
+  // Denied, nothing is written and nothing is echoed.
+  const no = makeCtx({}, { approve: false });
+  const den = await exportDoc(no, { markdown: "x", filename: "access", title: key, format: "md" });
+  assert.match(den.text, /^blocked:/);
+  assert.ok(!den.text.includes(key) && !JSON.stringify(no.journalEvents).includes(key));
+  assert.ok(!fs.existsSync(exportsDir(no)));
+  // A first heading that becomes the title is the same case.
+  const head = makeCtx({}, { approve: true });
+  const h = await exportDoc(head, { markdown: `# ${key}\n\ntext`, filename: "heading", format: "md" });
+  assert.match(h.text, /titled "\[redacted: an AWS access key id\]"/);
+  assert.ok(!h.text.includes(key) && !JSON.stringify(head.journalEvents).includes(key));
+  // A heading whose markup hides the key from the raw scan still reads as one once stripped, and the gate sees that title.
+  const split = makeCtx({}, { approve: false });
+  const s = await exportDoc(split, { markdown: `# **AKIA**${key.slice(4)}\n\ntext`, filename: "split", format: "md" });
+  assert.match(s.text, /^blocked:/);
+  assert.match(split.approvalsSeen[0].why, /AWS access key id/);
+  assert.ok(!s.text.includes(key) && !JSON.stringify(split.approvalsSeen).includes(key) && !JSON.stringify(split.journalEvents).includes(key));
+  assert.ok(!fs.existsSync(exportsDir(split)));
+});
+test("redactSecrets names the kind and drops the value, and what comes out no longer trips the scanner", () => {
+  const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
+  const pem = "-----BEGIN RSA PRIVATE" + " KEY-----";
+  assert.strictEqual(H.redactSecrets(`report ${key} v2`), "report [redacted: a live Stripe secret key] v2");
+  assert.strictEqual(H.redactSecrets("plain title"), "plain title");
+  assert.strictEqual(H.redactSecrets(null), "");
+  // The header goes last here: an unterminated block is taken to the end of the text, by design (below).
+  const twice = H.redactSecrets(`${key} and ${key} then ${pem}`);
+  assert.ok(!twice.includes(key) && !twice.includes(pem), "every occurrence goes");
+  assert.strictEqual(twice, "[redacted: a live Stripe secret key] and [redacted: a live Stripe secret key] then [redacted: a private key block]");
+  assert.deepStrictEqual(H.scanForSecrets(twice), []);
+  // A private key is detected by its header and redacted as a block: the body goes, to the END line or the end of the text.
+  const end = "-----END RSA PRIVATE" + " KEY-----";
+  const body = "MIIEowIBAAKCAQEA" + "x".repeat(40);
+  assert.strictEqual(H.redactSecrets(`before ${pem}\n${body}\n${end} after`), "before [redacted: a private key block] after");
+  assert.strictEqual(H.redactSecrets(`title ${pem}\n${body}`), "title [redacted: a private key block]", "an unterminated block is taken to the end");
+  assert.ok(!H.redactSecrets(`${pem}\n${body}\n${end}\n${pem}\n${body}\n${end}`).includes(body), "two blocks, both gone");
+});
+test("the tool card is drawn from a copy with the name and title redacted; the call itself runs on what was sent", async () => {
+  const key = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123";
+  const turn = (calls) => async (ctx) => {
+    const events = [];
+    let n = 0;
+    const reply = (tool_calls, content) => ({ content, tool_calls, usage: { prompt_tokens: 1, completion_tokens: 1 }, elapsedMs: 1 });
+    const deps = { gatewayChat: async () => (n++ === 0 ? reply(calls, "") : reply([], "done")),
+      send: (ev) => events.push(ev), isAborted: () => false, setController: () => {} };
+    await H.runAgent(ctx, [{ role: "user", content: "export my notes" }], deps);
+    return events;
+  };
+  const tc = (args) => [{ id: "c1", type: "function", function: { name: "export_document", arguments: JSON.stringify(args) } }];
+  // A flagged title: the card shows its kind, the gate asks, the approved document carries it, no event carries it.
+  const ctx = makeCtx({}, { approve: true });
+  const events = await turn(tc({ markdown: "# Notes\n\ntext", filename: "notes", title: key, format: "md" }))(ctx);
+  const card = events.find((e) => e.type === "tool_call");
+  assert.strictEqual(card.args.title, "[redacted: a GitHub token]");
+  assert.strictEqual(card.args.filename, "notes");
+  assert.match(events.find((e) => e.type === "tool_result").result, /^saved notes\.md/);
+  assert.ok(!JSON.stringify(events).includes(key), "no event carries the value");
+  assert.strictEqual(ctx.approvalsSeen.length, 1, "the gate still saw the real title");
+  assert.ok(fs.existsSync(path.join(exportsDir(ctx), "notes.md")));
+  // A flagged name: redacted on the card, refused by the tool.
+  const ctx2 = makeCtx({}, { approve: true });
+  const ev2 = await turn(tc({ markdown: "x", filename: key, format: "md" }))(ctx2);
+  assert.strictEqual(ev2.find((e) => e.type === "tool_call").args.filename, "[redacted: a GitHub token]");
+  assert.match(ev2.find((e) => e.type === "tool_result").result, /^rejected: the file name looks like a GitHub token/);
+  assert.ok(!JSON.stringify(ev2).includes(key) && !JSON.stringify(ctx2.journalEvents).includes(key));
+  // Every string the model sent is covered, not only the two the card names: the
+  // activity brief prints the whole object, and a bad format is shown before it is refused.
+  const shown = H.shownArgs("export_document", { markdown: `# ${key}\n\nbody`, filename: "n", format: key, extra: key, count: 3 });
+  assert.deepStrictEqual(shown, { markdown: "# [redacted: a GitHub token]\n\nbody", filename: "n", format: "[redacted: a GitHub token]", extra: "[redacted: a GitHub token]", count: 3 });
+  // Other tools' cards are untouched, and so are the real arguments.
+  assert.deepStrictEqual(H.shownArgs("write_file", { path: "a", content: key }), { path: "a", content: key });
+  const real = { markdown: "x", filename: key, format: "md" };
+  H.shownArgs("export_document", real);
+  assert.strictEqual(real.filename, key, "the copy is a copy");
+});
+test("the destination is fixed before the print and before the approval wait, never read again after", async () => {
+  // The printer switches the workspace mid-print, as the user can from the sidebar.
+  const ctx = makeCtx();
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-other-"));
+  let cwd = ctx.dir;
+  ctx.getCwd = () => cwd;
+  ctx.printToPdf = async (html) => { cwd = other; return Buffer.from("%PDF-1.7 stub " + html.length); };
+  const out = await exportDoc(ctx, { markdown: "# Moved\n\ntext", filename: "moved", format: "pdf" });
+  assert.match(out.text, /^saved moved\.pdf to /);
+  assert.ok(out.text.includes(path.join(ctx.dir, "exports", "moved.pdf")));
+  assert.ok(fs.existsSync(path.join(ctx.dir, "exports", "moved.pdf")), "lands where the containment check looked");
+  assert.ok(!fs.existsSync(path.join(other, "exports")), "nothing lands under the folder switched to during the print");
+  // Across the approval wait the same holds: the path the user approved is the path written.
+  const gated = makeCtx();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-elsewhere-"));
+  const later = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-later-"));
+  fs.symlinkSync(elsewhere, exportsDir(gated));
+  let gcwd = gated.dir;
+  gated.getCwd = () => gcwd;
+  gated.requestApproval = async (req) => { gated.approvalsSeen.push(req); gcwd = later; return { approved: true }; };
+  const g = await exportDoc(gated, { markdown: "x", filename: "approved", format: "md" });
+  assert.match(g.text, /^saved approved\.md to /);
+  assert.strictEqual(gated.approvalsSeen[0].detail, path.join(gated.dir, "exports", "approved.md"));
+  assert.ok(fs.existsSync(path.join(elsewhere, "approved.md")), "written through the link the user approved");
+  assert.ok(!fs.existsSync(path.join(later, "exports")), "not under the folder switched to while the card was up");
 });
 test("an exports/ that points outside the workspace asks, like any write outside it", async () => {
   const ctx = makeCtx({}, { approve: false });

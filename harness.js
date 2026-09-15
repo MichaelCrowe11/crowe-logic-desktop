@@ -203,7 +203,9 @@ function classifyCommand(command) {
    never echoed - not into the prompt, not into the journal, not into the approval
    card. Only its kind. */
 const SECRET_VALUE_RES = [
-  { name: "a private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  { name: "a private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+    // The header is enough to know one is there; taking it out means the body too, to the END line or the end of the text.
+    span: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/ },
   { name: "an AWS access key id", re: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: "a live Stripe secret key", re: /\bsk_live_[0-9a-zA-Z]{16,}\b/ },
   { name: "a live Stripe restricted key", re: /\brk_live_[0-9a-zA-Z]{16,}\b/ },
@@ -219,6 +221,18 @@ function scanForSecrets(content) {
   const found = [];
   for (const p of SECRET_VALUE_RES) if (p.re.test(s)) found.push(p.name);
   return found;
+}
+/* The same list, used on text that is about to be shown or kept - a tool card, a
+   result line, a journal row - rather than on text about to be written. The
+   value goes; its kind stays, in brackets, so the reader still learns what was
+   there without learning it. */
+function redactSecrets(text) {
+  let s = String(text ?? "");
+  for (const p of SECRET_VALUE_RES) {
+    const re = p.span || p.re;
+    s = s.replace(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"), `[redacted: ${p.name}]`);
+  }
+  return s;
 }
 
 /* Paths whose contents decide how software is built, shipped, or resolved. A
@@ -327,8 +341,9 @@ function escapesWorkspace(ctx, abs) {
     return !(target === root || target.startsWith(root + path.sep));
   } catch { return false; }
 }
-async function gateOutsideWorkspace(ctx, state, relPath, kind) {
-  const abs = resolvePath(ctx, relPath);
+/* `abs` may be handed in by a caller that resolved the destination before it
+   awaited anything, so the path judged here is the path it later writes. */
+async function gateOutsideWorkspace(ctx, state, relPath, kind, abs = resolvePath(ctx, relPath)) {
   if (!escapesWorkspace(ctx, abs)) return { ok: true };
   return await gateAction(ctx, state, {
     risk: RISK.STRICT, why: `writes ${abs}, which is outside the workspace the user opened`,
@@ -620,23 +635,38 @@ function toolListDir(ctx, args) {
    itself as .md, saved under exports/ in the workspace. The gates a write_file
    passes stand in front of it: the tier (checked by the caller), the workspace
    boundary through symlinks, so an exports/ that points elsewhere asks first,
-   and the secret scanner over everything the model supplied. The file name is a
-   name, not a path; export-document.js decides what it may be. */
+   and the secret scanner over everything the model supplied: a name that trips
+   it is refused, content that trips it asks. The file name is a name, not a
+   path; export-document.js decides what it may be. */
 async function toolExportDocument(ctx, state, args) {
   const format = String(args.format ?? "").trim().toLowerCase();
   if (!Object.hasOwn(Doc.FORMATS, format)) return `rejected: format must be pdf, html, or md (got ${JSON.stringify(args.format ?? null)})`;
   const markdown = String(args.markdown ?? "");
   if (!markdown.trim()) return "rejected: markdown is empty, so there is nothing to export";
   if (markdown.length > Doc.MAX_MARKDOWN_CHARS) return `rejected: the document is ${markdown.length} characters and the limit is ${Doc.MAX_MARKDOWN_CHARS}. Split it into parts.`;
+  /* A name that looks like a credential is refused, not gated. The path is what
+     every later line repeats - the approval card's "why", the journal rows, the
+     result, the verifier's list of changes - so a gate that named the path would
+     put the value in each of them. The Markdown and the title are content and go
+     through the gate below, which names the kind and never the value. */
   const stem = Doc.exportFileName(args.filename);
+  const nameLeak = scanForSecrets(`${String(args.filename ?? "")}\n${stem}`);
+  if (nameLeak.length) return `rejected: the file name looks like ${nameLeak.join(" and ")}. Give the document a plain name and call again.`;
   const rel = path.join("exports", `${stem}.${format}`);
-  const supplied = [markdown, String(args.filename ?? ""), String(args.title ?? "")].join("\n");
-  for (const gate of [() => gateOutsideWorkspace(ctx, state, rel, "export_document"),
+  /* Resolved once, here, before anything awaits. The user can switch folders
+     while the approval card is up or the PDF is printing, and a destination read
+     from the workspace afterwards is a file landing somewhere the containment
+     check never looked at. From here on only `dest` is used. */
+  const dest = resolvePath(ctx, rel);
+  /* The title is decided here, before the gate, and scanned with the rest: a
+     heading with its markup stripped can read as a key the raw line did not. */
+  const title = Doc.documentTitle(markdown, args.title, stem);
+  const supplied = [markdown, String(args.filename ?? ""), String(args.title ?? ""), title].join("\n");
+  for (const gate of [() => gateOutsideWorkspace(ctx, state, rel, "export_document", dest),
     () => gateSecretContent(ctx, state, rel, supplied, "export_document")]) {
     const g = await gate();
     if (!g.ok) return g.text;
   }
-  const title = Doc.documentTitle(markdown, args.title, stem);
   let bytes;
   if (format === "md") bytes = Buffer.from(markdown.endsWith("\n") ? markdown : markdown + "\n", "utf8");
   else {
@@ -650,10 +680,11 @@ async function toolExportDocument(ctx, state, args) {
     }
   }
   let saved;
-  try { saved = await Doc.saveExport(path.join(ctx.getCwd(), "exports"), stem, format, bytes); }
+  try { saved = await Doc.saveExport(path.dirname(dest), stem, format, bytes); }
   catch (e) { return `error: could not save the document (${String((e && e.message) || e).slice(0, 200)})`; }
   const name = path.basename(saved.file);
-  return `saved ${name} to ${saved.file} (${format}, ${bytes.length} bytes, titled "${title}")`
+  // The title went into the document as the user approved it; the line about the document does not repeat a value.
+  return `saved ${name} to ${saved.file} (${format}, ${bytes.length} bytes, titled "${redactSecrets(title)}")`
     + (saved.renamed ? `. ${stem}.${format} already existed and was left alone, so this one is ${name}.` : "");
 }
 
@@ -842,6 +873,18 @@ function snapshotBefore(ctx, relPath) {
     const file = writeArtifact(ctx, fs.readFileSync(abs, "utf8"), `before-${path.basename(abs)}`);
     return file ? { path: String(relPath), before: file } : null;
   } catch { return null; }
+}
+/* The renderer draws a tool card from the arguments the moment the call is made,
+   before the tool has run and before any gate has spoken. The call itself runs
+   on the arguments as sent; the card gets a copy of an export's arguments with
+   every string run through the scanner. The name and the title are printed on
+   the card verbatim, and the activity brief prints the whole object, so a field
+   the schema does not name, or a format about to be refused, is shown too. */
+function shownArgs(name, a) {
+  if (name !== "export_document" || !a || typeof a !== "object") return a;
+  const out = { ...a };
+  for (const k of Object.keys(out)) if (typeof out[k] === "string") out[k] = redactSecrets(out[k]);
+  return out;
 }
 function mutationLabel(name, args) {
   if (name === "run_shell") return `run_shell ${String(args.command || "").slice(0, 120)}`;
@@ -1442,7 +1485,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       if (deps.isAborted()) break;
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
       const name = tc.function?.name;
-      deps.send({ type: "tool_call", name, args: a, stage: opts.stage });
+      deps.send({ type: "tool_call", name, args: shownArgs(name, a), stage: opts.stage });
       let out;
       if (opts.onVerdict && name === "submit_verdict") {
         opts.onVerdict(a); closed = true;
@@ -1696,7 +1739,7 @@ module.exports = {
   BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
-  shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,
+  shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, redactSecrets, shownArgs, escapesWorkspace,
   gateOutsideWorkspace, gateSecretContent,
   spool, writeArtifact, verdictReceipt, rejectionPrompt, isTransient,
 };
