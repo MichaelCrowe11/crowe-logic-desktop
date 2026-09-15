@@ -122,9 +122,9 @@
       // A browser or a phone cannot open a local folder; the desktop button
       // that offers to would be a promise this shell cannot keep.
       const root = event && event.detail && event.detail.root;
-      if (root) root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
-      const root = event.detail && event.detail.root;
-      if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(webCopy);
+      if (!root || !root.querySelectorAll) return;
+      root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+      root.querySelectorAll(".said").forEach(webCopy);
     });
     new MutationObserver((records) => {
       webWelcome(transcript);
