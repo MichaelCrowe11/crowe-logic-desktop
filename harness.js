@@ -20,6 +20,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { exec, execFile } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
+const SharePreview = require("./share-preview");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
 const MAX_ROUNDS = 24;
@@ -251,6 +252,7 @@ const DELIVERY = {
   submit_verdict: "read_only",
   edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
   compose_workflow: "compensatable",   // a draft row in the Runbook; one click to delete
+  share_preview: "compensatable",      // a public link that stop: true, expiry, or quitting takes down; what was read stays read
 
   run_shell: "varies",       // resolved per command, below
 };
@@ -400,6 +402,15 @@ const BUILTIN_TOOLS = [
   { type: "function", function: { name: "open_url",
     description: "Open a URL in the in-app browser pane for the user to see.",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
+  { type: "function", function: { name: "share_preview",
+    description: "Publish a temporary public link to something you built, for the user to send to someone else. Pass dir to serve a folder of static files (index.html at /), or port alone to forward a local server that is already listening, through a Cloudflare quick tunnel; the result carries the https://<random>.trycloudflare.com address. No account is needed. This exposes those files or that port to anyone who has the link, so it needs Execute autonomy and pauses for the user's approval every time: call it only when the user asked for a link other people can open. The link stops after minutes (default 120), when the app quits, or when you call this tool with stop: true, with the id from an earlier result to stop one preview or no id to stop them all.",
+    parameters: { type: "object", properties: {
+      dir: { type: "string", description: "Folder of static files to serve, relative to the workspace. Dotfiles, source maps, and credential files under it are never served." },
+      port: { type: "number", description: "With dir: the local port to serve on (default: any free port). Without dir: the local port a server is already listening on, forwarded as-is." },
+      minutes: { type: "number", description: "How long the link stays up, 1 to 720 (default 120)." },
+      stop: { type: "boolean", description: "Stop a running preview instead of starting one." },
+      id: { type: "string", description: "With stop: the preview id from an earlier result. Omit to stop every preview." },
+    } } } },
 ];
 
 /* The grower's own store, writable.
@@ -633,6 +644,7 @@ async function execTool(ctx, name, args, route, state) {
     if (route && route.verify) {
       if (name === "edit_file" || name === "write_file" || name === "log_grow" || (name && name.startsWith("mcp__")))
         return "blocked: the verifier does not change anything. Record what is wrong in your verdict and leave the fixing to the operator.";
+      if (name === "share_preview") return "blocked: the verifier checks the work; it does not publish it.";
       if (name === "run_shell" && classifyCommand(args.command).risk >= RISK.REVIEW)
         return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
     }
@@ -724,6 +736,38 @@ async function execTool(ctx, name, args, route, state) {
       });
       if (!gate.ok) return gate.text;
       ctx.openUrl(u); return `opened ${u}`;
+    }
+    /* A public link to a folder or a port: two gates, in order. The tier first.
+       This is Execute, like the shell, because it reaches out of the machine,
+       and the tiers below Execute were sold as "nothing leaves". Then the
+       approval card, at STRICT, so it asks every time in every mode that asks
+       at all: a tier is consent to a capability, and "you may run things" was
+       never consent to publish the working tree. The card names the exact
+       folder or port and the duration, and the hash is bound to those, so the
+       yes covers this link and no other. The cloudflared lookup comes before
+       the card, because asking the user to approve something that cannot run
+       is how a card stops being read. Stopping is not gated: it only ever
+       narrows exposure, and only for tunnels this process started, so any
+       tier may do it. The mechanics live in share-preview.js; ctx.previewDeps
+       is the seam the tests use to stand in for the binary and the network. */
+    if (name === "share_preview") {
+      const a = args && typeof args === "object" ? args : {};
+      const deps = ctx.previewDeps && typeof ctx.previewDeps === "object" ? ctx.previewDeps : {};
+      if (a.stop) return await SharePreview.stopShares(ctx, state, a, deps);
+      if (tier !== "execute")
+        return `blocked: share_preview exposes files or a local port to the internet, which needs Execute autonomy, and the current mode is "${tier}". Ask the user to switch autonomy to Execute if they want a public link.`;
+      const bin = deps.cloudflared !== undefined ? deps.cloudflared : SharePreview.findCloudflared();
+      if (!bin) return SharePreview.installHint(deps.platform);
+      const plan = await SharePreview.planShare(ctx, a, deps);
+      if (plan.error) return `error: ${plan.error}`;
+      const gate = await gateAction(ctx, state, {
+        risk: RISK.STRICT, why: plan.why, kind: "share_preview", title: plan.title,
+        detail: plan.detail, hash: inputHash("share_preview", plan.key),
+      });
+      if (!gate.ok) return gate.text;
+      return await SharePreview.startShare(ctx, state, plan, {
+        cloudflared: bin, env: safeShellEnv(), refuse: (rel) => isSecretPath(rel), ...deps,
+      });
     }
     /* No tier gate: authoring writes a draft into the Runbook and nothing runs
        until the operator presses Run, so even Plan mode may hand its plan back
@@ -912,11 +956,11 @@ const TIER_LINES = {
   plan: "PLAN: read-only exploration. Inspect freely (read_file, search, list_dir, open_url) but change nothing. Investigate the task, then finish by writing a short numbered plan of the changes you would make, and ask the user to approve by switching to Edit or Execute. Do not call run_shell, write_file, or edit_file.",
   readonly: "READ-ONLY: you may inspect (read_file, search, list_dir, open_url) but shell and all writes are blocked. Say what tier a blocked action needs instead of retrying it.",
   edit: "EDIT: you may inspect and change files (edit_file/write_file, each reviewed by the user before applying). Shell is blocked; suggest commands for the user instead of retrying run_shell.",
-  execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive.",
+  execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive. share_preview can publish a folder or a local port at a temporary public link, and asks the user first every time.",
 };
 const APPROVAL_LINES = {
   off: "",
-  "high-risk": "- Approval: irreversible or outward-facing actions pause for the user's explicit yes, Execute included - force-push, recursive delete, publishing or deploying, destructive SQL, sudo, piping a download into a shell, sending a credentials file anywhere. Expect the pause. A denial means change approach, not retry and not route around.",
+  "high-risk": "- Approval: irreversible or outward-facing actions pause for the user's explicit yes, Execute included - force-push, recursive delete, publishing or deploying, sharing a public preview link, destructive SQL, sudo, piping a download into a shell, sending a credentials file anywhere. Expect the pause. A denial means change approach, not retry and not route around.",
   strict: "- Approval: anything reaching past this working tree pauses for the user's explicit yes - remotes, dependency changes, build and deploy config - as well as every irreversible action. Expect the pause. A denial means change approach, not retry and not route around.",
 };
 function turnBudget(cfg) {

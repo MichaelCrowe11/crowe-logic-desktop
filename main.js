@@ -2044,10 +2044,14 @@ app.whenReady().then(async () => {
 // Native children outlive the window unless we kill them. node-pty in
 // particular throws from its destructor if a PTY is still open at exit, which
 // aborts the process with SIGABRT after the app has otherwise shut down
-// cleanly. Tear both down on every quit path.
+// cleanly. Tear all of them down on every quit path. Preview tunnels are on
+// the list because a public link that outlives the app is a link nobody can
+// stop from here; stopAll signals every cloudflared synchronously, so this
+// path still has nothing to wait on.
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+  try { require("./share-preview").stopAll("the app is quitting"); } catch {}
 }
 app.on("before-quit", shutdownNativeResources);
 app.on("will-quit", () => { shutdownNativeResources(); try { globalShortcut.unregisterAll(); } catch {} });

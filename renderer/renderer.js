@@ -236,6 +236,7 @@ function stageLabel(name) {
   if (name === "run_shell") return "executing";
   if (name === "write_file" || name === "edit_file") return "editing";
   if (name === "open_url") return "browsing";
+  if (name === "share_preview") return "publishing";
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
   return "retrieving";
 }
@@ -404,6 +405,7 @@ function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
   const arg = ev.name === "run_shell" ? (ev.args.command || "")
     : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "share_preview" ? (ev.args.stop ? "stop " + (ev.args.id || "all") : (ev.args.dir || (ev.args.port ? "port " + ev.args.port : "")))
     : ev.name === "search" ? (ev.args.pattern || "")
     : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
@@ -454,7 +456,10 @@ function addApproval(body, ev) {
   const card = document.createElement("div");
   card.className = `editcard gatecard risk-${ev.risk === "review" ? "review" : "strict"}`;
   card.dataset.approvalId = String(ev.id);
-  card.innerHTML = `<div class="ec-head"><span class="ec-title">${ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone"}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
+  // A preview link is strict-risk because it reaches the public internet, not
+  // because it cannot be undone: stop takes it down. The heading says which.
+  const heading = ev.kind === "share_preview" ? "Opens a public link" : ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone";
+  card.innerHTML = `<div class="ec-head"><span class="ec-title">${heading}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
     <div class="gc-why">This ${esc(ev.why || "action needs your approval")}.</div>
     <div class="ec-diff"><div class="dl ctx">${esc(ev.detail || "")}</div></div>
     <div class="ec-actions"><button class="approve">Allow once</button><button class="reject">Deny</button><span class="ec-hint">a allow · r deny</span></div>`;
