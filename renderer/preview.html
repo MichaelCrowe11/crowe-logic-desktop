@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1789294520558" />
+  <link rel="stylesheet" href="styles.css?v=1789422278343" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -149,10 +149,10 @@
            same place: a room closed with its panel was otherwise reachable
            only by remembering it existed. -->
       <aside id="rooms-drawer" class="drawer">
-        <div class="drawer-head"><span>Rooms</span><button id="room-new" class="side-icon" title="Open a room">
+        <div class="drawer-head"><span>Messages</span><button id="room-new" class="side-icon" title="New message">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button></div>
-        <div id="room-list" class="sess-list"></div>
+        <div id="room-list" class="sess-list msg-list"></div>
       </aside>
 
       <!-- Repositories: the folders this app has opened and, once the GitHub
@@ -466,10 +466,11 @@
 
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="preview-shim.js?v=1789294520558"></script>
-  <script src="mark-geometry.js?v=1789294520558"></script>
-  <script src="mark.js?v=1789294520558"></script>
-  <script src="renderer.js?v=1789294520558"></script>
+  <script src="preview-shim.js?v=1789422278343"></script>
+  <script src="mark-geometry.js?v=1789422278343"></script>
+  <script src="mark.js?v=1789422278343"></script>
+  <script src="messages.js?v=1789422278343"></script>
+<script src="renderer.js?v=1789422278343"></script>
   <script src="plan.js"></script>
 </body>
 </html>

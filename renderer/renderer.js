@@ -1409,39 +1409,44 @@ async function refreshRoomList() {
   let list = [];
   try { list = await window.crowe.rooms.list(); } catch { return; }
   host.innerHTML = "";
-  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet. A room is a standing colleague: give it a brief and a routine and it speaks first.</div>'; return; }
-  for (const r of list) {
+  if (!list.length) { host.innerHTML = '<div class="card-empty">No conversations yet. Message a worker and it keeps the thread, works while you are away, and speaks first when it has something for you.</div>'; return; }
+  const M = window.CroweMessages;
+  const now = Date.now();
+  // Newest conversation on top, the way a phone orders texts.
+  const rows = list.map((r) => ({ r, m: M ? M.rowModel(r, now) : { id: r.id, title: r.title || "Conversation", preview: r.preview || "", time: "", unread: r.unread || 0, state: r.working ? "working" : "idle", solo: (r.agents || []).length === 1, agents: r.agents || [], names: r.names || [] } }))
+    .sort((x, y) => (y.r.updatedAt || 0) - (x.r.updatedAt || 0));
+  for (const { r, m } of rows) {
     const row = document.createElement("div");
-    row.className = "sess-row room-row" + (r.unread ? " has-unread" : "") + (r.working ? " is-working" : "") + (r.openAsk ? " has-ask" : "");
+    row.className = "sess-row room-row msg-row" + (m.unread ? " has-unread" : "") + (m.state === "working" ? " is-working" : "") + (m.state === "waiting" ? " has-ask" : "") + (m.solo ? " is-solo" : "");
     const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
     if (open && open.id === activePanelId) row.classList.add("current");
-    const names = r.names || [];
     row.innerHTML = `<div class="room-avatars" aria-hidden="true"></div>
       <div class="sess-main">
-        <div class="sess-title"><span class="room-row-title"></span></div>
+        <div class="msg-top"><span class="room-row-title"></span><span class="msg-time"></span></div>
         <div class="room-row-preview"></div>
       </div>
-      <span class="room-row-dot" aria-label="${r.unread ? esc(String(r.unread)) + " unread" : ""}"></span>
-      <button class="sess-del" title="Delete">Delete</button>`;
-    row.querySelector(".room-row-title").textContent = r.title || "Room";
-    row.querySelector(".room-row-preview").textContent = r.openAsk ? "Waiting on your decision" : (r.preview || names.join(", "));
-    // Up to three seats as marks, the first turning while the room works, and
-    // the rest as a count - the same stack a group thread wears anywhere.
+      <span class="room-row-dot" aria-label="${m.unread ? esc(String(m.unread)) + " unread" : ""}"></span>
+      <button class="sess-del" title="Delete conversation">Delete</button>`;
+    row.querySelector(".room-row-title").textContent = m.title;
+    row.querySelector(".msg-time").textContent = m.time;
+    row.querySelector(".room-row-preview").textContent = m.preview;
+    // One worker: one mark, turning while it works. A group: up to three
+    // marks and a count, the stack a group thread wears anywhere.
     const av = row.querySelector(".room-avatars");
-    const ids = r.agents || [];
+    const ids = m.agents;
     ids.slice(0, 3).forEach((id, i) => {
-      const m = document.createElement("span"); m.className = "room-avatar"; m.title = names[i] || id;
-      av.appendChild(m);
-      if (window.CroweMark) CroweMark.mount(m, { state: r.working && i === 0 ? "reasoning" : "rest", small: true });
+      const mk = document.createElement("span"); mk.className = "room-avatar"; mk.title = m.names[i] || id;
+      av.appendChild(mk);
+      if (window.CroweMark) CroweMark.mount(mk, { state: m.state === "working" && i === 0 ? "reasoning" : "rest", small: true });
     });
     if (ids.length > 3) { const more = document.createElement("span"); more.className = "room-avatar-more"; more.textContent = `+${ids.length - 3}`; av.appendChild(more); }
     row.addEventListener("click", (e) => {
       if (e.target.closest(".sess-del")) return;
-      openRoomPanel(r.id, r.title);
+      openRoomPanel(r.id, m.title);
     });
     row.querySelector(".sess-del").addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete the room "${r.title || "Room"}"? Its transcript and routines go with it.`)) return;
+      if (!confirm(`Delete the conversation with ${m.title}? Its thread and routines go with it.`)) return;
       await window.crowe.rooms.delete(r.id);
       for (const p of panels.filter((p) => p.type === "room" && p.roomId === r.id)) closePanel(p.id);
       refreshRoomList();
@@ -1479,8 +1484,11 @@ async function mountRoom(p, body, seed = {}) {
   wrap.innerHTML = `
     <div class="room-head">
       <span class="room-logotype" role="img" aria-label="Crowe Logic"></span>
+      <span class="room-worker-mark" aria-hidden="true" hidden></span>
       <span class="room-name"></span>
-      <span class="room-tier" title="The tier this room may run at: the lowest ceiling among its agents, clamped by your autonomy setting"></span>
+      <span class="room-state" aria-live="polite"></span>
+      <span class="room-tier" title="The tier this conversation may run at: the lowest ceiling among its workers, clamped by your autonomy setting"></span>
+      <button class="room-add ghost sm" type="button" title="Add a worker to this conversation">Add</button>
       <button class="room-details ghost sm" type="button" aria-pressed="false" title="Brief, routines and activity">Details</button>
     </div>
     <div class="room-main">
@@ -1500,7 +1508,7 @@ async function mountRoom(p, body, seed = {}) {
         <form class="room-composer">
           <button class="room-attach ghost sm" type="button" title="Attach files" aria-label="Attach files">+</button>
           <input class="room-input" autocomplete="off" spellcheck="false"
-                 placeholder="Message the room. @name addresses one seat, @room addresses everyone" aria-label="Message the room">
+                 placeholder="Message" aria-label="Message">
           <button class="room-mic ghost sm" type="button" title="Dictate" aria-label="Dictate" aria-pressed="false">Mic</button>
           <button class="room-send primary sm" type="submit">Send</button>
           <div class="room-suggest hidden" role="listbox"></div>
@@ -1744,7 +1752,22 @@ async function mountRoom(p, body, seed = {}) {
   }
 
   function drawHead() {
-    wrap.querySelector(".room-name").textContent = state?.title || "Room";
+    const M = window.CroweMessages;
+    const workers = state?.agents || [];
+    const names = workers.map((a) => a.name || a.agentId);
+    const solo = workers.length === 1;
+    const generic = !state?.title || state.title === "Untitled room" || state.title === "Room";
+    wrap.querySelector(".room-name").textContent = generic ? (M ? M.conversationTitle(workers.map((a) => ({ name: a.name, id: a.agentId }))) : names.join(", ") || "Conversation") : state.title;
+    // One worker: its mark where the logotype was, its state beside its name,
+    // no roster strip. A group keeps the roster, the way a group text shows
+    // everyone in it.
+    const logo = wrap.querySelector(".room-logotype"), wm = wrap.querySelector(".room-worker-mark");
+    if (logo) logo.hidden = solo;
+    if (wm) { wm.hidden = !solo; if (solo && !wm.dataset.mounted && window.CroweMark) { CroweMark.mount(wm, { state: "rest", small: true }); wm.dataset.mounted = "1"; } }
+    const st = wrap.querySelector(".room-state");
+    if (st) st.textContent = solo ? (workers[0].state === "working" || workers[0].state === "queued" ? "working" : workers[0].state === "failed" ? "failed" : "") : `${workers.length} workers`;
+    if (roster) roster.hidden = solo;
+    if (input && M) input.placeholder = M.composerPlaceholder(names);
     const tier = state?.tier || "";
     const tierEl = wrap.querySelector(".room-tier");
     // Named plainly. "readonly" is the tier id; "reads only" is what it does.
@@ -1752,6 +1775,34 @@ async function mountRoom(p, body, seed = {}) {
     tierEl.hidden = !tier;
     setRoomWorking((state?.agents || []).some((a) => a.state === "working" || a.state === "queued"));
   }
+
+  // ── Add a worker to this conversation: the group-text move ──
+  wrap.querySelector(".room-add")?.addEventListener("click", async () => {
+    let pop = wrap.querySelector(".room-add-pop");
+    if (pop) { pop.remove(); return; }
+    const { agents = [] } = await window.crowe.rooms.agents();
+    const seated = new Set((state?.agents || []).map((a) => a.agentId));
+    const M = window.CroweMessages;
+    const spaces = (window.crowe && window.crowe.installSpaces) || null;
+    const choices = (M ? M.visibleWorkers(agents, spaces) : agents).filter((a) => !seated.has(a.id));
+    pop = document.createElement("div"); pop.className = "room-add-pop";
+    pop.innerHTML = `<div class="rap-head">Add to conversation</div><input class="rap-search" placeholder="Search workers" aria-label="Search workers"><div class="rap-list" role="listbox"></div>`;
+    const listEl = pop.querySelector(".rap-list");
+    const draw = (q) => {
+      listEl.innerHTML = "";
+      for (const a of (M ? M.filterWorkers(choices, q) : choices)) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "rap-row"; b.setAttribute("role", "option");
+        b.innerHTML = `<span class="rap-mark" aria-hidden="true"></span><span class="rap-main"><span class="rap-name"></span><span class="rap-role"></span></span>`;
+        b.querySelector(".rap-name").textContent = a.name || a.id; b.querySelector(".rap-role").textContent = a.role || a.domain || "";
+        if (window.CroweMark) CroweMark.mount(b.querySelector(".rap-mark"), { state: "rest", small: true });
+        b.addEventListener("click", async () => { pop.remove(); await window.crowe.rooms.join(p.roomId, a.id); await refresh(); refreshRoomListSoon(); });
+        listEl.appendChild(b);
+      }
+      if (!listEl.children.length) listEl.innerHTML = '<div class="card-empty">Everyone available is already here.</div>';
+    };
+    pop.querySelector(".rap-search").addEventListener("input", (e) => draw(e.target.value));
+    wrap.querySelector(".room-head").after(pop); draw(""); pop.querySelector(".rap-search").focus();
+  });
 
   // ── The side pane: brief, routines, activity ──
   const titleEl = wrap.querySelector(".rs-title");
@@ -2058,73 +2109,82 @@ async function mountRoom(p, body, seed = {}) {
 
   const { agents = [], templates = [] } = await window.crowe.rooms.agents();
   const picked = new Set();
+  const M = window.CroweMessages;
+  const spaces = (window.crowe && window.crowe.installSpaces) || null;
+  const workers = M ? M.visibleWorkers(agents, spaces) : agents;
+  const groups = M ? M.visibleTemplates(templates, workers) : templates;
 
-  const byDomain = agents.reduce((m, a) => ((m[a.domain || "other"] = m[a.domain || "other"] || []).push(a), m), {});
+  /* New message: a contact list, not a template menu. The worker is the thing
+     you choose; a group is several of them. Templates survive as suggested
+     groups underneath, offered only when every seat in them is a worker this
+     edition shows. Name, brief and budget wait under Details, where they
+     belong: a first message should cost one tap. */
   composer.innerHTML = `
-    <div class="rc-head">
-      <span class="rc-logotype" role="img" aria-label="Crowe Logic"></span>
-      <b>Open a room</b>
-      <span>A room is a standing colleague: seat the specialists, give it a brief, and it keeps the thread. A room earns its cost when a decision has more than one binding constraint; where there is only one, one seat is the right answer.</span>
+    <div class="rc-head msg-new-head">
+      <b>New message</b>
+      <span>Pick a worker to message, or several for a group. It keeps the thread, works while you are away, and can speak first on a routine.</span>
     </div>
-    ${seed.repo ? `<div class="rc-base">Base checkout: <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>. The room works from this workspace.</div>` : ""}
-    <div class="rc-templates"></div>
-    <div class="rc-own">
-      <div class="rc-sub">Or compose your own</div>
-      <div class="rc-agents"></div>
-      <textarea class="rc-brief" rows="2" maxlength="4000" aria-label="Standing brief" placeholder="Standing brief, optional. What this room is for, said once; every seat carries it on every turn."></textarea>
+    ${seed.repo ? `<div class="rc-base">Working from <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>.</div>` : ""}
+    <input class="msg-search" placeholder="Search workers" aria-label="Search workers" autocomplete="off">
+    <div class="rc-agents msg-contacts" role="listbox" aria-label="Workers"></div>
+    <div class="rc-templates msg-groups"></div>
+    <details class="msg-details">
+      <summary>Details, optional</summary>
+      <textarea class="rc-brief" rows="2" maxlength="4000" aria-label="Standing brief" placeholder="Standing brief. What this conversation is for, said once; every worker carries it on every turn."></textarea>
       <div class="rc-actions">
-        <input class="rc-name" placeholder="Name this room" aria-label="Room name">
-        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Room budget in dollars"></label>
-        <span class="rc-count"></span>
-        <button class="rc-open primary sm" disabled>Open</button>
+        <input class="rc-name" placeholder="Name this conversation" aria-label="Conversation name">
+        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Budget in dollars"></label>
       </div>
+    </details>
+    <div class="msg-start">
+      <span class="rc-count"></span>
+      <button class="rc-open primary sm" disabled>Start conversation</button>
     </div>`;
 
-  mountMotionLogotype(composer.querySelector(".rc-logotype"), "");
-
-  const tWrap = composer.querySelector(".rc-templates");
-  for (const t of templates) {
-    const b = document.createElement("button");
-    b.type = "button";
-    // Bake-off is demoted rather than hidden: it says of itself that it makes
-    // no domain claim, and a menu that presents it as an equal argument is
-    // recommending a model comparison as if it were a decision.
-    b.className = "rc-template" + (t.id === "bake-off" ? " is-lesser" : "");
-    b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
-      <em class="rc-seats">${t.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
-    if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
-    b.addEventListener("click", () => open({ template: t.id }));
-    tWrap.appendChild(b);
-  }
-
   const aWrap = composer.querySelector(".rc-agents");
+  const tWrap = composer.querySelector(".rc-templates");
   const countEl = composer.querySelector(".rc-count");
   const openBtn = composer.querySelector(".rc-open");
   const nameEl = composer.querySelector(".rc-name");
   if (seed.repo && seed.repo.label) nameEl.value = String(seed.repo.label).slice(0, 60);
 
   const syncPick = () => {
-    countEl.textContent = picked.size
-      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? ": a room of one is a single colleague with a thread of its own" : ""}`
-      : "";
-    openBtn.disabled = picked.size === 0;
+    const chosen = workers.filter((w) => picked.has(w.id));
+    countEl.textContent = chosen.length ? (chosen.length === 1 ? `Message ${chosen[0].name || chosen[0].id}` : `Group of ${chosen.length}: ${M ? M.conversationTitle(chosen) : chosen.map((w) => w.name).join(", ")}`) : "";
+    openBtn.textContent = chosen.length > 1 ? "Start group" : "Start conversation";
+    openBtn.disabled = chosen.length === 0;
+    aWrap.querySelectorAll(".msg-contact").forEach((el) => el.classList.toggle("on", picked.has(el.dataset.id)));
   };
-
-  for (const [domain, list] of Object.entries(byDomain)) {
-    const g = document.createElement("div"); g.className = "rc-group";
-    g.innerHTML = `<div class="rc-domain">${esc(domain)}</div>`;
-    for (const a of list) {
+  const drawContacts = (q) => {
+    aWrap.innerHTML = "";
+    const shown = M ? M.filterWorkers(workers, q) : workers;
+    for (const a of shown) {
       const b = document.createElement("button");
-      b.type = "button"; b.className = "rc-agent"; b.title = a.role || "";
-      b.innerHTML = `<b>${esc(a.name)}</b><span>${esc(a.autonomyCeiling || "plan")}</span>`;
-      b.addEventListener("click", () => {
-        if (picked.has(a.id)) { picked.delete(a.id); b.classList.remove("on"); }
-        else { picked.add(a.id); b.classList.add("on"); }
-        syncPick();
-      });
-      g.appendChild(b);
+      b.type = "button"; b.className = "msg-contact" + (picked.has(a.id) ? " on" : ""); b.dataset.id = a.id; b.setAttribute("role", "option"); b.title = a.role || "";
+      b.innerHTML = `<span class="msg-contact-mark" aria-hidden="true"></span><span class="msg-contact-main"><b></b><span></span></span><span class="msg-contact-tier"></span>`;
+      b.querySelector("b").textContent = a.name || a.id;
+      b.querySelector(".msg-contact-main span").textContent = a.role || a.domain || "";
+      b.querySelector(".msg-contact-tier").textContent = a.autonomyCeiling || "";
+      if (window.CroweMark) CroweMark.mount(b.querySelector(".msg-contact-mark"), { state: "rest", small: true });
+      b.addEventListener("click", () => { if (picked.has(a.id)) picked.delete(a.id); else picked.add(a.id); syncPick(); });
+      aWrap.appendChild(b);
     }
-    aWrap.appendChild(g);
+    if (!shown.length) aWrap.innerHTML = '<div class="card-empty">No worker matches that.</div>';
+  };
+  composer.querySelector(".msg-search").addEventListener("input", (e) => drawContacts(e.target.value));
+  drawContacts("");
+
+  if (groups.length) {
+    const sub = document.createElement("div"); sub.className = "rc-sub"; sub.textContent = "Start a group"; tWrap.appendChild(sub);
+    for (const g of groups) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "rc-template msg-group" + (g.id === "bake-off" ? " is-lesser" : "");
+      b.innerHTML = `<b>${esc(g.name)}</b><span>${esc(g.purpose || "")}</span>
+        <em class="rc-seats">${g.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
+      if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
+      b.addEventListener("click", () => open({ template: g.id }));
+      tWrap.appendChild(b);
+    }
   }
   syncPick();
 
@@ -2148,7 +2208,7 @@ async function mountRoom(p, body, seed = {}) {
 
   openBtn.addEventListener("click", () => open({
     agentIds: [...picked],
-    title: nameEl.value.trim() || "Room",
+    title: nameEl.value.trim() || (M ? M.conversationTitle(workers.filter((w) => picked.has(w.id))) : "Conversation"),
   }));
 }
 
