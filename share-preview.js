@@ -129,7 +129,9 @@ function neverServed(relPosix) { return HIDDEN_RE.test(relPosix) || /\.map$/i.te
 /* One pipeline from request path to open file descriptor. The path is decoded
    once, refused if it carries a NUL or a backslash, split into segments that are
    each checked before anything is joined (so ".." is refused, not normalised
-   away), then the file it names is resolved through symlinks and checked again:
+   away, which is why createStaticServer hands over the raw request target and
+   not a parsed pathname), then the file it names is resolved through symlinks
+   and checked again:
    it has to sit under the real root, and its real relative path has to pass
    the same name rules, so a link called public.txt pointing at .env is refused
    on what it points at. The descriptor is what gets streamed, and fstat on it
@@ -178,7 +180,17 @@ function createStaticServer(root, { port = 0, refuse, platform } = {}) {
     res.setHeader("Referrer-Policy", "no-referrer");
     const method = req.method || "GET";
     if (method !== "GET" && method !== "HEAD") { res.setHeader("Allow", "GET, HEAD"); return plain(res, 405, REASONS[405]); }
-    let pathname; try { pathname = new URL(req.url || "/", "http://preview.invalid").pathname; } catch { return plain(res, 400, REASONS[400]); }
+    /* The target as the client sent it, origin-form only. Node's URL parser
+       would fold "." and ".." segments, and their %2e spellings, before
+       resolveRequest saw them, so its dot-dot refusal never ran and
+       /assets/../index.html was served as /index.html. That cannot leave the
+       root, but the rule here is that a dot segment is refused, not resolved,
+       so the segment checks get the raw path. Absolute-form and asterisk-form
+       targets are for proxies and never arrive through the tunnel: 400. */
+    const target = String(req.url || "/");
+    const cut = target.search(/[?#]/);
+    const pathname = cut >= 0 ? target.slice(0, cut) : target;
+    if (!pathname.startsWith("/")) return plain(res, 400, REASONS[400]);
     const r = resolveRequest(rootReal, pathname, refuse, platform);
     if (r.status === 301) { res.writeHead(301, { Location: r.location }); return res.end(); }
     if (r.status !== 200) return plain(res, r.status, REASONS[r.status] || REASONS[400]);
@@ -394,14 +406,19 @@ async function planShare(ctx, args, over) {
     if (typeof a.dir !== "string" || /\0/.test(a.dir)) return { error: "dir must be a path" };
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(a.dir)) return { error: "dir is a folder on this machine, not a URL; to expose a server that is already running, pass its port instead" };
     const abs = resolveDir(ctx, a.dir);
-    let st; try { st = fs.statSync(abs); } catch { return { error: `no such directory: ${abs}` }; }
+    let real; try { real = fs.realpathSync(abs); } catch { return { error: `no such directory: ${abs}` }; }
+    let st; try { st = fs.statSync(real, { bigint: true }); } catch { return { error: `no such directory: ${abs}` }; }
     if (!st.isDirectory()) return { error: `${abs} is a file, not a directory; pass the folder that holds the site` };
-    const real = fs.realpathSync(abs);
     const refused = refuseDir(real, ctx);
     if (refused) return { error: refused };
     const whole = real === safeReal(ctx.getCwd());
+    // dev and ino identify the directory itself, not its name: startShare uses
+    // them to tell the folder the card named from another one that has taken
+    // its path since. Exact decimal strings from a bigint stat, because a
+    // Number rounds a large inode and two folders could then compare equal.
+    // They are not part of the key, which describes what the user saw.
     return {
-      mode: "dir", dir: real, listenPort: port || 0, minutes, wholeWorkspace: whole,
+      mode: "dir", dir: real, dev: String(st.dev), ino: String(st.ino), listenPort: port || 0, minutes, wholeWorkspace: whole,
       title: "Share a preview publicly",
       why: `publishes ${real}${whole ? " (the whole workspace)" : ""} at a public link with no sign-in: anyone who has the link can read every file under it, including files added later, until it is stopped or ${minutes} minutes pass`,
       detail: `${real} -> https://<random>.trycloudflare.com for ${minutes} minutes${port ? ` (served on 127.0.0.1:${port})` : ""}`,
@@ -426,6 +443,10 @@ async function planShare(ctx, args, over) {
    failure path, so nothing that is running is ever unlisted. */
 const previews = new Map();
 let seq = 0;
+// Teardowns that have left the registry and not yet settled: a stop takes its
+// entry out before its first await, so for the grace period the child is still
+// alive and listed nowhere. The quit hold joins these as well as the registry.
+const inFlight = new Set();
 
 function listShares() {
   return [...previews.values()].map((e) => ({
@@ -469,7 +490,10 @@ function stopPreview(entry, reason, deps) {
   entry.state = "stopping";
   entry.stopReason = reason;
   entry.stopping = teardown(entry, deps).then(() => ({ id: entry.id, url: entry.url, reason }));
-  return entry.stopping;
+  const p = entry.stopping;
+  inFlight.add(p);
+  p.then(() => inFlight.delete(p), () => inFlight.delete(p));
+  return p;
 }
 function stopAll(reason) {
   const deps = withDefaults();
@@ -477,6 +501,30 @@ function stopAll(reason) {
     // teardown already removed the file with the last entry; this sweeps the
     // case where startTunnel was used on its own and nothing was registered.
     .then((r) => { if (!previews.size) removePinnedConfig(); return r; });
+}
+/* For the app's quit handler. Electron does not wait on a promise from
+   before-quit, and the SIGKILL behind an ignored SIGTERM lives in this
+   process, so a stopAll whose promise was dropped let a child that sat through
+   SIGTERM outlive the app. This signals every child now, as stopAll does, and
+   hands back what the caller should hold the quit for: null when nothing was
+   running and no earlier stop is still winding down (no hold, the app quits as
+   before), otherwise a promise that settles when every child is down and every
+   listener closed, or after holdMs, whichever comes first, so a teardown that
+   hangs cannot pin the app open. The timer is cleared when the teardown wins,
+   so a quick stop leaves nothing behind. The bound limits the wait, not the
+   child: a teardown the bound cut short goes on in the background until the
+   process exits, and a child that survived SIGKILL is not this module's to
+   reach. */
+function stopAllForQuit(reason, holdMs = STOP_GRACE_MS + EXIT_WAIT_MS + 1000) {
+  stopAll(reason || "the app is quitting").catch(() => {});
+  // stopAll has just added its own teardowns to inFlight, beside any stop that
+  // was already winding down when the quit landed.
+  const pending = [...inFlight];
+  if (!pending.length) return null;
+  const settled = Promise.all(pending).then(() => undefined, () => undefined);
+  let t = null;
+  const bound = new Promise((r) => { t = setTimeout(r, holdMs); });
+  return Promise.race([settled, bound]).then(() => { clearTimeout(t); });
 }
 
 function successText(e) {
@@ -495,9 +543,14 @@ function successText(e) {
 /* Runs an approved plan. The checks that decided the approval are made again
    here, because the folder or the listener can change while the card is open,
    and the answer is bound to what is there now. For a folder that means the
-   same resolved path the card named and the same refusals, not only "still a
-   directory": a symlink dropped in its place while the card was open would
-   otherwise be followed by the file server to wherever it points. */
+   same resolved path the card named, the same directory at that path (by
+   device and inode, where the platform reports them), and the same refusals,
+   not only "still a directory": a symlink dropped in its place while the card
+   was open would otherwise be followed by the file server to wherever it
+   points, and a folder removed and recreated under the same name is a
+   different folder from the one the card named. What remains open is the
+   window between this check and the server's own realpath of the root, and
+   changes to the folder's contents, which the card says are published. */
 async function startShare(ctx, state, plan, over) {
   const deps = withDefaults(over);
   const now = (ev) => { try { if (state && state.journal) state.journal(ev); else if (ctx && ctx.journal) ctx.journal(ev); } catch {} };
@@ -506,9 +559,17 @@ async function startShare(ctx, state, plan, over) {
   if (previews.size >= deps.maxPreviews) return full();
   if (!deps.cloudflared) return installHint(deps.platform);
   if (plan.mode === "dir") {
-    let real = null; try { if (fs.statSync(plan.dir).isDirectory()) real = fs.realpathSync(plan.dir); } catch {}
-    if (!real) return `error: ${plan.dir} is no longer a directory`;
+    let real = null, st = null;
+    try { real = fs.realpathSync(plan.dir); st = fs.statSync(real, { bigint: true }); } catch {}
+    if (!real || !st || !st.isDirectory()) return `error: ${plan.dir} is no longer a directory`;
     if (real !== plan.dir) return `error: ${plan.dir} now leads to ${real}, which is not the folder the card named; nothing was published. Ask again with the folder you mean`;
+    // Identity is unavailable, not matched, when either side reports inode 0
+    // (a mount or platform that does not number its files): the path check
+    // then stands alone, and this is not read as a swap.
+    const ino = String(st.ino), dev = String(st.dev);
+    const known = (v) => typeof v === "string" && v !== "" && v !== "0";
+    if (known(plan.ino) && known(ino) && (ino !== plan.ino || dev !== plan.dev))
+      return `error: ${plan.dir} was replaced while the card was open: the folder at that path now is not the one the card named; nothing was published. Ask again with the folder you mean`;
     const refused = refuseDir(real, ctx);
     if (refused) return `error: ${refused}`;
   } else if (!(await deps.portOpen(plan.port))) {
@@ -610,6 +671,6 @@ async function stopShares(ctx, state, args, over) {
 module.exports = {
   parseTunnelUrl, findCloudflared, searchDirs, isExecutable, installHint, childEnv,
   createStaticServer, resolveRequest, neverServed, startTunnel, portOpen, pinnedConfigPath,
-  planShare, startShare, stopShares, stopAll, listShares,
-  TUNNEL_URL_RE, MAX_PREVIEWS, DEFAULT_MINUTES, MAX_MINUTES, EXTRA_BIN_DIRS, OWN_LOOPBACK_PORTS, PINNED_CONFIG,
+  planShare, startShare, stopShares, stopAll, stopAllForQuit, listShares,
+  TUNNEL_URL_RE, MAX_PREVIEWS, DEFAULT_MINUTES, MAX_MINUTES, STOP_GRACE_MS, EXIT_WAIT_MS, EXTRA_BIN_DIRS, OWN_LOOPBACK_PORTS, PINNED_CONFIG,
 };

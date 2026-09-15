@@ -2046,14 +2046,38 @@ app.whenReady().then(async () => {
 // aborts the process with SIGABRT after the app has otherwise shut down
 // cleanly. Tear all of them down on every quit path. Preview tunnels are on
 // the list because a public link that outlives the app is a link nobody can
-// stop from here; stopAll signals every cloudflared synchronously, so this
-// path still has nothing to wait on.
+// stop from here. stopAllForQuit signals every cloudflared before its first
+// await, and returns a promise for the rest of the teardown (the grace period,
+// the SIGKILL behind a SIGTERM that was ignored, the loopback listeners) only
+// when a preview was running; null means there is nothing to wait for. The
+// scripts that call this by hand before app.exit ignore the return value.
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
-  try { require("./share-preview").stopAll("the app is quitting"); } catch {}
+  try { return require("./share-preview").stopAllForQuit("the app is quitting"); } catch { return null; }
 }
-app.on("before-quit", shutdownNativeResources);
+/* Electron does not wait on a promise from before-quit, and the SIGKILL that
+   follows the grace period lives in this process, so a cloudflared that sat
+   through SIGTERM used to outlive the app. When a preview is up, this first
+   quit is cancelled, the teardown is awaited (bounded inside stopAllForQuit,
+   about six seconds at most), and quit is asked for again; that pass is let
+   through. A quit asked for during the wait (a second Cmd+Q, window-all-closed
+   on Windows and Linux, the updater) is held as well, so nothing but the bound
+   can cut the teardown short. If the released quit is cancelled by something
+   else, a window that refuses to close for one, the barrier re-arms a second
+   later, so a later quit is held again rather than let through unguarded.
+   With no preview up there is no hold and the quit is what it always was. */
+let quitPhase = "idle";   // idle -> draining -> releasing -> idle
+app.on("before-quit", (event) => {
+  if (quitPhase === "releasing") { setTimeout(() => { quitPhase = "idle"; }, 1000); return; }
+  if (quitPhase === "draining") { event.preventDefault(); return; }
+  const pending = shutdownNativeResources();
+  if (!pending) return;
+  quitPhase = "draining";
+  event.preventDefault();
+  const release = () => { quitPhase = "releasing"; app.quit(); };
+  pending.then(release, release);
+});
 app.on("will-quit", () => { shutdownNativeResources(); try { globalShortcut.unregisterAll(); } catch {} });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 

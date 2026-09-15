@@ -346,8 +346,16 @@ test("an approved dir share serves the folder on loopback, spawns cloudflared at
     assert.strictEqual((await get(port, "/escape.txt")).status, 404, "a symlink that leaves the tree is refused on what it points at");
     assert.strictEqual((await get(port, "/missing.html")).status, 404);
     assert.strictEqual((await get(port, "/", "POST")).status, 405);
-    assert.match(await raw(port, "GET /../secret.txt"), /^HTTP\/1\.1 404/, "a dot-dot segment is refused, not normalised into a hit");
+    assert.match(await raw(port, "GET /../secret.txt"), /^HTTP\/1\.1 404/, "a dot-dot segment is refused");
     assert.match(await raw(port, "GET /assets/%2e%2e/%2e%2e/secret.txt"), /^HTTP\/1\.1 404/);
+    // Those two are 404 either way, since dist/secret.txt does not exist. These
+    // tell refusal from resolution: a URL parser folds the dot segments and
+    // serves index.html; the server refuses the path as it was sent.
+    assert.match(await raw(port, "GET /assets/../index.html"), /^HTTP\/1\.1 404/, "a dot-dot segment is refused even when following it would land in the tree");
+    assert.match(await raw(port, "GET /assets/%2e%2e/index.html"), /^HTTP\/1\.1 404/, "and so is its percent-encoded spelling");
+    assert.match(await raw(port, "GET /./index.html"), /^HTTP\/1\.1 404/, "a single-dot segment likewise");
+    assert.match(await raw(port, "GET http://preview.invalid/index.html"), /^HTTP\/1\.1 400/, "an absolute-form target is for a proxy, not this server");
+    assert.match(await raw(port, "GET /index.html?v=1"), /^HTTP\/1\.1 200/, "the query string is not part of the path");
     assert.match(await raw(port, "GET /assets%5c..%5c..%5csecret.txt"), /^HTTP\/1\.1 400/, "a backslash in the path is refused outright");
     const notFound = await get(port, "/missing.html");
     assert.ok(!notFound.body.includes(ctx.dir), "error bodies carry no local paths");
@@ -394,6 +402,47 @@ test("a folder replaced while the card is open is checked again before anything 
     // A fresh card, drawn for the folder as it now is, is honoured: the
     // refusal was about the swap, not the path.
     fs.unlinkSync(dist); fs.mkdirSync(dist); fs.writeFileSync(path.join(dist, "index.html"), "other");
+    ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: true }; };
+    const again = await run(ctx, { dir: "dist" });
+    assert.match(again, /^preview live at/, again);
+    assert.strictEqual(ctx.approvalsSeen.length, 2);
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("a different folder at the same path, made while the card was open, is refused by its identity and not only its name", async () => {
+  // rm -rf dist && mkdir dist between the card and the yes: the same real
+  // path, still a directory, so the path check alone would pass and the file
+  // server would publish a folder the card never named. The start compares
+  // the directory's device and inode with what planShare recorded.
+  const ctx = makeCtx();
+  const dist = path.join(ctx.dir, "dist");
+  const named = fs.realpathSync(dist);
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  ctx.requestApproval = async (req) => {
+    ctx.approvalsSeen.push(req);
+    fs.renameSync(dist, dist + ".moved");
+    fs.mkdirSync(dist); fs.writeFileSync(path.join(dist, "index.html"), "another folder");
+    return { approved: true };
+  };
+  try {
+    const out = await run(ctx, { dir: "dist" });
+    assert.match(out, new RegExp(`^error: ${esc(named)} was replaced while the card was open.*nothing was published`), out);
+    assert.strictEqual(ctx.approvalsSeen.length, 1);
+    assert.strictEqual(ctx.spawn.calls.length, 0, "no tunnel was spawned");
+    assert.strictEqual(S.listShares().length, 0);
+    assert.strictEqual(events(ctx, "PREVIEW_STARTED").length, 0);
+    // The plan carries the identity as exact decimal strings from a bigint
+    // stat, not as a Number that would round a large inode, and not in the
+    // key the card was hashed on, which describes what the user saw.
+    const plan = await S.planShare(ctx, { dir: "dist" }, ctx.previewDeps);
+    const st = fs.statSync(dist, { bigint: true });
+    assert.deepStrictEqual([plan.dev, plan.ino], [String(st.dev), String(st.ino)]);
+    assert.deepStrictEqual(Object.keys(plan.key).sort(), ["dir", "listenPort", "minutes", "mode"]);
+    // A platform or mount that reports no inode is identity unavailable, not a
+    // swap: the path check stands alone and the share goes ahead.
+    const blind = await S.startShare(ctx, stateFor(ctx), { ...plan, dev: "0", ino: "0" }, { ...ctx.previewDeps });
+    assert.match(blind, /^preview live at/, blind);
+    // A fresh card, drawn for the folder as it now is, is honoured.
     ctx.requestApproval = async (req) => { ctx.approvalsSeen.push(req); return { approved: true }; };
     const again = await run(ctx, { dir: "dist" });
     assert.match(again, /^preview live at/, again);
@@ -464,6 +513,59 @@ test("quitting the app signals every tunnel before anything is awaited", async (
     assert.strictEqual(await refused(port), true);
     assert.strictEqual(fs.existsSync(cfg), false, "the pinned config is removed once nothing is running");
     assert.strictEqual(fs.existsSync(path.dirname(cfg)), false);
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("the quit hold: nothing running means no hold, a running child is waited for through SIGKILL, and a stop already winding down is joined", async () => {
+  assert.strictEqual(S.stopAllForQuit("the app is quitting"), null, "with nothing running the app quits as it always did");
+  const spawn = fakeSpawn(BANNER, { ignoreTerm: true });
+  const ctx = makeCtx({}, { approve: true, spawn });
+  try {
+    await run(ctx, { dir: "dist" });
+    await run(ctx, { dir: "dist" });
+    const [a, b] = spawn.calls.map((c) => c.child);
+    const ports = S.listShares().map((e) => e.port);
+    // b was stopped a moment before the quit: out of the registry already, its
+    // child still sitting through the grace period.
+    const early = run(ctx, { stop: true, id: S.listShares()[1].id });
+    await tick();
+    assert.deepStrictEqual(b.signals, ["SIGTERM"]);
+    assert.strictEqual(S.listShares().length, 1);
+    const t0 = Date.now();
+    const hold = S.stopAllForQuit("the app is quitting");
+    assert.ok(hold && typeof hold.then === "function", "something is running, so there is a hold");
+    assert.deepStrictEqual(a.signals, ["SIGTERM"], "signalled before the first await, as before");
+    assert.strictEqual(S.listShares().length, 0);
+    await hold;
+    assert.deepStrictEqual(a.signals, ["SIGTERM", "SIGKILL"], "the hold lasted through the grace period and the SIGKILL");
+    assert.deepStrictEqual(b.signals, ["SIGTERM", "SIGKILL"], "and joined the stop that was already winding down");
+    assert.ok(Date.now() - t0 >= FAST.stopGraceMs - 5, "the grace period was waited out");
+    for (const p of ports) assert.strictEqual(await refused(p), true);
+    await early;
+    assert.strictEqual(S.stopAllForQuit("the app is quitting"), null, "and afterwards there is nothing left to hold for");
+  } finally { await S.stopAll("test cleanup"); }
+});
+
+test("the quit hold is bounded: a teardown that does not settle releases the quit after holdMs", async () => {
+  // The listener's close() takes far longer than the bound (a stand-in for
+  // anything in the teardown that hangs); the hold gives up at holdMs and the
+  // app quits, with the teardown left to finish in the background.
+  const slowClose = async (root, o) => {
+    const s = await S.createStaticServer(root, o);
+    return { ...s, close: () => { s.close(); return new Promise((r) => { const t = setTimeout(r, 1500); if (t.unref) t.unref(); }); } };
+  };
+  const ctx = makeCtx({}, { approve: true, previewDeps: { createStaticServer: slowClose } });
+  try {
+    await run(ctx, { dir: "dist" });
+    const child = ctx.spawn.calls[0].child;
+    const t0 = Date.now();
+    const hold = S.stopAllForQuit("the app is quitting", 120);
+    assert.ok(hold, "there is a hold");
+    await hold;
+    const took = Date.now() - t0;
+    assert.ok(took >= 110 && took < 1000, `released by the bound, not the teardown: ${took} ms`);
+    assert.deepStrictEqual(child.signals, ["SIGTERM"], "the child had left on SIGTERM; only the listener was slow");
+    assert.strictEqual(S.listShares().length, 0);
   } finally { await S.stopAll("test cleanup"); }
 });
 
@@ -552,6 +654,23 @@ test("the app's own sign-in callback ports are refused in both modes, before any
   }
   assert.strictEqual(ctx.approvalsSeen.length, 0);
   assert.strictEqual(ctx.spawn.calls.length, 0);
+});
+
+test("main.js holds the quit for the teardown: the first quit is cancelled while a preview is up and asked for again when the hold settles", () => {
+  // main.js cannot run here, so this reads the wiring. shutdownNativeResources
+  // must hand the hold back, before-quit must cancel only when there is one
+  // and quit again when it settles, and will-quit must still sweep.
+  const src = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+  assert.match(src, /function shutdownNativeResources\(\) \{[\s\S]{0,700}?return require\("\.\/share-preview"\)\.stopAllForQuit\("the app is quitting"\)/,
+    "shutdownNativeResources returns the hold from stopAllForQuit");
+  const m = /app\.on\("before-quit", \(event\) => \{([\s\S]*?)\n\}\);/.exec(src);
+  assert.ok(m, "before-quit has a handler that sees the event");
+  const body = m[1];
+  assert.match(body, /const pending = shutdownNativeResources\(\);\s*\n\s*if \(!pending\) return;/, "no preview, no hold");
+  assert.match(body, /event\.preventDefault\(\)/, "the first quit is cancelled");
+  assert.match(body, /app\.quit\(\)/, "and asked for again once the hold settles");
+  assert.match(body, /quitPhase === "draining"\) \{ event\.preventDefault\(\); return; \}/, "a quit during the wait is held too");
+  assert.match(src, /app\.on\("will-quit", \(\) => \{ shutdownNativeResources\(\);/, "will-quit still sweeps synchronously");
 });
 
 test("a link split across two chunks is still found", async () => {
