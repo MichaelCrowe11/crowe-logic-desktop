@@ -89,14 +89,14 @@
   const COPY = [
     ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
      "This is the operator over your CroweLM gateway, in your browser: reasoning, routing to the right expert, and rooms of specialists. Terminal, files and git live in the desktop app."],
-    ["Point the workspace at a project folder (Settings or ask the agent).",
+    ["Open the project folder the agent should work in (the button below, or Cmd+O).",
      "When a turn needs a terminal, files or git, the desktop app runs it on your own machine."],
     ["Give the agent a task. Try",
      "Ask it something. Try"],
-    ["Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).",
-     "Sign in with your Crowe ID. Pro unlocks the operator, the rooms and the named agents; the free plan can look around."],
-    ["Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.",
-     "Sign in with your Crowe ID to start. Pro unlocks the operator; the free plan can look around."],
+    ["Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.",
+     "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table, the rooms and the named agents."],
+    ["Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.",
+     "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day. Personal, Pro and Max open the whole CroweLM table."],
     ["summarize this repo", "summarize where this project stands"],
     ["run the tests and fix what fails", "talk me through two ways to approach this"],
   ];
@@ -119,6 +119,10 @@
     // pocket phrasing, over the top.
     window.addEventListener("crowe:mobile-ui", () => webWelcome(transcript, true));
     window.addEventListener("crowe:onboarding-shown", (event) => {
+      // A browser or a phone cannot open a local folder; the desktop button
+      // that offers to would be a promise this shell cannot keep.
+      const root = event && event.detail && event.detail.root;
+      if (root) root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
       const root = event.detail && event.detail.root;
       if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(webCopy);
     });

@@ -361,7 +361,7 @@
   const COPY = [
     ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
      "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and once you pair a desktop, its shell, files and git."],
-    ["Point the workspace at a project folder (Settings or ask the agent).",
+    ["Open the project folder the agent should work in (the button below, or Cmd+O).",
      "Pair a desktop in Settings under Remote machine, and it can work on that machine from here."],
     ["Give the agent a task. Try",
      "Ask it something. Try"],
@@ -399,6 +399,8 @@
     window.addEventListener("crowe:onboarding-shown", (event) => {
       const root = event.detail && event.detail.root;
       if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(mobiliseCopy);
+      // A phone has no local folder to open; the desktop's button would promise one.
+      if (root && root.querySelectorAll) root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
     });
   }
 

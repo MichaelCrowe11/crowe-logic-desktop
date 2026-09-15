@@ -2277,3 +2277,7 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .rc-base { margin: -12px 0 18px; font-size: var(--fs-sm); color: var(--muted); max-width: 62ch; }
 .rc-base b { color: var(--ink); font-weight: 600; }
 .rc-base code { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); background: var(--code-bg); padding: 1px 5px; border-radius: var(--r-xs); }
+
+/* Files pane at home: ask for a project instead of listing ~ */
+.files-empty { color: var(--muted); white-space: normal; line-height: 1.5; padding: 10px 12px 6px; cursor: default; }
+.files-open { margin: 6px 12px 12px; }

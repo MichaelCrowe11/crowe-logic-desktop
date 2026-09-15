@@ -869,7 +869,19 @@ if (composerFoot && typeof ResizeObserver === "function") {
   }).observe(composerFoot);
 }
 syncComposerInput();
-function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
+// First run: the workspace is the home folder until a project is opened, and
+// the first chip then opens a folder instead of asking the agent to summarise ~.
+let atHome = false;
+function applyWelcomeChips() {
+  const F = window.CroweFirstRun; if (!F) return;
+  const chips = transcript.querySelectorAll(".welcome .chips .chip");
+  const model = F.welcomeChips(atHome);
+  chips.forEach((c, i) => { if (!model[i]) return; c.textContent = model[i].text; c.dataset.action = model[i].action; });
+}
+function bindChips() {
+  applyWelcomeChips();
+  transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => (c.dataset.action === "open-folder" ? pickRepoFolder() : send(c.textContent))));
+}
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
 
@@ -943,7 +955,7 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
@@ -1017,7 +1029,7 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   /* This panel is the one place the Crowe Logic CLI is entered for you. When
      the tier withholds the shell the dock still works - the objective runs on
      the gateway - so this is a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
@@ -1884,8 +1896,19 @@ window.crowe.onBrowserNavigate((u)=>{navigate(u)});
 
 // ── Files ──
 async function loadTree(dir) {
+  const tree = $("files-tree");
+  // The home folder is where a fresh install lands; listing it is the one
+  // thing this pane must not do quietly. Ask for a project instead.
+  if (!dir && atHome && window.CroweFirstRun) {
+    tree.innerHTML = "";
+    const why = document.createElement("div"); why.className = "frow files-empty"; why.textContent = window.CroweFirstRun.FILES_EMPTY_HOME; tree.appendChild(why);
+    const go = document.createElement("button"); go.type = "button"; go.className = "primary sm files-open"; go.textContent = "Open a project folder";
+    go.onclick = () => pickRepoFolder(); tree.appendChild(go);
+    $("files-view").textContent = "";
+    return;
+  }
   const r = await window.crowe.fs.list(dir);
-  const tree = $("files-tree"); tree.innerHTML = "";
+  tree.innerHTML = "";
   /* A bridge with no filesystem answers with an empty list AND a reason, and
      may name where a filesystem exists (`remedy`, set by the web build for a
      Crowe Workspace). Rendering only the "../" row would read as an empty
@@ -1924,6 +1947,8 @@ async function refreshStatus() {
   const c = await window.crowe.getConfig();
   if (c.textPace) setTextPace(c.textPace);
   setCwd(c.cwd);
+  atHome = window.CroweFirstRun ? window.CroweFirstRun.workspaceIsHome(c.cwd, c.homeDir) : false;
+  applyWelcomeChips();
   refreshModelBadge(c);
   const total = (c.mcp || []).reduce((n, s) => n + s.tools, 0);
   const badge = $("mcp-badge");
@@ -4257,7 +4282,8 @@ async function doSignIn() {
 function showSignInPrompt() {
   clearWelcome();
   const b = addAssistant();
-  b.innerHTML = '<p class="said">Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.</p>';
+  b.innerHTML = '<p class="said"></p>';
+  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
@@ -4277,8 +4303,8 @@ async function maybeShowOnboarding(cfg) {
     '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
-    "<li>Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).</li>",
-    "<li>Point the workspace at a project folder (Settings or ask the agent).</li>",
+    "<li>" + esc(window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
+    "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
   ].join("");
@@ -4293,7 +4319,14 @@ async function maybeShowOnboarding(cfg) {
   // shell (the mark and an empty body) standing in the transcript as a blank
   // operator bubble. Remove the message.
   laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); (b.closest(".msg") || b).remove(); });
-  row.appendChild(signinBtn); row.appendChild(laterBtn);
+  // At home there is no project yet; opening one is the first move and the
+  // button says so. With a project open, sign-in leads.
+  const folderBtn = document.createElement("button");
+  folderBtn.className = atHome ? "primary" : "ghost"; folderBtn.textContent = "Open a project folder";
+  folderBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await pickRepoFolder(); });
+  if (atHome) { signinBtn.className = "ghost"; row.appendChild(folderBtn); row.appendChild(signinBtn); }
+  else { row.appendChild(signinBtn); row.appendChild(folderBtn); }
+  row.appendChild(laterBtn);
   b.appendChild(row);
   // Platform shells rewrite promises the local desktop can keep but they
   // cannot. Announce only after the card is complete so those rewrites do not
