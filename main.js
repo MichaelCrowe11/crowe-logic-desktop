@@ -744,9 +744,8 @@ function mcpConnect(name, spec) {
     });
     srv.notify = (method, params) => { try { send({ jsonrpc: "2.0", method, params }); } catch {} };
     proc.on("error", () => resolve({ error: "spawn failed" }));
-    // child_process reports (code, signal); a utility process reports (event, code).
-    proc.on("exit", (...args) => {
-      const code = spec.fork ? args[1] : args[0];
+    // Both report the code first: child_process as (code, signal), a utility process as (code).
+    proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
       if (MCP[name] === srv) { delete MCP[name]; PLUGIN_MANAGED.delete(name); }
