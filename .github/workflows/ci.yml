@@ -62,6 +62,7 @@ jobs:
       - name: Run the remaining node contract checks
         run: |
           node scripts/test-plan.js
+          node scripts/test-mail.js
           node scripts/test-version-parity.js
           node mobile/scripts/sync-version.js --check
           node scripts/test-brand-copy.js

@@ -82,6 +82,20 @@ four places only — everything else stays closed:
 Third-party official (later, curated): GitHub, Slack, Notion — via the same
 manifest, `official: true`, vetted commands only.
 
+### Built-in plugins (no server)
+
+A manifest entry may carry `"mcp": null` and a `builtin.tools` list instead of
+a command. Nothing is spawned: the tools live in `harness.js`, and `main.js`
+maps the id to them through `BUILTIN_PLUGIN_TOOLS`, so an entry can neither
+claim a built-in it does not own nor be treated as one while it names a server.
+The entry still declares the credentials (`envPrompts`, with `secret: false`
+on a host or an address so it is typed in the clear) and the tier rules, and
+enable and disable travel the same road as every other plugin. Mail is the
+first: `send_email` in `mail.js`, offered only while the plugin is on with a
+complete account, gated at Execute behind an approval card that shows the whole
+message. It exists as a built-in because no maintained MCP email server was
+found on npm to trust with a password (see the header of `mail.js`).
+
 ## Phases
 
 - **P1 — desktop-only (no backend dependency).** Bundled manifest, Settings

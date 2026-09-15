@@ -4016,7 +4016,9 @@ async function renderPlugins() {
         // Keys are entered by the user, stored in the plugin's config section,
         // and passed to the server as env — never rendered back.
         const env = document.createElement("div"); env.className = "plug-env";
-        env.innerHTML = p.envPrompts.map((e) => `<input type="password" data-key="${esc(e.key)}" placeholder="${esc(e.label)}" spellcheck="false">`).join("");
+        // A prompt marked secret: false is a host or an address, typed in the
+        // clear so a slip can be seen; everything else stays a password field.
+        env.innerHTML = p.envPrompts.map((e) => `<input type="${e.secret === false ? "text" : "password"}" data-key="${esc(e.key)}" placeholder="${esc(e.label)}" spellcheck="false" autocomplete="off">`).join("");
         const go = document.createElement("button"); go.type = "button"; go.className = "primary sm"; go.textContent = "Connect";
         go.addEventListener("click", () => doEnable(collectEnv(env)));
         env.appendChild(go); row.appendChild(env);
