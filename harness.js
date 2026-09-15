@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
-const { exec, execFile } = require("child_process");
+const { exec, execFile, execFileSync } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
@@ -67,6 +67,67 @@ function safeShellEnv(source = process.env) {
   try { fs.mkdirSync(rcDir, { recursive: true, mode: 0o700 }); } catch {}
   clean.ZDOTDIR = rcDir;
   return clean;
+}
+
+/* A packaged app opened from Finder or the Dock inherits launchd's PATH,
+   /usr/bin:/bin:/usr/sbin:/sbin, so everything Homebrew, nvm or volta installed
+   is invisible to spawn(). MCP plugin servers run through npx, exactly such a
+   binary, and the failure surfaced as "could not start: spawn failed" with no
+   further word. Ask the user's login shell for its PATH once (interactive and
+   login, so .zprofile and .zshrc both count) and keep the usual install
+   directories as a fallback for a shell that prints nothing. */
+// Windows ships too (Trusted Signing landed in 0.24.8's successor), and it has
+// no login shell to ask: the PATH a Windows app inherits is already the user's.
+// Directories are joined with the platform delimiter, and a command on Windows
+// may be node.exe or npx.cmd, so PATHEXT is tried the way cmd.exe would.
+const IS_WIN = process.platform === "win32";
+const KNOWN_TOOL_DIRS = IS_WIN ? [
+  path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs"),
+  path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "npm"),
+  path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".bun", "bin"),
+] : [
+  "/opt/homebrew/bin", "/usr/local/bin",
+  path.join(os.homedir(), ".volta", "bin"), path.join(os.homedir(), ".local", "bin"),
+  path.join(os.homedir(), ".bun", "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+];
+let loginPathCache = null;
+function loginShellPath({ shell = process.env.SHELL || "/bin/zsh", timeoutMs = 4000, fresh = false } = {}) {
+  if (loginPathCache !== null && !fresh) return loginPathCache;
+  let out = "";
+  if (!IS_WIN) {
+    try {
+      out = execFileSync(shell, ["-ilc", 'printf "%s" "$PATH"'], {
+        encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "ignore"],
+        env: { HOME: os.homedir(), USER: os.userInfo().username, SHELL: shell, TERM: "dumb", LANG: process.env.LANG || "en_US.UTF-8" },
+      });
+    } catch { out = ""; }
+  }
+  const parts = [];
+  for (const dir of [...String(out).split(path.delimiter), ...String(process.env.PATH || "").split(path.delimiter), ...KNOWN_TOOL_DIRS]) {
+    if (dir && !parts.includes(dir)) parts.push(dir);
+  }
+  loginPathCache = parts.join(path.delimiter);
+  return loginPathCache;
+}
+function findOnPath(command, PATH = process.env.PATH || "") {
+  if (!command) return null;
+  if (command.includes("/") || (IS_WIN && command.includes("\\"))) { try { return fs.statSync(command).isFile() ? command : null; } catch { return null; } }
+  const exts = IS_WIN && !path.extname(command) ? ["", ...String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  for (const dir of String(PATH).split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
+  }
+  return null;
+}
+// The environment a plugin server gets: the agent shell's filtered variables,
+// the plugin's own, and a PATH the user would recognise from their terminal.
+function pluginSpawnEnv(extra = {}) {
+  const env = { ...safeShellEnv(), ...(extra || {}) };
+  env.PATH = loginShellPath();
+  return env;
 }
 
 // ─── Output shaping ──────────────────────────────────────────────────────────
@@ -1658,7 +1719,7 @@ module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, parseBareCd, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,

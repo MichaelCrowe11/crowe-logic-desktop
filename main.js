@@ -701,7 +701,14 @@ function mcpConnect(name, spec) {
     let proc;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
+    const harness = require("./harness");
+    const env = harness.pluginSpawnEnv(spec.env || {});
+    // Resolve the binary ourselves so the failure names it. A Finder launch has
+    // no npx on PATH, and "spawn failed" told nobody that.
+    if (!harness.findOnPath(spec.command, env.PATH)) {
+      return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+    }
+    try { proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { return resolve({ error: String(e) }); }
     const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
     const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
@@ -724,7 +731,7 @@ function mcpConnect(name, spec) {
         }
       }
     });
-    proc.on("error", () => resolve({ error: "spawn failed" }));
+    proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
