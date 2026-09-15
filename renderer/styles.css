@@ -2278,6 +2278,9 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .rc-base b { color: var(--ink); font-weight: 600; }
 .rc-base code { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); background: var(--code-bg); padding: 1px 5px; border-radius: var(--r-xs); }
 
+/* Files pane at home: ask for a project instead of listing ~ */
+.files-empty { color: var(--muted); white-space: normal; line-height: 1.5; padding: 10px 12px 6px; cursor: default; }
+.files-open { margin: 6px 12px 12px; }
 /* ── Activity pane: what the agent is doing, live ── */
 #pane-activity { padding: 0; }
 .activity-head { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }

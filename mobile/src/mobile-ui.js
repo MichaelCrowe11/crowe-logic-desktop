@@ -361,7 +361,7 @@
   const COPY = [
     ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
      "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and once you pair a desktop, its shell, files and git."],
-    ["Point the workspace at a project folder (Settings or ask the agent).",
+    ["Open the project folder the agent should work in (the button below, or Cmd+O).",
      "Pair a desktop in Settings under Remote machine, and it can work on that machine from here."],
     ["Give the agent a task. Try",
      "Ask it something. Try"],
@@ -385,13 +385,18 @@
     // swap runs on every change to the transcript rather than once at load.
     // innerHTML rewriting would drop the card's buttons and their handlers, so
     // it is confined to the nodes that carry prose.
+    // A phone has no local folder to open; the desktop's button would promise one.
+    // Stripped here as well as on the event below, because the card can be built
+    // before this script has registered its listener, and then the event is gone.
+    const stripFolderButton = (root) => root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+    stripFolderButton(transcript);
     new MutationObserver((records) => {
       mobiliseWelcome(transcript);
       if (!records.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1))) return;
       // The card is appended empty and filled a statement later, so the pass
       // waits a turn. Only direct children are observed, so streaming text —
       // which lands inside a message that already exists — never triggers it.
-      setTimeout(() => transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy), 0);
+      setTimeout(() => { transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy); stripFolderButton(transcript); }, 0);
     }).observe(transcript, { childList: true });
     // The onboarding card is filled after its empty message node is appended.
     // Listen for the completed card as well as the DOM mutation so the phone
@@ -399,6 +404,7 @@
     window.addEventListener("crowe:onboarding-shown", (event) => {
       const root = event.detail && event.detail.root;
       if (root && root.querySelectorAll) root.querySelectorAll(".said").forEach(mobiliseCopy);
+      if (root && root.querySelectorAll) stripFolderButton(root);
     });
   }
 
