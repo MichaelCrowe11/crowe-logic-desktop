@@ -8,6 +8,7 @@
 //   requestApproval({kind,title,detail,why,risk,hash}): Promise<bool|{approved,expired}>,
 //   mcpTools(): tool[], mcpCall(name, args): Promise<string>,
 //   openUrl(u): void,
+//   printToPdf(html): Promise<Buffer>,   // optional; main.js prints a page in a hidden window
 //   growWrite(type, record): { ok, id } | { ok: false, error },  // grower's store
 //   growRead(type): row[],
 //   journal(event): void,      // append-only audit stream; never read back as state
@@ -20,6 +21,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { exec, execFile } = require("child_process");
 const { GROW_SCHEMA, GROW_TYPES, growValidate } = require("./grow-schema");
+const Doc = require("./export-document");
 
 // ─── Limits ──────────────────────────────────────────────────────────────────
 const MAX_ROUNDS = 24;
@@ -201,22 +203,41 @@ function classifyCommand(command) {
    never echoed - not into the prompt, not into the journal, not into the approval
    card. Only its kind. */
 const SECRET_VALUE_RES = [
-  { name: "a private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
-  { name: "an AWS access key id", re: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: "a live Stripe secret key", re: /\bsk_live_[0-9a-zA-Z]{16,}\b/ },
-  { name: "a live Stripe restricted key", re: /\brk_live_[0-9a-zA-Z]{16,}\b/ },
-  { name: "a GitHub token", re: /\bgh[pousr]_[0-9A-Za-z]{20,}\b/ },
-  { name: "a Slack token", re: /\bxox[abposr]-[0-9A-Za-z-]{12,}\b/ },
-  { name: "an Anthropic API key", re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
-  { name: "an OpenAI-style API key", re: /\bsk-[A-Za-z0-9]{32,}\b/ },
-  { name: "a Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
-  { name: "a signed token (JWT)", re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  { name: "a private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+    // The header is enough to know one is there; taking it out means the body too, to the END line or the end of the text.
+    span: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/ },
+  // No word boundaries around the distinctive prefixes: a key glued to a word,
+  // as in notes_sk_live_... or x<key> or <key>_, is still that key, and the
+  // export_document name refusal and redaction lean on this list. The prefixes
+  // are specific enough on their own; only the generic sk- shape keeps a guard
+  // against the letter before it, since task-<32 chars> is ordinary text.
+  { name: "an AWS access key id", re: /AKIA[0-9A-Z]{16}/ },
+  { name: "a live Stripe secret key", re: /sk_live_[0-9a-zA-Z]{16,}/ },
+  { name: "a live Stripe restricted key", re: /rk_live_[0-9a-zA-Z]{16,}/ },
+  { name: "a GitHub token", re: /gh[pousr]_[0-9A-Za-z]{20,}/ },
+  { name: "a Slack token", re: /xox[abposr]-[0-9A-Za-z-]{12,}/ },
+  { name: "an Anthropic API key", re: /sk-ant-[A-Za-z0-9_-]{20,}/ },
+  { name: "an OpenAI-style API key", re: /(?<![A-Za-z0-9])sk-[A-Za-z0-9]{32,}/ },
+  { name: "a Google API key", re: /AIza[0-9A-Za-z_-]{35}/ },
+  { name: "a signed token (JWT)", re: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
 ];
 function scanForSecrets(content) {
   const s = String(content ?? "");
   const found = [];
   for (const p of SECRET_VALUE_RES) if (p.re.test(s)) found.push(p.name);
   return found;
+}
+/* The same list, used on text that is about to be shown or kept - a tool card, a
+   result line, a journal row - rather than on text about to be written. The
+   value goes; its kind stays, in brackets, so the reader still learns what was
+   there without learning it. */
+function redactSecrets(text) {
+  let s = String(text ?? "");
+  for (const p of SECRET_VALUE_RES) {
+    const re = p.span || p.re;
+    s = s.replace(new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"), `[redacted: ${p.name}]`);
+  }
+  return s;
 }
 
 /* Paths whose contents decide how software is built, shipped, or resolved. A
@@ -251,6 +272,7 @@ const DELIVERY = {
   submit_verdict: "read_only",
   edit_file: "compensatable", write_file: "compensatable", log_grow: "compensatable",
   compose_workflow: "compensatable",   // a draft row in the Runbook; one click to delete
+  export_document: "compensatable",    // a new file under exports/, never over an old one
 
   run_shell: "varies",       // resolved per command, below
 };
@@ -324,8 +346,9 @@ function escapesWorkspace(ctx, abs) {
     return !(target === root || target.startsWith(root + path.sep));
   } catch { return false; }
 }
-async function gateOutsideWorkspace(ctx, state, relPath, kind) {
-  const abs = resolvePath(ctx, relPath);
+/* `abs` may be handed in by a caller that resolved the destination before it
+   awaited anything, so the path judged here is the path it later writes. */
+async function gateOutsideWorkspace(ctx, state, relPath, kind, abs = resolvePath(ctx, relPath)) {
   if (!escapesWorkspace(ctx, abs)) return { ok: true };
   return await gateAction(ctx, state, {
     risk: RISK.STRICT, why: `writes ${abs}, which is outside the workspace the user opened`,
@@ -400,6 +423,14 @@ const BUILTIN_TOOLS = [
   { type: "function", function: { name: "open_url",
     description: "Open a URL in the in-app browser pane for the user to see.",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } } },
+  { type: "function", function: { name: "export_document",
+    description: "Create a document for the user from Markdown and save it under exports/ in the workspace. pdf prints a styled page to PDF, html saves that page as one standalone file, md saves the Markdown itself. Use this when the user asks for a report, brief, summary, letter, or anything they will read or send rather than run: write the whole document, then call this once. The result names the saved path. An existing file with that name is left alone and the new one gets a numbered name. Remote images are not fetched; only embedded data images are drawn.",
+    parameters: { type: "object", properties: {
+      markdown: { type: "string", description: "The whole document in Markdown: headings, paragraphs, lists, tables, code blocks, links." },
+      filename: { type: "string", description: "A name without a directory, e.g. \"q3-summary\". The extension follows the format." },
+      format: { type: "string", enum: ["pdf", "html", "md"], description: "pdf unless the user named a format." },
+      title: { type: "string", description: "Optional page title; defaults to the first heading." },
+    }, required: ["markdown", "filename", "format"] } } },
 ];
 
 /* The grower's own store, writable.
@@ -602,6 +633,69 @@ function toolListDir(ctx, args) {
   return lines.join("\n") || "(empty directory)";
 }
 
+/* The operator handing the user a file they can read or send, rather than a
+   source file or a wall of chat. Markdown in; out comes the page as .html, the
+   page printed to .pdf through the hook main.js attaches (harness.js never
+   requires electron, so node tests run with the hook stubbed), or the Markdown
+   itself as .md, saved under exports/ in the workspace. The gates a write_file
+   passes stand in front of it: the tier (checked by the caller), the workspace
+   boundary through symlinks, so an exports/ that points elsewhere asks first,
+   and the secret scanner over everything the model supplied: a name that trips
+   it is refused, content that trips it asks. The file name is a name, not a
+   path; export-document.js decides what it may be. */
+async function toolExportDocument(ctx, state, args) {
+  const format = String(args.format ?? "").trim().toLowerCase();
+  // The rejected value is not repeated: the result line becomes a tool_result
+  // event and the journal row's output_summary, and a credential-shaped string
+  // handed in as the format would otherwise be persisted by both.
+  if (!Object.hasOwn(Doc.FORMATS, format)) return "rejected: format must be pdf, html, or md";
+  const markdown = String(args.markdown ?? "");
+  if (!markdown.trim()) return "rejected: markdown is empty, so there is nothing to export";
+  if (markdown.length > Doc.MAX_MARKDOWN_CHARS) return `rejected: the document is ${markdown.length} characters and the limit is ${Doc.MAX_MARKDOWN_CHARS}. Split it into parts.`;
+  /* A name that looks like a credential is refused, not gated. The path is what
+     every later line repeats - the approval card's "why", the journal rows, the
+     result, the verifier's list of changes - so a gate that named the path would
+     put the value in each of them. The Markdown and the title are content and go
+     through the gate below, which names the kind and never the value. */
+  const stem = Doc.exportFileName(args.filename);
+  const nameLeak = scanForSecrets(`${String(args.filename ?? "")}\n${stem}`);
+  if (nameLeak.length) return `rejected: the file name looks like ${nameLeak.join(" and ")}. Give the document a plain name and call again.`;
+  const rel = path.join("exports", `${stem}.${format}`);
+  /* Resolved once, here, before anything awaits. The user can switch folders
+     while the approval card is up or the PDF is printing, and a destination read
+     from the workspace afterwards is a file landing somewhere the containment
+     check never looked at. From here on only `dest` is used. */
+  const dest = resolvePath(ctx, rel);
+  /* The title is decided here, before the gate, and scanned with the rest: a
+     heading with its markup stripped can read as a key the raw line did not. */
+  const title = Doc.documentTitle(markdown, args.title, stem);
+  const supplied = [markdown, String(args.filename ?? ""), String(args.title ?? ""), title].join("\n");
+  for (const gate of [() => gateOutsideWorkspace(ctx, state, rel, "export_document", dest),
+    () => gateSecretContent(ctx, state, rel, supplied, "export_document")]) {
+    const g = await gate();
+    if (!g.ok) return g.text;
+  }
+  let bytes;
+  if (format === "md") bytes = Buffer.from(markdown.endsWith("\n") ? markdown : markdown + "\n", "utf8");
+  else {
+    const html = Doc.documentHtml(markdown, { title });
+    if (format === "html") bytes = Buffer.from(html, "utf8");
+    else {
+      if (typeof ctx.printToPdf !== "function") return "error: this build has no PDF printer attached. Export the document as html or md instead.";
+      try { bytes = await ctx.printToPdf(html); }
+      catch (e) { return `error: printing the PDF failed (${String((e && e.message) || e).slice(0, 200)}). Export as html instead, or try once more.`; }
+      if (!bytes || !bytes.length) return "error: the PDF printer returned an empty document. Export as html instead.";
+    }
+  }
+  let saved;
+  try { saved = await Doc.saveExport(path.dirname(dest), stem, format, bytes); }
+  catch (e) { return `error: could not save the document (${String((e && e.message) || e).slice(0, 200)})`; }
+  const name = path.basename(saved.file);
+  // The title went into the document as the user approved it; the line about the document does not repeat a value.
+  return `saved ${name} to ${saved.file} (${format}, ${bytes.length} bytes, titled "${redactSecrets(title)}")`
+    + (saved.renamed ? `. ${stem}.${format} already existed and was left alone, so this one is ${name}.` : "");
+}
+
 // Official plugins declare per-tool tiers in their manifest. A plugin can add
 // capability, never widen autonomy: its tools pass the same gate as built-ins.
 // Unmanaged (hand-configured) MCP servers keep their historic behavior.
@@ -631,7 +725,7 @@ async function execTool(ctx, name, args, route, state) {
        this block: it may look, and where the tier already allowed it, it may
        build. That is all. */
     if (route && route.verify) {
-      if (name === "edit_file" || name === "write_file" || name === "log_grow" || (name && name.startsWith("mcp__")))
+      if (name === "edit_file" || name === "write_file" || name === "log_grow" || name === "export_document" || (name && name.startsWith("mcp__")))
         return "blocked: the verifier does not change anything. Record what is wrong in your verdict and leave the fixing to the operator.";
       if (name === "run_shell" && classifyCommand(args.command).risk >= RISK.REVIEW)
         return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
@@ -646,10 +740,10 @@ async function execTool(ctx, name, args, route, state) {
       return await ctx.mcpCall(name, args);
     }
     const tier = ctx.loadConfig().autonomy || "edit";
-    if ((name === "run_shell" || name === "write_file" || name === "edit_file") && tier === "plan")
+    if ((name === "run_shell" || name === "write_file" || name === "edit_file" || name === "export_document") && tier === "plan")
       return "blocked: Plan mode is read-only. Do not change anything; finish by writing a numbered plan and ask the user to approve by switching to Edit or Execute.";
     if (name === "run_shell" && tier !== "execute") return `blocked: shell execution is disabled in "${tier}" autonomy mode. Ask the user to switch autonomy to Execute.`;
-    if ((name === "write_file" || name === "edit_file") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
+    if ((name === "write_file" || name === "edit_file" || name === "export_document") && tier === "readonly") return "blocked: file writes are disabled in read-only autonomy mode.";
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
       const m = /^\s*cd\s+(.+)$/.exec(args.command || "");
@@ -704,6 +798,11 @@ async function execTool(ctx, name, args, route, state) {
       const shown = Object.entries(v.record).filter(([k]) => k !== "id").map(([k, x]) => `${k}=${x}`).join(", ");
       return `${v.record.id ? "corrected" : "logged"} ${args.type} record ${res.id}: ${shown}`;
     }
+    /* A document is a write and is gated like one, but it does not go through
+       proposeEdit: a PDF has no diff to review, and exports/ is the tool's own
+       output folder, not source. The review that matters is the document itself,
+       which the result points at, and nothing that already exists is replaced. */
+    if (name === "export_document") return await toolExportDocument(ctx, state, args);
     if (name === "search") return await toolSearch(ctx, args);
     if (name === "list_dir") return toolListDir(ctx, args);
     if (name === "open_url") {
@@ -783,9 +882,27 @@ function snapshotBefore(ctx, relPath) {
     return file ? { path: String(relPath), before: file } : null;
   } catch { return null; }
 }
+/* The renderer draws a tool card from the arguments the moment the call is made,
+   before the tool has run and before any gate has spoken. The call itself runs
+   on the arguments as sent; the card gets a copy of an export's arguments with
+   every string run through the scanner. The name and the title are printed on
+   the card verbatim, and the activity brief prints the whole object, so a field
+   the schema does not name, or a format about to be refused, is shown too. */
+function shownArgs(name, a) {
+  if (name !== "export_document" || !a || typeof a !== "object") return a;
+  const out = { ...a };
+  // A value the schema did not ask for (an array, an object) is shown as its
+  // JSON, redacted the same way, so a key hidden in a list is not shown either.
+  for (const k of Object.keys(out)) {
+    if (typeof out[k] === "string") out[k] = redactSecrets(out[k]);
+    else if (out[k] && typeof out[k] === "object") out[k] = redactSecrets(JSON.stringify(out[k]));
+  }
+  return out;
+}
 function mutationLabel(name, args) {
   if (name === "run_shell") return `run_shell ${String(args.command || "").slice(0, 120)}`;
   if (name === "log_grow") return `log_grow ${args.type || ""}`;
+  if (name === "export_document") return `export_document ${Doc.exportFileName(args.filename)}.${args.format || ""}`;
   if (args && args.path) return `${name} ${args.path}`;
   return name;
 }
@@ -794,6 +911,7 @@ function didMutate(ctx, name, args, text) {
   if (name === "run_shell") return !classifyCommand(args.command).readOnly && !/^cwd -> /.test(text);
   if (name === "edit_file" || name === "write_file") return /^(applied edit|wrote )/.test(text);
   if (name === "log_grow") return /^(logged|corrected)/.test(text);
+  if (name === "export_document") return /^saved /.test(text);
   if (String(name || "").startsWith("mcp__")) { const t = pluginToolTier(ctx, name); return t === "edit" || t === "execute"; }
   return false;
 }
@@ -909,9 +1027,9 @@ function workspaceNotes(cwd) {
   return null;
 }
 const TIER_LINES = {
-  plan: "PLAN: read-only exploration. Inspect freely (read_file, search, list_dir, open_url) but change nothing. Investigate the task, then finish by writing a short numbered plan of the changes you would make, and ask the user to approve by switching to Edit or Execute. Do not call run_shell, write_file, or edit_file.",
+  plan: "PLAN: read-only exploration. Inspect freely (read_file, search, list_dir, open_url) but change nothing. Investigate the task, then finish by writing a short numbered plan of the changes you would make, and ask the user to approve by switching to Edit or Execute. Do not call run_shell, write_file, edit_file, or export_document.",
   readonly: "READ-ONLY: you may inspect (read_file, search, list_dir, open_url) but shell and all writes are blocked. Say what tier a blocked action needs instead of retrying it.",
-  edit: "EDIT: you may inspect and change files (edit_file/write_file, each reviewed by the user before applying). Shell is blocked; suggest commands for the user instead of retrying run_shell.",
+  edit: "EDIT: you may inspect and change files (edit_file/write_file, each reviewed by the user before applying) and hand the user a document with export_document. Shell is blocked; suggest commands for the user instead of retrying run_shell.",
   execute: "EXECUTE: full access. Shell commands run for real in the user's workspace; be deliberate with anything destructive.",
 };
 const APPROVAL_LINES = {
@@ -959,6 +1077,7 @@ async function buildSystemPrompt(ctx) {
     "## How you work",
     "- Investigate before acting: search to locate, list_dir to orient, read_file for exactly the region you need. Never edit a file you have not read this turn.",
     "- Prefer edit_file (exact string replace) for existing files; write_file is for new files. Edits go through the user's review; a rejected edit means change approach, not retry.",
+    "- When the user asks for a document (a report, a brief, a summary, a letter, notes to hand to someone), write it in full and call export_document once, as pdf unless they named a format, then say where it was saved. Source files still go through write_file.",
     "- After changing something, verify it: run the project's tests or build when the tier allows, or re-read the changed region. Say how you verified.",
     verifies ? "- A second pass then checks a mutating turn independently, with its own tools, against what the user asked for. Make that possible: say exactly what you changed and exactly how you checked it, and if you did not check something, say so rather than implying you did." : "",
     "- The shell is one-shot and non-interactive. cwd persists only via a bare `cd <dir>`. Never run destructive commands (rm -rf, git reset --hard, force-push) unless the user explicitly asked.",
@@ -1379,7 +1498,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       if (deps.isAborted()) break;
       let a = {}; try { a = JSON.parse(tc.function?.arguments || "{}"); } catch {}
       const name = tc.function?.name;
-      deps.send({ type: "tool_call", name, args: a, stage: opts.stage });
+      deps.send({ type: "tool_call", name, args: shownArgs(name, a), stage: opts.stage });
       let out;
       if (opts.onVerdict && name === "submit_verdict") {
         opts.onVerdict(a); closed = true;
@@ -1633,7 +1752,7 @@ module.exports = {
   BUILTIN_TOOLS, VERDICT_TOOL, isSecretPath, commandTouchesSecret, safeShellEnv, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
-  shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, escapesWorkspace,
+  shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, redactSecrets, shownArgs, escapesWorkspace,
   gateOutsideWorkspace, gateSecretContent,
   spool, writeArtifact, verdictReceipt, rejectionPrompt, isTransient,
 };
