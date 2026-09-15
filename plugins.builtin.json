@@ -282,6 +282,50 @@
       ]
     },
     {
+      "id": "mail",
+      "name": "Mail",
+      "description": "Send mail from your own account over SMTP with an app password. Sending requires Execute autonomy, and every message stops at an approval card that shows the whole text unless approvals are switched off.",
+      "category": "communication",
+      "spaces": [
+        "chat",
+        "projects"
+      ],
+      "official": true,
+      "available": true,
+      "mcp": null,
+      "builtin": {
+        "tools": [
+          "send_email"
+        ]
+      },
+      "envPrompts": [
+        {
+          "key": "SMTP_HOST",
+          "label": "SMTP host, with :port if not 587 (465 is implicit TLS)",
+          "secret": false
+        },
+        {
+          "key": "SMTP_USER",
+          "label": "Mail address you send from",
+          "secret": false
+        },
+        {
+          "key": "SMTP_PASSWORD",
+          "label": "App password"
+        }
+      ],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "execute"
+        }
+      ],
+      "glyph": "meridian",
+      "chips": [
+        "Draft a reply to the message I pasted and send it once I approve"
+      ]
+    },
+    {
       "id": "crowe-cli",
       "name": "Crowe CLI",
       "description": "The Crowe agent CLI as a tool server: python execution, file ops, and web search.",
