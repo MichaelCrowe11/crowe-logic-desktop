@@ -880,6 +880,7 @@ function summary(room) {
     spentUsd: room.spentUsd || 0, halted: room.halted || "",
     unread: unreadCount(room), preview: preview(room),
     working: room.agents.some((a) => a.state === "working" || a.state === "queued"),
+    workingAgents: room.agents.filter((a) => a.state === "working" || a.state === "queued").map((a) => a.agentId),
     routines: (room.routines || []).filter((r) => r.enabled).length,
     openAsk: room.messages.some((m) => m.ask && m.ask.state === "open"),
   };
