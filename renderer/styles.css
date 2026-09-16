@@ -2644,7 +2644,7 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .rmsg-status { text-align: right; padding: 3px 12px 0; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .rmsg-status[data-state="read"] { color: var(--muted); }
 /* The typing bubble: the seat's mark, turning, beside three dots. */
-.rmsg-typing { display: grid; grid-template-columns: 24px auto; column-gap: 8px; align-items: end; margin-top: 12px; }
+.rmsg-typing { display: grid; grid-template-columns: 24px max-content; column-gap: 8px; align-items: end; justify-items: start; margin-top: 12px; }
 .rmsg-typing .rmsg-mark { width: 22px; height: 22px; margin-bottom: 3px; display: block; }
 .rmsg-dots { display: inline-flex; gap: 4px; align-items: center; padding: 11px 13px; border-radius: 18px; border-bottom-left-radius: 6px;
   background: var(--bubble-them); border: 1px solid var(--line); border-top-color: var(--hair-top); box-shadow: var(--z1); }
