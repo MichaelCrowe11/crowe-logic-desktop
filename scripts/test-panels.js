@@ -1510,6 +1510,28 @@ const tests = [
     expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
   },
   {
+    // The agent panel used to type "crowe-logic" and Enter into its console the
+    // moment the PTY came up, so every agent panel opened as a CLI session (and
+    // every plain terminal once did too). Terminals are shells now. This stands
+    // in a PTY that says yes and records every byte written to it, mounts each
+    // terminal-backed panel type, and asserts nothing was typed for the
+    // operator. The source check closes the other door: no call site may hand
+    // pty.input a string literal, so an auto-enter cannot return on a path this
+    // stub does not walk.
+    name: "no terminal types a command for the operator on start",
+    body: `const real = window.crowe.pty; const typed = []; const opened = [];
+      window.crowe.pty = { ...real, start: async (o) => ({ ok: true, id: o.id }), input: (id, data) => typed.push(String(data)), resize() {}, close: async () => ({ ok: true }) };
+      try {
+        for (const [type, seed] of [["agent", { title: "Probe agent" }], ["terminal", {}], ["system", {}]]) opened.push(await addPanel(type, seed));
+        await new Promise((r) => setTimeout(r, 150));
+        const src = await (await fetch("renderer.js")).text();
+        const literal = /pty\\.input\\([^,)]+,\\s*["'\`]/.test(src);
+        const head = document.querySelector('[data-id="' + opened[0].id + '"] .agent-operation-head small');
+        return { typed: typed.join("|"), literal, label: head ? head.textContent : null, mounted: opened.length };
+      } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
+    expect: { typed: "", literal: false, label: "AGENT", mounted: 3 },
+  },
+  {
     name: "lane navigation exposes the current page and follows programmatic changes",
     body: `__resetSpaces();
       projLane = "deployments"; setSpace("projects");

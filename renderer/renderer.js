@@ -964,7 +964,8 @@ async function mountTerminal(p, body, systemTerminal=false) {
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
      one or not - and left no ordinary shell to run anything else from. The
-     agent panel is the one place the CLI is entered for you. */
+     agent panel's console is a plain shell too; nothing is typed into any
+     terminal for you. Commands go in when the operator wants them. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
@@ -976,7 +977,7 @@ window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 async function mountWorkspaceAgent(p, body, seed={}) {
   body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
   const slot=body.querySelector(".agent-terminal-slot");
   const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
@@ -985,9 +986,11 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   /* The panel head wears the logotype, same as the header and the thinking
      indicator — one mark everywhere, and here the motion is doing work: turning
      rotors mean the runtime is alive and reasoning, still ones mean it is
-     waiting on you. The <small> beside it reads "CLI AGENT" rather than "CROWE
-     LOGIC CLI AGENT" because the drawing already says the name and setting it
-     twice, once drawn and once in caps, just looks like nobody checked.
+     waiting on you. The <small> beside it reads "AGENT" rather than "CROWE
+     LOGIC AGENT" because the drawing already says the name and setting it
+     twice, once drawn and once in caps, just looks like nobody checked. It no
+     longer says "CLI": the console below is a plain shell and the objective
+     runs on the gateway agent, so there is no CLI in this panel to name.
 
      This replaced a CroweMark whorl. Nothing is lost: the whorl's states were
      idle / reasoning / failed, and only "reasoning" ever animated, which is
@@ -1030,10 +1033,15 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   const CHIP={booting:"BOOTING",running:"ACTIVE",verified:"DONE",waiting:"PAUSED",failed:"OFFLINE",idle:"READY"};
   const setState=(chipState,markState,label)=>{chip.dataset.state=chipState;chip.textContent=CHIP[chipState]||chipState.toUpperCase();mark.setState(markState);if(label)status.textContent=label};
   const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
-  /* This panel is the one place the Crowe Logic CLI is entered for you. When
-     the tier withholds the shell the dock still works - the objective runs on
-     the gateway - so this is a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  /* The console is a plain shell. It used to type "crowe-logic" and Enter into
+     the PTY the moment it opened, so every agent panel was a CLI session whether
+     the operator wanted one or not - and the name did not match the binary this
+     package ships (`crowe`), so on a clean machine the first line of every
+     console was "command not found". Nothing is typed for you now; the shell
+     waits at its prompt for whatever the operator wants to run. The objective
+     runs on the gateway agent, not in this shell, so when the tier withholds
+     the shell the dock still works - a degraded panel, not a dead one. */
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){setState("idle","idle","Ready");addEvent("runtime","console shell ready")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
