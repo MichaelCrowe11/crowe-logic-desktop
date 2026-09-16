@@ -131,6 +131,7 @@ contextBridge.exposeInMainWorld("crowe", {
     update: (id, patch) => ipcRenderer.invoke("crowe:rooms:update", { id, patch: patch || {} }),
     markRead: (id) => ipcRenderer.invoke("crowe:rooms:mark-read", { id }),
     answer: (id, messageId, optionId) => ipcRenderer.invoke("crowe:rooms:answer", { id, messageId, optionId }),
+    react: (id, messageId, kind) => ipcRenderer.invoke("crowe:rooms:react", { id, messageId, kind }),
     forward: (fromId, messageId, toId, to) => ipcRenderer.invoke("crowe:rooms:forward", { fromId, messageId, toId, to: to || null }),
     routineAdd: (id, spec) => ipcRenderer.invoke("crowe:rooms:routine-add", { id, spec: spec || {} }),
     routineUpdate: (id, routineId, patch) => ipcRenderer.invoke("crowe:rooms:routine-update", { id, routineId, patch: patch || {} }),

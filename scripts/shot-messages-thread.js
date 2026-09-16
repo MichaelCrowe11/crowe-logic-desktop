@@ -136,6 +136,15 @@ app.whenReady().then(async () => {
     check(/^Read \d/.test(done.status) && done.statusAfterOp, `Read carries the time and sits under your last text (${JSON.stringify(done.status)})`);
     await js(`SHOW()`); await sleep(200);
     await shot("03-solo-answered");
+    // React to the last worker bubble: the bar's word becomes a chip on the bubble, gold because it is yours.
+    await js(`(function(){ const rows=[...R().querySelectorAll('.room-thread .rmsg:not(.from-operator):not(.is-progress)')]; const b=rows[rows.length-1].querySelector('.rmsg-react-btn[data-kind="good"]'); b.click(); return true; })()`);
+    await sleep(700);
+    const reacted = await js(`(function(){ const chips=[...R().querySelectorAll('.rmsg-chip')]; return { n: chips.length, text: chips.map(c=>c.textContent.trim()), mine: chips.filter(c=>c.classList.contains('mine')).length, onLast: !!R().querySelectorAll('.room-thread .rmsg:not(.from-operator):not(.is-progress)')[R().querySelectorAll('.room-thread .rmsg:not(.from-operator):not(.is-progress)').length-1].querySelector('.rmsg-chip') }; })()`);
+    console.log("reacted:", JSON.stringify(reacted));
+    check(reacted.n === 1 && reacted.text[0] === "Good" && reacted.mine === 1 && reacted.onLast, `Good sits on the last worker bubble as your chip (${JSON.stringify(reacted)})`);
+    const stored = (await js(`window.crowe.rooms.load(${JSON.stringify(id)})`)).messages.filter((m) => m.reactions).map((m) => m.reactions.map((r) => r.by + ":" + r.kind).join(","));
+    check(stored.length === 1 && stored[0] === ":operator:good", `the reaction is stored on the message (${JSON.stringify(stored)})`);
+    await shot("03b-reaction");
     await js(`document.body.classList.add("dark"); true`);
     await sleep(300);
     await shot("04-solo-dark");

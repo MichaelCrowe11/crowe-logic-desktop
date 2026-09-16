@@ -89,4 +89,16 @@ assert.strictEqual(M.filterWorkers(agents, "").length, agents.length);
   assert.strictEqual(M.typingLabel([]), "");
 }
 
-console.log("ok      messages: rows, times, edition roster, composer words, runs, delivery and typing");
+
+// ── reactions ──
+{
+  const E = require("../rooms/engine.js");
+  assert.deepStrictEqual(M.REACTIONS.map((r) => r.kind), E.REACTIONS, "the bar offers exactly the words the engine accepts, in order");
+  for (const r of M.REACTIONS) assert.strictEqual(r.label, E.REACTION_LABEL[r.kind], `one label for ${r.kind}`);
+  assert.deepStrictEqual(M.reactionChips({}), [], "no reactions, no chips");
+  assert.deepStrictEqual(M.reactionChips({ reactions: [{ by: ":operator", kind: "why", at: 1 }, { by: "studio", kind: "good", at: 2 }, { by: ":operator", kind: "good", at: 3 }] }),
+    [{ kind: "good", label: "Good", count: 2, mine: true }, { kind: "why", label: "Why", count: 1, mine: true }], "chips in bar order, counted, mine when the operator put one there");
+  assert.deepStrictEqual(M.reactionChips({ reactions: [{ by: "studio", kind: "no", at: 1 }] }), [{ kind: "no", label: "No", count: 1, mine: false }], "a seat's reaction is not mine");
+}
+
+console.log("ok      messages: rows, times, edition roster, composer words, runs, delivery, typing and reactions");

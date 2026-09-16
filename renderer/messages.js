@@ -124,6 +124,17 @@
     if (d.state === "delivered") return "Delivered";
     return d.at && typeof fmtTime === "function" ? `Read ${fmtTime(d.at)}` : "Read";
   }
+  /* Reactions: the same four words rooms/engine.js accepts, in the order the
+     bar offers them. A bubble wears one chip per kind present, counted, and
+     marked mine when the operator put it there so a second tap takes it off. */
+  const REACTIONS = [{ kind: "good", label: "Good" }, { kind: "more", label: "More" }, { kind: "no", label: "No" }, { kind: "why", label: "Why" }];
+  function reactionChips(m, me) {
+    me = me || OPERATOR;
+    const list = Array.isArray(m && m.reactions) ? m.reactions.filter(Boolean) : [];
+    if (!list.length) return [];
+    return REACTIONS.filter((r) => list.some((x) => x.kind === r.kind))
+      .map((r) => ({ kind: r.kind, label: r.label, count: list.filter((x) => x.kind === r.kind).length, mine: list.some((x) => x.kind === r.kind && x.by === me) }));
+  }
   // Seats that should show a typing bubble: working or queued, in roster order.
   function typingSeats(agents) {
     return (agents || []).filter((a) => a && (a.state === "working" || a.state === "queued")).map((a) => a.agentId || a.id);
@@ -136,5 +147,5 @@
     return `${names[0]}, ${names[1]} and ${names.length - 2} more are typing`;
   }
   return { DEVELOPER_DOMAINS, relativeTime, rowModel, visibleWorkers, visibleTemplates, conversationTitle, composerPlaceholder, filterWorkers,
-    sameRun, runPosition, deliveryState, deliveryLabel, typingSeats, typingLabel };
+    sameRun, runPosition, deliveryState, deliveryLabel, typingSeats, typingLabel, REACTIONS, reactionChips };
 });

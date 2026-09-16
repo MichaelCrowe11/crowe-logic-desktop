@@ -1737,7 +1737,7 @@ async function mountRoom(p, body, seed = {}) {
     return `${day} ${fmtTime(ms)}`;
   };
   // The content itself, not its length: a note rewritten to the same length must still repaint.
-  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${m.content || ""}`;
+  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${(m.reactions || []).map((r) => r.by + ":" + r.kind).join(",")}|${m.content || ""}`;
   const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 90;
   let pendingNew = 0;
 
@@ -1776,9 +1776,22 @@ async function mountRoom(p, body, seed = {}) {
         </div>
         ${m.quote ? `<div class="rmsg-quote" title="Answering this question">${esc(m.quote)}</div>` : ""}
         <div class="rmsg-body">${md(m.content || "")}</div>
+        <div class="rmsg-reactions" hidden></div>
         <div class="rmsg-ask hidden"></div>
-        ${!mine ? '<div class="rmsg-actions"><button class="rmsg-forward ghost sm" type="button" title="Carry this message into another room">Forward</button></div>' : ""}
+        ${!mine ? `<div class="rmsg-actions">${m.kind !== "progress" ? `<span class="rmsg-react" role="group" aria-label="React to this message">${((window.CroweMessages || {}).REACTIONS || []).map((r) => `<button type="button" class="rmsg-react-btn" data-kind="${r.kind}" title="${esc(r.label)}: the worker reads this on its next turn">${esc(r.label)}</button>`).join("")}</span>` : ""}<button class="rmsg-forward ghost sm" type="button" title="Carry this message into another room">Forward</button></div>` : ""}
       </div>`;
+    /* Reactions. The bar sits with the other actions and shows on hover; a
+       chip on the bubble's corner shows what has been said about it, gold
+       when it was the operator, and a tap on a chip of your own takes it off. */
+    {
+      const M = window.CroweMessages;
+      const chips = M ? M.reactionChips(m) : [];
+      const rx = el.querySelector(".rmsg-reactions");
+      rx.hidden = !chips.length;
+      rx.innerHTML = chips.map((c) => `<button type="button" class="rmsg-chip${c.mine ? " mine" : ""}" data-kind="${c.kind}" title="${c.mine ? "Take this reaction off" : "React the same way"}">${esc(c.label)}${c.count > 1 ? ` <i>${c.count}</i>` : ""}</button>`).join("");
+      const toggle = async (kind) => { const r = await window.crowe.rooms.react(p.roomId, m.id, kind); if (r?.error) note(r.error, "is-error"); await refresh(); };
+      el.querySelectorAll(".rmsg-react-btn, .rmsg-chip").forEach((b) => b.addEventListener("click", () => toggle(b.dataset.kind)));
+    }
     // The operator is a person, not a mark. Only agents wear one, their own.
     el.dataset.author = m.author || "";
     if (!mine) mountWorkerMark(el.querySelector(".rmsg-mark"), workerOf(m.author), "rest");
