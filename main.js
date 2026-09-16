@@ -14,20 +14,7 @@ const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
 const Repos = require("./repos");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
-  hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, resolveTestProfile, MAX_MESSAGE_CHARS } = require("./main-security");
-
-/* A test launch of a packaged build needs a profile that is not the user's,
-   and Electron does not take one from HOME on macOS: three test launches on
-   2026-09-15 shared a live profile that way. CROWE_TEST_PROFILE moves userData
-   and sessionData, only to an existing directory inside the OS temp folder,
-   and only here, before anything reads a path. scripts/smoke-packaged-mac.sh
-   is the caller; the test scripts keep their own app.setPath first, so a
-   broken override lands them on a throwaway of their own and never here. */
-{
-  const roots = [os.tmpdir(), ...(process.platform === "win32" ? [] : ["/tmp"])];
-  const dir = resolveTestProfile(process.env.CROWE_TEST_PROFILE, { roots, fs });
-  if (dir) { app.setPath("userData", dir); app.setPath("sessionData", dir); }
-}
+  hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
 const APP_ENTRY = path.join(__dirname, "renderer", "index.html");
 let mainWindow = null;

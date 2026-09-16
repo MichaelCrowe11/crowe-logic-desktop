@@ -138,32 +138,6 @@ function sanitizeAgentMessages(raw) {
     .map((message) => ({ role: message.role, content: String(message.content || "").slice(0, MAX_MESSAGE_CHARS) }));
 }
 
-
-/* A test launch may move the profile, and only into the OS temp folder.
-   Electron does not derive userData from HOME on macOS, so a HOME override
-   leaves a test launch of a packaged build on the user's live profile; this
-   is the switch that works. It takes an absolute path to an existing
-   directory whose real location is strictly inside one of the given temp
-   roots. Anything else is ignored, so the variable cannot point an installed
-   app at a profile someone else prepared: a config.json with a foreign
-   gateway URL there would carry the user's token to it. */
-function resolveTestProfile(raw, { roots, fs }) {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (!value || !path.isAbsolute(value)) return null;
-  let real;
-  try {
-    real = fs.realpathSync(value);
-    if (!fs.statSync(real).isDirectory()) return null;
-  } catch { return null; }
-  for (const root of roots || []) {
-    let base;
-    try { base = fs.realpathSync(root); } catch { continue; }
-    const rel = path.relative(base, real);
-    if (rel && rel !== "." && !rel.startsWith("..") && !path.isAbsolute(rel)) return real;
-  }
-  return null;
-}
-
 module.exports = {
   isAppDocument,
   isTrustedPermissionUrl,
@@ -175,6 +149,5 @@ module.exports = {
   sanitizeMcpServers,
   sanitizeConfigPatch,
   sanitizeAgentMessages,
-  resolveTestProfile,
   MAX_MESSAGE_CHARS,
 };

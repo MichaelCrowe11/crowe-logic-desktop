@@ -98,8 +98,9 @@ it on any machine but the one that built it.
 ### Smoke a packaged build without touching your profile
 
 ```
-scripts/smoke-packaged-mac.sh          # build unsigned, launch, check, clean up
-scripts/smoke-packaged-mac.sh --keep   # leave the build and profile for a look
+scripts/smoke-packaged-mac.sh                          # build this checkout unsigned, launch, check, clean up
+scripts/smoke-packaged-mac.sh --app "/Applications/Crowe Logic.app"   # smoke an existing build: the installed app, or a release unzipped from the feed
+scripts/smoke-packaged-mac.sh --keep                   # leave the build and the profile for a look
 ```
 
 The dev Electron in `node_modules` has its fuses on, so every suite in
@@ -109,20 +110,25 @@ connector found exactly that: a bundled server launched through
 `ELECTRON_RUN_AS_NODE` worked in every test and could not start in an
 installed build. This script builds the checkout the way electron-builder
 lays it out (same files, same `asarUnpack`, same fuse flip; identity null, so
-unsigned and local only), reads the fuses back, launches the app once with the
-connector pre-enabled, and checks that its utility process comes up and
-survives the 15 s handshake timeout.
+unsigned and local only), or takes an existing `.app`, reads the fuses back,
+launches the app once with the connector pre-enabled, and checks that its
+utility process comes up and survives the 15 s handshake timeout.
 
-The launch is put on a throwaway profile with `CROWE_TEST_PROFILE`. Electron on
-macOS does not derive `userData` from `HOME`, so a `HOME=` override leaves a
-test launch on the installed app's live profile, beside the running app, with
-`config.json` and `auth.bin` in play; that happened here on 2026-09-15 before
-the switch existed. `main.js` honours the variable only for an existing
-directory inside the temp folder, so it cannot aim an installed app at a
-profile someone prepared, and the test scripts still set their own profile
-first. `--use-mock-keychain` keeps the ad-hoc-signed build away from the real
-Keychain item, which would otherwise prompt. Never launch a packaged build for
-a test here without it.
+The launch is put on a throwaway profile with `--user-data-dir`, the Chromium
+switch Electron maps onto `userData` and `sessionData`; it works on a shipped,
+signed binary too, which is how a release from the feed is verified in place.
+`HOME=` does not do this on macOS: Electron takes Application Support from the
+system, not from that variable, and three test launches on 2026-09-15 landed on
+the installed app's live profile beside the running app that way, with
+`config.json` and `auth.bin` in play. The script kills the app and fails if the
+throwaway has not filled within 5 s, so a binary that ignored the switch could
+not sit on the live profile for long, and it reports whether the live
+profile's files moved during the run (the running app rewrites `config.json`
+and `auth.bin` every 4 minutes on its own, so read the times before reading
+anything into a change). `scripts/test-user-data-dir.js` pins the mapping for
+the Electron this checkout ships. `--use-mock-keychain` keeps the launch away
+from the real Keychain item. Never launch a packaged build for a test here
+without both switches.
 
 ### iOS
 
