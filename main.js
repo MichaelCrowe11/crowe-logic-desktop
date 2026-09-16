@@ -792,6 +792,7 @@ async function mcpConnectAll() {
     if (spec && spec.command) await mcpConnect(name, spec);
   }
 }
+const mail = require("./mail");
 // ─── Official plugins (Phase 1: bundled manifest over the MCP client) ────────
 // A plugin IS a manifest entry + an MCP server + declared tiers. Enable is one
 // click, disable is one click, and a dead server never breaks the app.
@@ -805,9 +806,21 @@ const BUILTIN_PLUGINS = (() => {
   catch { return []; }
 })();
 const PLUGIN_IDS = new Set(BUILTIN_PLUGINS.map((p) => p.id));
-const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager
+const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager, or whose built-in tools are on
 const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
 const PLUGIN_CONNECTING = new Set();
+/* A built-in plugin has no server: its tools live in the harness, and the
+   manifest entry exists so its credentials, its tier rule, and its on/off
+   switch travel the same road as every other plugin. The tool names come from
+   this table and not from the manifest, so an entry cannot claim a built-in it
+   does not own, and an entry that names a server is never treated as one.
+   Connecting a built-in is checking that its account is complete: a switched-on
+   Mail with no password is a tool the agent can see and can never use. */
+const BUILTIN_PLUGIN_TOOLS = { [mail.PLUGIN_ID]: mail.TOOLS };
+const BUILTIN_PLUGIN_CHECKS = {
+  [mail.PLUGIN_ID]: (env) => (mail.isConfigured(env) ? "" : "Mail needs the SMTP host (host or host:port), the full mail address you send from, and the app password"),
+};
+function pluginBuiltinTools(p) { return p && !p.mcp && BUILTIN_PLUGIN_TOOLS[p.id] ? BUILTIN_PLUGIN_TOOLS[p.id] : null; }
 function pluginState() { return loadConfig().plugins || {}; }
 function pluginSecretState() { return readKeyStore().__plugins || {}; }
 function pluginEnv(id) { return pluginSecretState()[id] || {}; }
@@ -843,14 +856,15 @@ function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
 function pluginList() {
   const st = pluginState();
   return BUILTIN_PLUGINS.map((p) => {
-    const connected = PLUGIN_MANAGED.has(p.id) && Boolean(MCP[p.id]);
+    const builtin = pluginBuiltinTools(p);
+    const connected = PLUGIN_MANAGED.has(p.id) && (builtin ? true : Boolean(MCP[p.id]));
     return {
       id: p.id, name: p.name, description: p.description, category: p.category,
       spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
       glyph: p.glyph || "", chips: p.chips || [],
       enabled: Boolean(st[p.id] && st[p.id].enabled),
       connected,
-      toolCount: connected ? MCP[p.id].tools.length : 0,
+      toolCount: connected ? (builtin ? builtin.length : MCP[p.id].tools.length) : 0,
     };
   });
 }
@@ -871,6 +885,14 @@ function resolvePluginPath(s) {
   return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
 }
 async function pluginConnect(p, env) {
+  const builtin = pluginBuiltinTools(p);
+  if (builtin) {
+    const check = BUILTIN_PLUGIN_CHECKS[p.id];
+    const problem = check ? check(env || {}) : "";
+    if (problem) return { error: problem };
+    PLUGIN_MANAGED.add(p.id);
+    return { ok: true, tools: builtin.length };
+  }
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
   const asNode = p.mcp.command === "${NODE}";
   const args = (p.mcp.args || []).map(resolvePluginPath);
@@ -1137,6 +1159,22 @@ const harnessCtx = {
   // indistinguishable from a hand-logged one and both are equally correctable.
   growWrite: (type, record) => growWrite(type, record),
   growRead: (type) => growRead(type),
+  /* Mail. The account never crosses into the harness: the message comes in,
+     the credentials are read from the encrypted store here at send time, and
+     only the server's verdict goes back. No IPC handler sends mail; the one
+     road to sendMail is the harness gate in front of send_email. */
+  mailConfigured: () => PLUGIN_MANAGED.has(mail.PLUGIN_ID) && mail.isConfigured(pluginEnv(mail.PLUGIN_ID)),
+  // The sender and the server for the approval card; the password stays here.
+  mailAccount: () => mail.accountIdentity(mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID))),
+  /* Pinned to the account the card showed: the store is read once, and if the
+     sender or the server it holds is not what the user approved, nothing
+     goes. The harness makes the same check a moment earlier; this one stands
+     where the credentials are actually in hand. */
+  sendMail: (message, approved) => {
+    const account = mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID));
+    if (!mail.sameIdentity(account, approved)) return Promise.reject(new mail.SmtpError("the Mail account is not the one the approval card showed"));
+    return mail.sendMail(account, message, { mailer: `Crowe Logic ${app.getVersion()}` });
+  },
   // The image tool's key, read at call time from the same encrypted store the
   // Key Manager writes, and handed over as a value the harness keeps inside one
   // request header. OpenAI first because it is the native images endpoint,
