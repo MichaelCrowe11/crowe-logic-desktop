@@ -174,6 +174,13 @@ check(/contextFileGrants/.test(main) && /File access was not granted by the pick
 // single-quoted argument is not quoted at all and a file name is a command.
 check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
 check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
+// A shell that will not start is a refusal the panel prints, not an exception
+// the renderer never catches. The spawn sits inside try/catch and answers
+// { ok: false, error }; the dev-only mode-bit repair never touches a packaged
+// bundle, which the code signature seals.
+check(/try \{ proc = spawnShell\(cols, rows\); \}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed spawn into { ok: false, error }");
+check(/if \(app\.isPackaged \|\| process\.platform === "win32" \|\| !\/posix_spawnp\/i\.test/.test(main), "the spawn-helper mode-bit repair must be dev-only");
+check(!/pty\.spawn\([^\n]*\n[^\n]*ptyProcs\.set/.test(main), "no bare pty.spawn may feed ptyProcs outside spawnShell");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
 // The plugin server's environment is built by harness.pluginSpawnEnv, which
 // starts from safeShellEnv (the agent shell's filtered variables) and only adds

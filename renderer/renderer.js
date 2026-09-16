@@ -959,7 +959,7 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"}).catch(err=>({ok:false,error:err?.message||String(err)}));const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
@@ -1041,7 +1041,7 @@ async function mountWorkspaceAgent(p, body, seed={}) {
      waits at its prompt for whatever the operator wants to run. The objective
      runs on the gateway agent, not in this shell, so when the tier withholds
      the shell the dock still works - a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){setState("idle","idle","Ready");addEvent("runtime","console shell ready")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"}).catch(err=>({ok:false,error:err?.message||String(err)}));if(r?.ok!==false){setState("idle","idle","Ready");addEvent("runtime","console shell ready")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;

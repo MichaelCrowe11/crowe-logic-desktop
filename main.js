@@ -1207,11 +1207,43 @@ function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"
    agent's tier made the default layout open a terminal that refused to start.
    The gate stays for panels that hand the shell to an agent (kind "agent"),
    where the tier's "no shell" promise is the point. */
+/* node-pty runs the shell through a small helper binary beside its native
+   module. The prebuilt copy npm installs is not executable (upstream ships it
+   0644), so a fresh checkout failed every spawn with "posix_spawnp failed" and
+   the handler threw it at the renderer, which never catches: the panel sat on
+   "starting" forever. A packaged build was never affected - electron-builder
+   rebuilds the module from source and that helper carries its mode bit - and a
+   packaged app is never modified here, its bundle is sealed by the signature.
+   A dev checkout gets the bit set once and the spawn retried. Whatever the
+   cause, a shell that will not start is a refusal the panel can print. */
+function ptyHelperPaths() {
+  try {
+    const dir = path.dirname(require.resolve("node-pty/package.json"));
+    return [path.join(dir, "build", "Release", "spawn-helper"), path.join(dir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper")];
+  } catch { return []; }
+}
+function spawnShell(cols, rows) {
+  const shell = process.env.SHELL || "/bin/zsh";
+  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env };
+  try { return pty.spawn(shell, [], opts); }
+  catch (err) {
+    if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
+    let fixed = false;
+    for (const helper of ptyHelperPaths()) {
+      if (!fs.existsSync(helper)) continue;
+      try { fs.accessSync(helper, fs.constants.X_OK); } catch { try { fs.chmodSync(helper, 0o755); fixed = true; } catch {} }
+    }
+    if (!fixed) throw err;
+    return pty.spawn(shell, [], opts);
+  }
+}
 ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
   if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
-  const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
+  let proc;
+  try { proc = spawnShell(cols, rows); }
+  catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
   ptyProcs.set(id, proc);
   proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
