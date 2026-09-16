@@ -1085,17 +1085,18 @@ const tests = [
         { type: "tool_call", id: "t2", name: "run_shell", args: { command: "ls" } },
         { type: "tool_result", id: "t2", name: "run_shell", result: "ok" },
         { type: "assistant", text: "Two reads, then done." },
-      ], 120);
+      ], 200);
       const turn = send("follow me");
       const who = () => transcript.querySelector(".msg.assistant .who");
       const y = () => parseFloat(who() && who().style.getPropertyValue("--mark-y")) || 0;
       const seen = []; let atSecondCard = null, secondCardTop = null;
-      const deadline = Date.now() + 4000;
+      const deadline = Date.now() + 6000;
       while (Date.now() < deadline) {
         const cards = transcript.querySelectorAll(".msg.assistant .toolcard");
         const v = y(); if (v && seen[seen.length - 1] !== v) seen.push(v);
         if (cards.length === 2 && atSecondCard === null) {
-          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          // A timer, not a frame: a hidden window under xvfb paints no frames.
+          await new Promise((r) => setTimeout(r, 60));
           atSecondCard = y(); secondCardTop = cards[1].offsetTop;
         }
         if (transcript.querySelector(".msg.assistant .said") && atSecondCard !== null) break;
@@ -1104,6 +1105,9 @@ const tests = [
       await turn;
       const landedY = y();
       await new Promise((r) => setTimeout(r, 1000));
+      // Printed to the runner's stderr under ELECTRON_ENABLE_LOGGING, so a red
+      // run on a headless runner says what the mark actually did.
+      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
       const result = {
         moved: seen.length >= 2 && seen.every((v, i) => i === 0 || v > seen[i - 1]),
         besideSecondCard: atSecondCard !== null && Math.abs(atSecondCard - (secondCardTop + 14.5 - 13)) <= 1,

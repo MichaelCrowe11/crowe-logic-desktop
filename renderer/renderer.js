@@ -253,9 +253,10 @@ const BLOCK_CENTRE = { routecard: 7.5, toolcard: 14.5, editcard: 14.5 };
 function followMark(body) {
   const who = body.parentNode && body.parentNode.querySelector(".who");
   if (!who || typeof MutationObserver !== "function") return { end() {} };
-  let raf = 0, last = null;
+  let pending = false, stopped = false, last = null;
   const place = () => {
-    raf = 0;
+    pending = false;
+    if (stopped) return;
     let block = body.lastElementChild;
     while (block && (block.classList.contains("thinking") || block.classList.contains("message-copy"))) block = block.previousElementSibling;
     let y = 0;
@@ -269,13 +270,22 @@ function followMark(body) {
     last = y;
     who.style.setProperty("--mark-y", y + "px");
   };
-  const queue = () => { if (!raf) raf = requestAnimationFrame(place); };
+  // One placement per burst of changes. A frame callback coalesces to the
+  // paint, but a hidden or occluded window gets no frames (CI under xvfb, a
+  // minimised app) and the turn still runs there, so a short timer stands
+  // behind it; whichever comes first places, the other finds nothing to do.
+  const queue = () => {
+    if (pending || stopped) return;
+    pending = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(place);
+    setTimeout(place, 24);
+  };
   const mo = new MutationObserver(queue); mo.observe(body, { childList: true });
   const ro = typeof ResizeObserver === "function" ? new ResizeObserver(queue) : null;
   if (ro) ro.observe(body);
   return {
     end(landed) {
-      mo.disconnect(); if (ro) ro.disconnect(); if (raf) cancelAnimationFrame(raf);
+      stopped = true; mo.disconnect(); if (ro) ro.disconnect();
       // Home after the landing has played where the eye is; at once otherwise.
       setTimeout(() => who.style.removeProperty("--mark-y"), landed ? 720 : 0);
     },
