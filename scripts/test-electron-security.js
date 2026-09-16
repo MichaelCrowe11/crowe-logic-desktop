@@ -15,6 +15,7 @@ const {
   sanitizeMcpServers,
   sanitizeConfigPatch,
   sanitizeAgentMessages,
+  resolveTestProfile,
 } = require("../main-security");
 
 const root = path.join(__dirname, "..");
@@ -200,6 +201,32 @@ check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "
     check(fuses.includes(f), `fuses.js must set ${f}`);
   const plist = fs.readFileSync(path.join(root, "build", "entitlements.mac.plist"), "utf8");
   check(!/allow-dyld-environment-variables/.test(plist), "the hardened runtime must not honour DYLD_* variables");
+}
+// CROWE_TEST_PROFILE: a throwaway profile for a test launch of a packaged build,
+// accepted only inside the temp folder, so the switch cannot aim an installed
+// app at a prepared profile.
+{
+  const os = require("os");
+  const roots = [os.tmpdir()];
+  const inside = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-profile-gate-"));
+  const realInside = fs.realpathSync(inside);
+  check(resolveTestProfile(inside, { roots, fs }) === realInside, "an existing directory under the temp folder is accepted, as its real path");
+  check(resolveTestProfile(` ${inside} `, { roots, fs }) === realInside, "surrounding whitespace is trimmed");
+  check(resolveTestProfile(undefined, { roots, fs }) === null && resolveTestProfile("", { roots, fs }) === null, "no value means no override");
+  check(resolveTestProfile(path.relative(process.cwd(), inside), { roots, fs }) === null, "a relative path is refused");
+  check(resolveTestProfile(os.homedir(), { roots, fs }) === null, "the home folder is refused");
+  check(resolveTestProfile(os.tmpdir(), { roots, fs }) === null, "the temp folder itself is refused");
+  check(resolveTestProfile(path.join(inside, "missing"), { roots, fs }) === null, "a path that does not exist is refused");
+  const file = path.join(inside, "a-file"); fs.writeFileSync(file, "x");
+  check(resolveTestProfile(file, { roots, fs }) === null, "a file is refused");
+  const link = path.join(inside, "escape"); fs.symlinkSync(os.homedir(), link);
+  check(resolveTestProfile(link, { roots, fs }) === null, "a symlink that leaves the temp folder is refused");
+  check(resolveTestProfile(inside, { roots: ["/nonexistent-root-for-this-test"], fs }) === null, "an unreadable root accepts nothing");
+  fs.rmSync(inside, { recursive: true, force: true });
+  const firstPath = main.indexOf('app.getPath("userData")');
+  const override = main.indexOf('resolveTestProfile(process.env.CROWE_TEST_PROFILE');
+  check(override > 0 && override < firstPath, "the profile override must run before anything reads userData");
+  check(/const roots = \[os\.tmpdir\(\), \.\.\.\(process\.platform === "win32" \? \[\] : \["\/tmp"\]\)\];/.test(main), "the override roots are the temp folders and nothing else");
 }
 check(/will-redirect/.test(main) && /guardGuestNavigation/.test(main), "guest redirects must remain under the navigation policy");
 const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "utf8");

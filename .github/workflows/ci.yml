@@ -210,6 +210,15 @@ jobs:
           CROWE_ALLOW_PLAINTEXT_AUTH: "1"
         run: xvfb-run -a npx electron scripts/test-plugin-fork.js
 
+      # CROWE_TEST_PROFILE moves a launch onto a throwaway profile, the switch
+      # scripts/smoke-packaged-mac.sh uses so a packaged build under test never
+      # opens the installed app's profile. The gate itself is unit-tested in
+      # the security suite; this checks main.js applies it at load.
+      - name: Run profile override test (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-profile-override.js
+
       - name: Upload smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4
