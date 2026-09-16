@@ -1912,7 +1912,7 @@ const tests = [
         name: panel ? panel.querySelector(".rc-name").value : "" };
       R.open = origOpen; await __reset(); __resetSpaces(); return out;`,
     expect: { opened: "/Users/crowelogic/Projects/crowe-logic-foundry", space: "chat", room: true,
-      base: "Base checkout: MichaelCrowe11/crowe-logic-foundry /Users/crowelogic/Projects/crowe-logic-foundry. The room works from this workspace.",
+      base: "Working from MichaelCrowe11/crowe-logic-foundry /Users/crowelogic/Projects/crowe-logic-foundry.",
       name: "MichaelCrowe11/crowe-logic-foundry" },
   },
   {

@@ -307,3 +307,119 @@ and left alone deliberately: `test-companion.js`, `test-qr.js`, `test-icons.js`
 and `test-install-spaces.js` are also absent from CI while passing locally.
 Adding them is a repository decision rather than part of this feature, and
 naming it here is more useful than quietly widening this branch.
+
+
+---
+
+## Addendum: rooms as standing colleagues (2026-09-13)
+
+The reference was Grok Bot, running live on the founder's machine against the
+Southwest Mushrooms channel. Watching it for an hour, the pattern that made it
+feel like a colleague rather than a chat was small and specific:
+
+- Bots are persistent, named, and listed like an inbox: a preview line, an
+  unread dot, a mark that turns while one is working.
+- A bot speaks first. A routine ran overnight and the bot opened the morning
+  with a snapshot and one proposed next action.
+- While working it posts several short messages, minutes apart, not one essay.
+- When it needs a decision it puts one question with tappable options. The tap
+  is the answer; the bot carries on from it. Typing over the card also works.
+- Messages carried between bots appear inline, attributed to who said it and
+  where.
+- The boundary is said out loud: "I will not touch Studio unless you ask."
+
+Rooms now do each of these, built on the engine that already existed rather
+than beside it. `node scripts/test-rooms.js` holds 48 checks; the twelve new
+ones are under "rooms as standing colleagues". The harness suite holds 94.
+
+| | |
+|---|---|
+| `rooms/engine.js` | Every message has an id and a sequence number. New kinds: `progress` (what a seat said between tool rounds), `routine` (the scheduled trigger), `relay` (carried from another room), `note` (system, never shown to a model). A reply may carry an `ask`. A room has a `brief`, `routines`, and a read mark. |
+| `harness.js` | `propose_options`: a tool a room seat may call to put one question with up to four options and end its turn. Offered only to callers that can draw the card. Refused and continued when malformed. Read-only in the delivery table. |
+| `main.js` | Main owns rooms and every window subscribes. One turn at a time per room. A scheduler ticks every thirty seconds and on wake, claims a due routine on disk before calling a model, skips a run that is more than the grace window late with a note, and posts an OS notification when a routine lands. |
+| `renderer/renderer.js` | Rail rows are inbox entries: avatar stack, preview, unread dot, working mark, "waiting on your decision". The thread groups a seat's bubbles, divides sittings by time, shows progress live, draws the question card, and quotes the question under the operator's answer. A details pane holds the brief, routines and an activity ledger. The composer takes files and dictation. |
+| `renderer/web-bridge.js`, `mobile/src/mobile-bridge.js` | The same surface, the web on the engine (routines run while the tab is open, and it says so), the phone refusing with a reason. |
+
+### The rules that hold
+
+**Nobody speaks unaddressed, still.** A routine names the one seat it wakes.
+A relay goes to the target room's default seat unless the operator names
+another. A tap on an option goes back to the seat that asked.
+
+**Progress is the seat's own memory.** A seat's own progress notes are rejoined
+onto its reply in its view, so it remembers what it found on the way. Other
+seats see the reply and not the notes; a room of three does not pay for three
+sets of working notes. Flattened to a plain session, the turn is one assistant
+message again, which is what keeps the one-agent parity claim true.
+
+**A proposal is a question, not a permission.** The chosen option lands as an
+ordinary operator message. Whatever the seat then does passes the same tool
+gate as anything else; the room's tier still binds. The fenced fallback
+(a trailing block tagged `ask`) is read only when it is the last thing in the
+message, and a malformed one is left as prose rather than drawn as a card with
+nothing to tap. A second tap on an answered card is refused; typing over an
+open card closes it.
+
+**Timers wake the scheduler; they are not the schedule.** Due times are
+persisted. Every tick compares them with the wall clock, so a laptop that slept
+through 07:00 runs the brief on waking if it is within two hours, and otherwise
+leaves one note and schedules the next. Nothing is replayed. The claim is
+written before the model is called, so a crash mid-run cannot fire the same
+instant again on restart. A halted room's routine leaves one note and spends
+nothing.
+
+**Unread is a comparison, not a counter.** Messages after the operator's read
+mark that the operator, a routine or the system did not write. The mark moves
+only when the panel is active in a focused window.
+
+**A room seat's question reaches the person.** A gate raised for a room seat
+used to have no consumer: the approval request carried only the seat's
+composite id, the operator thread ignores any id but "main", and the room
+panel filtered on a room stamp the gate never set. The card sat unanswered
+for five minutes and was denied. The room thread now draws the same card the
+operator thread draws, under the seat that asked, and closes it on expiry.
+
+**A read-only room asks before acting through a connector.** Hand-configured
+MCP servers have no manifest and their tools always ran ungated, which in a
+room that may only read left the one kind of tool the room needs (the
+channel, the store, the calendar) as the one open door to a write. A room
+seat's call to such a tool now asks first unless the tool's name says it
+only looks. The classifier is one table in `harness.js`, labelled a heuristic
+over names: a name reads as a read only when its first verb-like word is on a
+short READ list and no word anywhere in it is on a long WRITE list. So
+`get_analytics` runs and `get_or_create_customer`, `checkout` and `weather`
+all ask. The alternative was asking about every analytics read, which teaches
+the person to tap Allow without reading. The plain operator thread and a room
+that may write are unchanged. Three harness checks hold the cases. The card
+names the seat, the connector and the tool.
+
+Screenshots from the real app against a stubbed gateway are in
+`docs/design/rooms-2026-09-14/`: the open question card, the answered card
+with the details pane, and a connector approval card under the seat that asked.
+
+### What Grok Bot does that Rooms deliberately do not
+
+- **Bots messaging bots on their own.** Relays are the operator's act. An
+  agent-initiated relay is a cost multiplier with nobody addressed and a loop
+  waiting to happen; the primitive exists in the engine for later, behind
+  allowlists and a chain budget, and is not exposed.
+- **"Always allow".** The harness asks about physical writes and external
+  actions every time, and this addendum changes nothing there. The observed
+  Grok Bot wrote a file on its own computer with Auto-review on and no card
+  (evidence folder, task 2); that is the failure the tool gate exists to
+  prevent, and a proposal card must not become a way around it.
+- **A remote computer and its screen.** There is no cloud machine here. The
+  pane is called Activity and shows the seats' tool traffic as a ledger, with
+  arguments cut short. It does not claim to be a screen.
+- **Voice as a first-class channel.** Dictation into the composer where the
+  platform offers it; nothing more.
+
+### Not verified here
+
+The live Electron suite (`scripts/test-rooms-live.js`) drives a room through
+the real IPC against a stubbed gateway and covers say, critique, cost and
+persistence. It does not yet drive a routine through the scheduler or a tap
+through `crowe:rooms:answer`; those paths are covered at the engine and the
+handlers are one line each over the engine. The founder's test is on the live
+channel, with real seats and a real morning: that is where "speaks first with
+one next action" is either true or not, and the transcript will say.
