@@ -87,6 +87,7 @@ jobs:
           node scripts/test-repos.js
           node scripts/test-releases-worker.js
           node scripts/test-verify-release.js
+          node scripts/test-share-preview.js
           node scripts/test-messages.js
           node scripts/test-marks.js
           node scripts/test-plugin-path.js
