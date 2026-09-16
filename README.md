@@ -39,6 +39,19 @@ npm start
 
 We did not run `npm start` for this README, so there is no output to show. The window asks you to sign in with a Crowe ID; the browser opens for the sign-in and the app stores the token in its own config directory.
 
+### Headless
+
+The same agent runs without the window, for CI, SSH and scheduled work:
+
+```bash
+export CROWE_TOKEN=...
+node bin/crowe.js --tier execute --yes --json "run the tests and fix what fails"
+```
+
+Same harness, same tiers, same gates, same verifier, same journal. It denies
+approvals when there is no terminal to ask, and it exits non-zero on a failed
+verdict. See [docs/CLI.md](docs/CLI.md).
+
 The test suite that does not need a display, run today:
 
 ```
@@ -81,7 +94,9 @@ Each item names the file that holds it.
 - A browser panel in a `<webview>` with permission requests refused by the main process. `main.js`, `renderer/renderer.js`, tested in `scripts/test-electron-security.js`.
 - A file tree, a git pane, and a sessions browser. `preload.js` (`fs`, `git`, `sessions`), `main.js`.
 - MCP client: servers listed in the config are launched and their tools appear to the model as `mcp__<server>__<tool>`. `main.js` `mcpConnect`.
-- Rooms: several agents work the same repo on separate git worktrees and their results are merged or kept as branches. `rooms/engine.js`, `rooms/worktrees.js`, tested in `scripts/test-rooms.js`.
+- Rooms: several named agents and you in one thread, kept as standing colleagues. A room has a brief, routines that let it speak first, seats that work out loud and ask with tappable options, per-seat cost, and critique and revise rounds. Seats run read-only until worktree isolation lands; the isolation module exists and is tested but not switched on. `rooms/engine.js`, `rooms/worktrees.js`, tested in `scripts/test-rooms.js`, `docs/ROOMS-REPORT.md`.
+- A headless runner, `bin/crowe.js`: the same harness in a terminal, exit codes as the contract. `cli/`, `docs/CLI.md`, tested in `scripts/test-cli.js`.
+- A control-plane boundary, off by default: authorize before a turn, record after it. `cloud/`, tested in `scripts/test-cloud.js`.
 - Phone pairing over a QR code with per-device tokens that survive a restart. `companion.js`, `qr.js`, tested in `scripts/test-companion.js` and `scripts/test-qr.js`.
 - Cultivation records and a poller for Crowe Sense readings. `grow-schema.js`, `sense.js`, tested in `scripts/test-sense.js`.
 - Plugins declared in `plugins.builtin.json`, described in `docs/PLUGINS.md`.

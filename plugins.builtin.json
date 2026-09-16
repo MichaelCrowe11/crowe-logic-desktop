@@ -35,33 +35,59 @@
     {
       "id": "crowe-sense",
       "name": "Crowe Sense",
-      "description": "Grow-room telemetry and farmlog: sensors, environment history, and outcomes for the Cultivation space.",
+      "description": "The grow-room sensing node: readings, history, the device descriptor, and its two operations. Writes reach the node only on the direct path, with its operator token, behind an approval every time.",
       "category": "cultivation",
       "spaces": [
         "cultivation"
       ],
       "official": true,
-      "available": false,
-      "mcp": null,
+      "available": true,
+      "mcp": {
+        "command": "python3",
+        "args": [
+          "~/crowe-sense/mcp_server.py"
+        ],
+        "env": {}
+      },
       "envPrompts": [
         {
-          "key": "SENSE_API_KEY",
-          "label": "Crowe Sense API key"
+          "key": "CROWE_SENSE_URL",
+          "label": "Node API URL on the LAN or tailnet, e.g. http://100.123.229.57:8078"
+        },
+        {
+          "key": "CROWE_SENSE_OPERATOR_TOKEN",
+          "label": "Operator token for writes (optional; the node's /etc/crowe/operator.token)"
         }
       ],
       "tools": [
+        {
+          "match": "describe_*",
+          "tier": "readonly"
+        },
         {
           "match": "read_*",
           "tier": "readonly"
         },
         {
-          "match": "log_*",
-          "tier": "edit"
+          "match": "list_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "request_operation",
+          "tier": "execute",
+          "physical": true
+        },
+        {
+          "match": "*",
+          "tier": "execute",
+          "physical": true
         }
       ],
       "glyph": "mycelial",
       "chips": [
-        "Chart the last 72h of fruiting-room humidity"
+        "What is the fruiting room reading right now?",
+        "Chart the last 72h of fruiting-room humidity",
+        "Describe the sensor node and what it can do"
       ]
     },
     {
@@ -198,28 +224,62 @@
     {
       "id": "channel-analytics",
       "name": "Channel Analytics",
-      "description": "Southwest Mushrooms YouTube channel performance.",
+      "description": "Southwest Mushrooms YouTube channel performance, read from the channel manager's nightly snapshot: subscribers, 28-day revenue and monetized playbacks, the Shorts and long-form split, recent uploads with voiced and machine flags, the Studio-only task register, the daily brief, and Stripe checkouts carrying a YouTube tag. Reads cost no quota and need no credential; a fresh collect is the one edit-tier tool.",
       "category": "audience",
       "spaces": [
         "projects"
       ],
       "official": true,
-      "available": false,
-      "mcp": null,
+      "available": true,
+      "mcp": {
+        "command": "${NODE}",
+        "args": [
+          "${APP}/plugins/channel-analytics/server.js"
+        ],
+        "env": {}
+      },
       "envPrompts": [
         {
-          "key": "YT_API_KEY",
-          "label": "YouTube Data API key"
+          "key": "SWM_CHANNEL_MANAGER_DIR",
+          "label": "Folder of the channel manager (default ~/swm-channel-manager)"
+        },
+        {
+          "key": "SWM_CHANNEL_EVIDENCE_DIR",
+          "label": "Folder of the daily briefs (default ~/crowe-evidence/swm-channel)"
+        },
+        {
+          "key": "SWM_CHANNEL_MANAGER_PYTHON",
+          "label": "Python that runs the manager, for run_collect (default the foundry venv)"
         }
       ],
       "tools": [
         {
-          "match": "*",
+          "match": "get_*",
           "tier": "readonly"
+        },
+        {
+          "match": "list_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "read_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "run_collect",
+          "tier": "edit"
+        },
+        {
+          "match": "*",
+          "tier": "edit"
         }
       ],
       "glyph": "meridian",
-      "chips": []
+      "chips": [
+        "Morning snapshot of the channel, then one next action",
+        "Which uploads in the last 14 days are unvoiced machine Shorts?",
+        "What did YouTube-attributed checkouts do this week?"
+      ]
     },
     {
       "id": "github",

@@ -299,7 +299,7 @@ test("the tool card redacts a key hidden in a non-string argument", () => {
   const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
   const shown = H.shownArgs("export_document", { markdown: "x", filename: [key], format: { k: key }, extra: [key] });
   for (const v of Object.values(shown)) assert.ok(!String(v).includes(key), "no argument shape may show the value");
-  assert.match(String(shown.filename), /\[redacted: a live Stripe secret key\]/);
+  assert.match(String(shown.filename), /\[a live Stripe secret key\]/);
 });
 test("a rejected format is named by rule, never by value", async () => {
   // The result line becomes a tool_result event and the journal row's output_summary,
@@ -341,7 +341,7 @@ test("a credential in the title goes into the document only as approved, and not
   const key = "AKIA" + "IOSFODNN7EXAMPLE";
   const yes = makeCtx({}, { approve: true });
   const out = await exportDoc(yes, { markdown: "# Access\n\ntext", filename: "access", title: key, format: "html" });
-  assert.match(out.text, /^saved access\.html to .* titled "\[redacted: an AWS access key id\]"\)$/);
+  assert.match(out.text, /^saved access\.html to .* titled "\[an AWS access key id\]"\)$/);
   assert.strictEqual(yes.approvalsSeen.length, 1);
   assert.match(yes.approvalsSeen[0].why, /AWS access key id/);
   for (const s of [out.text, JSON.stringify(yes.approvalsSeen), JSON.stringify(yes.journalEvents)])
@@ -356,7 +356,7 @@ test("a credential in the title goes into the document only as approved, and not
   // A first heading that becomes the title is the same case.
   const head = makeCtx({}, { approve: true });
   const h = await exportDoc(head, { markdown: `# ${key}\n\ntext`, filename: "heading", format: "md" });
-  assert.match(h.text, /titled "\[redacted: an AWS access key id\]"/);
+  assert.match(h.text, /titled "\[an AWS access key id\]"/);
   assert.ok(!h.text.includes(key) && !JSON.stringify(head.journalEvents).includes(key));
   // A heading whose markup hides the key from the raw scan still reads as one once stripped, and the gate sees that title.
   const split = makeCtx({}, { approve: false });
@@ -369,19 +369,19 @@ test("a credential in the title goes into the document only as approved, and not
 test("redactSecrets names the kind and drops the value, and what comes out no longer trips the scanner", () => {
   const key = "sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc";
   const pem = "-----BEGIN RSA PRIVATE" + " KEY-----";
-  assert.strictEqual(H.redactSecrets(`report ${key} v2`), "report [redacted: a live Stripe secret key] v2");
+  assert.strictEqual(H.redactSecrets(`report ${key} v2`), "report [a live Stripe secret key] v2");
   assert.strictEqual(H.redactSecrets("plain title"), "plain title");
   assert.strictEqual(H.redactSecrets(null), "");
   // The header goes last here: an unterminated block is taken to the end of the text, by design (below).
   const twice = H.redactSecrets(`${key} and ${key} then ${pem}`);
   assert.ok(!twice.includes(key) && !twice.includes(pem), "every occurrence goes");
-  assert.strictEqual(twice, "[redacted: a live Stripe secret key] and [redacted: a live Stripe secret key] then [redacted: a private key block]");
+  assert.strictEqual(twice, "[a live Stripe secret key] and [a live Stripe secret key] then [a private key block]");
   assert.deepStrictEqual(H.scanForSecrets(twice), []);
   // A private key is detected by its header and redacted as a block: the body goes, to the END line or the end of the text.
   const end = "-----END RSA PRIVATE" + " KEY-----";
   const body = "MIIEowIBAAKCAQEA" + "x".repeat(40);
-  assert.strictEqual(H.redactSecrets(`before ${pem}\n${body}\n${end} after`), "before [redacted: a private key block] after");
-  assert.strictEqual(H.redactSecrets(`title ${pem}\n${body}`), "title [redacted: a private key block]", "an unterminated block is taken to the end");
+  assert.strictEqual(H.redactSecrets(`before ${pem}\n${body}\n${end} after`), "before [a private key block] after");
+  assert.strictEqual(H.redactSecrets(`title ${pem}\n${body}`), "title [a private key block]", "an unterminated block is taken to the end");
   assert.ok(!H.redactSecrets(`${pem}\n${body}\n${end}\n${pem}\n${body}\n${end}`).includes(body), "two blocks, both gone");
 });
 test("the tool card is drawn from a copy with the name and title redacted; the call itself runs on what was sent", async () => {
@@ -400,7 +400,7 @@ test("the tool card is drawn from a copy with the name and title redacted; the c
   const ctx = makeCtx({}, { approve: true });
   const events = await turn(tc({ markdown: "# Notes\n\ntext", filename: "notes", title: key, format: "md" }))(ctx);
   const card = events.find((e) => e.type === "tool_call");
-  assert.strictEqual(card.args.title, "[redacted: a GitHub token]");
+  assert.strictEqual(card.args.title, "[a GitHub token]");
   assert.strictEqual(card.args.filename, "notes");
   assert.match(events.find((e) => e.type === "tool_result").result, /^saved notes\.md/);
   assert.ok(!JSON.stringify(events).includes(key), "no event carries the value");
@@ -409,13 +409,13 @@ test("the tool card is drawn from a copy with the name and title redacted; the c
   // A flagged name: redacted on the card, refused by the tool.
   const ctx2 = makeCtx({}, { approve: true });
   const ev2 = await turn(tc({ markdown: "x", filename: key, format: "md" }))(ctx2);
-  assert.strictEqual(ev2.find((e) => e.type === "tool_call").args.filename, "[redacted: a GitHub token]");
+  assert.strictEqual(ev2.find((e) => e.type === "tool_call").args.filename, "[a GitHub token]");
   assert.match(ev2.find((e) => e.type === "tool_result").result, /^rejected: the file name looks like a GitHub token/);
   assert.ok(!JSON.stringify(ev2).includes(key) && !JSON.stringify(ctx2.journalEvents).includes(key));
   // Every string the model sent is covered, not only the two the card names: the
   // activity brief prints the whole object, and a bad format is shown before it is refused.
   const shown = H.shownArgs("export_document", { markdown: `# ${key}\n\nbody`, filename: "n", format: key, extra: key, count: 3 });
-  assert.deepStrictEqual(shown, { markdown: "# [redacted: a GitHub token]\n\nbody", filename: "n", format: "[redacted: a GitHub token]", extra: "[redacted: a GitHub token]", count: 3 });
+  assert.deepStrictEqual(shown, { markdown: "# [a GitHub token]\n\nbody", filename: "n", format: "[a GitHub token]", extra: "[a GitHub token]", count: 3 });
   // Other tools' cards are untouched, and so are the real arguments.
   assert.deepStrictEqual(H.shownArgs("write_file", { path: "a", content: key }), { path: "a", content: key });
   const real = { markdown: "x", filename: key, format: "md" };
