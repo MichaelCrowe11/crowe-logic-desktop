@@ -36,7 +36,7 @@
     r = r || {};
     const names = r.names || [];
     const solo = (r.agents || []).length === 1;
-    const title = r.title && r.title !== "Untitled room" && r.title !== "Room" ? r.title : (names.join(", ") || "Conversation");
+    const title = r.title && r.title !== "Untitled room" && r.title !== "Room" ? r.title : conversationTitle(names.map((n) => ({ name: n })));
     const state = r.openAsk ? "waiting" : r.working ? "working" : "idle";
     const preview = r.openAsk ? "Waiting on your decision" : r.working ? "Working…" : (r.preview || (solo ? "Say hello" : names.join(", ")));
     return { id: r.id, title, preview, time: relativeTime(r.updatedAt, now), unread: Number(r.unread) || 0, state, solo, agents: r.agents || [], names };
@@ -73,5 +73,68 @@
     if (!q) return workers || [];
     return (workers || []).filter((w) => [w.name, w.id, w.role, w.domain].some((f) => String(f || "").toLowerCase().includes(q)));
   }
-  return { DEVELOPER_DOMAINS, relativeTime, rowModel, visibleWorkers, visibleTemplates, conversationTitle, composerPlaceholder, filterWorkers };
+
+  /* ── the thread, as texts ──────────────────────────────────────────────────
+     The rules a phone applies without saying so: consecutive bubbles from one
+     sender within a few minutes read as one run, the sender's mark sits by the
+     last bubble of the run, "Delivered" and "Read" sit under the last thing you
+     sent and nowhere else, and a typing bubble stands in for a seat that is
+     working and has not answered yet. Pure, so the renderer draws what these
+     say and the tests can say it back. */
+  const OPERATOR = ":operator";
+  const RUN_GAP_MS = 5 * 60 * 1000;
+  // Housekeeping lines (a routine firing, a system note) break runs and never
+  // count as a reply.
+  const isAside = (m) => !m || m.author === ":system" || m.author === ":routine";
+  // A critique or a relay is its own beat and never joins the bubble before it.
+  const standsAlone = (m) => Boolean(m && (m.kind === "critique" || m.kind === "relay"));
+  function sameRun(prev, m) {
+    if (!prev || !m || isAside(prev) || isAside(m)) return false;
+    if (prev.author !== m.author) return false;
+    if (standsAlone(prev) || standsAlone(m)) return false;
+    if (prev.ask) return false;                      // a question closes the run: its options are the tail
+    return (Number(m.at) || 0) - (Number(prev.at) || 0) < RUN_GAP_MS;
+  }
+  // Where a message sits in its run: first, middle, last, or alone (both).
+  function runPosition(messages, i) {
+    const m = messages[i];
+    const first = !sameRun(messages[i - 1], m);
+    const last = !sameRun(m, messages[i + 1]);
+    return { first, last };
+  }
+  /* Delivery. The room stores a message the moment it is said, so "Delivered"
+     is true as soon as it is drawn. "Read" is the seat taking it up: a worker
+     message after it, or a seat working or queued right now. Only the last
+     operator message carries a state, the way a phone marks only the last
+     text you sent. */
+  function deliveryState(messages, agents) {
+    const list = messages || [];
+    let li = -1;
+    for (let i = 0; i < list.length; i++) if (list[i] && list[i].author === OPERATOR) li = i;
+    if (li < 0) return null;
+    const mine = list[li];
+    const reply = list.slice(li + 1).find((m) => m && !isAside(m) && m.author !== OPERATOR);
+    if (reply) return { id: mine.id, state: "read", at: Number(reply.at) || null };
+    const busy = (agents || []).some((a) => a && (a.state === "working" || a.state === "queued"));
+    if (busy) return { id: mine.id, state: "read", at: null };
+    return { id: mine.id, state: "delivered", at: Number(mine.at) || null };
+  }
+  function deliveryLabel(d, fmtTime) {
+    if (!d) return "";
+    if (d.state === "delivered") return "Delivered";
+    return d.at && typeof fmtTime === "function" ? `Read ${fmtTime(d.at)}` : "Read";
+  }
+  // Seats that should show a typing bubble: working or queued, in roster order.
+  function typingSeats(agents) {
+    return (agents || []).filter((a) => a && (a.state === "working" || a.state === "queued")).map((a) => a.agentId || a.id);
+  }
+  function typingLabel(names) {
+    names = (names || []).filter(Boolean);
+    if (!names.length) return "";
+    if (names.length === 1) return `${names[0]} is typing`;
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
+    return `${names[0]}, ${names[1]} and ${names.length - 2} more are typing`;
+  }
+  return { DEVELOPER_DOMAINS, relativeTime, rowModel, visibleWorkers, visibleTemplates, conversationTitle, composerPlaceholder, filterWorkers,
+    sameRun, runPosition, deliveryState, deliveryLabel, typingSeats, typingLabel };
 });

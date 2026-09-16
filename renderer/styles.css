@@ -22,6 +22,8 @@
 :root {
   /* paper surfaces (rise = lighter + top light) */
   --cream: #f7f3ea; --panel: #fbf8f1; --raised: #fffdf8;
+  /* The two bubbles of a text thread: yours is ink on the page, a worker's is a raised card. */
+  --bubble-me: #1a1714; --bubble-me-ink: #f7f3ea; --bubble-them: #fffdf8; --bubble-them-ink: #1a1714;
   --ink: #1a1714; --muted: #6b6457;
   --gold: #b8893a; --gold-soft: #c9a227; --gold-deep: #8c682c;
   /* Gold as text needs a darker step on paper to clear 4.5:1; as a border or
@@ -98,6 +100,7 @@ body.dark {
      edge. Shadows go near-black rather than warm-black - a brown shadow under a
      neutral panel is the same mistake one layer down. */
   --cream: #0a0a0b; --panel: #141416; --raised: #1c1c1f;
+  --bubble-me: #2a2f3a; --bubble-me-ink: #e9e9ec; --bubble-them: #1c1c1f; --bubble-them-ink: #e9e9ec;
   --ink: #e9e9ec; --muted: #9a9aa2;
   --gold: #d2ad62; --gold-soft: #e7c984; --gold-deep: #9a7e44;
   --gold-text: var(--gold);
@@ -2581,3 +2584,97 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .act-prompt { color: #bfa669; }
 .act-diff { border-top: 1px solid var(--line); max-height: 260px; overflow: auto; padding: 6px 10px; font-family: var(--mono); font-size: 11.5px; }
 @media (prefers-reduced-motion: reduce) { .act-card.running .act-dot { animation: none; } }
+
+/* ── the thread as texts ─────────────────────────────────────────────────────
+   Michael: "the messages should have an iMessage-like concept". A worker's
+   bubbles sit left as raised cards with its mark by the last one of a run;
+   yours sit right, ink on the page, with no name. Consecutive bubbles from one
+   sender a few minutes apart are one run: tighter spacing, the corner toward
+   the sender squared on the tail. "Delivered" or "Read" under your last text;
+   a typing bubble in the seat's mark while it works. Depth is a stepped
+   surface and a lit top edge, not a shadow. Everything here is appended so it
+   wins over the transcript layout above at equal or higher specificity. */
+.room-thread { gap: 0; padding: 14px 16px 18px; }
+.room-thread .rmsg { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 8px; align-items: end; margin: 3px 0 0; }
+.room-thread .rmsg.run-first { margin-top: 12px; }
+.room-thread .rmsg:first-child, .room-thread .rmsg-divider + .rmsg { margin-top: 0; }
+.room-thread .rmsg.from-operator { grid-template-columns: minmax(0, 1fr); }
+.room-thread .rmsg > .rmsg-mark { grid-column: 1; width: 22px; height: 22px; margin-bottom: 3px; visibility: hidden; }
+.room-thread .rmsg.run-last > .rmsg-mark { visibility: visible; }
+.room-thread .rmsg-col { grid-column: 2; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.room-thread .rmsg.from-operator .rmsg-col { grid-column: 1; align-items: flex-end; }
+/* The head: who and what kind, on the first bubble of a run in a group. Never on yours; not in a one-worker thread unless the bubble is a note, a review or a relay. */
+.room-thread .rmsg-head { display: flex; align-items: baseline; gap: 6px; padding: 0 12px; min-height: 0; }
+.room-thread .rmsg:not(.run-first) > .rmsg-col > .rmsg-head,
+.room-thread .rmsg.from-operator .rmsg-head,
+.room.is-solo .room-thread .rmsg:not(.is-progress):not(.is-critique):not(.is-relay) .rmsg-head { display: none; }
+.room-thread .rmsg.is-continued { margin-top: 3px; }
+.room-thread .rmsg.is-continued > .rmsg-head { display: none; }
+.room-thread .rmsg-who { font-size: var(--fs-cap); font-weight: 600; letter-spacing: .02em; color: var(--muted); }
+.room-thread .rmsg-time { margin-left: 0; opacity: 0; }
+.room-thread .rmsg:hover .rmsg-time, .room-thread .rmsg:focus-within .rmsg-time { opacity: 1; }
+/* The bubble itself. */
+.room-thread .rmsg:not(.from-operator) .rmsg-body,
+.room-thread .rmsg.from-operator .rmsg-body {
+  padding: 8px 13px; max-width: min(66ch, 82%); line-height: 1.52; font-size: var(--fs-body);
+  border-radius: 18px; border: 1px solid var(--line); border-top-color: var(--hair-top);
+  background: var(--bubble-them); color: var(--bubble-them-ink); box-shadow: var(--z1);
+  transition: border-color 120ms var(--ease);
+}
+.room-thread .rmsg.from-operator .rmsg-body { background: var(--bubble-me); color: var(--bubble-me-ink); border-color: transparent; box-shadow: none; }
+.room-thread .rmsg.from-operator .rmsg-body code { background: rgba(255,255,255,.14); color: inherit; }
+.room-thread .rmsg.from-operator .rmsg-body a { color: inherit; text-decoration: underline; }
+/* Runs: the corner toward the sender squares off along the run and on the tail. */
+.room-thread .rmsg:not(.from-operator):not(.run-first) .rmsg-body { border-top-left-radius: 6px; }
+.room-thread .rmsg:not(.from-operator).run-last .rmsg-body { border-bottom-left-radius: 6px; }
+.room-thread .rmsg.from-operator:not(.run-first) .rmsg-body { border-top-right-radius: 6px; }
+.room-thread .rmsg.from-operator.run-last .rmsg-body { border-bottom-right-radius: 6px; }
+/* A note a seat makes while it works is a hollow bubble in the secondary voice. */
+.room-thread .rmsg.is-progress .rmsg-body { background: transparent; color: var(--muted); font-size: var(--fs-sm); box-shadow: none; border-top-color: var(--line); }
+/* A review keeps its rule and label, and reads as a plain card, not a chat bubble. */
+.room-thread .rmsg.is-critique .rmsg-body { border-radius: var(--r-lg); max-width: 72ch; }
+.room-thread .rmsg-quote { margin-left: 0; max-width: min(66ch, 82%); }
+.room-thread .rmsg-ask { margin: 2px 0 2px; }
+.room-thread .rmsg-actions { padding-left: 4px; }
+/* The approval card a seat raises keeps its own row: full width, its mark in the head as before. */
+.room-thread .rmsg.is-gate { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
+.room-thread .rmsg.is-gate .rmsg-head { display: flex; padding: 0; }
+.room-thread .rmsg.is-gate .rmsg-head .rmsg-mark { visibility: visible; width: 17px; height: 17px; }
+/* Delivered, or Read with the time, under your last text and nowhere else. */
+.rmsg-status { text-align: right; padding: 3px 12px 0; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.rmsg-status[data-state="read"] { color: var(--muted); }
+/* The typing bubble: the seat's mark, turning, beside three dots. */
+.rmsg-typing { display: grid; grid-template-columns: 24px max-content; column-gap: 8px; align-items: end; justify-items: start; margin-top: 12px; }
+.rmsg-typing .rmsg-mark { width: 22px; height: 22px; margin-bottom: 3px; display: block; }
+.rmsg-dots { display: inline-flex; gap: 4px; align-items: center; padding: 11px 13px; border-radius: 18px; border-bottom-left-radius: 6px;
+  background: var(--bubble-them); border: 1px solid var(--line); border-top-color: var(--hair-top); box-shadow: var(--z1); }
+.rmsg-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); opacity: .35; animation: rmsg-dot 1.2s var(--ease) infinite; }
+.rmsg-dots i:nth-child(2) { animation-delay: .16s; }
+.rmsg-dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes rmsg-dot { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .rmsg-dots i { animation: none; opacity: .6; } }
+.rmsg-divider { margin: 14px 0 2px; }
+/* The composer: a pill, a round attach button, Send that lights when there is text. */
+.room-composer { align-items: center; gap: 8px; padding: 10px 12px 11px; }
+.room-input { border-radius: var(--r-pill); padding: 8px 14px; }
+.room-attach { width: 30px; height: 30px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.room-send { border-radius: var(--r-pill); opacity: .6; transition: opacity 120ms var(--ease); }
+.room-composer.has-text .room-send, .room-send:focus-visible { opacity: 1; }
+/* The rail and the contact list on the same grid: marks, a name, a preview line, hairline rows. */
+.msg-row { padding: 9px 12px 9px 10px; gap: 10px; border: 1px solid transparent; }
+.msg-row .room-avatars { margin-top: 1px; }
+.msg-row .msg-top { display: flex; align-items: baseline; gap: 8px; }
+.msg-row .msg-time { margin-left: auto; font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.msg-row .room-row-preview { margin-top: 1px; }
+.msg-row.current { background: var(--raised); border-color: var(--line); border-top-color: var(--hair-top); box-shadow: var(--z1); }
+.msg-search { width: 100%; box-sizing: border-box; border-radius: var(--r-pill); padding: 8px 14px; font-family: var(--body); font-size: var(--fs-body); color: var(--ink);
+  background: var(--raised); border: 1px solid var(--line); }
+.msg-search:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px var(--focus-halo); }
+.msg-contact { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 12px; border-radius: var(--r-lg); border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease); }
+.msg-contact:hover, .msg-contact:focus-visible { background: var(--raised); border-color: var(--line); border-top-color: var(--hair-top); outline: none; }
+.msg-contact.on { border-color: var(--gold); background: var(--accent-wash); }
+.msg-contact-mark { width: 24px; height: 24px; display: block; }
+.msg-contact-tier { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); letter-spacing: .03em; }
+

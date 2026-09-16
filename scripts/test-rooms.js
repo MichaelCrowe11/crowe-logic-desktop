@@ -53,6 +53,18 @@ const roomOf = (ids, extra = {}) =>
 
   // ── registry ───────────────────────────────────────────────────────────────
 
+  await check("workers are named as colleagues, without the company in front", () => {
+    const names = registry.listAgents().map((a) => a.name);
+    const prefixed = names.filter((n) => /^Crowe\s/.test(n));
+    assert(!prefixed.length, `still prefixed: ${prefixed.join(", ")}`);
+    assert(registry.getAgent("operator").name === "Operator", `operator is ${registry.getAgent("operator").name}`);
+    assert(registry.getAgent("studio").name === "Studio Director", `studio is ${registry.getAgent("studio").name}`);
+    assert(registry.getAgent("crowe-logic").name === "Orchestrator", `crowe-logic is ${registry.getAgent("crowe-logic").name}`);
+    assert(registry.getAgent("crowelm-frontier").name === "CroweLM Frontier", "a product name is not the prefix");
+    assert(registry.displayName({ id: "x", name: "Crowe   Auditor" }) === "Auditor" && registry.displayName({ id: "y", name: "Crowe" }) === "Crowe", "the rule strips only a leading word");
+    return `${names.length} names, none prefixed`;
+  });
+
   await check("the vendored roster is the canonical one, not an invented parallel", () => {
     const ids = registry.listAgents().map((a) => a.id);
     assert(ids.length >= 20, `only ${ids.length} agents vendored`);
@@ -706,7 +718,7 @@ const roomOf = (ids, extra = {}) =>
     const s = rooms.summary(room);
     assert(s.unread === 2, `two replies should be unread, got ${s.unread}`);
     assert(s.preview === "Nothing uploading on this Mac right now." || s.preview === "No claim issue here.", `preview was ${s.preview}`);
-    assert(s.names.includes("Crowe Operator") && s.agents.length === 2, "the summary does not name its seats");
+    assert(s.names.includes("Operator") && s.agents.length === 2, "the summary does not name its seats");
     rooms.markRead(room);
     assert(rooms.unreadCount(room) === 0, "marking read did not clear the count");
     await rooms.speak(room, "thanks", f);
@@ -726,7 +738,7 @@ const roomOf = (ids, extra = {}) =>
     const relay = b.messages[0];
     assert(relay.kind === "relay" && relay.author === "operator" && relay.from.roomTitle === "SWM Ops" && relay.from.messageId === said.id, `relay was ${JSON.stringify(relay)}`);
     const seen = rooms.viewFor(b, "studio")[0].content;
-    assert(/^\[Crowe Operator, from the room "SWM Ops"\]/.test(seen), `the seat read the relay as ${seen.slice(0, 60)}`);
+    assert(/^\[Operator, from the room "SWM Ops"\]/.test(seen), `the seat read the relay as ${seen.slice(0, 60)}`);
     assert((await rooms.forward(a, a, said.id, fa)).error, "a message was forwarded into its own room");
     assert((await rooms.forward(a, b, "m-nope", fb)).error, "a missing message was forwarded");
     return "relayed, attributed, answered by one seat";

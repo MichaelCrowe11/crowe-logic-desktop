@@ -2009,7 +2009,13 @@ async function runRoomTurn(id, fn) {
   if (!room) return { error: "no such room" };
   return withRoom(id, async () => {
     room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-    const out = await fn(room, roomRunner(room));
+    /* speak() stores what the operator said before its first await, so by the
+       time the turn's promise exists the text is in the room. Broadcast that
+       now: a thread that only heard "turn" drew the operator's own text when
+       the seats came back, with a typing bubble standing over its absence. */
+    const pending = fn(room, roomRunner(room));
+    roomChanged(room, "message", { save: false });
+    const out = await pending;
     roomChanged(room, "turn");
     return { ...out, room: roomState(room) };
   });
