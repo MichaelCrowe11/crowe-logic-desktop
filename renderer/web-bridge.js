@@ -913,6 +913,14 @@
         },
         answer: async (id, messageId, optionId) =>
           runRoomTurn(id, (room, deps) => ROOMS.engine.answerAsk(room, String(messageId || ""), String(optionId || ""), deps)),
+        // A word on a worker's bubble, not a turn: the same engine call the desktop makes.
+        react: async (id, messageId, kind) => {
+          const room = loadRoom(id); if (!room) return { error: "no such room" };
+          const r = ROOMS.engine.react(room, String(messageId || ""), String(kind || ""));
+          if (r.error) return { error: r.error };
+          roomChanged(room, "react");
+          return { ok: true, on: r.on, reactions: r.message.reactions || [] };
+        },
         forward: async (fromId, messageId, toId, to) => {
           const from = loadRoom(fromId); if (!from) return { error: "no such source room" };
           return runRoomTurn(toId, (target, deps) => ROOMS.engine.forward(from, target, String(messageId || ""), deps, { to: Array.isArray(to) ? to : null }));
@@ -967,6 +975,7 @@
         update: async () => ({ error: ROOMS_OFF }),
         markRead: async () => ({ unread: 0 }),
         answer: async () => ({ error: ROOMS_OFF }),
+        react: async () => ({ error: ROOMS_OFF }),
         forward: async () => ({ error: ROOMS_OFF }),
         routineAdd: async () => ({ error: ROOMS_OFF }),
         routineUpdate: async () => ({ error: ROOMS_OFF }),

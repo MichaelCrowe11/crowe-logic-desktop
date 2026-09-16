@@ -2678,3 +2678,21 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .msg-contact-mark { width: 24px; height: 24px; display: block; }
 .msg-contact-tier { font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); letter-spacing: .03em; }
 
+/* ── reactions: tapbacks as words ── */
+.room-thread .rmsg-actions { padding-left: 4px; align-items: center; gap: 8px; }
+.rmsg-react { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r-pill);
+  background: var(--raised); border: 1px solid var(--line); border-top-color: var(--hair-top); box-shadow: var(--z1); }
+.rmsg-react-btn { font-family: var(--mono); font-size: var(--fs-cap); letter-spacing: .04em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: var(--r-pill); border: none; background: none; color: var(--muted); cursor: pointer;
+  transition: background 100ms var(--ease), color 100ms var(--ease); }
+.rmsg-react-btn:hover, .rmsg-react-btn:focus-visible { background: var(--accent-wash); color: var(--ink); outline: none; }
+/* The chip rides the bubble's lower corner, the way a tapback does. */
+.rmsg-reactions { display: flex; gap: 4px; margin: -9px 0 0 10px; position: relative; z-index: 1; }
+.rmsg-reactions[hidden] { display: none; }
+.rmsg-chip { font-family: var(--mono); font-size: var(--fs-cap); letter-spacing: .04em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--line-strong);
+  border-top-color: var(--hair-top); color: var(--ink); cursor: pointer; box-shadow: var(--z1); }
+.rmsg-chip.mine { border-color: var(--gold); color: var(--gold-text); }
+.rmsg-chip i { font-style: normal; color: var(--muted); margin-left: 2px; }
+.rmsg-chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-halo); }
+

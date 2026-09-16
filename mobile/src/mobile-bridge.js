@@ -2261,6 +2261,7 @@
       update: async () => ({ error: ROOMS_OFF }),
       markRead: async () => ({ unread: 0 }),
       answer: async () => ({ error: ROOMS_OFF }),
+      react: async () => ({ error: ROOMS_OFF }),
       forward: async () => ({ error: ROOMS_OFF }),
       routineAdd: async () => ({ error: ROOMS_OFF }),
       routineUpdate: async () => ({ error: ROOMS_OFF }),

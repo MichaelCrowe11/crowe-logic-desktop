@@ -1981,6 +1981,17 @@ ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
   return { unread: 0 };
 });
 
+// A reaction is a word on a worker's bubble, not a turn: no seat runs, the
+// room is saved, and every window learns of it. Queued behind the room's turns
+// so it cannot land on a message list mid-write.
+ipcMain.handle("crowe:rooms:react", (_e, { id, messageId, kind } = {}) => withRoom(id, async () => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const r = roomsEngine.react(room, String(messageId || ""), String(kind || ""));
+  if (r.error) return { error: r.error };
+  roomChanged(room, "react");
+  return { ok: true, on: r.on, reactions: r.message.reactions || [] };
+}));
+
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
    back and run at Execute after the operator moved the app down. */
