@@ -34,6 +34,7 @@ const COPY = [
   ["renderer/adopted-styles.js", "adopted-styles.js"],
   ["renderer/mark-geometry.js", "mark-geometry.js"],
   ["renderer/mark.js", "mark.js"],
+  ["renderer/messages.js", "messages.js"],
   ["renderer/first-run.js", "first-run.js"],
   ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
@@ -61,7 +62,7 @@ const COPY = [
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
