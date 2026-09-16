@@ -2,12 +2,13 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
+const { app, BrowserWindow, session, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
@@ -1127,6 +1128,60 @@ async function fetchCatalog() {
   } catch { /* keep last good; the router degrades to the default model */ }
 }
 
+// ─── The document printer ────────────────────────────────────────────────────
+/* export_document lays its page out in Chromium, and Chromium is here, not in
+   the harness, so the harness is handed this hook. The page loads into a hidden
+   window with scripts off and no network at all: an image URL the model
+   composed, fetched while printing, is the same outbound GET open_url asks
+   about, so on this session every request that is not the document itself is
+   cancelled. One job at a time, since each is a renderer process, and the whole
+   job - load and print - has one deadline, with the window destroyed either
+   way, so a hung page cannot outlive the turn that asked for it. */
+const PRINT_TIMEOUT_MS = 30000;
+const PRINT_MAX_DATA_URL_CHARS = 1800000;   // Chromium will not navigate to a URL past 2M characters
+let printSess = null, printAllow = "", printChain = Promise.resolve();
+function printSession() {
+  if (printSess) return printSess;
+  printSess = session.fromPartition("crowe-print");   // no persist: prefix, so it lives in memory only
+  printSess.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+    callback({ cancel: !(details.url === printAllow || details.url.startsWith("data:") || details.url.startsWith("about:")) });
+  });
+  printSess.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  printSess.setPermissionCheckHandler(() => false);
+  return printSess;
+}
+async function printOne(html) {
+  printSession();
+  const win = new BrowserWindow({ show: false, width: 816, height: 1056, webPreferences: {
+    partition: "crowe-print", sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  let timer = null, tmp = null;
+  try {
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`printing took longer than ${PRINT_TIMEOUT_MS / 1000}s`)), PRINT_TIMEOUT_MS); });
+    let url = "data:text/html;charset=utf-8;base64," + Buffer.from(html, "utf8").toString("base64");
+    if (url.length > PRINT_MAX_DATA_URL_CHARS) {
+      // Too long for a URL: a private temp file, readable by this user only, removed in finally.
+      tmp = path.join(app.getPath("temp"), `crowe-print-${crypto.randomBytes(8).toString("hex")}.html`);
+      fs.writeFileSync(tmp, html, { mode: 0o600 });
+      url = pathToFileURL(tmp).toString();
+    }
+    printAllow = url;
+    await Promise.race([win.loadURL(url), deadline]);
+    return await Promise.race([win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true, generateDocumentOutline: true }), deadline]);
+  } finally {
+    clearTimeout(timer);
+    printAllow = "";
+    if (!win.isDestroyed()) win.destroy();
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+}
+function printToPdf(html) {
+  const job = printChain.then(() => printOne(String(html ?? "")));
+  printChain = job.catch(() => {});
+  return job;
+}
+
 const harnessCtx = {
   getCwd: () => CWD,
   setCwd: (p) => { CWD = p; },
@@ -1141,6 +1196,8 @@ const harnessCtx = {
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  // The document printer above. The harness never requires electron itself.
+  printToPdf,
   // The Runbook lives in the renderer's store, so authoring is an event, not a
   // write from here: the renderer saves it and surfaces the canvas. Stamped
   // "main" because chat is the only surface that offers the tool.

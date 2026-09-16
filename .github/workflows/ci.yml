@@ -75,6 +75,7 @@ jobs:
       # is added here in the same commit, and this step is where it goes.
       - name: Run the remaining node contract checks
         run: |
+          node scripts/test-export-document.js
           node scripts/test-generate-image.js
           node scripts/test-plan.js
           node scripts/test-mail.js

@@ -280,6 +280,7 @@ function stageLabel(name) {
   if (name === "run_shell") return "executing";
   if (name === "write_file" || name === "edit_file") return "editing";
   if (name === "open_url") return "browsing";
+  if (name === "export_document") return "exporting";
   if (name === "generate_image") return "drawing";
   if (name === "share_preview") return "publishing";
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
@@ -450,6 +451,7 @@ function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
   const arg = ev.name === "run_shell" ? (ev.args.command || "")
     : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "export_document" ? `${ev.args.filename || "document"}.${ev.args.format || ""}`
     : ev.name === "generate_image" ? (ev.args.prompt || "")
     : ev.name === "share_preview" ? (ev.args.stop ? "stop " + (ev.args.id || "all") : (ev.args.dir || (ev.args.port ? "port " + ev.args.port : "")))
     : ev.name === "search" ? (ev.args.pattern || "")
