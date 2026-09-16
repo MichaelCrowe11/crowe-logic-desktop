@@ -181,6 +181,10 @@ check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checko
 check(/try \{ proc = spawnShell\(cols, rows\); \}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed spawn into { ok: false, error }");
 check(/if \(app\.isPackaged \|\| process\.platform === "win32" \|\| !\/posix_spawnp\/i\.test/.test(main), "the spawn-helper mode-bit repair must be dev-only");
 check(!/pty\.spawn\([^\n]*\n[^\n]*ptyProcs\.set/.test(main), "no bare pty.spawn may feed ptyProcs outside spawnShell");
+// The terminal is the operator's login shell (their PATH, even from a Finder
+// launch), and PowerShell where there is no $SHELL.
+check(/if \(process\.platform === "win32"\) return \{ file: "powershell\.exe", args: \[\] \};/.test(main)
+  && /return \{ file: process\.env\.SHELL \|\| "\/bin\/zsh", args: \["-l"\] \};/.test(main), "the terminal must be a login shell, and PowerShell on Windows");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
 // The plugin server's environment is built by harness.pluginSpawnEnv, which
 // starts from safeShellEnv (the agent shell's filtered variables) and only adds

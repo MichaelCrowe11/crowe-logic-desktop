@@ -1222,10 +1222,20 @@ function ptyHelperPaths() {
     return [path.join(dir, "build", "Release", "spawn-helper"), path.join(dir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper")];
   } catch { return []; }
 }
+/* The operator's login shell, started as one (`-l`), so the PATH they set in
+   .zprofile is there even from a Finder or Dock launch, where the app itself
+   inherits only /usr/bin:/bin:/usr/sbin:/sbin; without it the first terminal a
+   user opened said "command not found" to node, brew and crowe. Windows has no
+   $SHELL and no /bin/zsh: PowerShell is on every supported Windows, and until
+   this the Windows build's terminal could not start at all. */
+function shellCommand() {
+  if (process.platform === "win32") return { file: "powershell.exe", args: [] };
+  return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
+}
 function spawnShell(cols, rows) {
-  const shell = process.env.SHELL || "/bin/zsh";
+  const { file, args } = shellCommand();
   const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env };
-  try { return pty.spawn(shell, [], opts); }
+  try { return pty.spawn(file, args, opts); }
   catch (err) {
     if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
     let fixed = false;
@@ -1234,7 +1244,7 @@ function spawnShell(cols, rows) {
       try { fs.accessSync(helper, fs.constants.X_OK); } catch { try { fs.chmodSync(helper, 0o755); fixed = true; } catch {} }
     }
     if (!fixed) throw err;
-    return pty.spawn(shell, [], opts);
+    return pty.spawn(file, args, opts);
   }
 }
 ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
