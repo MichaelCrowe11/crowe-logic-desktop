@@ -82,11 +82,27 @@ four places only — everything else stays closed:
 | Gateway Ops | Projects/Models | /health + /evals endpoints (Codex, in flight) |
 | R2 Storage | Projects/Data | crowe-releases + dataset buckets |
 | SWM Commerce | Projects | Shopify/Stripe read-only analytics |
-| Channel Analytics | Projects | Southwest Mushrooms YouTube data |
+| Channel Analytics | Projects | Shipped: `plugins/channel-analytics/server.js`, a read-only server over the channel manager's nightly state (snapshot, uploads, machine Shorts, hand tasks, brief, Stripe attribution); `run_collect` at edit |
 | Crowe Skills | all | crowe-skills corpus server (skill_search/show) |
 
 Third-party official (later, curated): GitHub, Slack, Notion — via the same
 manifest, `official: true`, vetted commands only.
+
+### Built-in plugins (no server)
+
+A manifest entry may carry `"mcp": null` and a `builtin.tools` list instead of
+a command. Nothing is spawned: the tools live in `harness.js`, and `main.js`
+maps the id to them through `BUILTIN_PLUGIN_TOOLS`, so an entry can neither
+claim a built-in it does not own nor be treated as one while it names a server.
+The entry still declares the credentials (`envPrompts`, with `secret: false`
+on a host or an address so it is typed in the clear) and the tier rules, and
+enable and disable travel the same road as every other plugin. Mail is the
+first: `send_email` in `mail.js`, offered only while the plugin is on with a
+complete account, gated at Execute behind an approval card that shows the whole
+message and names the sender and the SMTP server it goes through; both are
+checked for shape before the card and again at send time, so what leaves is
+what was approved. It exists as a built-in because no maintained MCP email
+server was found on npm to trust with a password (see the header of `mail.js`).
 
 ## Phases
 
@@ -109,3 +125,33 @@ manifest, `official: true`, vetted commands only.
   references (the MODEL_PLAN_ACCESS lesson).
 - A plugin can add capability, never widen autonomy: tier gates and the
   secret guard apply to plugin tools with no opt-out.
+
+## Channel Analytics: the first bundled server
+
+The channel manager (`~/swm-channel-manager/manager.py`, launchd 00:02 and
+07:25) already reads the YouTube Data API, the Analytics API and Stripe every
+night and writes what it found. The plugin does not talk to YouTube; it reads
+those files. A room seat asking for the morning numbers therefore costs no
+quota, needs no credential, and sees exactly what the emailed brief saw.
+
+Tools, all read-only by manifest rule except the last: `list_snapshot_dates`,
+`get_channel_snapshot` (the brief's numbers in one read, text or json),
+`get_snapshot_section`, `list_recent_uploads` (voiced and machine flags,
+failed description checks), `list_machine_shorts` (with the hours of day they
+land), `get_video_performance`, `list_hand_tasks`, `read_daily_brief`,
+`get_stripe_attribution`, and `run_collect` at the edit tier, so a read-only
+room cannot spend quota.
+
+It is the first server that ships inside the app. The manifest names it with
+two placeholders the loader resolves and nothing else does: `${APP}` is the
+app's directory (`plugins/` is unpacked from the asar so a child process can
+read it) and `${NODE}` as the command runs the named script in an Electron
+utility process, the Node runtime the app carries, so no node is needed on the
+machine. It is a utility process and not the binary run as Node because a
+packaged build has the RunAsNode fuse off: there, `ELECTRON_RUN_AS_NODE` is
+ignored and would start a second copy of the app. The server speaks
+newline-delimited JSON on stdio when run by node and the same messages over
+its parent port when forked by the app. Dates and video ids are
+validated before they touch a path; sections are allowlisted; the two folders
+it reads are the only two it opens, and `~/.swm-yt-creds` is never one of
+them. `scripts/test-channel-analytics.js` drives it over its own wire.

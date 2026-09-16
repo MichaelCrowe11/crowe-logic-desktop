@@ -178,10 +178,14 @@ check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_U
 // The plugin server's environment is built by harness.pluginSpawnEnv, which
 // starts from safeShellEnv (the agent shell's filtered variables) and only adds
 // the plugin's own variables plus a login-shell PATH so npx resolves from a
-// Finder launch. Both halves are pinned: the spawn must use that env, and the
-// builder must start from the filtered environment.
-check(/const env = harness\.pluginSpawnEnv\(spec\.env \|\| \{\}\);[\s\S]{0,600}spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+// Finder launch. Both halves are pinned, for a spawned server and a forked one:
+// each must use that env, and the builder must start from the filtered environment.
+check(/const env = harness\.pluginSpawnEnv\(spec\.env \|\| \{\}\);/.test(main) && /spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio: \["pipe", "pipe", "pipe"\]/.test(main) && /utilityProcess\.fork\(spec\.fork, spec\.args \|\| \[\], \{ env, stdio: \["ignore", "pipe", "pipe"\]/.test(main), "MCP servers, spawned or forked, must inherit the filtered shell environment, not the app's");
 check(/function pluginSpawnEnv\([^)]*\) \{\s*const env = \{ \.\.\.safeShellEnv\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "harness.js"), "utf8")), "pluginSpawnEnv must start from safeShellEnv");
+// The packaged binary has the RunAsNode fuse off (pinned below), so ELECTRON_RUN_AS_NODE
+// on it does not make a Node: it starts a second copy of the app. A server that ships
+// inside the app runs in a utility process, the one Node runtime a packaged build has.
+check(!/ELECTRON_RUN_AS_NODE:/.test(main) && /p\.mcp\.command === "\$\{NODE\}"/.test(main) && /\{ fork: args\[0\], args: args\.slice\(1\), env: merged \}/.test(main), "a bundled ${NODE} server must be forked as a utility process, never spawned through ELECTRON_RUN_AS_NODE");
 check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame" && !isSafeGuestUrl\(details\.url\)/.test(main), "guest main-frame requests must be checked at the session, since webview.src is a loadURL");
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
