@@ -869,7 +869,23 @@ if (composerFoot && typeof ResizeObserver === "function") {
   }).observe(composerFoot);
 }
 syncComposerInput();
-function bindChips() { transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => send(c.textContent))); }
+// First run: the workspace is the home folder until a project is opened, and
+// the first chip then opens a folder instead of asking the agent to summarise ~.
+let atHome = false;
+function applyWelcomeChips() {
+  const F = window.CroweFirstRun; if (!F) return;
+  // The phone and web shells rewrite the welcome for a device that has no folder
+  // to open; once they have, the desktop's chips must not come back over theirs.
+  const welcome = transcript.querySelector(".welcome");
+  if (welcome && (welcome.dataset.mobile === "1" || welcome.dataset.web === "1")) return;
+  const chips = transcript.querySelectorAll(".welcome .chips .chip");
+  const model = F.welcomeChips(atHome);
+  chips.forEach((c, i) => { if (!model[i]) return; c.textContent = model[i].text; c.dataset.action = model[i].action; });
+}
+function bindChips() {
+  applyWelcomeChips();
+  transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => (c.dataset.action === "open-folder" ? pickRepoFolder() : send(c.textContent))));
+}
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
 
@@ -882,7 +898,7 @@ const panelDeck = $("panel-deck");
 let panels = [], panelSeq = 0, activeLegacy = null, activePanelId = null;
 const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
-function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "" })) }; }
+function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
 function savePanelState() {
   try { localStorage.setItem("crowe-workspace-panels", JSON.stringify(panelState())); } catch {}
 }
@@ -943,7 +959,7 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
@@ -1017,7 +1033,7 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   /* This panel is the one place the Crowe Logic CLI is entered for you. When
      the tier withholds the shell the dock still works - the objective runs on
      the gateway - so this is a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
@@ -1396,32 +1412,52 @@ function mountWorkbench(p, body) {
    Rooms are sessions with a roster, so they persist exactly as sessions do -
    but until this existed the only way back into one was to keep its panel open,
    which made "persistent agent identities" true in the store and false in the
-   product. Each row carries what a person actually chooses by: who is in the
-   room, and what it has spent. */
+   product. A row is an inbox entry: who is in the room, the last thing said,
+   whether anything is unread, whether a seat is working right now, and whether
+   one of them is waiting on a decision. That is what a person chooses by. */
+let roomListTimer = null;
+function refreshRoomListSoon() {
+  clearTimeout(roomListTimer);
+  roomListTimer = setTimeout(() => { refreshRoomList(); }, 120);
+}
 async function refreshRoomList() {
   const host = $("room-list"); if (!host) return;
   let list = [];
   try { list = await window.crowe.rooms.list(); } catch { return; }
   host.innerHTML = "";
-  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet.</div>'; return; }
+  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet. A room is a standing colleague: give it a brief and a routine and it speaks first.</div>'; return; }
   for (const r of list) {
-    const row = document.createElement("div"); row.className = "sess-row room-row";
-    const seats = (r.agents || []).length;
-    const spent = typeof r.spentUsd === "number" ? `$${r.spentUsd.toFixed(3)}` : "";
-    row.innerHTML = `<div class="sess-main">
-        <div class="sess-title">${esc(r.title || "Room")}</div>
-        <div class="sess-when">${seats} agent${seats === 1 ? "" : "s"}${spent ? " · " + esc(spent) : ""}${r.halted ? " · halted" : ""}</div>
-      </div><button class="sess-del" title="Delete">Delete</button>`;
+    const row = document.createElement("div");
+    row.className = "sess-row room-row" + (r.unread ? " has-unread" : "") + (r.working ? " is-working" : "") + (r.openAsk ? " has-ask" : "");
+    const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
+    if (open && open.id === activePanelId) row.classList.add("current");
+    const names = r.names || [];
+    row.innerHTML = `<div class="room-avatars" aria-hidden="true"></div>
+      <div class="sess-main">
+        <div class="sess-title"><span class="room-row-title"></span></div>
+        <div class="room-row-preview"></div>
+      </div>
+      <span class="room-row-dot" aria-label="${r.unread ? esc(String(r.unread)) + " unread" : ""}"></span>
+      <button class="sess-del" title="Delete">Delete</button>`;
+    row.querySelector(".room-row-title").textContent = r.title || "Room";
+    row.querySelector(".room-row-preview").textContent = r.openAsk ? "Waiting on your decision" : (r.preview || names.join(", "));
+    // Up to three seats as marks, the first turning while the room works, and
+    // the rest as a count - the same stack a group thread wears anywhere.
+    const av = row.querySelector(".room-avatars");
+    const ids = r.agents || [];
+    ids.slice(0, 3).forEach((id, i) => {
+      const m = document.createElement("span"); m.className = "room-avatar"; m.title = names[i] || id;
+      av.appendChild(m);
+      if (window.CroweMark) CroweMark.mount(m, { state: r.working && i === 0 ? "reasoning" : "rest", small: true });
+    });
+    if (ids.length > 3) { const more = document.createElement("span"); more.className = "room-avatar-more"; more.textContent = `+${ids.length - 3}`; av.appendChild(more); }
     row.addEventListener("click", (e) => {
       if (e.target.closest(".sess-del")) return;
-      // Reuse an open panel rather than stacking a second view of one room:
-      // two panels on one transcript would each paint over the other's state.
-      const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
-      if (open) { focusPanel(open.id); return; }
-      addPanel("room", { roomId: r.id, title: r.title || "Room" });
+      openRoomPanel(r.id, r.title);
     });
     row.querySelector(".sess-del").addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (!confirm(`Delete the room "${r.title || "Room"}"? Its transcript and routines go with it.`)) return;
       await window.crowe.rooms.delete(r.id);
       for (const p of panels.filter((p) => p.type === "room" && p.roomId === r.id)) closePanel(p.id);
       refreshRoomList();
@@ -1429,20 +1465,31 @@ async function refreshRoomList() {
     host.appendChild(row);
   }
 }
+// Reuse an open panel rather than stacking a second view of one room: two
+// panels on one transcript would each paint over the other's state.
+async function openRoomPanel(id, title) {
+  const open = panels.find((p) => p.type === "room" && p.roomId === id);
+  if (open) { focusPanel(open.id); return open; }
+  return addPanel("room", { roomId: id, title: title || "Room" });
+}
 
-/* A room: several named agents and the operator in one thread.
+/* A room: several named agents and the operator in one thread, kept as a
+   standing colleague.
 
-   The surface is built around the two facts that make a room different from a
-   thread, and it refuses to bury either one. Every message wears the name of
+   The surface is built around the facts that make a room different from a
+   thread, and it refuses to bury any of them. Every message wears the name of
    the agent that wrote it, never a generic assistant label, because "which
-   specialist said this" is the whole reason there is more than one. And the
-   roster strip carries live state and live cost per seat, in the room rather
-   than in a settings pane, because a three-agent room with a two-round critique
-   loop is roughly nine calls where the app used to make one and the operator
-   should be able to watch that happen.
+   specialist said this" is the whole reason there is more than one. A seat
+   works out loud: what it says between tool rounds lands as short messages
+   while it is still working. When a seat needs a decision it asks with a card
+   the operator answers in one tap, and the tap is a message, not a permission.
+   The roster strip carries live state and live cost per seat, in the room
+   rather than in a settings pane, because a three-agent room with a two-round
+   critique loop is roughly nine calls where the app used to make one and the
+   operator should be able to watch that happen.
 
-   Critique and revise are buttons rather than remembered commands, and each one
-   states what it is about to spend before it spends it. */
+   The side pane is where the room becomes a colleague: its brief, the routines
+   that let it speak first, and the activity feed of what its seats are doing. */
 async function mountRoom(p, body, seed = {}) {
   const wrap = document.createElement("div"); wrap.className = "room";
   wrap.innerHTML = `
@@ -1450,43 +1497,88 @@ async function mountRoom(p, body, seed = {}) {
       <span class="room-logotype" role="img" aria-label="Crowe Logic"></span>
       <span class="room-name"></span>
       <span class="room-tier" title="The tier this room may run at: the lowest ceiling among its agents, clamped by your autonomy setting"></span>
+      <button class="room-details ghost sm" type="button" aria-pressed="false" title="Brief, routines and activity">Details</button>
     </div>
-    <div class="room-roster" role="list" aria-label="Room roster"></div>
-    <div class="room-thread" aria-live="polite"></div>
-    <div class="room-rounds">
-      <button class="room-critique ghost sm" disabled>Critique</button>
-      <button class="room-revise ghost sm" disabled>Revise</button>
-      <span class="room-cap"></span>
-      <span class="spacer"></span>
-      <span class="room-meter" title="Spent of this room's budget"></span>
-    </div>
-    <form class="room-composer">
-      <input class="room-input" autocomplete="off" spellcheck="false"
-             placeholder="Address the room with @room, or one agent with @name" aria-label="Message the room">
-      <button class="room-send primary sm" type="submit">Send</button>
-      <div class="room-suggest hidden" role="listbox"></div>
-    </form>`;
+    <div class="room-main">
+      <div class="room-left">
+        <div class="room-roster" role="list" aria-label="Room roster"></div>
+        <div class="room-thread-wrap">
+          <div class="room-thread" aria-live="polite"></div>
+          <button class="room-newpill hidden" type="button"></button>
+        </div>
+        <div class="room-rounds">
+          <button class="room-critique ghost sm" disabled>Critique</button>
+          <button class="room-revise ghost sm" disabled>Revise</button>
+          <span class="room-cap"></span>
+          <span class="spacer"></span>
+          <span class="room-meter" title="Spent of this room's budget"></span>
+        </div>
+        <form class="room-composer">
+          <button class="room-attach ghost sm" type="button" title="Attach files" aria-label="Attach files">+</button>
+          <input class="room-input" autocomplete="off" spellcheck="false"
+                 placeholder="Message the room. @name addresses one seat, @room addresses everyone" aria-label="Message the room">
+          <button class="room-mic ghost sm" type="button" title="Dictate" aria-label="Dictate" aria-pressed="false">Mic</button>
+          <button class="room-send primary sm" type="submit">Send</button>
+          <div class="room-suggest hidden" role="listbox"></div>
+          <div class="room-attached hidden"></div>
+        </form>
+      </div>
+      <aside class="room-side" hidden>
+        <section class="rs-sec">
+          <div class="rs-head"><b>Brief</b><span>What this room is for, said once. Every seat carries it on every turn.</span></div>
+          <input class="rs-title" maxlength="80" aria-label="Room name" placeholder="Room name">
+          <textarea class="rs-brief" rows="5" maxlength="4000" aria-label="Room brief" placeholder="e.g. Run Southwest Mushrooms channel operations. Voiced Shorts only. Never touch Studio visibility or settings unless asked."></textarea>
+        </section>
+        <section class="rs-sec">
+          <div class="rs-head"><b>Routines</b><span>Recurring messages this room sends itself on a schedule. This is how it speaks first.</span></div>
+          <div class="rs-routines"></div>
+          <form class="rs-add">
+            <div class="rs-add-row">
+              <select class="rsa-agent" aria-label="Which seat runs it"></select>
+              <select class="rsa-every" aria-label="How often">
+                <option value="daily">Daily</option><option value="weekdays">Weekdays</option>
+                <option value="weekly">Weekly</option><option value="minutes">Every N minutes</option>
+              </select>
+              <input class="rsa-at" type="time" value="07:00" aria-label="At what time">
+              <select class="rsa-weekday hidden" aria-label="Which day">
+                <option value="1">Mon</option><option value="2">Tue</option><option value="3">Wed</option><option value="4">Thu</option>
+                <option value="5">Fri</option><option value="6">Sat</option><option value="0">Sun</option>
+              </select>
+              <input class="rsa-minutes hidden" type="number" min="5" max="10080" step="5" value="60" aria-label="Every how many minutes">
+            </div>
+            <textarea class="rsa-text" rows="2" maxlength="4000" aria-label="The message it sends" placeholder="The message it sends. e.g. Morning snapshot of the channel: subs, revenue, anything unvoiced that slipped through, and one next action."></textarea>
+            <div class="rs-add-row"><span class="rsa-note"></span><span class="spacer"></span><button class="primary sm" type="submit">Add routine</button></div>
+          </form>
+        </section>
+        <section class="rs-sec rs-activity-sec">
+          <div class="rs-head"><b>Activity</b><span>What the seats are doing: routing, tools called, results. Not a screen; a ledger.</span></div>
+          <div class="rs-activity"><div class="card-empty">Nothing yet.</div></div>
+        </section>
+      </aside>
+    </div>`;
   body.appendChild(wrap);
 
   const roster = wrap.querySelector(".room-roster");
   const thread = wrap.querySelector(".room-thread");
+  const pill = wrap.querySelector(".room-newpill");
   const input = wrap.querySelector(".room-input");
   const suggest = wrap.querySelector(".room-suggest");
   const bCrit = wrap.querySelector(".room-critique");
   const bRev = wrap.querySelector(".room-revise");
   const capEl = wrap.querySelector(".room-cap");
   const meter = wrap.querySelector(".room-meter");
+  const side = wrap.querySelector(".room-side");
+  const detailsBtn = wrap.querySelector(".room-details");
+  const activity = wrap.querySelector(".rs-activity");
 
   let state = null, busy = false;
-
   const money = (n) => "$" + Number(n || 0).toFixed(3);
+  const nameOf = (id) => id === ":operator" ? "You" : id === ":routine" ? "Routine" : id === ":system" ? "" : (state?.agents.find((a) => a.agentId === id)?.name || id);
 
   /* The panel head wears the logotype, same as the header, the agent panel and
      the thinking indicator. It is not decoration here: it turns while any seat
      in the room is working, which is the one state the per-seat marks cannot
-     give at a glance once the roster scrolls sideways. A room either is
-     thinking or it is not, and the mark that carries the product's name is
-     what says so. */
+     give at a glance once the roster scrolls sideways. */
   const roomMark = { svg: null, on: false };
   mountMotionLogotype(wrap.querySelector(".room-logotype"), "").then((svg) => {
     roomMark.svg = svg;
@@ -1498,17 +1590,14 @@ async function mountRoom(p, body, seed = {}) {
     if (roomMark.svg) roomMark.svg.classList.toggle("is-thinking", on);
   }
 
-  /* The roster is a row of living marks.
+  // The details pane is a per-panel choice, remembered with the panel.
+  const setSide = (on) => { p.side = Boolean(on); side.hidden = !p.side; wrap.classList.toggle("with-side", p.side); detailsBtn.setAttribute("aria-pressed", String(p.side)); savePanelState(); };
+  detailsBtn.addEventListener("click", () => setSide(!p.side));
+  if (seed.side) setSide(true);
 
-     Every other surface in this app already says "an agent is working" with the
-     whorl turning - the thinking indicator, the transcript avatar - and a room
-     is the one place where several agents work at once, so it is the surface
-     that needs the grammar most. A word alone ("working") makes the operator
-     read three labels; three marks, one of them turning, is read at a glance.
-
-     Seats are built once and re-stated afterwards. Rebuilding the row would
-     remount every mark and restart every animation, which is how a turning
-     rotor becomes a stutter. */
+  /* The roster is a row of living marks. Seats are built once and re-stated
+     afterwards: rebuilding the row would remount every mark and restart every
+     animation, which is how a turning rotor becomes a stutter. */
   const seats = new Map();
   const MARK_STATE = { working: "reasoning", queued: "reasoning", failed: "failed", done: "rest", idle: "rest" };
   function drawRoster() {
@@ -1527,7 +1616,7 @@ async function mountRoom(p, body, seed = {}) {
         seats.set(a.agentId, seat);
       }
       seat.el.querySelector(".seat-name").textContent = a.name || a.agentId;
-      seat.el.querySelector(".seat-state").textContent = a.model || "room default";
+      seat.el.querySelector(".seat-state").textContent = a.state === "working" ? "working" : a.state === "queued" ? "queued" : (a.model || "room default");
       const calls = a.cost?.calls || 0;
       seat.el.querySelector(".seat-cost").textContent = `${money(a.cost?.usd)} · ${calls} ${calls === 1 ? "call" : "calls"}`;
       seat.el.dataset.state = a.state || "idle";
@@ -1536,40 +1625,118 @@ async function mountRoom(p, body, seed = {}) {
         if (seat.mark) seat.mark.setState(MARK_STATE[a.state] || "rest");
       }
     }
+    for (const [id, seat] of seats) if (!(state?.agents || []).some((a) => a.agentId === id)) { seat.el.remove(); seats.delete(id); }
   }
 
-  /* Appended, never rebuilt. Same reason as the roster: a mounted mark is a
-     running animation, and redrawing the transcript on every refresh would
-     restart all of them and drop any text the operator was selecting. */
-  let drawn = 0;
+  /* The thread. Appended, never rebuilt, for the same reason as the roster:
+     a mounted mark is a running animation, and redrawing on every refresh would
+     restart all of them and drop any text the operator was selecting. But a
+     message can change after it lands - a progress note is promoted to the
+     reply when the turn ends, a question is answered - so each element is
+     re-stated in place when its message changes. */
+  const drawnMsgs = new Map();   // id -> { el, sig }
+  const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const fmtDivider = (ms) => {
+    const d = new Date(ms), now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    const day = sameDay ? "Today" : d.toDateString() === y.toDateString() ? "Yesterday" : d.toLocaleDateString([], { month: "short", day: "numeric" });
+    return `${day} ${fmtTime(ms)}`;
+  };
+  // The content itself, not its length: a note rewritten to the same length must still repaint.
+  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${m.content || ""}`;
+  const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 90;
+  let pendingNew = 0;
+
+  function renderMsg(el, m, prev) {
+    const mine = m.author === ":operator";
+    const isRoutine = m.author === ":routine";
+    const isNote = m.author === ":system";
+    const continued = prev && !mine && !isRoutine && !isNote && prev.author === m.author && prev.kind !== "critique" && m.kind !== "critique" && prev.kind !== "relay" && m.kind !== "relay" && (m.at - prev.at) < 5 * 60 * 1000;
+    const startsRound = m.kind === "critique" && (!prev || prev.kind !== "critique");
+    el.className = "rmsg" + (mine ? " from-operator" : "") + (m.kind === "progress" ? " is-progress" : "")
+      + (m.kind === "critique" ? " is-critique" : "") + (startsRound ? " starts-round" : "")
+      + (isRoutine ? " is-routine" : "") + (isNote ? " is-note" : "") + (m.kind === "relay" ? " is-relay" : "")
+      + (m.ask ? " is-ask" : "") + (continued ? " is-continued" : "");
+    el.dataset.id = m.id || "";
+    if (isRoutine || isNote) {
+      el.innerHTML = `<div class="rmsg-line"><span class="rmsg-line-tag">${isRoutine ? "Routine" : "Note"}</span><span class="rmsg-line-text"></span></div>`;
+      el.querySelector(".rmsg-line-text").textContent = String(m.content || "").replace(/\s+/g, " ").slice(0, 160);
+      return;
+    }
+    const who = mine ? "You" : nameOf(m.author);
+    const tag = m.kind === "critique" ? "reviewing the others"
+      : m.kind === "relay" ? `from ${m.from?.roomTitle || "another room"}`
+      : m.kind === "progress" ? "notes" : "";
+    el.innerHTML = `<div class="rmsg-head">
+        <span class="rmsg-mark" aria-hidden="true"></span>
+        <span class="rmsg-who">${m.kind === "relay" ? "Message from " : ""}${esc(who)}</span>
+        ${tag ? `<span class="rmsg-tag">${esc(tag)}</span>` : ""}
+        <span class="rmsg-time">${esc(fmtTime(m.at || Date.now()))}</span>
+      </div>
+      ${m.quote ? `<div class="rmsg-quote" title="Answering this question">${esc(m.quote)}</div>` : ""}
+      <div class="rmsg-body">${md(m.content || "")}</div>
+      <div class="rmsg-ask hidden"></div>
+      ${!mine ? '<div class="rmsg-actions"><button class="rmsg-forward ghost sm" type="button" title="Carry this message into another room">Forward</button></div>' : ""}`;
+    // The operator is a person, not a mark. Only agents wear one.
+    if (!mine && window.CroweMark) CroweMark.mount(el.querySelector(".rmsg-mark"), { state: "rest", small: true });
+    else el.querySelector(".rmsg-mark").remove();
+    if (!m.content) el.querySelector(".rmsg-body").remove();
+    if (m.ask) {
+      const ask = el.querySelector(".rmsg-ask");
+      ask.classList.remove("hidden");
+      ask.dataset.state = m.ask.state;
+      ask.innerHTML = `<div class="ask-q"></div><div class="ask-opts"></div>${m.ask.state === "answered" && !m.ask.chosen ? `<div class="ask-answered">answered in words: <i></i></div>` : ""}`;
+      ask.querySelector(".ask-q").textContent = m.ask.question;
+      if (m.ask.state === "answered" && !m.ask.chosen) ask.querySelector(".ask-answered i").textContent = m.ask.answer || "";
+      const opts = ask.querySelector(".ask-opts");
+      for (const o of m.ask.options || []) {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "ask-opt" + (m.ask.chosen === o.id ? " chosen" : "");
+        b.disabled = m.ask.state !== "open" || busy;
+        b.innerHTML = `<b>${esc(o.id.toUpperCase())}</b><span></span><em aria-hidden="true">${m.ask.chosen === o.id ? "&#10003;" : ""}</em>`;
+        b.querySelector("span").textContent = o.label;
+        b.addEventListener("click", () => round(() => window.crowe.rooms.answer(p.roomId, m.id, o.id)));
+        opts.appendChild(b);
+      }
+    }
+    const fwd = el.querySelector(".rmsg-forward");
+    if (fwd) fwd.addEventListener("click", () => forwardMessage(m, fwd));
+  }
+
   function drawThread() {
     const msgs = state?.messages || [];
-    if (msgs.length < drawn) { thread.innerHTML = ""; drawn = 0; }   // a room was swapped in
-    for (const [i, m] of msgs.slice(drawn).entries()) {
-      const mine = m.author === ":operator";
-      const prev = msgs[drawn + i - 1];
-      /* The rule separates ROUNDS, not messages. Marking every critique drew
-         three rules for one review round, which reads as a striped list rather
-         than as "something different started here". */
-      const startsRound = m.kind === "critique" && (!prev || prev.kind !== "critique");
+    const wasNear = nearBottom();
+    let appended = 0, appendedTheirs = 0;
+    for (const [i, m] of msgs.entries()) {
+      const prev = i ? msgs[i - 1] : null;
+      const id = m.id || `i${i}`;
+      const have = drawnMsgs.get(id);
+      if (have) {
+        const sig = sigOf(m);
+        if (have.sig !== sig) { renderMsg(have.el, m, prev); have.sig = sig; }
+        continue;
+      }
+      // The rule separates stretches of time, not messages: a divider where
+      // twenty minutes passed, so a morning routine and the afternoon's
+      // conversation read as two sittings rather than one long list.
+      if (!prev || (m.at - prev.at) > 20 * 60 * 1000) {
+        const d = document.createElement("div"); d.className = "rmsg-divider"; d.textContent = fmtDivider(m.at || Date.now());
+        thread.appendChild(d);
+      }
       const el = document.createElement("div");
-      el.className = "rmsg" + (mine ? " from-operator" : "")
-        + (m.kind === "critique" ? " is-critique" : "") + (startsRound ? " starts-round" : "");
-      const who = mine ? "You" : (state.agents.find((a) => a.agentId === m.author)?.name || m.author);
-      el.innerHTML = `<div class="rmsg-head">
-          <span class="rmsg-mark" aria-hidden="true"></span>
-          <span class="rmsg-who">${esc(who)}</span>
-          ${m.kind === "critique" ? '<span class="rmsg-tag">reviewing the others</span>' : ""}
-        </div>
-        <div class="rmsg-body">${md(m.content || "")}</div>`;
-      // The operator is a person, not a mark. Only agents wear one.
-      if (!mine && window.CroweMark) CroweMark.mount(el.querySelector(".rmsg-mark"), { state: "rest", small: true });
-      else el.querySelector(".rmsg-mark").remove();
+      renderMsg(el, m, prev);
       thread.appendChild(el);
+      drawnMsgs.set(id, { el, sig: sigOf(m) });
+      appended++;
+      if (m.author !== ":operator" && m.author !== ":system") appendedTheirs++;
     }
-    drawn = msgs.length;
-    thread.scrollTop = thread.scrollHeight;
+    if (!appended) return;
+    if (wasNear || drawnMsgs.size === appended) { thread.scrollTop = thread.scrollHeight; pendingNew = 0; pill.classList.add("hidden"); }
+    else if (appendedTheirs) { pendingNew += appendedTheirs; pill.textContent = `${pendingNew} new message${pendingNew === 1 ? "" : "s"}`; pill.classList.remove("hidden"); }
   }
+  pill.addEventListener("click", () => { thread.scrollTop = thread.scrollHeight; pendingNew = 0; pill.classList.add("hidden"); });
+  thread.addEventListener("scroll", () => { if (nearBottom()) { pendingNew = 0; pill.classList.add("hidden"); } });
 
   /* The projected call count rides on the button itself. A round that is about
      to make three calls should say three before it is pressed, not after. */
@@ -1578,7 +1745,6 @@ async function mountRoom(p, body, seed = {}) {
     const critiques = (state?.messages || []).filter((m) => m.kind === "critique").length;
     const capped = (state?.critiqueRounds || 0) >= (state?.maxCritiqueRounds || 2);
     const halted = Boolean(state?.halted);
-
     const [pc, pr] = await Promise.all([
       window.crowe.rooms.project(p.roomId, "critique"),
       window.crowe.rooms.project(p.roomId, "revise"),
@@ -1603,7 +1769,123 @@ async function mountRoom(p, body, seed = {}) {
     setRoomWorking((state?.agents || []).some((a) => a.state === "working" || a.state === "queued"));
   }
 
-  const paint = async () => { drawHead(); drawRoster(); drawThread(); await drawRounds(); };
+  // ── The side pane: brief, routines, activity ──
+  const titleEl = wrap.querySelector(".rs-title");
+  const briefEl = wrap.querySelector(".rs-brief");
+  const saveMeta = async () => {
+    if (!state) return;
+    const patch = {};
+    if (titleEl.value.trim() && titleEl.value.trim() !== state.title) patch.title = titleEl.value.trim();
+    if (briefEl.value !== (state.brief || "")) patch.brief = briefEl.value;
+    if (!Object.keys(patch).length) return;
+    const r = await window.crowe.rooms.update(p.roomId, patch);
+    if (r?.room) { state = { ...state, ...r.room }; p.title = state.title; drawHead(); renderDockTabs(); refreshRoomListSoon(); }
+  };
+  titleEl.addEventListener("change", saveMeta);
+  briefEl.addEventListener("change", saveMeta);
+  titleEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); titleEl.blur(); } });
+
+  const everySel = wrap.querySelector(".rsa-every");
+  const syncEvery = () => {
+    const v = everySel.value;
+    wrap.querySelector(".rsa-at").classList.toggle("hidden", v === "minutes");
+    wrap.querySelector(".rsa-weekday").classList.toggle("hidden", v !== "weekly");
+    wrap.querySelector(".rsa-minutes").classList.toggle("hidden", v !== "minutes");
+  };
+  everySel.addEventListener("change", syncEvery); syncEvery();
+
+  const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const schedText = (r) => r.every === "minutes" ? `Every ${r.minutes} minutes`
+    : r.every === "daily" ? `Daily at ${r.at}` : r.every === "weekdays" ? `Weekdays at ${r.at}` : `Weekly on ${WD[r.weekday] || "Sun"} at ${r.at}`;
+  const rel = (ms) => {
+    if (!ms) return "";
+    const d = ms - Date.now(), abs = Math.abs(d), m = Math.round(abs / 60000);
+    const s = m < 1 ? "under a minute" : m < 60 ? `${m} min` : m < 60 * 36 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+    return d >= 0 ? `in ${s}` : `${s} ago`;
+  };
+  function drawSide() {
+    if (!state) return;
+    if (document.activeElement !== titleEl) titleEl.value = state.title || "";
+    if (document.activeElement !== briefEl) briefEl.value = state.brief || "";
+    const agentSel = wrap.querySelector(".rsa-agent");
+    const keep = agentSel.value;
+    agentSel.innerHTML = (state.agents || []).map((a) => `<option value="${esc(a.agentId)}">${esc(a.name || a.agentId)}</option>`).join("");
+    if (keep && [...agentSel.options].some((o) => o.value === keep)) agentSel.value = keep;
+    else if (state.defaultAgent) agentSel.value = state.defaultAgent;
+    const list = wrap.querySelector(".rs-routines");
+    list.innerHTML = "";
+    const routines = state.routines || [];
+    if (!routines.length) { list.innerHTML = '<div class="card-empty">None yet. A morning snapshot with one next action is the classic.</div>'; return; }
+    for (const r of routines) {
+      const row = document.createElement("div"); row.className = "rs-routine" + (r.enabled ? "" : " is-paused");
+      row.innerHTML = `<div class="rs-r-head"><b></b><span class="rs-r-sched"></span></div>
+        <div class="rs-r-text"></div>
+        <div class="rs-r-meta"></div>
+        <div class="rs-r-actions">
+          <button class="rs-r-run ghost sm" type="button">Run now</button>
+          <button class="rs-r-toggle ghost sm" type="button">${r.enabled ? "Pause" : "Resume"}</button>
+          <button class="rs-r-del ghost sm" type="button">Delete</button>
+        </div>`;
+      row.querySelector("b").textContent = nameOf(r.agentId);
+      row.querySelector(".rs-r-sched").textContent = schedText(r);
+      row.querySelector(".rs-r-text").textContent = r.text;
+      row.querySelector(".rs-r-meta").textContent = [
+        r.enabled && r.nextRunAt ? `next ${rel(r.nextRunAt)}` : "paused",
+        r.lastRunAt ? `last ${rel(r.lastRunAt)}` : "never run",
+        r.lastStatus || "",
+      ].filter(Boolean).join(" · ");
+      row.querySelector(".rs-r-run").addEventListener("click", () => round(() => window.crowe.rooms.routineRun(p.roomId, r.id)));
+      row.querySelector(".rs-r-toggle").addEventListener("click", async () => { await window.crowe.rooms.routineUpdate(p.roomId, r.id, { enabled: !r.enabled }); await refresh(); });
+      row.querySelector(".rs-r-del").addEventListener("click", async () => { if (!confirm("Delete this routine?")) return; await window.crowe.rooms.routineRemove(p.roomId, r.id); await refresh(); });
+      list.appendChild(row);
+    }
+  }
+  wrap.querySelector(".rs-add").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const note = wrap.querySelector(".rsa-note");
+    const spec = {
+      agentId: wrap.querySelector(".rsa-agent").value,
+      every: everySel.value,
+      at: wrap.querySelector(".rsa-at").value,
+      weekday: Number(wrap.querySelector(".rsa-weekday").value),
+      minutes: Number(wrap.querySelector(".rsa-minutes").value),
+      text: wrap.querySelector(".rsa-text").value.trim(),
+    };
+    const r = await window.crowe.rooms.routineAdd(p.roomId, spec);
+    if (r?.error) { note.textContent = r.error; return; }
+    note.textContent = "";
+    wrap.querySelector(".rsa-text").value = "";
+    await refresh();
+  });
+
+  /* Activity: the seats' tool traffic for this room, as a ledger. Not a screen
+     - there is no remote computer to show - and it says so. Arguments are cut
+     short, because a path is enough to know what was looked at and a whole
+     file body is not activity. */
+  let activityCount = 0;
+  function note(line, cls = "") {
+    if (activityCount === 0) activity.innerHTML = "";
+    const el = document.createElement("div"); el.className = "rs-act" + (cls ? " " + cls : "");
+    el.innerHTML = `<span class="rs-act-time">${esc(fmtTime(Date.now()))}</span><span class="rs-act-text"></span>`;
+    el.querySelector(".rs-act-text").textContent = line;
+    activity.appendChild(el);
+    activityCount++;
+    while (activity.children.length > 200) activity.removeChild(activity.firstChild);
+    activity.scrollTop = activity.scrollHeight;
+  }
+
+  const paint = async () => { drawHead(); drawRoster(); drawThread(); drawSide(); await drawRounds(); };
+
+  /* Read marks. What the operator has seen is what was on a focused screen in
+     the active panel; a room repainting behind another tab has not been read. */
+  async function maybeMarkRead() {
+    if (!state || !state.unread) return;
+    if (!document.hasFocus() || activePanelId !== p.id || !document.body.contains(wrap)) return;
+    await window.crowe.rooms.markRead(p.roomId);
+    state.unread = 0;
+  }
+  const onFocus = () => { maybeMarkRead(); };
+  window.addEventListener("focus", onFocus);
 
   async function refresh() {
     const r = await window.crowe.rooms.load(p.roomId);
@@ -1611,32 +1893,61 @@ async function mountRoom(p, body, seed = {}) {
     state = { ...r.room, messages: r.messages || [] };
     p.title = state.title || p.title;
     await paint();
+    await maybeMarkRead();
   }
 
-  /* Live state, from the events the room's turns already emit.
-
-     A round is one await that resolves when every addressed agent has finished,
-     so painting only from its result left the roster reading "idle" for the
-     whole time the room was working and then jumping to done. With a real
-     gateway that is ten seconds of a surface whose entire purpose is showing
-     who is thinking.
-
-     main.js stamps roomId and roomAgent on every event a seat produces, so the
-     states come from the same stream the transcript already uses rather than
-     from a second guess at who was addressed. */
+  /* Live state, from the events the room's turns already emit. main.js stamps
+     roomId and roomAgent on every event a seat produces, so the states come
+     from the same stream the transcript already uses rather than from a second
+     guess at who was addressed. The same stream feeds the activity ledger. */
   const offEvents = window.crowe.agent.onEvent((ev) => {
-    if (!p.roomId || ev.roomId !== p.roomId || !ev.roomAgent || !state) return;
-    const seat = state.agents.find((a) => a.agentId === ev.roomAgent);
-    if (!seat) return;
-    if (ev.type === "route") seat.state = "working";
-    else if (ev.type === "error") seat.state = "failed";
-    else if (ev.type === "stopped") seat.state = "stopped";
-    else if (ev.type === "final") seat.state = seat.state === "failed" ? "failed" : "done";
+    if (!p.roomId || !state) return;
+    /* Two shapes arrive. The runner stamps roomId and roomAgent on everything
+       a seat's turn emits. An approval request comes straight from main's
+       gate with only the seat's composite id, because the gate does not know
+       rooms exist, so the seat is read back out of that id. Without this a
+       room seat's question sat unanswered until it expired, denied. */
+    const prefix = "room:" + p.roomId + ":";
+    const roomAgent = ev.roomAgent || (String(ev.agentId || "").startsWith(prefix) ? String(ev.agentId).slice(prefix.length) : "");
+    if (!roomAgent || (ev.roomId && ev.roomId !== p.roomId)) return;
+    const seat = state.agents.find((a) => a.agentId === roomAgent);
+    const who = seat ? seat.name : roomAgent;
+    if (ev.type === "route") { if (seat) seat.state = "working"; note(`${who}: routed to ${ev.model || "the default model"}${ev.reason ? " (" + String(ev.reason).slice(0, 80) + ")" : ""}`); }
+    else if (ev.type === "tool_call") { note(`${who}: ${ev.name} ${JSON.stringify(ev.args || {}).slice(0, 140)}`, "is-tool"); }
+    else if (ev.type === "tool_result") { note(`${who}: ${ev.name} ${ev.status || ""} ${String(ev.result || "").replace(/\s+/g, " ").slice(0, 120)}`, /^blocked:/.test(String(ev.result || "")) ? "is-blocked" : ""); }
+    else if (ev.type === "error") { if (seat) seat.state = "failed"; note(`${who}: error ${String(ev.text || "").slice(0, 160)}`, "is-error"); }
+    else if (ev.type === "stopped") { if (seat) seat.state = "stopped"; note(`${who}: stopped`); }
+    else if (ev.type === "final") { if (seat) seat.state = seat.state === "failed" ? "failed" : "done"; note(`${who}: turn finished${ev.note ? ", " + ev.note : ""}`); }
+    else if (ev.type === "approval_request") {
+      // The same card the operator thread draws, in this thread, under the
+      // seat that asked. Allowing it here is the operator's act; the seat's
+      // tier is unchanged by it.
+      note(`${who}: waiting on your approval: ${ev.title || ev.kind || "an action"}`, "is-blocked");
+      const holder = document.createElement("div"); holder.className = "rmsg is-gate"; holder.dataset.gateFor = roomAgent;
+      const meta = ev.meta && typeof ev.meta === "object" ? ev.meta : null;
+      holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">${meta ? "asks to act through " + esc(meta.connector || "a connector") : "asks to act"}</span></div>`;
+      if (window.CroweMark) CroweMark.mount(holder.querySelector(".rmsg-mark"), { state: "reasoning", small: true });
+      thread.appendChild(holder);
+      // The card's own label names all three: which seat, which connector, which tool.
+      addApproval(holder, meta ? { ...ev, kind: `${who} · ${meta.connector || "connector"} · ${meta.tool || ev.kind || "tool"}` } : ev);
+      thread.scrollTop = thread.scrollHeight;
+    }
+    else if (ev.type === "approval_expired") { expireApproval(ev.id); note(`${who}: no answer in time, so the action was denied`, "is-blocked"); }
+    else return;
     drawHead(); drawRoster();
+  });
+  /* Main owns the room and this panel subscribes. A routine that posts, a
+     progress note that lands mid-turn, a tap answered in another window: each
+     arrives here as "changed" and the panel re-reads the room. */
+  const offChanged = window.crowe.rooms.onChanged((ev) => {
+    if (!p.roomId || ev.id !== p.roomId) return;
+    if (ev.reason === "read") return;
+    if (ev.reason === "delete") { closePanel(p.id); return; }
+    refresh();
   });
   // The panel outlives no listener: a closed room panel that kept receiving
   // events would repaint a roster that is no longer on screen.
-  p.onClose = () => { try { offEvents(); } catch {} };
+  p.onClose = () => { try { offEvents(); offChanged(); window.removeEventListener("focus", onFocus); if (recog) recog.stop(); } catch {} };
 
   async function round(fn) {
     if (busy) return;
@@ -1647,15 +1958,54 @@ async function mountRoom(p, body, seed = {}) {
     drawHead(); drawRoster(); await drawRounds();
     try {
       const out = await fn();
+      if (out?.error) note(out.error, "is-error");
       if (out?.room) state = { ...out.room, messages: state.messages };
       await refresh();
-    } finally { busy = false; await drawRounds(); refreshRoomList(); }
+    } finally { busy = false; await drawRounds(); refreshRoomListSoon(); }
   }
+
+  // ── Composer: attachments, dictation, mentions ──
+  let attached = [];
+  const attachedEl = wrap.querySelector(".room-attached");
+  const drawAttached = () => {
+    attachedEl.classList.toggle("hidden", !attached.length);
+    attachedEl.innerHTML = attached.map((f, i) => `<span class="room-att" title="${esc(f.path)}">${esc(f.name)} <button type="button" data-i="${i}" aria-label="Remove">x</button></span>`).join("");
+    attachedEl.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { attached.splice(Number(b.dataset.i), 1); drawAttached(); }));
+  };
+  wrap.querySelector(".room-attach").addEventListener("click", async () => {
+    const picked = await window.crowe.fs.pick();
+    if (Array.isArray(picked) && picked.length) { attached = attached.concat(picked).slice(0, 6); drawAttached(); }
+  });
+  // Attached files ride in the message itself, fenced, so the transcript holds
+  // exactly what every seat was shown and a reloaded room shows it too.
+  async function withAttachments(text) {
+    if (!attached.length) return text;
+    const files = await window.crowe.fs.readContext(attached.map((x) => x.path));
+    const parts = files.map((x) => `Attached file: ${x.path}\n\`\`\`\n${String(x.content || x.error || "").slice(0, 20000)}\n\`\`\``);
+    attached = []; drawAttached();
+    return [text, ...parts].filter(Boolean).join("\n\n");
+  }
+
+  let recog = null;
+  const micBtn = wrap.querySelector(".room-mic");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { micBtn.classList.add("unavailable"); micBtn.setAttribute("aria-disabled", "true"); micBtn.title = "Dictation is not available on this system"; }
+  micBtn.addEventListener("click", () => {
+    if (!SR) return;
+    if (recog) { recog.stop(); return; }
+    recog = new SR(); recog.continuous = true; recog.interimResults = false;
+    recog.onstart = () => { micBtn.classList.add("active"); micBtn.setAttribute("aria-pressed", "true"); };
+    recog.onresult = (e) => { let t = ""; for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript; input.value = (input.value + " " + t).trim(); };
+    recog.onend = () => { micBtn.classList.remove("active"); micBtn.setAttribute("aria-pressed", "false"); recog = null; };
+    recog.onerror = recog.onend;
+    recog.start();
+  });
 
   wrap.querySelector(".room-composer").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = input.value.trim(); if (!text || busy) return;
+    const raw = input.value.trim(); if ((!raw && !attached.length) || busy) return;
     input.value = ""; suggest.classList.add("hidden");
+    const text = await withAttachments(raw || "See the attached files.");
     await round(() => window.crowe.rooms.say(p.roomId, text));
   });
   bCrit.addEventListener("click", () => round(() => window.crowe.rooms.critique(p.roomId)));
@@ -1684,6 +2034,30 @@ async function mountRoom(p, body, seed = {}) {
     suggest.classList.remove("hidden");
   });
 
+  /* Forwarding: the operator carries a message into another room, where that
+     room's default seat answers it. A small chooser rather than a dialog; the
+     rooms are few and the person knows them by name. */
+  async function forwardMessage(m, anchor) {
+    const list = (await window.crowe.rooms.list()).filter((r) => r.id !== p.roomId);
+    const old = wrap.querySelector(".room-fwd"); if (old) old.remove();
+    const box = document.createElement("div"); box.className = "room-fwd";
+    if (!list.length) { box.innerHTML = '<span class="card-empty">No other room to forward to.</span>'; }
+    else {
+      box.innerHTML = `<span>Forward to</span><select aria-label="Room to forward to">${list.map((r) => `<option value="${esc(r.id)}">${esc(r.title)}</option>`).join("")}</select><button class="primary sm" type="button">Send</button><button class="ghost sm room-fwd-x" type="button">Cancel</button>`;
+      box.querySelector(".primary").addEventListener("click", async () => {
+        const toId = box.querySelector("select").value;
+        box.remove();
+        const out = await window.crowe.rooms.forward(p.roomId, m.id, toId);
+        if (out?.error) { note(out.error, "is-error"); return; }
+        const target = list.find((r) => r.id === toId);
+        note(`Forwarded to ${target ? target.title : "another room"}; ${(out.ran || []).length} seat${(out.ran || []).length === 1 ? "" : "s"} answered there.`);
+        refreshRoomListSoon();
+      });
+    }
+    box.querySelector(".room-fwd-x")?.addEventListener("click", () => box.remove());
+    anchor.closest(".rmsg").appendChild(box);
+  }
+
   /* A room panel opens on the composer unless it was handed a room to resume.
 
      Opening straight into a fixed template was the shortcut that made Rooms
@@ -1706,13 +2080,14 @@ async function mountRoom(p, body, seed = {}) {
     <div class="rc-head">
       <span class="rc-logotype" role="img" aria-label="Crowe Logic"></span>
       <b>Open a room</b>
-      <span>A room earns its cost when a decision has more than one binding constraint. Where there is only one, a single agent is the right answer.</span>
+      <span>A room is a standing colleague: seat the specialists, give it a brief, and it keeps the thread. A room earns its cost when a decision has more than one binding constraint; where there is only one, one seat is the right answer.</span>
     </div>
     ${seed.repo ? `<div class="rc-base">Base checkout: <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>. The room works from this workspace.</div>` : ""}
     <div class="rc-templates"></div>
     <div class="rc-own">
       <div class="rc-sub">Or compose your own</div>
       <div class="rc-agents"></div>
+      <textarea class="rc-brief" rows="2" maxlength="4000" aria-label="Standing brief" placeholder="Standing brief, optional. What this room is for, said once; every seat carries it on every turn."></textarea>
       <div class="rc-actions">
         <input class="rc-name" placeholder="Name this room" aria-label="Room name">
         <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Room budget in dollars"></label>
@@ -1733,8 +2108,6 @@ async function mountRoom(p, body, seed = {}) {
     b.className = "rc-template" + (t.id === "bake-off" ? " is-lesser" : "");
     b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
       <em class="rc-seats">${t.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
-    // The same mark the room will wear, so a template reads as the table it
-    // composes rather than as a feature card.
     if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
     b.addEventListener("click", () => open({ template: t.id }));
     tWrap.appendChild(b);
@@ -1748,7 +2121,7 @@ async function mountRoom(p, body, seed = {}) {
 
   const syncPick = () => {
     countEl.textContent = picked.size
-      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? ": a room of one behaves like an ordinary thread" : ""}`
+      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? ": a room of one is a single colleague with a thread of its own" : ""}`
       : "";
     openBtn.disabled = picked.size === 0;
   };
@@ -1778,7 +2151,8 @@ async function mountRoom(p, body, seed = {}) {
        default dollar. Only a blank or unparseable field falls back. */
     const raw = composer.querySelector(".rc-budget-input").value;
     const budgetUsd = raw.trim() === "" || !Number.isFinite(Number(raw)) ? undefined : Number(raw);
-    const made = await window.crowe.rooms.create({ budgetUsd, ...opts });
+    const brief = composer.querySelector(".rc-brief").value.trim();
+    const made = await window.crowe.rooms.create({ budgetUsd, brief, ...opts });
     if (made?.error) { countEl.textContent = made.error; openBtn.disabled = false; return; }
     p.roomId = made.room.id;
     composer.remove();
@@ -1802,7 +2176,7 @@ function mountOperator(p, body) {
 function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
-  if(["files","git","output"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
+  if(["files","git","output","activity"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
   const type = name === "term" ? "terminal" : name;
   hideLegacy();
   const found = [...panels].reverse().find((p)=>p.type===type);
@@ -1884,8 +2258,19 @@ window.crowe.onBrowserNavigate((u)=>{navigate(u)});
 
 // ── Files ──
 async function loadTree(dir) {
+  const tree = $("files-tree");
+  // The home folder is where a fresh install lands; listing it is the one
+  // thing this pane must not do quietly. Ask for a project instead.
+  if (!dir && atHome && window.CroweFirstRun) {
+    tree.innerHTML = "";
+    const why = document.createElement("div"); why.className = "frow files-empty"; why.textContent = window.CroweFirstRun.FILES_EMPTY_HOME; tree.appendChild(why);
+    const go = document.createElement("button"); go.type = "button"; go.className = "primary sm files-open"; go.textContent = "Open a project folder";
+    go.onclick = () => pickRepoFolder(); tree.appendChild(go);
+    $("files-view").textContent = "";
+    return;
+  }
   const r = await window.crowe.fs.list(dir);
-  const tree = $("files-tree"); tree.innerHTML = "";
+  tree.innerHTML = "";
   /* A bridge with no filesystem answers with an empty list AND a reason, and
      may name where a filesystem exists (`remedy`, set by the web build for a
      Crowe Workspace). Rendering only the "../" row would read as an empty
@@ -1924,6 +2309,8 @@ async function refreshStatus() {
   const c = await window.crowe.getConfig();
   if (c.textPace) setTextPace(c.textPace);
   setCwd(c.cwd);
+  atHome = window.CroweFirstRun ? window.CroweFirstRun.workspaceIsHome(c.cwd, c.homeDir) : false;
+  applyWelcomeChips();
   refreshModelBadge(c);
   const total = (c.mcp || []).reduce((n, s) => n + s.tools, 0);
   const badge = $("mcp-badge");
@@ -4065,6 +4452,60 @@ function appendOutput(line) {
   if (lines.length > OUTPUT_MAX) log.textContent = lines.slice(lines.length - OUTPUT_MAX).join("\n");
   log.scrollTop = log.scrollHeight;
 }
+// ── Activity: what the agent is doing, live, beside the chat ──
+// The Output pane keeps the full log. This is the view: one card per tool
+// call, commands streaming their output, landed edits opening as a diff in
+// Changes, pages opening in the browser. "Follow the agent" brings the right
+// pane forward; off, the user's pane stays put. renderer/activity.js holds the
+// pure half and its tests.
+const activity = window.CroweActivity ? window.CroweActivity.newActivity() : null;
+const FOLLOW_KEY = "crowe.followAgent";
+function followOn() { const el = $("follow-agent"); return el ? el.checked : true; }
+(function initFollow() {
+  const el = $("follow-agent"); if (!el) return;
+  const saved = localStorage.getItem(FOLLOW_KEY);
+  el.checked = saved == null ? true : saved === "1";
+  el.addEventListener("change", () => localStorage.setItem(FOLLOW_KEY, el.checked ? "1" : "0"));
+  const clear = $("activity-clear");
+  if (clear) clear.addEventListener("click", () => { if (activity) { activity.cards.length = 0; renderActivity(); } });
+})();
+function activityCardHtml(c) {
+  const dur = c.endedAt ? ` · ${Math.max(0, Math.round((c.endedAt - c.startedAt) / 100) / 10)}s` : "";
+  const status = c.status === "running" ? "running" : c.status === "waiting" ? "waiting" : c.status === "error" ? "failed" : c.status;
+  const isTerm = c.tool === "run_shell";
+  const body = c.kind === "proposal" ? `<div class="act-diff">${colorizeDiff(c.output)}</div>`
+    : isTerm ? `<pre class="act-term"><span class="act-prompt">$ </span>${esc(c.detail)}\n${esc(c.output || (c.status === "running" ? "…" : ""))}</pre>`
+    : c.output ? `<pre class="act-out">${esc(window.CroweActivity.short(c.output, 1200))}</pre>` : "";
+  const link = (c.args && (c.args.path || c.args.file)) ? ` data-path="${esc(c.args.path || c.args.file)}"` : (c.args && c.args.url ? ` data-url="${esc(c.args.url)}"` : "");
+  return `<div class="act-card ${c.status}" data-id="${esc(c.id)}"${link}>`
+    + `<div class="act-line"><span class="act-dot" aria-hidden="true"></span><span class="act-verb">${esc(c.verb)}</span> <span class="act-detail" title="${esc(c.detail)}">${esc(window.CroweActivity.short(c.detail, 90))}</span><span class="act-status">${esc(status)}${dur}</span></div>`
+    + body + `</div>`;
+}
+function renderActivity() {
+  const log = $("activity-log"); if (!log || !activity) return;
+  if (!activity.cards.length) { log.innerHTML = `<div class="activity-empty">When the agent reads, edits, runs or opens something, it shows up here as it happens.</div>`; }
+  else log.innerHTML = activity.cards.slice(-60).map(activityCardHtml).join("");
+  const st = $("activity-status"); if (st) st.textContent = window.CroweActivity.summary(activity);
+  log.scrollTop = log.scrollHeight;
+}
+const activityLogEl = $("activity-log");
+if (activityLogEl) activityLogEl.addEventListener("click", (e) => {
+  const card = e.target.closest(".act-card"); if (!card) return;
+  if (card.dataset.path) { switchPane("git"); showDiff({ path: card.dataset.path, staged: false }); }
+  else if (card.dataset.url) { setSpace("chat"); navigate(card.dataset.url); }
+});
+function followAgent(ev) {
+  if (!activity) return;
+  const { card, target } = window.CroweActivity.reduceActivity(activity, ev);
+  if (card) renderActivity();
+  const pane = window.CroweActivity.nextPane(target, followOn());
+  if (!pane) return;
+  if (pane === "browser") { if (target.url) { setSpace("chat"); navigate(target.url); } return; }
+  switchPane(pane);
+  if (pane === "git" && target.path && ev.type !== "tool_call") showDiff({ path: target.path, staged: false });
+}
+window.crowe.agent.onEvent((ev) => { try { followAgent(ev); } catch (e) { appendOutput("activity view: " + (e && e.message)); } });
+
 window.crowe.agent.onEvent((ev) => {
   if (ev.type === "assistant_delta") return; // too chatty for a log
   const brief = ev.type === "tool_call" ? `${ev.name} ${JSON.stringify(ev.args || {}).slice(0, 120)}`
@@ -4257,7 +4698,8 @@ async function doSignIn() {
 function showSignInPrompt() {
   clearWelcome();
   const b = addAssistant();
-  b.innerHTML = '<p class="said">Sign in with your Crowe ID to start. Your Pro access unlocks the full CroweLM tiers.</p>';
+  b.innerHTML = '<p class="said"></p>';
+  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
@@ -4277,8 +4719,8 @@ async function maybeShowOnboarding(cfg) {
     '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
-    "<li>Sign in with your Crowe ID (Pro access unlocks the full CroweLM tiers).</li>",
-    "<li>Point the workspace at a project folder (Settings or ask the agent).</li>",
+    "<li>" + esc(window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
+    "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
   ].join("");
@@ -4293,7 +4735,14 @@ async function maybeShowOnboarding(cfg) {
   // shell (the mark and an empty body) standing in the transcript as a blank
   // operator bubble. Remove the message.
   laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); (b.closest(".msg") || b).remove(); });
-  row.appendChild(signinBtn); row.appendChild(laterBtn);
+  // At home there is no project yet; opening one is the first move and the
+  // button says so. With a project open, sign-in leads.
+  const folderBtn = document.createElement("button");
+  folderBtn.className = atHome ? "primary" : "ghost"; folderBtn.textContent = "Open a project folder";
+  folderBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await pickRepoFolder(); });
+  if (atHome) { signinBtn.className = "ghost"; row.appendChild(folderBtn); row.appendChild(signinBtn); }
+  else { row.appendChild(signinBtn); row.appendChild(folderBtn); }
+  row.appendChild(laterBtn);
   b.appendChild(row);
   // Platform shells rewrite promises the local desktop can keep but they
   // cannot. Announce only after the card is complete so those rewrites do not
@@ -4405,6 +4854,10 @@ function dismissLaunch() {
   const roomNew = $("room-new");
   if (roomNew) roomNew.addEventListener("click", () => addPanel("room"));
   refreshRoomList();
+  // Main owns rooms: a routine that posts with no panel open still moves the
+  // rail, and a notification click opens the room it came from.
+  window.crowe.rooms.onChanged(() => refreshRoomListSoon());
+  window.crowe.rooms.onOpen(({ id } = {}) => { if (id) openRoomPanel(id); });
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");

@@ -125,6 +125,21 @@ contextBridge.exposeInMainWorld("crowe", {
     critique: (id) => ipcRenderer.invoke("crowe:rooms:critique", { id }),
     revise: (id) => ipcRenderer.invoke("crowe:rooms:revise", { id }),
     project: (id, kind) => ipcRenderer.invoke("crowe:rooms:project", { id, kind }),
+    // A room as a standing colleague: its brief and title, the read mark that
+    // clears the rail's dot, a tap on one of a seat's options, a message carried
+    // into another room, and the routines that let it speak first.
+    update: (id, patch) => ipcRenderer.invoke("crowe:rooms:update", { id, patch: patch || {} }),
+    markRead: (id) => ipcRenderer.invoke("crowe:rooms:mark-read", { id }),
+    answer: (id, messageId, optionId) => ipcRenderer.invoke("crowe:rooms:answer", { id, messageId, optionId }),
+    forward: (fromId, messageId, toId, to) => ipcRenderer.invoke("crowe:rooms:forward", { fromId, messageId, toId, to: to || null }),
+    routineAdd: (id, spec) => ipcRenderer.invoke("crowe:rooms:routine-add", { id, spec: spec || {} }),
+    routineUpdate: (id, routineId, patch) => ipcRenderer.invoke("crowe:rooms:routine-update", { id, routineId, patch: patch || {} }),
+    routineRemove: (id, routineId) => ipcRenderer.invoke("crowe:rooms:routine-remove", { id, routineId }),
+    routineRun: (id, routineId) => ipcRenderer.invoke("crowe:rooms:routine-run", { id, routineId }),
+    // Main owns rooms and every window subscribes: a routine that posts with no
+    // panel open still moves the rail, and a notification click opens the room.
+    onChanged: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:changed", h); return () => ipcRenderer.removeListener("crowe:rooms:changed", h); },
+    onOpen: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:open", h); return () => ipcRenderer.removeListener("crowe:rooms:open", h); },
   },
   // Cultivation records — blocks, flushes, contamination, environment, strains,
   // recipes, grow log. Persisted on disk in the main process, like sessions.

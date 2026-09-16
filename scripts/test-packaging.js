@@ -167,5 +167,23 @@ check("the DMG stapler finds each edition's artifacts and feed from its config",
   return `${path.basename(plain.dir)}/${plain.feed}, ${path.basename(edition.dir)}/${edition.feed}`;
 });
 
+check("the phone bundle carries every script and stylesheet the shell loads", () => {
+  // The same mistake one layer down. build-www.js copies an allowlist into
+  // mobile/www and rewrites index.html; a <script> tag added to the shell
+  // without a COPY line shipped as a 404 on the phone with every desktop test
+  // green, three times in one week. The build now reads its own page back and
+  // throws on a reference it did not copy. Requiring the script runs the build
+  // (www/ is generated and git-ignored) and with it that guard.
+  const script = path.join(root, "mobile", "scripts", "build-www.js");
+  delete require.cache[require.resolve(script)];
+  require(script);
+  const html = fs.readFileSync(path.join(root, "mobile", "www", "index.html"), "utf8");
+  const refs = [...html.matchAll(/<(?:script\b[^>]*\ssrc|link\b[^>]*\shref)="([^"?]+\.(?:m?js|css))/g)].map((m) => m[1]);
+  assert(refs.length >= 10, `only ${refs.length} local script and stylesheet tags in the built page`);
+  const gone = refs.filter((r) => !fs.existsSync(path.join(root, "mobile", "www", r)));
+  assert(gone.length === 0, `built page names files not in www: ${gone.join(", ")}`);
+  return `${refs.length} references, every one a file in mobile/www`;
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall packaging checks passed");
 process.exit(failures ? 1 : 0);
