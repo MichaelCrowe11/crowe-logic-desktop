@@ -35,6 +35,9 @@ const COPY = [
   ["renderer/mark-geometry.js", "mark-geometry.js"],
   ["renderer/mark.js", "mark.js"],
   ["renderer/marks.js", "marks.js"],
+  ["renderer/messages.js", "messages.js"],
+  ["renderer/first-run.js", "first-run.js"],
+  ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
@@ -60,7 +63,7 @@ const COPY = [
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -187,6 +190,25 @@ function main() {
   // keeps the number in package.json rather than duplicated in a script.
   fs.writeFileSync(path.join(www, "build.json"),
     JSON.stringify({ version, builtFor: "capacitor", stamp }, null, 2) + "\n");
+
+  /* The shell's script tags are the other allowlist. A renderer module added to
+     index.html with a <script> tag but not to COPY above ships as a tag that
+     points at nothing: the phone's webview logs a 404, the feature is silently
+     absent on the phone, and every desktop test passes because from the
+     checkout the file is right there. Three branches did exactly that in one
+     is read back, and every local script and stylesheet it names must be a
+     file in www. Same bargain as scripts/test-packaging.js, one layer down. */
+  const built = fs.readFileSync(path.join(www, "index.html"), "utf8");
+  const missing = [];
+  for (const m of built.matchAll(/<(?:script\b[^>]*\ssrc|link\b[^>]*\shref)="([^"]+)"/g)) {
+    const ref = m[1].split("?")[0];
+    if (/^(https?:)?\/\//.test(ref) || ref.startsWith("data:") || !/\.(m?js|css)$/.test(ref)) continue;
+    if (!fs.existsSync(path.join(www, ref))) missing.push(ref);
+  }
+  if (missing.length) {
+    throw new Error(`index.html loads ${missing.join(", ")} but nothing copies ${missing.length === 1 ? "it" : "them"} into www. ` +
+      "Add each to COPY (and BUSTED) in mobile/scripts/build-www.js, or strip the tag in buildIndex().");
+  }
 
   const files = [];
   (function walk(dir) {

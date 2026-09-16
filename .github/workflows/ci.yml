@@ -88,6 +88,9 @@ jobs:
           node scripts/test-verify-release.js
           node scripts/test-messages.js
           node scripts/test-marks.js
+          node scripts/test-plugin-path.js
+          node scripts/test-first-run.js
+          node scripts/test-activity.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
@@ -191,6 +194,17 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           CROWE_ALLOW_PLAINTEXT_AUTH: "1"
         run: xvfb-run -a npx electron scripts/test-rooms-live.js
+
+      # The bundled plugin server, forked the way a packaged app forks it. The
+      # node wire test drives it as `node server.js`; this drives it through
+      # main.js as an Electron utility process, the one Node runtime a packaged
+      # build has (its RunAsNode fuse is off), and reads a room seat's answer
+      # back through the process's message port.
+      - name: Run bundled plugin fork test (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+          CROWE_ALLOW_PLAINTEXT_AUTH: "1"
+        run: xvfb-run -a npx electron scripts/test-plugin-fork.js
 
       - name: Upload smoke screenshots
         if: always()

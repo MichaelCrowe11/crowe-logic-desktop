@@ -129,8 +129,13 @@ room cannot spend quota.
 It is the first server that ships inside the app. The manifest names it with
 two placeholders the loader resolves and nothing else does: `${APP}` is the
 app's directory (`plugins/` is unpacked from the asar so a child process can
-read it) and `${NODE}` as the command is the app's own Electron binary run as
-plain Node, so no node is needed on the machine. Dates and video ids are
+read it) and `${NODE}` as the command runs the named script in an Electron
+utility process, the Node runtime the app carries, so no node is needed on the
+machine. It is a utility process and not the binary run as Node because a
+packaged build has the RunAsNode fuse off: there, `ELECTRON_RUN_AS_NODE` is
+ignored and would start a second copy of the app. The server speaks
+newline-delimited JSON on stdio when run by node and the same messages over
+its parent port when forked by the app. Dates and video ids are
 validated before they touch a path; sections are allowlisted; the two folders
 it reads are the only two it opens, and `~/.swm-yt-creds` is never one of
 them. `scripts/test-channel-analytics.js` drives it over its own wire.
