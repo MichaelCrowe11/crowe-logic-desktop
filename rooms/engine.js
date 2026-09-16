@@ -10,22 +10,39 @@
 //
 //   a room is a session         with a roster and a per-message author, stored
 //                               by the existing sessions store, not a new one
+//   a room is a colleague       it has a standing brief, an inbox with unread
+//                               marks, and routines that let it speak first
 //   a message names its author  "operator", or an agent id, never a generic
 //                               assistant label
 //   every agent sees everything the shared transcript IS the feature. An agent
 //                               that sees only its own turns is N sessions in
 //                               one window wearing a costume
-//   nobody speaks unaddressed   the single largest cost control here
+//   nobody speaks unaddressed   the single largest cost control here. A routine
+//                               is addressed too: it names the one seat it wakes
+//   a seat works out loud       what it says between tool rounds lands as short
+//                               progress messages; the last thing it says is
+//                               its reply
+//   a seat asks, it does not act the operator decides with one tap; the choice
+//                               comes back as an ordinary addressed message and
+//                               grants nothing the tool gate would not
 //
 // What this file deliberately does NOT do: write to the workspace. Gate 4 of
 // the build order is worktree isolation, and until that lands `roomTier()`
 // clamps every room to readonly. Three agents editing one tree is not a bug you
 // recover from by looping.
+//
+// Nothing here reads a clock or a file at module level. The same bytes run in
+// the desktop, in the browser bundle (scripts/build-rooms-web.js) and under the
+// fake runner, so time is a parameter wherever it matters.
 
 const registry = require("./registry");
 
 const MAX_CRITIQUE_ROUNDS = 2;
 const DEFAULT_ROOM_BUDGET_USD = 1.0;
+const MAX_BRIEF_CHARS = 4000;
+const MAX_TITLE_CHARS = 80;
+const MAX_ASK_OPTIONS = 4;
+const PREVIEW_CHARS = 120;
 
 /* The human's author id, and why it is not "operator".
 
@@ -37,9 +54,55 @@ const DEFAULT_ROOM_BUDGET_USD = 1.0;
 
    Registry ids are lowercase kebab, so a leading colon cannot collide with one
    now or later. Everything that decides "is this the person" asks this constant
-   rather than comparing to a string. */
+   rather than comparing to a string. The two other reserved authors follow the
+   same rule: a routine speaks for the operator's standing orders, and the
+   system speaks only in notes that no model ever reads. */
 const HUMAN = ":operator";
+const ROUTINE = ":routine";
+const SYSTEM = ":system";
 const isHuman = (author) => author === HUMAN;
+const isReserved = (author) => author === HUMAN || author === ROUTINE || author === SYSTEM;
+
+// ─── Messages ────────────────────────────────────────────────────────────────
+
+/* One door for every message. A stable id and a sequence number are what let
+   the operator answer a question by id rather than by index (an index moves
+   the moment another seat posts), and what let the rail count unread without
+   a counter that drifts. Anything that pushes onto room.messages goes here. */
+function pushMessage(room, msg) {
+  room.seq = (room.seq || 0) + 1;
+  const m = { id: "m" + room.seq.toString(36) + "-" + Math.random().toString(36).slice(2, 6), seq: room.seq, at: Date.now(), ...msg };
+  room.messages.push(m);
+  room.updatedAt = m.at;
+  return m;
+}
+
+const byId = (room, messageId) => room.messages.find((m) => m.id === messageId) || null;
+
+/* What the rail shows under the title. The last thing anyone said, minus
+   system housekeeping, cut to one line. Derived, never stored, so it cannot
+   disagree with the transcript. */
+function preview(room) {
+  for (let i = room.messages.length - 1; i >= 0; i--) {
+    const m = room.messages[i];
+    if (m.author === SYSTEM) continue;
+    const text = String(m.content || "").replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ").trim();
+    if (!text && m.ask) return String(m.ask.question || "").slice(0, PREVIEW_CHARS);
+    if (text) return text.slice(0, PREVIEW_CHARS);
+  }
+  return "";
+}
+
+/* Unread is a comparison, not a counter: messages after the operator's read
+   mark that the operator did not write. A counter incremented on arrival
+   and decremented on view is the kind of state that ends up at -1. */
+function unreadCount(room) {
+  const mark = room.readSeq || 0;
+  // The operator's own words, a routine firing on the operator's own schedule
+  // and system housekeeping are not news; what the seats said back is.
+  return room.messages.filter((m) => (m.seq || 0) > mark && !isReserved(m.author)).length;
+}
+function markRead(room) { room.readSeq = room.seq || 0; return room.readSeq; }
 
 // ─── Addressing ──────────────────────────────────────────────────────────────
 
@@ -93,26 +156,62 @@ function parseAddress(text, room) {
      because a model handed someone else's words as its own assistant history
      will continue them as if it had said them.
 
+   Progress is memory only for the seat that produced it: an agent's own
+   progress lines are joined back onto its reply so it remembers what it found
+   on the way, and nobody else pays context for another seat's working notes.
+   System notes are for the person and never enter a model's view. A routine's
+   text is the operator's standing order and reads as the operator's turn. A
+   relayed message is attributed context, never an instruction.
+
    The label is prose rather than a role field the gateway would have to
    understand, so this works on any OpenAI-compatible deployment. */
 function viewFor(room, agentId) {
   const out = [];
+  const progressOf = progressByRun(room);
   for (const m of room.messages) {
+    if (m.author === SYSTEM || m.kind === "progress") continue;
     if (isHuman(m.author)) {
       out.push({ role: "user", content: m.content });
+    } else if (m.author === ROUTINE) {
+      out.push({ role: "user", content: `[Scheduled routine]\n${m.content}` });
+    } else if (m.kind === "relay") {
+      const who = displayName(m.author);
+      const where = m.from && m.from.roomTitle ? `, from the room "${m.from.roomTitle}"` : ", relayed from another room";
+      out.push({ role: "user", content: `[${who}${where}]\n${m.content}` });
     } else if (m.author === agentId) {
-      out.push({ role: "assistant", content: m.content });
+      out.push({ role: "assistant", content: withOwnProgress(m, progressOf) + askText(m) });
     } else {
       const who = displayName(m.author);
       const kind = m.kind === "critique" ? `${who}, reviewing` : who;
-      out.push({ role: "user", content: `[${kind}]\n${m.content}` });
+      out.push({ role: "user", content: `[${kind}]\n${m.content}${askText(m)}` });
     }
   }
   return out;
 }
 
+function progressByRun(room) {
+  const map = new Map();
+  for (const m of room.messages) {
+    if (m.kind === "progress" && m.runId) (map.get(m.runId) || map.set(m.runId, []).get(m.runId)).push(m.content);
+  }
+  return map;
+}
+function withOwnProgress(m, progressOf) {
+  const notes = m.runId ? progressOf.get(m.runId) : null;
+  return notes && notes.length ? [...notes, m.content].filter(Boolean).join("\n\n") : m.content;
+}
+// A question an agent put to the operator, restated so the model remembers
+// it asked and what the choices were.
+function askText(m) {
+  if (!m.ask || !m.ask.question) return "";
+  const opts = (m.ask.options || []).map((o, i) => `${String.fromCharCode(65 + i)}) ${o.label}`).join("  ");
+  return `\n\n[Asked the operator: ${m.ask.question}${opts ? "  Options: " + opts : ""}]`;
+}
+
 function displayName(agentId) {
   if (isHuman(agentId)) return "Operator";
+  if (agentId === ROUTINE) return "Routine";
+  if (agentId === SYSTEM) return "System";
   const a = registry.getAgent(agentId);
   return a ? a.name : String(agentId);
 }
@@ -120,7 +219,13 @@ function displayName(agentId) {
 /* The standing instruction an agent carries in a room, on top of whatever its
    registry role says. Rooms are a social setting and the model has to be told
    the rules of it, or it invents them - which in practice means thanking its
-   colleagues for their thorough review. */
+   colleagues for their thorough review.
+
+   The working rules at the end are what make a room read like a colleague
+   rather than an essay: short messages, one proposed next action, a question
+   with options when the operator has to decide, and the boundary said out
+   loud. A proposal is a question, not a permission: choosing an option comes
+   back as an ordinary message and the tool gate still decides what may run. */
 function roomBrief(room, agentId) {
   const me = registry.getAgent(agentId);
   const others = room.agents.filter((a) => a.agentId !== agentId).map((a) => displayName(a.agentId));
@@ -129,14 +234,18 @@ function roomBrief(room, agentId) {
     others.length
       ? `You are in a shared room with the operator and: ${others.join(", ")}. You can see their contributions and they can see yours.`
       : "You are in a room with the operator.",
+    room.brief ? `The room's standing brief, set by the operator: ${String(room.brief).trim()}` : "",
     "Answer the operator and the room. Do not address the other participants directly, do not thank them, and do not comment on the quality of their work unless you are explicitly asked for a review.",
     "Speak from your own specialty. Where you disagree with what another participant concluded, say so plainly and give your reason.",
-  ].join(" ");
+    "Work in short messages, the way a colleague reports in: what you checked, what you found, what you will do next. Lead with the answer. Close with one proposed next action when there is one.",
+    "When the operator has to decide, call propose_options with one plain question and up to four short options, then stop; the answer arrives as the operator's next message. If tools are unavailable to you, end your message with a fenced block whose language tag is ask: the question on the first line, then one option per line starting with a dash.",
+    "Default to reading. Say plainly what you will not touch unless asked, and never claim an action you did not take.",
+  ].filter(Boolean).join(" ");
 }
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────
 
-function createRoom({ id, title, agentIds, defaultAgent, budgetUsd, template } = {}) {
+function createRoom({ id, title, agentIds, defaultAgent, budgetUsd, template, brief } = {}) {
   // Only joinable agents are seated. An id that exists but is retired from
   // rooms is dropped here rather than at display time, so no caller - the
   // composer, a template, or a raw IPC create - can compose around the flag.
@@ -144,13 +253,17 @@ function createRoom({ id, title, agentIds, defaultAgent, budgetUsd, template } =
   return {
     id: id || "r-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7),
     kind: "room",
-    title: title || "Untitled room",
+    title: String(title || "Untitled room").slice(0, MAX_TITLE_CHARS),
     template: template || "",
+    brief: String(brief || "").slice(0, MAX_BRIEF_CHARS),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     agents: ids.map((agentId) => ({ agentId, model: (registry.getAgent(agentId) || {}).model || "", state: "idle" })),
     defaultAgent: defaultAgent && ids.includes(defaultAgent) ? defaultAgent : ids[0] || "",
     messages: [],
+    seq: 0,
+    readSeq: 0,
+    routines: [],
     budgetUsd: typeof budgetUsd === "number" ? budgetUsd : DEFAULT_ROOM_BUDGET_USD,
     spentUsd: 0,
     cost: {},           // agentId -> { usd, promptTokens, completionTokens, calls }
@@ -169,6 +282,35 @@ function fromTemplate(templateId, opts = {}) {
     agentIds: t.agents.map((a) => a.id),
     defaultAgent: t.defaultAgent,
   });
+}
+
+/* What the operator may change about a standing room, and how much of it.
+   Allowlisted and capped, the same way a session's name and brief are: a
+   brief is the persona every seat carries on every turn, so a runaway one
+   would quietly become the whole context window. */
+function updateRoom(room, patch = {}) {
+  const changed = [];
+  if (Object.prototype.hasOwnProperty.call(patch, "title")) {
+    const t = String(patch.title == null ? "" : patch.title).trim().slice(0, MAX_TITLE_CHARS);
+    if (t) { room.title = t; changed.push("title"); }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "brief")) {
+    room.brief = String(patch.brief == null ? "" : patch.brief).slice(0, MAX_BRIEF_CHARS); changed.push("brief");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "budgetUsd")) {
+    const b = Number(patch.budgetUsd);
+    if (Number.isFinite(b) && b >= 0) {
+      room.budgetUsd = b; changed.push("budgetUsd");
+      // Raising the cap above what was spent un-halts a room the cap stopped.
+      if (room.halted === "budget" && !overBudget(room)) room.halted = "";
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "defaultAgent")) {
+    const d = String(patch.defaultAgent || "");
+    if (room.agents.some((a) => a.agentId === d)) { room.defaultAgent = d; changed.push("defaultAgent"); }
+  }
+  if (changed.length) room.updatedAt = Date.now();
+  return changed;
 }
 
 /* The tier a room may actually run at.
@@ -214,6 +356,81 @@ function projectRound(room, kind) {
   return { calls: live, agents: live, note: `${live} replies` };
 }
 
+// ─── Proposals ───────────────────────────────────────────────────────────────
+
+/* A question with options, as the seat's tool call produced it or as the
+   fenced fallback spelled it. Both arrive here and both are held to the same
+   shape: one question, one to four short distinct options, nothing else.
+   Anything malformed is not a half-actionable card; it is dropped and the
+   text stands as ordinary text. */
+function normalizeAsk(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const question = String(raw.question || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const seen = new Set();
+  const options = [];
+  for (const o of Array.isArray(raw.options) ? raw.options : []) {
+    const label = String(typeof o === "object" && o ? o.label : o).replace(/\s+/g, " ").trim().slice(0, 120);
+    const key = label.toLowerCase();
+    if (!label || seen.has(key)) continue;
+    seen.add(key);
+    options.push({ id: String.fromCharCode(97 + options.length), label });
+    if (options.length >= MAX_ASK_OPTIONS) break;
+  }
+  if (!question || !options.length) return null;
+  return { question, options, state: "open", chosen: "", answer: "" };
+}
+
+/* The fallback for a deployment that ignores tool schemas: a fenced block
+   tagged `ask`, and only when it is the last thing in the message. A block in
+   the middle of the text, text after the block, or two blocks all mean the
+   model was not actually ending its turn on a question, and the whole message
+   is left as prose. */
+const ASK_FENCE = /```ask[ \t]*\n([\s\S]*?)\n```[ \t]*$/;
+function extractAsk(text) {
+  const src = String(text || "").trimEnd();
+  const m = src.match(ASK_FENCE);
+  if (!m) return { text: src, ask: null };
+  if ((src.match(/```ask\b/g) || []).length > 1) return { text: src, ask: null };
+  const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
+  const question = lines.shift() || "";
+  const options = lines.filter((l) => /^[-*]\s+/.test(l)).map((l) => l.replace(/^[-*]\s+/, ""));
+  const ask = normalizeAsk({ question, options });
+  if (!ask) return { text: src, ask: null };
+  return { text: src.slice(0, m.index).trimEnd(), ask };
+}
+
+/* The operator's tap on an option. Check, then mark, then speak, with nothing
+   awaited between the check and the mark: two windows or a double-click must
+   not run the same decision twice. The choice becomes an ordinary message
+   addressed to the seat that asked, so the model reads it exactly as it would
+   read the operator typing the same words. */
+async function answerAsk(room, messageId, optionId, deps) {
+  const m = byId(room, messageId);
+  if (!m || !m.ask) return { error: "that message is not a question" };
+  if (m.ask.state !== "open") return { error: `that question was already ${m.ask.state}` };
+  const opt = (m.ask.options || []).find((o) => o.id === optionId);
+  if (!opt) return { error: "no such option" };
+  // A halted room cannot speak, so the card must not be marked answered: the
+  // tap would vanish and the card would say the decision was taken.
+  if (room.halted) return { error: `this room is halted (${room.halted}); raise its budget or clear the halt, then answer`, halted: room.halted, ran: [] };
+  m.ask.state = "answered"; m.ask.chosen = opt.id; m.ask.answer = opt.label; m.ask.answeredAt = Date.now();
+  return speak(room, opt.label, deps, { to: [m.author], quote: m.ask.question, quoteOf: m.id });
+}
+
+// The operator typed instead of tapping. Every open question from the seats
+// this message reaches is closed with the text as its answer, so a stale card
+// cannot be tapped later and re-decide something the operator already said.
+function closeOpenAsks(room, to, text) {
+  const closed = [];
+  for (const m of room.messages) {
+    if (m.ask && m.ask.state === "open" && to.includes(m.author)) {
+      m.ask.state = "answered"; m.ask.chosen = ""; m.ask.answer = String(text).slice(0, 300); m.ask.answeredAt = Date.now();
+      closed.push(m.id);
+    }
+  }
+  return closed;
+}
+
 // ─── Running a turn ──────────────────────────────────────────────────────────
 
 const setState = (room, agentId, state) => {
@@ -227,22 +444,37 @@ const setState = (room, agentId, state) => {
    seat failed and leaves the room running. The status it lands on is the one
    thing this function must never lie about - a seat that errored says failed,
    and its output does not enter the transcript, so it cannot be critiqued as
-   if it were work. */
+   if it were work.
+
+   Progress lands live. The runner calls `onProgress` with each complete thing
+   the seat said between tool rounds, and each lands as its own message while
+   the turn is still running, which is what lets the operator watch a seat
+   work instead of waiting for an essay. The harness returns the whole turn's
+   text; when that text ends with the last progress note, the note is promoted
+   to the reply rather than posted twice. */
 async function runOne(room, agentId, deps, { kind = "reply", brief = "" } = {}) {
   setState(room, agentId, "working");
   const seat = room.agents.find((a) => a.agentId === agentId) || {};
   const messages = viewFor(room, agentId);
   if (brief) messages.push({ role: "user", content: brief });
+  const runId = "run-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+  const onProgress = (text) => {
+    const t = String(text || "").trim();
+    if (!t) return null;
+    return pushMessage(room, { author: agentId, content: t, kind: "progress", runId });
+  };
 
   let res;
   try {
     res = await deps.runAgent({
       agentId,
       roomId: room.id,
+      runId,
       model: seat.model || "",
       systemBrief: roomBrief(room, agentId),
       messages,
       tier: room.tier || "readonly",
+      onProgress,
     });
   } catch (e) {
     setState(room, agentId, "failed");
@@ -256,26 +488,49 @@ async function runOne(room, agentId, deps, { kind = "reply", brief = "" } = {}) 
     return { agentId, ok: false, error: (res && (res.error || "stopped")) || "no result", stopped: !!(res && res.stopped) };
   }
 
-  const text = String(res.text || "").trim();
-  if (!text) { setState(room, agentId, "failed"); return { agentId, ok: false, error: "empty answer" }; }
+  let text = String(res.text || "").trim();
+  // A proposal from the tool wins; the fenced fallback is read only when the
+  // tool was not used, so a model that did both is not asked twice.
+  let ask = normalizeAsk(res.proposal);
+  if (!ask) { const f = extractAsk(text); text = f.text; ask = f.ask; }
+  if (!text && !ask) { setState(room, agentId, "failed"); return { agentId, ok: false, error: "empty answer" }; }
 
-  const msg = { author: agentId, content: text, kind, at: Date.now(), replyTo: kind === "critique" ? res.replyTo || "" : "" };
-  room.messages.push(msg);
+  const notes = room.messages.filter((m) => m.kind === "progress" && m.runId === runId);
+  const last = notes[notes.length - 1];
+  let msg;
+  if (last && (text === last.content || text.endsWith(last.content))) {
+    // The final text is the notes joined; the last note IS the reply.
+    msg = last; msg.kind = kind;
+  } else {
+    msg = pushMessage(room, { author: agentId, content: text, kind, runId });
+  }
+  if (ask) msg.ask = ask;
+  if (kind === "critique") msg.replyTo = res.replyTo || "";
   room.updatedAt = Date.now();
   setState(room, agentId, "done");
-  return { agentId, ok: true, text, message: msg };
+  return { agentId, ok: true, text: msg.content, message: msg, ask: ask || null };
 }
 
 /* The operator says something; whoever is addressed answers.
 
    Concurrently, not round-robin: three specialists asked the same question
    should be able to think at once, and a room that serialises them for no
-   reason feels broken in a way no amount of status text repairs. */
-async function speak(room, text, deps, { author = HUMAN } = {}) {
+   reason feels broken in a way no amount of status text repairs.
+
+   `to` overrides the mentions in the text. A routine names the one seat it
+   wakes, and an answered question goes back to the seat that asked, whatever
+   handles the text happens to contain. */
+async function speak(room, text, deps, { author = HUMAN, to = null, kind = "say", quote = "", quoteOf = "", routineId = "" } = {}) {
   if (room.halted) return { halted: room.halted, ran: [] };
-  const addr = parseAddress(text, room);
-  room.messages.push({ author, content: String(text), kind: "say", at: Date.now(), to: addr.to.slice() });
-  room.updatedAt = Date.now();
+  const roster = room.agents.map((a) => a.agentId);
+  const addr = Array.isArray(to)
+    ? { to: to.filter((id) => roster.includes(id)), broadcast: false, unknown: [], explicit: true }
+    : parseAddress(text, room);
+  const msg = { author, content: String(text), kind, to: addr.to.slice() };
+  if (quote) { msg.quote = String(quote).slice(0, 300); if (quoteOf) msg.quoteOf = quoteOf; }
+  if (routineId) msg.routineId = routineId;
+  if (isHuman(author)) msg.closedAsks = closeOpenAsks(room, addr.to, text);
+  pushMessage(room, msg);
 
   // Everyone not addressed is explicitly idle rather than left on whatever they
   // were, so "queued" never lingers on an agent that is not going to run.
@@ -286,6 +541,188 @@ async function speak(room, text, deps, { author = HUMAN } = {}) {
   const results = await Promise.all(addr.to.map((id) => runOne(room, id, deps, { kind: "reply" })));
   if (overBudget(room)) room.halted = "budget";
   return { ran: results, address: addr, halted: room.halted };
+}
+
+// ─── Relays between rooms ────────────────────────────────────────────────────
+
+/* A message carried from one room into another, by the operator.
+
+   Rooms are colleagues, and colleagues hand each other things - but a seat
+   that could message another room on its own would be a cost multiplier with
+   no one addressed, and a loop waiting to happen. So the hand-off is the
+   operator's act: the message lands in the target room attributed to who said
+   it and where, and the target room's default seat (or whoever the operator
+   names) answers it as it would answer anything else. */
+async function forward(fromRoom, toRoom, messageId, deps, { to = null } = {}) {
+  const src = byId(fromRoom, messageId);
+  if (!src) return { error: "no such message" };
+  if (fromRoom.id === toRoom.id) return { error: "a message cannot be forwarded to its own room" };
+  if (toRoom.halted) return { halted: toRoom.halted, ran: [] };
+  const roster = toRoom.agents.map((a) => a.agentId);
+  const targets = (Array.isArray(to) && to.length ? to : [toRoom.defaultAgent || roster[0]]).filter((id) => roster.includes(id));
+  if (!targets.length) return { error: "the target room has no seat to address" };
+  pushMessage(toRoom, {
+    author: src.author, kind: "relay", content: String(src.content || ""), to: targets.slice(),
+    from: { roomId: fromRoom.id, roomTitle: fromRoom.title, agentId: src.author, messageId: src.id },
+  });
+  for (const seat of toRoom.agents) seat.state = targets.includes(seat.agentId) ? "queued" : "idle";
+  if (overBudget(toRoom)) { toRoom.halted = "budget"; return { halted: "budget", ran: [] }; }
+  const results = await Promise.all(targets.map((id) => runOne(toRoom, id, deps, { kind: "reply" })));
+  if (overBudget(toRoom)) toRoom.halted = "budget";
+  return { ran: results, to: targets, halted: toRoom.halted };
+}
+
+// ─── Routines ────────────────────────────────────────────────────────────────
+
+/* Recurring tasks a room runs on a schedule. This is how a room speaks first:
+   a routine is a standing message from the operator, addressed to one seat,
+   delivered at a time. The scheduler that decides "now" lives in main.js and
+   owns the clock; everything here takes `now` as an argument so the rules can
+   be checked against fixed instants.
+
+   Schedules are deliberately few: every N minutes, daily, weekdays, weekly.
+   Local time, in whatever zone the machine is in, because "07:00" to the
+   person means the clock on the wall. Daylight saving is handled by the
+   platform's own local Date arithmetic: a time that does not exist that day
+   moves forward to the first instant that does, and a time that happens twice
+   runs once, at the first. */
+const EVERY = ["minutes", "daily", "weekdays", "weekly"];
+const MIN_MINUTES = 5, MAX_MINUTES = 7 * 24 * 60;
+
+function parseAt(at) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(at || "").trim());
+  if (!m) return null;
+  const hh = Number(m[1]), mm = Number(m[2]);
+  if (hh > 23 || mm > 59) return null;
+  return { hh, mm };
+}
+
+function nextRunAt(routine, from) {
+  const t = Number(from);
+  if (routine.every === "minutes") {
+    const n = Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Number(routine.minutes) || 60));
+    return t + n * 60 * 1000;
+  }
+  const at = parseAt(routine.at) || { hh: 7, mm: 0 };
+  const d = new Date(t);
+  for (let day = 0; day < 8; day++) {
+    const c = new Date(d.getFullYear(), d.getMonth(), d.getDate() + day, at.hh, at.mm, 0, 0);
+    if (c.getTime() <= t) continue;
+    const wd = c.getDay();
+    if (routine.every === "weekdays" && (wd === 0 || wd === 6)) continue;
+    if (routine.every === "weekly" && wd !== (Number(routine.weekday) || 0)) continue;
+    return c.getTime();
+  }
+  return t + 24 * 60 * 60 * 1000;
+}
+
+// The window inside which a late routine still runs. Past it, the run is
+// skipped and said so, not replayed: an app opened at noon must not deliver
+// five overnight briefs in a burst.
+function graceMs(routine) {
+  if (routine.every === "minutes") return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Number(routine.minutes) || 60)) * 60 * 1000;
+  return 2 * 60 * 60 * 1000;
+}
+
+function addRoutine(room, spec = {}, now = Date.now()) {
+  const agentId = String(spec.agentId || room.defaultAgent || "");
+  if (!room.agents.some((a) => a.agentId === agentId)) return { error: "that agent is not in this room" };
+  const text = String(spec.text || "").trim().slice(0, 4000);
+  if (!text) return { error: "a routine needs the message it will send" };
+  const every = EVERY.includes(spec.every) ? spec.every : "daily";
+  if (every !== "minutes" && !parseAt(spec.at)) return { error: "a daily, weekdays or weekly routine needs a time as HH:MM" };
+  const routine = {
+    id: "rt-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
+    agentId, text, every,
+    at: every === "minutes" ? "" : String(spec.at).trim(),
+    minutes: every === "minutes" ? Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Number(spec.minutes) || 60)) : 0,
+    weekday: every === "weekly" ? Math.min(6, Math.max(0, Number(spec.weekday) || 0)) : 0,
+    enabled: spec.enabled !== false,
+    createdAt: now, lastRunAt: 0, lastStatus: "", runs: 0, nextRunAt: 0,
+  };
+  routine.nextRunAt = nextRunAt(routine, now);
+  room.routines = room.routines || [];
+  room.routines.push(routine);
+  room.updatedAt = now;
+  return { routine };
+}
+
+function updateRoutine(room, routineId, patch = {}, now = Date.now()) {
+  const r = (room.routines || []).find((x) => x.id === routineId);
+  if (!r) return { error: "no such routine" };
+  let reschedule = false;
+  if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+    const on = Boolean(patch.enabled);
+    // A routine paused past its due time must not fire the moment it resumes
+    // and then be skipped as "the app was not running": resuming schedules
+    // the next run from now.
+    if (on && (!r.enabled || !r.nextRunAt || r.nextRunAt <= now)) reschedule = true;
+    r.enabled = on;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "text")) { const t = String(patch.text || "").trim().slice(0, 4000); if (t) r.text = t; }
+  if (Object.prototype.hasOwnProperty.call(patch, "agentId") && room.agents.some((a) => a.agentId === patch.agentId)) r.agentId = String(patch.agentId);
+  if (EVERY.includes(patch.every)) { r.every = patch.every; reschedule = true; }
+  if (Object.prototype.hasOwnProperty.call(patch, "at") && parseAt(patch.at)) { r.at = String(patch.at).trim(); reschedule = true; }
+  if (Object.prototype.hasOwnProperty.call(patch, "minutes")) { r.minutes = Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Number(patch.minutes) || 60)); reschedule = true; }
+  if (Object.prototype.hasOwnProperty.call(patch, "weekday")) { r.weekday = Math.min(6, Math.max(0, Number(patch.weekday) || 0)); reschedule = true; }
+  if (reschedule || r.enabled && !r.nextRunAt) r.nextRunAt = nextRunAt(r, now);
+  room.updatedAt = now;
+  return { routine: r };
+}
+
+function removeRoutine(room, routineId) {
+  const before = (room.routines || []).length;
+  room.routines = (room.routines || []).filter((x) => x.id !== routineId);
+  return { removed: before !== room.routines.length };
+}
+
+function dueRoutines(room, now = Date.now()) {
+  return (room.routines || []).filter((r) => r.enabled && r.nextRunAt && r.nextRunAt <= now);
+}
+
+/* Taking a run. The claim is written before the run happens, and the caller
+   persists it before the model is called, so a crash mid-run cannot make the
+   same scheduled instant fire again on restart. A run that is too late is
+   skipped with a note the operator can read, and the next one is scheduled
+   from now, not from the missed time. */
+function claimRoutine(room, routineId, now = Date.now()) {
+  const r = (room.routines || []).find((x) => x.id === routineId);
+  if (!r) return { error: "no such routine" };
+  if (!r.enabled) return { skip: "disabled" };
+  if (!r.nextRunAt || r.nextRunAt > now) return { skip: "not due" };
+  const late = now - r.nextRunAt;
+  const scheduledFor = r.nextRunAt;
+  r.nextRunAt = nextRunAt(r, now);
+  if (late > graceMs(r)) {
+    r.lastStatus = "skipped: the app was not running at " + new Date(scheduledFor).toLocaleString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" });
+    pushMessage(room, { author: SYSTEM, kind: "note", content: `Skipped a scheduled routine for ${displayName(r.agentId)}: it was due ${Math.round(late / 60000)} minutes ago and the app was not running. Next run is scheduled.`, routineId: r.id });
+    return { skip: "too late", late, scheduledFor };
+  }
+  r.lastRunAt = now; r.runs = (r.runs || 0) + 1; r.lastStatus = "running";
+  return { run: true, scheduledFor, late };
+}
+
+/* One routine, delivered. The room's budget is the only cap here and it is
+   honoured before the call rather than after: a room the cap halted at three
+   in the morning gets one note saying so, not a failed call and no note. */
+async function runRoutine(room, routineId, deps, now = Date.now()) {
+  const r = (room.routines || []).find((x) => x.id === routineId);
+  if (!r) return { error: "no such routine" };
+  if (room.halted) {
+    r.lastStatus = `skipped: room halted (${room.halted})`;
+    pushMessage(room, { author: SYSTEM, kind: "note", content: `The scheduled routine for ${displayName(r.agentId)} did not run: this room is halted (${room.halted}). Raise the budget or clear the halt to resume.`, routineId: r.id });
+    return { skip: "halted", halted: room.halted };
+  }
+  if (!room.agents.some((a) => a.agentId === r.agentId)) {
+    r.lastStatus = "skipped: agent left the room";
+    pushMessage(room, { author: SYSTEM, kind: "note", content: `The scheduled routine could not run: ${displayName(r.agentId)} is no longer in this room.`, routineId: r.id });
+    return { skip: "no seat" };
+  }
+  const out = await speak(room, r.text, deps, { author: ROUTINE, to: [r.agentId], kind: "routine", routineId: r.id });
+  const ok = (out.ran || []).some((x) => x.ok);
+  r.lastStatus = ok ? "ran" : `failed: ${((out.ran || [])[0] || {}).error || out.halted || "no answer"}`;
+  r.lastRunAt = now;
+  return { ...out, ok };
 }
 
 // ─── Critique and revise ─────────────────────────────────────────────────────
@@ -371,11 +808,12 @@ async function revise(room, deps) {
    session written before rooms existed still load as an ordinary thread. */
 function toSession(room) {
   return {
-    id: room.id, kind: "room", title: room.title, updatedAt: room.updatedAt,
+    id: room.id, kind: "room", title: room.title, updatedAt: room.updatedAt, createdAt: room.createdAt,
     room: {
-      template: room.template, agents: room.agents, defaultAgent: room.defaultAgent,
+      template: room.template, brief: room.brief || "", agents: room.agents, defaultAgent: room.defaultAgent,
       budgetUsd: room.budgetUsd, spentUsd: room.spentUsd, cost: room.cost,
       critiqueRounds: room.critiqueRounds, halted: room.halted,
+      seq: room.seq || 0, readSeq: room.readSeq || 0, routines: room.routines || [],
     },
     messages: room.messages,
   };
@@ -383,13 +821,31 @@ function toSession(room) {
 
 function fromSession(d) {
   if (!d || d.kind !== "room" || !d.room) return null;
+  const messages = Array.isArray(d.messages) ? d.messages : [];
+  // A room saved before messages carried ids gets them now, in order, so an
+  // old transcript can be answered and counted like a new one.
+  let seq = 0;
+  for (const m of messages) {
+    if (typeof m.seq === "number" && m.seq > seq) seq = m.seq;
+  }
+  for (const m of messages) {
+    if (typeof m.seq !== "number") m.seq = ++seq;
+    if (!m.id) m.id = "m" + m.seq.toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+  }
+  seq = Math.max(seq, d.room.seq || 0);
   return {
     id: d.id, kind: "room", title: d.title || "Untitled room",
-    template: d.room.template || "", createdAt: d.createdAt || d.updatedAt || Date.now(),
+    template: d.room.template || "", brief: String(d.room.brief || "").slice(0, MAX_BRIEF_CHARS),
+    createdAt: d.createdAt || d.updatedAt || Date.now(),
     updatedAt: d.updatedAt || Date.now(),
     agents: (d.room.agents || []).map((a) => ({ ...a, state: "idle" })),
     defaultAgent: d.room.defaultAgent || "",
-    messages: Array.isArray(d.messages) ? d.messages : [],
+    messages,
+    seq,
+    // A room from before read marks existed loads as read: nothing in it is
+    // news to the person who was there for all of it.
+    readSeq: typeof d.room.readSeq === "number" ? d.room.readSeq : seq,
+    routines: Array.isArray(d.room.routines) ? d.room.routines : [],
     budgetUsd: typeof d.room.budgetUsd === "number" ? d.room.budgetUsd : DEFAULT_ROOM_BUDGET_USD,
     spentUsd: d.room.spentUsd || 0,
     cost: d.room.cost || {},
@@ -402,18 +858,42 @@ function fromSession(d) {
 
    This is what makes the one-agent parity claim checkable rather than asserted:
    a room with a single agent, flattened, must be exactly the message list the
-   operator thread would have persisted for the same conversation. */
+   operator thread would have persisted for the same conversation. A seat's
+   progress notes are rejoined onto its reply, because the operator thread
+   would have held the whole turn's text as one assistant message. */
 function toPlainMessages(room) {
+  const progressOf = progressByRun(room);
   return room.messages
-    .filter((m) => m.kind !== "critique")
-    .map((m) => ({ role: isHuman(m.author) ? "user" : "assistant", content: m.content }));
+    .filter((m) => m.kind !== "critique" && m.kind !== "progress" && m.author !== SYSTEM)
+    .map((m) => ({ role: isHuman(m.author) || m.author === ROUTINE ? "user" : "assistant",
+      content: isReserved(m.author) ? m.content : withOwnProgress(m, progressOf) }));
+}
+
+/* What the rail needs to show a room as a colleague with an inbox: who is in
+   it, the last thing said, how many things the operator has not seen, and
+   whether anyone is working right now. */
+function summary(room) {
+  return {
+    id: room.id, title: room.title, template: room.template || "", updatedAt: room.updatedAt,
+    agents: room.agents.map((a) => a.agentId),
+    names: room.agents.map((a) => displayName(a.agentId)),
+    spentUsd: room.spentUsd || 0, halted: room.halted || "",
+    unread: unreadCount(room), preview: preview(room),
+    working: room.agents.some((a) => a.state === "working" || a.state === "queued"),
+    workingAgents: room.agents.filter((a) => a.state === "working" || a.state === "queued").map((a) => a.agentId),
+    routines: (room.routines || []).filter((r) => r.enabled).length,
+    openAsk: room.messages.some((m) => m.ask && m.ask.state === "open"),
+  };
 }
 
 module.exports = {
-  HUMAN, isHuman,
-  createRoom, fromTemplate, parseAddress, viewFor, roomBrief, displayName,
-  speak, critique, revise, runOne,
+  HUMAN, ROUTINE, SYSTEM, isHuman, isReserved,
+  createRoom, fromTemplate, updateRoom, parseAddress, viewFor, roomBrief, displayName,
+  speak, critique, revise, runOne, forward,
+  pushMessage, byId, preview, unreadCount, markRead, summary,
+  normalizeAsk, extractAsk, answerAsk,
+  addRoutine, updateRoutine, removeRoutine, dueRoutines, claimRoutine, runRoutine, nextRunAt, graceMs, EVERY,
   noteCost, overBudget, projectRound, roomTier,
   toSession, fromSession, toPlainMessages,
-  MAX_CRITIQUE_ROUNDS, DEFAULT_ROOM_BUDGET_USD,
+  MAX_CRITIQUE_ROUNDS, DEFAULT_ROOM_BUDGET_USD, MAX_BRIEF_CHARS,
 };

@@ -34,6 +34,20 @@ jobs:
       - name: Run harness tests
         run: node scripts/test-harness.js
 
+      # The headless runner is a second caller of that same loop, so it is the
+      # cheapest place to catch the seam going wrong: a CLI that auto-approves in
+      # a pipe, or treats a missing terminal as consent, passes every harness
+      # test above and is still a hole.
+      # The billing path, before the runner that uses it. A turn billed twice or
+      # a plane outage served unmetered is not something a later test catches.
+      - name: Run control-plane tests
+        run: node scripts/test-cloud.js
+
+      - name: Run CLI tests
+        run: |
+          node scripts/test-cli.js
+          node scripts/smoke-cli.js
+
       # Second, and for the same reason: pure Node, seconds to run, and it is
       # the only thing holding the mobile port to the desktop it copies. The
       # renderer ships to the phone verbatim, so a bridge method dropped here or
@@ -69,9 +83,15 @@ jobs:
           node scripts/test-companion.js
           node scripts/test-qr.js
           node scripts/test-sense.js
+          node scripts/test-channel-analytics.js
           node scripts/test-repos.js
           node scripts/test-releases-worker.js
           node scripts/test-verify-release.js
+          node scripts/test-messages.js
+          node scripts/test-marks.js
+          node scripts/test-plugin-path.js
+          node scripts/test-first-run.js
+          node scripts/test-activity.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
@@ -175,6 +195,17 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
           CROWE_ALLOW_PLAINTEXT_AUTH: "1"
         run: xvfb-run -a npx electron scripts/test-rooms-live.js
+
+      # The bundled plugin server, forked the way a packaged app forks it. The
+      # node wire test drives it as `node server.js`; this drives it through
+      # main.js as an Electron utility process, the one Node runtime a packaged
+      # build has (its RunAsNode fuse is off), and reads a room seat's answer
+      # back through the process's message port.
+      - name: Run bundled plugin fork test (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+          CROWE_ALLOW_PLAINTEXT_AUTH: "1"
+        run: xvfb-run -a npx electron scripts/test-plugin-fork.js
 
       - name: Upload smoke screenshots
         if: always()
