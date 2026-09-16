@@ -2,7 +2,7 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -64,6 +64,11 @@ const DEFAULTS = {
   // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
   // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
   sense: { ...Sense.SENSE_DEFAULTS },
+  // The hosted control plane: off | local | remote. Off is the desktop exactly
+  // as it ships today, and it is the default so this changes nothing for an
+  // existing install. See cloud/contract.js.
+  controlPlane: "off",
+  tenantId: "",
   // Folders this app has opened as the workspace, newest first, capped in
   // repos.js. Written only from this process: the renderer opens a folder
   // through crowe:repos:open and main records it.
@@ -72,6 +77,7 @@ const DEFAULTS = {
   reposRoot: Repos.defaultReposRoot(),
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
+const PLANE_MODES = new Set(["off", "local", "remote"]);
 
 // ─── Crash reporting + minimal telemetry ─────────────────────────────────────
 // Local crash dumps always write to userData/crashes so the user can inspect
@@ -180,6 +186,9 @@ function loadConfig() {
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     cfg.sense = Sense.normalizeSense(cfg.sense);
+    // Same closed-set rule again: an unrecognised plane mode means no plane,
+    // never an unmetered remote one.
+    if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
     // Same closed-set discipline for the repository list: a hand-edited or
     // future-version store is sanitized on every read, cap included.
     cfg.recentWorkspaces = Repos.sanitizeRecent(cfg.recentWorkspaces);
@@ -457,13 +466,20 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
+/* One sign-in at a time. The loopback listener holds its port for up to five
+   minutes while the browser page waits, so a second click used to open a second
+   listener, collide with the first on EADDRINUSE, and blame the ports. A click
+   while one is pending now brings that page back up and joins its promise. */
+let pendingSignIn = null;
 function signIn() {
-  return new Promise((resolve) => {
+  if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const pending = { promise: null, authUrl: "" };
+  pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
     let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
     const server = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
@@ -488,7 +504,7 @@ function signIn() {
     let pIdx = 0;
     server.on("error", (e) => {
       if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
-      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+      finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
@@ -496,11 +512,14 @@ function signIn() {
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
         redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
       }).toString();
+      pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
     server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
+  pendingSignIn = pending;
+  return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
@@ -684,37 +703,64 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
 
-// ─── MCP client (stdio, newline-delimited JSON-RPC) ──────────────────────────
+// ─── MCP client: newline-delimited JSON-RPC over stdio, or the same messages over a utility process's port ──
 const MCP = {}; // name -> { proc, tools, send, pending, nextId }
 function mcpConnect(name, spec) {
   return new Promise((resolve) => {
-    let proc;
+    let proc, send;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
-    catch (e) { return resolve({ error: String(e) }); }
-    const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
-    const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+    const harness = require("./harness");
+    const env = harness.pluginSpawnEnv(spec.env || {});
+    const srv = { proc: null, tools: [], pending: new Map(), nextId: 1, buf: "" };
+    const receive = (msg) => {
+      if (!msg || !msg.id || !srv.pending.has(msg.id)) return;
+      const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
+      msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
+    };
+    try {
+      if (spec.fork) {
+        /* A server that ships inside the app runs in an Electron utility process:
+           the Node runtime the app carries, so no node is needed on the machine.
+           Not ELECTRON_RUN_AS_NODE on this binary: a packaged build has the
+           RunAsNode fuse off, so that variable is ignored and the "server" would
+           come up as a second copy of the app. A utility process has no stdin to
+           give it, so requests and replies cross its message port as objects. */
+        proc = utilityProcess.fork(spec.fork, spec.args || [], { env, stdio: ["ignore", "pipe", "pipe"], serviceName: `crowe-plugin-${name}` });
+        // Drained, not read: a server that writes to its stdio must never block on a full pipe.
+        proc.stdout.on("data", () => {});
+        proc.stderr.on("data", () => {});
+        proc.on("message", receive);
+        send = (msg) => proc.postMessage(msg);
+      } else {
+        // Resolve the binary ourselves so the failure names it. A Finder launch has
+        // no npx on PATH, and "spawn failed" told nobody that.
+        if (!harness.findOnPath(spec.command, env.PATH)) {
+          return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+        }
+        proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] });
+        proc.stdout.on("data", (chunk) => {
+          srv.buf += chunk.toString();
+          let i;
+          while ((i = srv.buf.indexOf("\n")) >= 0) {
+            const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
+            if (!line) continue;
+            let msg; try { msg = JSON.parse(line); } catch { continue; }
+            receive(msg);
+          }
+        });
+        send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+      }
+    } catch (e) { return resolve({ error: String(e) }); }
+    srv.proc = proc;
     srv.request = (method, params) => new Promise((res, rej) => {
       const id = srv.nextId++; srv.pending.set(id, { res, rej });
-      send({ jsonrpc: "2.0", id, method, params });
+      try { send({ jsonrpc: "2.0", id, method, params }); } catch (e) { srv.pending.delete(id); return rej(e); }
       setTimeout(() => { if (srv.pending.has(id)) { srv.pending.delete(id); rej(new Error("timeout")); } }, 15000);
     });
-    srv.notify = (method, params) => send({ jsonrpc: "2.0", method, params });
-    proc.stdout.on("data", (chunk) => {
-      srv.buf += chunk.toString();
-      let i;
-      while ((i = srv.buf.indexOf("\n")) >= 0) {
-        const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
-        if (!line) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id && srv.pending.has(msg.id)) {
-          const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
-          msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
-        }
-      }
-    });
-    proc.on("error", () => resolve({ error: "spawn failed" }));
+    srv.notify = (method, params) => { try { send({ jsonrpc: "2.0", method, params }); } catch {} };
+    proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
+    // Both report the code first: child_process as (code, signal), a utility process as (code).
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
@@ -808,14 +854,32 @@ function pluginList() {
     };
   });
 }
+/* Two placeholders a bundled manifest may use, so a server that ships inside
+   the app can be named without knowing where the app was installed. ${APP} is
+   the app's own directory, read from outside the asar (plugins/ is unpacked
+   for this), and ${NODE} as the command runs the named script in an Electron
+   utility process, the Node runtime the app carries, so a bundled server needs
+   no node on the machine and starts under a packaged build's fuses (RunAsNode
+   is off there, so this binary will not run a script as plain Node). Both
+   resolve here and nowhere else; the manifest stays the only source of commands. */
+function resolvePluginPath(s) {
+  // main.js's own directory, not app.getAppPath(): the two agree for `electron .`
+  // and for a packaged app, but a script launched as `electron scripts/x.js` gets
+  // that script's folder as its app path. The manifest itself is read from here.
+  // Either separator: on Windows the archive is spelled C:\...\app.asar\main.js.
+  const appDir = __dirname.replace(/app\.asar(?=[\\/]|$)/, "app.asar.unpacked");
+  return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
+}
 async function pluginConnect(p, env) {
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
+  const asNode = p.mcp.command === "${NODE}";
+  const args = (p.mcp.args || []).map(resolvePluginPath);
+  if (asNode && !args.length) return { error: "the manifest names ${NODE} but no server script" };
   const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
-  const r = await mcpConnect(p.id, {
-    command: expandHome(p.mcp.command),
-    args: (p.mcp.args || []).map(expandHome),
-    env: { ...(p.mcp.env || {}), ...(env || {}) },
-  });
+  const merged = { ...(p.mcp.env || {}), ...(env || {}) };
+  const r = await mcpConnect(p.id, asNode
+    ? { fork: args[0], args: args.slice(1), env: merged }
+    : { command: resolvePluginPath(p.mcp.command), args, env: merged });
   if (PLUGIN_GEN[p.id] !== gen) {
     // Disabled (or superseded) while connecting: tear down our registration.
     const srv = MCP[p.id];
@@ -877,6 +941,7 @@ async function mcpCall(fullName, args) {
 
 // ─── Agent harness (tools, system prompt, loop) — see harness.js ─────────────
 const harness = require("./harness");
+const { makeControlPlane, runTurn } = require("./cloud/index.js");
 function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.homedir()); return path.isAbsolute(p) ? p : path.join(CWD, p); }
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
@@ -948,6 +1013,8 @@ function requestApproval(req) {
   mainWindow.webContents.send("crowe:agent:event", {
     type: "approval_request", id, agentId, kind: req.kind, title: req.title,
     detail: req.detail, why: req.why, risk: req.risk, hash: req.hash,
+    // Seat, connector and tool, when a room seat is the one asking.
+    meta: req.meta || undefined,
     expiresInMs: APPROVAL_TIMEOUT_MS,
   });
   journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });
@@ -1070,6 +1137,18 @@ const harnessCtx = {
   // indistinguishable from a hand-logged one and both are equally correctable.
   growWrite: (type, record) => growWrite(type, record),
   growRead: (type) => growRead(type),
+  // The image tool's key, read at call time from the same encrypted store the
+  // Key Manager writes, and handed over as a value the harness keeps inside one
+  // request header. OpenAI first because it is the native images endpoint,
+  // OpenRouter otherwise. Null means no key, which the tool answers in words.
+  imageCredential: () => {
+    const store = readKeyStore();
+    for (const provider of ["openai", "openrouter"]) {
+      const secret = store[provider] && store[provider].value;
+      if (typeof secret === "string" && secret) return { provider, secret };
+    }
+    return null;
+  },
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();
@@ -1098,27 +1177,65 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
   agentRuns.set(id, run);
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
-    const result = await harness.runAgent(harnessCtx, messages.slice(), {
-      gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
-      send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
-      isAborted: () => run.aborted,
-      setController: (c) => { run.controller = c; },
-      role: String(role || ""),
-      agentId: String(id || "main"),
-      // Per-turn situational state from the renderer - today the cultivation
-      // records. Capped here rather than trusted from the caller: the renderer
-      // decides what is worth saying, the main process decides how much of the
-      // context window a caller may spend saying it.
-      context: String(context || "").slice(0, 8000),
-      // The session's standing brief is who is speaking for this thread; the
-      // harness already composes `persona` ahead of `context`, so a briefed
-      // session and a room seat are the same mechanism from here down.
-      persona: String(brief || "").slice(0, 4000),
+    const cfg = loadConfig();
+    const user = currentUser();
+    const plane = makeControlPlane({
+      mode: cfg.controlPlane, baseUrl: cfg.baseUrl, token: cfg.token,
+      dir: app.getPath("userData"),
+      // The desktop is a local agent someone already paid for. A plane it
+      // cannot reach must not brick it, so this one degrades and says so; the
+      // hosted seat is the deployment that fails closed.
+      requirePlane: false,
     });
-    if (id === "main") {
-      try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
+    const meter = { in: 0, out: 0, model: "" };
+    const send = (ev) => {
+      if (ev && ev.type === "telemetry") {
+        meter.in = Number(ev.promptTokens) || meter.in;
+        meter.out = Number(ev.completionTokens) || meter.out;
+      }
+      // The routed deployment, so the usage row names what answered.
+      if (ev && ev.type === "route" && ev.expert !== "verifier" && ev.model) meter.model = String(ev.model);
+      evt.sender.send("crowe:agent:event", { ...ev, agentId: id });
+    };
+
+    const turn = await runTurn({
+      plane, cfg, model: "",
+      identity: { tenantId: cfg.tenantId || (user && user.email) || "local", workspaceId: String(workspaceId || "") },
+      journal: journalWrite,
+      run: async ({ ceiling }) => {
+        // The plane's remaining quota arrives as the ceiling the harness
+        // already enforces, so it ends a turn with a reserve and a closing
+        // call rather than as a second, blunter stop.
+        const ctx = { ...harnessCtx, loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        const r = await harness.runAgent(ctx, messages.slice(), {
+          gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
+          send,
+          isAborted: () => run.aborted,
+          setController: (c) => { run.controller = c; },
+          role: String(role || ""),
+          agentId: String(id || "main"),
+          // Per-turn situational state from the renderer - today the cultivation
+          // records. Capped here rather than trusted from the caller: the renderer
+          // decides what is worth saying, the main process decides how much of the
+          // context window a caller may spend saying it.
+          context: String(context || "").slice(0, 8000),
+          // The session's standing brief is who is speaking for this thread; the
+          // harness already composes `persona` ahead of `context`, so a briefed
+          // session and a room seat are the same mechanism from here down.
+          persona: String(brief || "").slice(0, 4000),
+        });
+        return { ...r, inputTokens: meter.in, outputTokens: meter.out, model: r.model || meter.model };
+      },
+    });
+
+    if (!turn.authorized) {
+      send({ type: "error", text: turn.decision.reason });
+      return { done: false, error: turn.decision.reason, text: turn.decision.reason };
     }
-    return { done: true, text: result.text || "" };
+    if (id === "main") {
+      try { persistSession([...messages, { role: "assistant", content: turn.text || "" }]); } catch {}
+    }
+    return { done: true, text: turn.text || "" };
   } finally {
     agentRuns.delete(id);
   }
@@ -1135,9 +1252,14 @@ const ptyProcs = new Map();
    environment, the same one Terminal.app would give them, and the gateway token
    is not in it - it lives in the auth store. */
 function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
+/* The autonomy tier is the agent's leash, not the operator's. A terminal the
+   user opens is the user typing, the same as Terminal.app, and gating it by the
+   agent's tier made the default layout open a terminal that refused to start.
+   The gate stays for panels that hand the shell to an agent (kind "agent"),
+   where the tier's "no shell" promise is the point. */
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
   ptyProcs.set(id, proc);
@@ -1456,7 +1578,7 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 // ─── Config + status ─────────────────────────────────────────────────────────
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     reposRoot: c.reposRoot,
@@ -1546,14 +1668,16 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
 });
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────
-/* Several named agents and the operator in one thread.
+/* Several named agents and the operator in one thread, kept as standing
+   colleagues: each room has an inbox, a brief, and routines that let it speak
+   first.
 
    The orchestration is in rooms/engine.js, which takes its model call as an
    injected dependency; this file supplies the real one. That seam is why
    scripts/test-rooms.js can prove addressing, concurrency, attribution, the
-   budget and the critique loop without a gateway.
+   budget, the critique loop, questions and routines without a gateway.
 
-   Two things are deliberately wired through the machinery that already exists
+   Four things are deliberately wired through the machinery that already exists
    rather than beside it:
 
      stop      every room seat registers its run in `agentRuns` under a
@@ -1563,7 +1687,15 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
                written when there was only ever one agent.
      storage   a room is a session with kind:"room". It inherits listing,
                deletion and backup, and a session written before rooms existed
-               still loads as an ordinary thread. */
+               still loads as an ordinary thread.
+     order     one turn at a time per room. The engine mutates a room's
+               transcript and seat states as it runs, and a routine firing in
+               the middle of the operator's turn would interleave two rounds
+               into one transcript. A per-room queue makes that impossible;
+               stop does not wait in it.
+     delivery  main owns the room and every window is a subscriber. A routine
+               that fires with no panel open still lands, persists and notifies;
+               a window that closed mid-turn loses nothing. */
 const roomsEngine = require("./rooms/engine");
 const roomsRegistry = require("./rooms/registry");
 
@@ -1574,8 +1706,14 @@ function roomPath(id) {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) throw new Error("invalid room id");
   return path.join(sessionsDir(), id + ".json");
 }
+// Written whole then renamed into place, so a crash mid-write leaves the last
+// good transcript rather than half of a new one.
 function saveRoom(room) {
-  try { fs.writeFileSync(roomPath(room.id), JSON.stringify(roomsEngine.toSession(room), null, 2)); } catch {}
+  try {
+    const p = roomPath(room.id);
+    fs.writeFileSync(p + ".tmp", JSON.stringify(roomsEngine.toSession(room), null, 2));
+    fs.renameSync(p + ".tmp", p);
+  } catch {}
 }
 function loadRoom(id) {
   if (liveRooms.has(id)) return liveRooms.get(id);
@@ -1585,19 +1723,54 @@ function loadRoom(id) {
     return room;
   } catch { return null; }
 }
+function listRoomIds() {
+  try { return fs.readdirSync(sessionsDir()).filter((f) => f.startsWith("r-") && f.endsWith(".json")).map((f) => f.slice(0, -5)); }
+  catch { return []; }
+}
+
+// Every window hears about a room, not only the one that asked: a room is
+// main's, and the rail in a second window is as entitled to the unread mark.
+function broadcast(channel, payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch { /* window gone */ }
+  }
+}
+function roomChanged(room, reason, { save = true } = {}) {
+  if (save) saveRoom(room);
+  broadcast("crowe:rooms:changed", { id: room.id, reason, summary: roomsEngine.summary(room) });
+}
+
+/* One turn at a time per room. Chained promises, so a routine that fires
+   while the operator's message is being answered waits its turn instead of
+   writing into the same transcript. A failed turn does not poison the queue. */
+const roomQueues = new Map();
+function withRoom(id, fn) {
+  const prev = roomQueues.get(id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  roomQueues.set(id, next);
+  next.catch(() => {}).finally(() => { if (roomQueues.get(id) === next) roomQueues.delete(id); });
+  return next;
+}
 
 /* The real runner. One room seat, one harness turn.
 
    The seat's persona and pinned model ride the two additive deps the harness
    grew for this; everything else about the turn is the ordinary operator path,
-   which is what keeps a one-agent room honestly identical to today's thread. */
-function roomRunner(sender, room) {
+   which is what keeps a one-agent room honestly identical to today's thread.
+
+   Two more things ride along. Each complete thing the seat says between tool
+   rounds is handed to the engine as progress the moment it arrives, so the
+   thread shows a seat working rather than a seat silent for a minute and then
+   an essay. And a question the seat puts through propose_options comes back
+   structured, for the engine to turn into a card. */
+function roomRunner(room) {
   return {
-    runAgent: async ({ agentId, model, systemBrief, messages, tier }) => {
+    runAgent: async ({ agentId, runId, model, systemBrief, messages, tier, onProgress }) => {
       const seatId = roomSeatId(room.id, agentId);
       const run = { aborted: false, controller: null };
       agentRuns.set(seatId, run);
       let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+      let proposal = null;
       try {
         const result = await harness.runAgent(harnessCtx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
@@ -1608,7 +1781,10 @@ function roomRunner(sender, room) {
             if (ev.type === "telemetry") {
               usage = { usd: ev.cost || 0, promptTokens: ev.promptTokens || 0, completionTokens: ev.completionTokens || 0 };
             }
-            try { sender.send("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId }); } catch {}
+            if (ev.type === "assistant" && typeof onProgress === "function" && !run.aborted) {
+              if (onProgress(ev.text)) roomChanged(room, "progress", { save: false });
+            }
+            broadcast("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId, runId });
           },
           isAborted: () => run.aborted,
           setController: (c) => { run.controller = c; },
@@ -1616,9 +1792,10 @@ function roomRunner(sender, room) {
           persona: systemBrief,
           model: model || "",
           tier,
+          onPropose: (p) => { proposal = p; },
         });
         if (run.aborted) return { stopped: true, usage };
-        return { text: result.text || "", error: result.error, usage };
+        return { text: result.text || "", error: result.error, usage, proposal: result.proposal || proposal };
       } finally {
         agentRuns.delete(seatId);
       }
@@ -1632,26 +1809,21 @@ ipcMain.handle("crowe:rooms:agents", () => ({
   templates: roomsRegistry.listTemplates(),
 }));
 
+// The rail's view: who is in each room, the last thing said, what is unread,
+// who is working. Live rooms answer from memory so a seat mid-turn reads as
+// working; the rest are read off disk.
 ipcMain.handle("crowe:rooms:list", () => {
-  try {
-    return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
-      try {
-        const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8"));
-        if (d.kind !== "room" || !d.room) return null;
-        return { id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
-          agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" };
-      } catch { return null; }
-    }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch { return []; }
+  return listRoomIds().map((id) => { const room = loadRoom(id); return room ? roomsEngine.summary(room) : null; })
+    .filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
 });
 
-ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd, brief = "" } = {}) => {
   const room = template
-    ? roomsEngine.fromTemplate(template, { title, budgetUsd })
-    : roomsEngine.createRoom({ title, agentIds, budgetUsd });
+    ? roomsEngine.fromTemplate(template, { title, budgetUsd, brief })
+    : roomsEngine.createRoom({ title, agentIds, budgetUsd, brief });
   if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
   liveRooms.set(room.id, room);
-  saveRoom(room);
+  roomChanged(room, "create");
   return { room: roomState(room) };
 });
 
@@ -1664,6 +1836,7 @@ ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
   liveRooms.delete(id);
   try { fs.unlinkSync(roomPath(id)); } catch {}
+  broadcast("crowe:rooms:changed", { id, reason: "delete" });
   return { ok: true };
 });
 
@@ -1674,7 +1847,7 @@ ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
   if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
   room.agents.push({ agentId, model: (roomsRegistry.getAgent(agentId) || {}).model || "", state: "idle" });
   if (!room.defaultAgent) room.defaultAgent = agentId;
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1682,7 +1855,7 @@ ipcMain.handle("crowe:rooms:leave", (_e, { id, agentId } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   room.agents = room.agents.filter((a) => a.agentId !== agentId);
   if (room.defaultAgent === agentId) room.defaultAgent = room.agents[0] ? room.agents[0].agentId : "";
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1690,18 +1863,36 @@ ipcMain.handle("crowe:rooms:set-agent-model", (_e, { id, agentId, model } = {}) 
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   const seat = room.agents.find((a) => a.agentId === agentId);
   if (!seat) return { error: "that agent is not in this room" };
-  seat.model = String(model || "");
-  saveRoom(room);
+  seat.model = String(model || "").slice(0, 80);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
+});
+
+// Title, standing brief, budget, default seat. The engine holds the caps.
+ipcMain.handle("crowe:rooms:update", (_e, { id, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const changed = roomsEngine.updateRoom(room, patch || {});
+  roomChanged(room, "update");
+  return { room: roomState(room), changed };
+});
+
+// The operator has seen everything up to now. Answered from memory; the
+// broadcast is what clears the dot in every rail.
+ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (roomsEngine.unreadCount(room) === 0) return { unread: 0 };
+  roomsEngine.markRead(room);
+  roomChanged(room, "read");
+  return { unread: 0 };
 });
 
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
-   back later still believing it may write. */
+   back and run at Execute after the operator moved the app down. */
 function roomState(room) {
   const cfg = loadConfig();
   return {
-    id: room.id, title: room.title, template: room.template,
+    id: room.id, title: room.title, template: room.template, brief: room.brief || "",
     agents: room.agents.map((a) => {
       const meta = roomsRegistry.getAgent(a.agentId) || {};
       return { agentId: a.agentId, name: meta.name || a.agentId, domain: meta.domain || "",
@@ -1713,35 +1904,141 @@ function roomState(room) {
     budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
     critiqueRounds: room.critiqueRounds, maxCritiqueRounds: roomsEngine.MAX_CRITIQUE_ROUNDS,
     halted: room.halted,
+    routines: room.routines || [],
+    unread: roomsEngine.unreadCount(room), seq: room.seq || 0, readSeq: room.readSeq || 0,
   };
 }
 
-async function runRoomTurn(evt, id, fn) {
+async function runRoomTurn(id, fn) {
   const room = loadRoom(id);
   if (!room) return { error: "no such room" };
-  room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-  const deps = roomRunner(evt.sender, room);
-  const out = await fn(room, deps);
-  saveRoom(room);
-  return { ...out, room: roomState(room) };
+  return withRoom(id, async () => {
+    room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
+    const out = await fn(room, roomRunner(room));
+    roomChanged(room, "turn");
+    return { ...out, room: roomState(room) };
+  });
 }
 
-ipcMain.handle("crowe:rooms:say", (evt, { id, text } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
+ipcMain.handle("crowe:rooms:say", (_e, { id, text } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
 
-ipcMain.handle("crowe:rooms:critique", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.critique(room, deps)));
+// A tap on an option. The engine checks the card is still open before it
+// speaks, and the queue means two taps from two windows arrive in order.
+ipcMain.handle("crowe:rooms:answer", (_e, { id, messageId, optionId } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.answerAsk(room, String(messageId || ""), String(optionId || ""), deps)));
 
-ipcMain.handle("crowe:rooms:revise", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.revise(room, deps)));
+ipcMain.handle("crowe:rooms:critique", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.critique(room, deps)));
 
-// What a round is about to cost, so the operator can decline it. Calls rather
-// than dollars: the price depends on a transcript nobody has generated yet, and
-// a projected figure with a decimal point in it would be a guess wearing a suit.
+ipcMain.handle("crowe:rooms:revise", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.revise(room, deps)));
+
+/* A message carried into another room by the operator. Both rooms are
+   touched: the source only to read, the target to append and to answer, so
+   only the target's queue is taken. */
+ipcMain.handle("crowe:rooms:forward", (_e, { fromId, messageId, toId, to } = {}) => {
+  const from = loadRoom(fromId); if (!from) return { error: "no such source room" };
+  return runRoomTurn(toId, (target, deps) => roomsEngine.forward(from, target, String(messageId || ""), deps, { to: Array.isArray(to) ? to : null }));
+});
+
+// Calls, not dollars: see engine.projectRound for why the honest unit is calls.
 ipcMain.handle("crowe:rooms:project", (_e, { id, kind = "critique" } = {}) => {
   const room = loadRoom(id);
   return room ? roomsEngine.projectRound(room, kind) : { error: "no such room" };
 });
+
+// ─── Routines: a room speaks first ───────────────────────────────────────────
+/* Recurring messages a room sends itself on a schedule, each addressed to one
+   seat. The rules (when a run is due, when a late run is skipped, that a claim
+   is written before the model is called) are in the engine and tested there;
+   this is the clock and the delivery.
+
+   Timers wake the scheduler; they are not the schedule. Every tick compares
+   the wall clock against the persisted due times, so a laptop that slept
+   through 07:00 runs the brief on waking if it is still within the grace
+   window, and says so and moves on if it is not. Nothing is replayed. */
+ipcMain.handle("crowe:rooms:routine-add", (_e, { id, spec } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.addRoutine(room, spec || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  startRoutineScheduler();
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-update", (_e, { id, routineId, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.updateRoutine(room, String(routineId || ""), patch || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-remove", (_e, { id, routineId } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.removeRoutine(room, String(routineId || ""));
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+// Run it now, in the room's queue, exactly as the clock would have.
+ipcMain.handle("crowe:rooms:routine-run", (_e, { id, routineId } = {}) =>
+  runRoomTurn(id, async (room, deps) => {
+    const r = (room.routines || []).find((x) => x.id === String(routineId || ""));
+    if (!r) return { error: "no such routine" };
+    r.lastRunAt = Date.now(); r.runs = (r.runs || 0) + 1; r.lastStatus = "running";
+    return roomsEngine.runRoutine(room, r.id, deps, Date.now());
+  }));
+
+const ROUTINE_TICK_MS = 30 * 1000;
+let routineTimer = null;
+let routineTicking = false;
+async function routineTick() {
+  if (routineTicking) return;
+  routineTicking = true;
+  try {
+    const now = Date.now();
+    for (const id of listRoomIds()) {
+      const room = loadRoom(id);
+      if (!room || !(room.routines || []).length) continue;
+      for (const r of roomsEngine.dueRoutines(room, now)) {
+        const claim = roomsEngine.claimRoutine(room, r.id, now);
+        // The claim is on disk before the model is called, so a crash mid-run
+        // cannot fire the same scheduled instant again on restart.
+        saveRoom(room);
+        if (!claim.run) { if (claim.skip === "too late") roomChanged(room, "routine-skipped"); continue; }
+        withRoom(room.id, async () => {
+          room.tier = roomsEngine.roomTier(room, loadConfig().autonomy || "edit");
+          const out = await roomsEngine.runRoutine(room, r.id, roomRunner(room), Date.now());
+          roomChanged(room, "routine");
+          notifyRoom(room, r, out);
+        }).catch(() => {});
+      }
+    }
+  } finally { routineTicking = false; }
+}
+/* A routine that posted is worth a knock on the door: the whole point of a
+   room speaking first is that the person was not looking at it. One
+   notification per run, carrying the room's name and the last thing said;
+   clicking it opens the room. */
+function notifyRoom(room, routine, out) {
+  try {
+    if (!Notification.isSupported()) return;
+    const body = out && out.skip ? String(routine.lastStatus || "skipped") : roomsEngine.preview(room);
+    const n = new Notification({ title: room.title, body: String(body || "").slice(0, 200) });
+    n.on("click", () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.show(); mainWindow.focus();
+      mainWindow.webContents.send("crowe:rooms:open", { id: room.id });
+    });
+    n.show();
+  } catch { /* a notification is a courtesy, never a dependency */ }
+}
+function startRoutineScheduler() {
+  if (routineTimer) return;
+  routineTimer = setInterval(() => { routineTick().catch(() => {}); }, ROUTINE_TICK_MS);
+  setTimeout(() => { routineTick().catch(() => {}); }, 5000);
+  // A laptop that slept through a due time checks the moment it is back.
+  try { powerMonitor.on("resume", () => { routineTick().catch(() => {}); }); } catch {}
+}
 
 // ─── Cultivation records ─────────────────────────────────────────────────────
 /* The farm's own notebook, on disk beside the sessions. No gateway and no
@@ -2033,6 +2330,8 @@ app.whenReady().then(async () => {
   if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
+  // Rooms with routines speak first; the scheduler is what lets them.
+  startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.
   setInterval(() => {
