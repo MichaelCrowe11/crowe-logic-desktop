@@ -53,6 +53,46 @@ const roomOf = (ids, extra = {}) =>
 
   // ── registry ───────────────────────────────────────────────────────────────
 
+  await check("workers are named as colleagues, without the company in front", () => {
+    const names = registry.listAgents().map((a) => a.name);
+    const prefixed = names.filter((n) => /^Crowe\s/.test(n));
+    assert(!prefixed.length, `still prefixed: ${prefixed.join(", ")}`);
+    assert(registry.getAgent("operator").name === "Operator", `operator is ${registry.getAgent("operator").name}`);
+    assert(registry.getAgent("studio").name === "Studio Director", `studio is ${registry.getAgent("studio").name}`);
+    assert(registry.getAgent("crowe-logic").name === "Orchestrator", `crowe-logic is ${registry.getAgent("crowe-logic").name}`);
+    assert(registry.getAgent("crowelm-frontier").name === "CroweLM Frontier", "a product name is not the prefix");
+    assert(registry.displayName({ id: "x", name: "Crowe   Auditor" }) === "Auditor" && registry.displayName({ id: "y", name: "Crowe" }) === "Crowe", "the rule strips only a leading word");
+    return `${names.length} names, none prefixed`;
+  });
+
+  await check("a reaction is a word on a worker's bubble, toggled, and the seat reads it on its next turn", () => {
+    const room = rooms.createRoom({ agentIds: ["operator", "studio"] });
+    const mine = rooms.pushMessage(room, { author: rooms.HUMAN, kind: "say", content: "Is the cut ready?" });
+    const theirs = rooms.pushMessage(room, { author: "operator", kind: "reply", content: "The upload slot at 9 is clear." });
+    const note = rooms.pushMessage(room, { author: rooms.SYSTEM, kind: "note", content: "housekeeping" });
+    const before = room.updatedAt;
+    assert(rooms.react(room, theirs.id, "shrug").error, "an unknown word is refused");
+    assert(rooms.react(room, "nope", "good").error, "a missing message is refused");
+    assert(rooms.react(room, mine.id, "good").error, "the operator's own text takes no reaction");
+    assert(rooms.react(room, note.id, "good").error, "a system note takes no reaction");
+    let r = rooms.react(room, theirs.id, "Good");
+    assert(r.ok && r.on && theirs.reactions.length === 1 && theirs.reactions[0].kind === "good" && theirs.reactions[0].by === rooms.HUMAN, "Good lands, lowercased, as the operator");
+    r = rooms.react(room, theirs.id, "why");
+    assert(r.on && theirs.reactions.length === 2, "a second word stacks");
+    assert(room.updatedAt === before, "a reaction does not move the room");
+    assert(rooms.unreadCount(room) === rooms.unreadCount(room), "and is not a message");
+    const own = rooms.viewFor(room, "operator");
+    const i = own.findIndex((m) => m.role === "assistant" && /upload slot/.test(m.content));
+    assert(i >= 0 && own[i + 1] && own[i + 1].role === "user" && own[i + 1].content === "[Reaction to your last message: Good, Why]", `the seat reads its reactions after its message, got ${JSON.stringify(own[i + 1])}`);
+    assert(!rooms.viewFor(room, "studio").some((m) => /Reaction to your last message/.test(m.content)), "another seat does not read them as its own");
+    r = rooms.react(room, theirs.id, "good");
+    assert(!r.on && theirs.reactions.length === 1 && theirs.reactions[0].kind === "why", "the same word again takes it off");
+    rooms.react(room, theirs.id, "why");
+    assert(!("reactions" in theirs), "the last one off leaves the message as it was");
+    assert(rooms.reactionLine(theirs) === "", "and the seat reads nothing");
+    return "refused 4 ways, toggled on and off, read by the seat";
+  });
+
   await check("the vendored roster is the canonical one, not an invented parallel", () => {
     const ids = registry.listAgents().map((a) => a.id);
     assert(ids.length >= 20, `only ${ids.length} agents vendored`);
@@ -706,7 +746,7 @@ const roomOf = (ids, extra = {}) =>
     const s = rooms.summary(room);
     assert(s.unread === 2, `two replies should be unread, got ${s.unread}`);
     assert(s.preview === "Nothing uploading on this Mac right now." || s.preview === "No claim issue here.", `preview was ${s.preview}`);
-    assert(s.names.includes("Crowe Operator") && s.agents.length === 2, "the summary does not name its seats");
+    assert(s.names.includes("Operator") && s.agents.length === 2, "the summary does not name its seats");
     rooms.markRead(room);
     assert(rooms.unreadCount(room) === 0, "marking read did not clear the count");
     await rooms.speak(room, "thanks", f);
@@ -726,7 +766,7 @@ const roomOf = (ids, extra = {}) =>
     const relay = b.messages[0];
     assert(relay.kind === "relay" && relay.author === "operator" && relay.from.roomTitle === "SWM Ops" && relay.from.messageId === said.id, `relay was ${JSON.stringify(relay)}`);
     const seen = rooms.viewFor(b, "studio")[0].content;
-    assert(/^\[Crowe Operator, from the room "SWM Ops"\]/.test(seen), `the seat read the relay as ${seen.slice(0, 60)}`);
+    assert(/^\[Operator, from the room "SWM Ops"\]/.test(seen), `the seat read the relay as ${seen.slice(0, 60)}`);
     assert((await rooms.forward(a, a, said.id, fa)).error, "a message was forwarded into its own room");
     assert((await rooms.forward(a, b, "m-nope", fb)).error, "a missing message was forwarded");
     return "relayed, attributed, answered by one seat";

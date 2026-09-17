@@ -1981,6 +1981,17 @@ ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
   return { unread: 0 };
 });
 
+// A reaction is a word on a worker's bubble, not a turn: no seat runs, the
+// room is saved, and every window learns of it. Queued behind the room's turns
+// so it cannot land on a message list mid-write.
+ipcMain.handle("crowe:rooms:react", (_e, { id, messageId, kind } = {}) => withRoom(id, async () => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const r = roomsEngine.react(room, String(messageId || ""), String(kind || ""));
+  if (r.error) return { error: r.error };
+  roomChanged(room, "react");
+  return { ok: true, on: r.on, reactions: r.message.reactions || [] };
+}));
+
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
    back and run at Execute after the operator moved the app down. */
@@ -2009,7 +2020,13 @@ async function runRoomTurn(id, fn) {
   if (!room) return { error: "no such room" };
   return withRoom(id, async () => {
     room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-    const out = await fn(room, roomRunner(room));
+    /* speak() stores what the operator said before its first await, so by the
+       time the turn's promise exists the text is in the room. Broadcast that
+       now: a thread that only heard "turn" drew the operator's own text when
+       the seats came back, with a typing bubble standing over its absence. */
+    const pending = fn(room, roomRunner(room));
+    roomChanged(room, "message", { save: false });
+    const out = await pending;
     roomChanged(room, "turn");
     return { ...out, room: roomState(room) };
   });
