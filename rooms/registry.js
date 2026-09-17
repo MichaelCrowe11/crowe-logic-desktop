@@ -55,13 +55,29 @@ const MARKS = {
   studio: "iris",                       // a camera's aperture
 };
 const markOf = (id) => MARKS[String(id)] || "";
+/* What a worker is called in the app. The upstream registry names its agents
+   with the company in front (Crowe Operator, Crowe Studio Director), which is
+   right in a catalogue and wrong in a contact list inside an app already
+   called Crowe Logic: every row would begin with the same word. The company
+   prefix comes off here, once, so the engine, the rail, the thread and the web
+   bundle all agree. The orchestrator would be left as "Logic", which reads as
+   the app rather than a colleague, so it is named for what it does. CroweLM is
+   a product name, not the prefix, and stays. The vendored snapshot is not
+   edited: it is regenerated from upstream and this rule survives that. */
+const NAMES = { "crowe-logic": "Orchestrator" };
+function displayName(a) {
+  if (!a) return "";
+  if (NAMES[a.id]) return NAMES[a.id];
+  const stripped = String(a.name || "").replace(/^Crowe\s+/, "").trim();
+  return stripped || String(a.name || a.id || "");
+}
 
 let cache = null;
 function loadAgents() {
   if (cache) return cache;
   try {
     const d = JSON.parse(fs.readFileSync(VENDORED, "utf8"));
-    cache = (Array.isArray(d.agents) ? d.agents : []).map((a) => (a && a.id && markOf(a.id) ? { ...a, mark: markOf(a.id) } : a));
+    cache = (Array.isArray(d.agents) ? d.agents : []).map((a) => (a && a.id ? { ...a, name: displayName(a), ...(markOf(a.id) ? { mark: markOf(a.id) } : {}) } : a));
   } catch {
     // A missing snapshot means no rooms, not a crash on boot. The caller shows
     // an empty roster and the rest of the app is untouched.
@@ -175,6 +191,7 @@ function listTemplates() {
 function getTemplate(id) { return listTemplates().find((t) => t.id === String(id)) || null; }
 
 module.exports = {
+  displayName,
   listAgents, getAgent, isJoinable, listTemplates, getTemplate,
   roomCeiling, effectiveTier, writeCapable, tierRank, TIERS,
   MARKS, markOf,
