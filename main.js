@@ -2,12 +2,13 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor } = require("electron");
+const { app, BrowserWindow, session, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
@@ -703,44 +704,64 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
 
-// ─── MCP client (stdio, newline-delimited JSON-RPC) ──────────────────────────
+// ─── MCP client: newline-delimited JSON-RPC over stdio, or the same messages over a utility process's port ──
 const MCP = {}; // name -> { proc, tools, send, pending, nextId }
 function mcpConnect(name, spec) {
   return new Promise((resolve) => {
-    let proc;
+    let proc, send;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
     const harness = require("./harness");
     const env = harness.pluginSpawnEnv(spec.env || {});
-    // Resolve the binary ourselves so the failure names it. A Finder launch has
-    // no npx on PATH, and "spawn failed" told nobody that.
-    if (!harness.findOnPath(spec.command, env.PATH)) {
-      return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
-    }
-    try { proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] }); }
-    catch (e) { return resolve({ error: String(e) }); }
-    const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
-    const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+    const srv = { proc: null, tools: [], pending: new Map(), nextId: 1, buf: "" };
+    const receive = (msg) => {
+      if (!msg || !msg.id || !srv.pending.has(msg.id)) return;
+      const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
+      msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
+    };
+    try {
+      if (spec.fork) {
+        /* A server that ships inside the app runs in an Electron utility process:
+           the Node runtime the app carries, so no node is needed on the machine.
+           Not ELECTRON_RUN_AS_NODE on this binary: a packaged build has the
+           RunAsNode fuse off, so that variable is ignored and the "server" would
+           come up as a second copy of the app. A utility process has no stdin to
+           give it, so requests and replies cross its message port as objects. */
+        proc = utilityProcess.fork(spec.fork, spec.args || [], { env, stdio: ["ignore", "pipe", "pipe"], serviceName: `crowe-plugin-${name}` });
+        // Drained, not read: a server that writes to its stdio must never block on a full pipe.
+        proc.stdout.on("data", () => {});
+        proc.stderr.on("data", () => {});
+        proc.on("message", receive);
+        send = (msg) => proc.postMessage(msg);
+      } else {
+        // Resolve the binary ourselves so the failure names it. A Finder launch has
+        // no npx on PATH, and "spawn failed" told nobody that.
+        if (!harness.findOnPath(spec.command, env.PATH)) {
+          return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+        }
+        proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] });
+        proc.stdout.on("data", (chunk) => {
+          srv.buf += chunk.toString();
+          let i;
+          while ((i = srv.buf.indexOf("\n")) >= 0) {
+            const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
+            if (!line) continue;
+            let msg; try { msg = JSON.parse(line); } catch { continue; }
+            receive(msg);
+          }
+        });
+        send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+      }
+    } catch (e) { return resolve({ error: String(e) }); }
+    srv.proc = proc;
     srv.request = (method, params) => new Promise((res, rej) => {
       const id = srv.nextId++; srv.pending.set(id, { res, rej });
-      send({ jsonrpc: "2.0", id, method, params });
+      try { send({ jsonrpc: "2.0", id, method, params }); } catch (e) { srv.pending.delete(id); return rej(e); }
       setTimeout(() => { if (srv.pending.has(id)) { srv.pending.delete(id); rej(new Error("timeout")); } }, 15000);
     });
-    srv.notify = (method, params) => send({ jsonrpc: "2.0", method, params });
-    proc.stdout.on("data", (chunk) => {
-      srv.buf += chunk.toString();
-      let i;
-      while ((i = srv.buf.indexOf("\n")) >= 0) {
-        const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
-        if (!line) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id && srv.pending.has(msg.id)) {
-          const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
-          msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
-        }
-      }
-    });
+    srv.notify = (method, params) => { try { send({ jsonrpc: "2.0", method, params }); } catch {} };
     proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
+    // Both report the code first: child_process as (code, signal), a utility process as (code).
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
@@ -772,6 +793,7 @@ async function mcpConnectAll() {
     if (spec && spec.command) await mcpConnect(name, spec);
   }
 }
+const mail = require("./mail");
 // ─── Official plugins (Phase 1: bundled manifest over the MCP client) ────────
 // A plugin IS a manifest entry + an MCP server + declared tiers. Enable is one
 // click, disable is one click, and a dead server never breaks the app.
@@ -785,9 +807,21 @@ const BUILTIN_PLUGINS = (() => {
   catch { return []; }
 })();
 const PLUGIN_IDS = new Set(BUILTIN_PLUGINS.map((p) => p.id));
-const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager
+const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager, or whose built-in tools are on
 const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
 const PLUGIN_CONNECTING = new Set();
+/* A built-in plugin has no server: its tools live in the harness, and the
+   manifest entry exists so its credentials, its tier rule, and its on/off
+   switch travel the same road as every other plugin. The tool names come from
+   this table and not from the manifest, so an entry cannot claim a built-in it
+   does not own, and an entry that names a server is never treated as one.
+   Connecting a built-in is checking that its account is complete: a switched-on
+   Mail with no password is a tool the agent can see and can never use. */
+const BUILTIN_PLUGIN_TOOLS = { [mail.PLUGIN_ID]: mail.TOOLS };
+const BUILTIN_PLUGIN_CHECKS = {
+  [mail.PLUGIN_ID]: (env) => (mail.isConfigured(env) ? "" : "Mail needs the SMTP host (host or host:port), the full mail address you send from, and the app password"),
+};
+function pluginBuiltinTools(p) { return p && !p.mcp && BUILTIN_PLUGIN_TOOLS[p.id] ? BUILTIN_PLUGIN_TOOLS[p.id] : null; }
 function pluginState() { return loadConfig().plugins || {}; }
 function pluginSecretState() { return readKeyStore().__plugins || {}; }
 function pluginEnv(id) { return pluginSecretState()[id] || {}; }
@@ -823,25 +857,52 @@ function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
 function pluginList() {
   const st = pluginState();
   return BUILTIN_PLUGINS.map((p) => {
-    const connected = PLUGIN_MANAGED.has(p.id) && Boolean(MCP[p.id]);
+    const builtin = pluginBuiltinTools(p);
+    const connected = PLUGIN_MANAGED.has(p.id) && (builtin ? true : Boolean(MCP[p.id]));
     return {
       id: p.id, name: p.name, description: p.description, category: p.category,
       spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
       glyph: p.glyph || "", chips: p.chips || [],
       enabled: Boolean(st[p.id] && st[p.id].enabled),
       connected,
-      toolCount: connected ? MCP[p.id].tools.length : 0,
+      toolCount: connected ? (builtin ? builtin.length : MCP[p.id].tools.length) : 0,
     };
   });
 }
+/* Two placeholders a bundled manifest may use, so a server that ships inside
+   the app can be named without knowing where the app was installed. ${APP} is
+   the app's own directory, read from outside the asar (plugins/ is unpacked
+   for this), and ${NODE} as the command runs the named script in an Electron
+   utility process, the Node runtime the app carries, so a bundled server needs
+   no node on the machine and starts under a packaged build's fuses (RunAsNode
+   is off there, so this binary will not run a script as plain Node). Both
+   resolve here and nowhere else; the manifest stays the only source of commands. */
+function resolvePluginPath(s) {
+  // main.js's own directory, not app.getAppPath(): the two agree for `electron .`
+  // and for a packaged app, but a script launched as `electron scripts/x.js` gets
+  // that script's folder as its app path. The manifest itself is read from here.
+  // Either separator: on Windows the archive is spelled C:\...\app.asar\main.js.
+  const appDir = __dirname.replace(/app\.asar(?=[\\/]|$)/, "app.asar.unpacked");
+  return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
+}
 async function pluginConnect(p, env) {
+  const builtin = pluginBuiltinTools(p);
+  if (builtin) {
+    const check = BUILTIN_PLUGIN_CHECKS[p.id];
+    const problem = check ? check(env || {}) : "";
+    if (problem) return { error: problem };
+    PLUGIN_MANAGED.add(p.id);
+    return { ok: true, tools: builtin.length };
+  }
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
+  const asNode = p.mcp.command === "${NODE}";
+  const args = (p.mcp.args || []).map(resolvePluginPath);
+  if (asNode && !args.length) return { error: "the manifest names ${NODE} but no server script" };
   const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
-  const r = await mcpConnect(p.id, {
-    command: expandHome(p.mcp.command),
-    args: (p.mcp.args || []).map(expandHome),
-    env: { ...(p.mcp.env || {}), ...(env || {}) },
-  });
+  const merged = { ...(p.mcp.env || {}), ...(env || {}) };
+  const r = await mcpConnect(p.id, asNode
+    ? { fork: args[0], args: args.slice(1), env: merged }
+    : { command: resolvePluginPath(p.mcp.command), args, env: merged });
   if (PLUGIN_GEN[p.id] !== gen) {
     // Disabled (or superseded) while connecting: tear down our registration.
     const srv = MCP[p.id];
@@ -1067,6 +1128,60 @@ async function fetchCatalog() {
   } catch { /* keep last good; the router degrades to the default model */ }
 }
 
+// ─── The document printer ────────────────────────────────────────────────────
+/* export_document lays its page out in Chromium, and Chromium is here, not in
+   the harness, so the harness is handed this hook. The page loads into a hidden
+   window with scripts off and no network at all: an image URL the model
+   composed, fetched while printing, is the same outbound GET open_url asks
+   about, so on this session every request that is not the document itself is
+   cancelled. One job at a time, since each is a renderer process, and the whole
+   job - load and print - has one deadline, with the window destroyed either
+   way, so a hung page cannot outlive the turn that asked for it. */
+const PRINT_TIMEOUT_MS = 30000;
+const PRINT_MAX_DATA_URL_CHARS = 1800000;   // Chromium will not navigate to a URL past 2M characters
+let printSess = null, printAllow = "", printChain = Promise.resolve();
+function printSession() {
+  if (printSess) return printSess;
+  printSess = session.fromPartition("crowe-print");   // no persist: prefix, so it lives in memory only
+  printSess.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+    callback({ cancel: !(details.url === printAllow || details.url.startsWith("data:") || details.url.startsWith("about:")) });
+  });
+  printSess.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  printSess.setPermissionCheckHandler(() => false);
+  return printSess;
+}
+async function printOne(html) {
+  printSession();
+  const win = new BrowserWindow({ show: false, width: 816, height: 1056, webPreferences: {
+    partition: "crowe-print", sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  let timer = null, tmp = null;
+  try {
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`printing took longer than ${PRINT_TIMEOUT_MS / 1000}s`)), PRINT_TIMEOUT_MS); });
+    let url = "data:text/html;charset=utf-8;base64," + Buffer.from(html, "utf8").toString("base64");
+    if (url.length > PRINT_MAX_DATA_URL_CHARS) {
+      // Too long for a URL: a private temp file, readable by this user only, removed in finally.
+      tmp = path.join(app.getPath("temp"), `crowe-print-${crypto.randomBytes(8).toString("hex")}.html`);
+      fs.writeFileSync(tmp, html, { mode: 0o600 });
+      url = pathToFileURL(tmp).toString();
+    }
+    printAllow = url;
+    await Promise.race([win.loadURL(url), deadline]);
+    return await Promise.race([win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true, generateDocumentOutline: true }), deadline]);
+  } finally {
+    clearTimeout(timer);
+    printAllow = "";
+    if (!win.isDestroyed()) win.destroy();
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+}
+function printToPdf(html) {
+  const job = printChain.then(() => printOne(String(html ?? "")));
+  printChain = job.catch(() => {});
+  return job;
+}
+
 const harnessCtx = {
   getCwd: () => CWD,
   setCwd: (p) => { CWD = p; },
@@ -1081,6 +1196,8 @@ const harnessCtx = {
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  // The document printer above. The harness never requires electron itself.
+  printToPdf,
   // The Runbook lives in the renderer's store, so authoring is an event, not a
   // write from here: the renderer saves it and surfaces the canvas. Stamped
   // "main" because chat is the only surface that offers the tool.
@@ -1099,6 +1216,34 @@ const harnessCtx = {
   // indistinguishable from a hand-logged one and both are equally correctable.
   growWrite: (type, record) => growWrite(type, record),
   growRead: (type) => growRead(type),
+  /* Mail. The account never crosses into the harness: the message comes in,
+     the credentials are read from the encrypted store here at send time, and
+     only the server's verdict goes back. No IPC handler sends mail; the one
+     road to sendMail is the harness gate in front of send_email. */
+  mailConfigured: () => PLUGIN_MANAGED.has(mail.PLUGIN_ID) && mail.isConfigured(pluginEnv(mail.PLUGIN_ID)),
+  // The sender and the server for the approval card; the password stays here.
+  mailAccount: () => mail.accountIdentity(mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID))),
+  /* Pinned to the account the card showed: the store is read once, and if the
+     sender or the server it holds is not what the user approved, nothing
+     goes. The harness makes the same check a moment earlier; this one stands
+     where the credentials are actually in hand. */
+  sendMail: (message, approved) => {
+    const account = mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID));
+    if (!mail.sameIdentity(account, approved)) return Promise.reject(new mail.SmtpError("the Mail account is not the one the approval card showed"));
+    return mail.sendMail(account, message, { mailer: `Crowe Logic ${app.getVersion()}` });
+  },
+  // The image tool's key, read at call time from the same encrypted store the
+  // Key Manager writes, and handed over as a value the harness keeps inside one
+  // request header. OpenAI first because it is the native images endpoint,
+  // OpenRouter otherwise. Null means no key, which the tool answers in words.
+  imageCredential: () => {
+    const store = readKeyStore();
+    for (const provider of ["openai", "openrouter"]) {
+      const secret = store[provider] && store[provider].value;
+      if (typeof secret === "string" && secret) return { provider, secret };
+    }
+    return null;
+  },
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();
@@ -1878,6 +2023,17 @@ ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
   return { unread: 0 };
 });
 
+// A reaction is a word on a worker's bubble, not a turn: no seat runs, the
+// room is saved, and every window learns of it. Queued behind the room's turns
+// so it cannot land on a message list mid-write.
+ipcMain.handle("crowe:rooms:react", (_e, { id, messageId, kind } = {}) => withRoom(id, async () => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const r = roomsEngine.react(room, String(messageId || ""), String(kind || ""));
+  if (r.error) return { error: r.error };
+  roomChanged(room, "react");
+  return { ok: true, on: r.on, reactions: r.message.reactions || [] };
+}));
+
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
    back and run at Execute after the operator moved the app down. */
@@ -1906,7 +2062,13 @@ async function runRoomTurn(id, fn) {
   if (!room) return { error: "no such room" };
   return withRoom(id, async () => {
     room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-    const out = await fn(room, roomRunner(room));
+    /* speak() stores what the operator said before its first await, so by the
+       time the turn's promise exists the text is in the room. Broadcast that
+       now: a thread that only heard "turn" drew the operator's own text when
+       the seats came back, with a typing bubble standing over its absence. */
+    const pending = fn(room, roomRunner(room));
+    roomChanged(room, "message", { save: false });
+    const out = await pending;
     roomChanged(room, "turn");
     return { ...out, room: roomState(room) };
   });
@@ -2335,12 +2497,40 @@ app.whenReady().then(async () => {
 // Native children outlive the window unless we kill them. node-pty in
 // particular throws from its destructor if a PTY is still open at exit, which
 // aborts the process with SIGABRT after the app has otherwise shut down
-// cleanly. Tear both down on every quit path.
+// cleanly. Tear all of them down on every quit path. Preview tunnels are on
+// the list because a public link that outlives the app is a link nobody can
+// stop from here. stopAllForQuit signals every cloudflared before its first
+// await, and returns a promise for the rest of the teardown (the grace period,
+// the SIGKILL behind a SIGTERM that was ignored, the loopback listeners) only
+// when a preview was running; null means there is nothing to wait for. The
+// scripts that call this by hand before app.exit ignore the return value.
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+  try { return require("./share-preview").stopAllForQuit("the app is quitting"); } catch { return null; }
 }
-app.on("before-quit", shutdownNativeResources);
+/* Electron does not wait on a promise from before-quit, and the SIGKILL that
+   follows the grace period lives in this process, so a cloudflared that sat
+   through SIGTERM used to outlive the app. When a preview is up, this first
+   quit is cancelled, the teardown is awaited (bounded inside stopAllForQuit,
+   about six seconds at most), and quit is asked for again; that pass is let
+   through. A quit asked for during the wait (a second Cmd+Q, window-all-closed
+   on Windows and Linux, the updater) is held as well, so nothing but the bound
+   can cut the teardown short. If the released quit is cancelled by something
+   else, a window that refuses to close for one, the barrier re-arms a second
+   later, so a later quit is held again rather than let through unguarded.
+   With no preview up there is no hold and the quit is what it always was. */
+let quitPhase = "idle";   // idle -> draining -> releasing -> idle
+app.on("before-quit", (event) => {
+  if (quitPhase === "releasing") { setTimeout(() => { quitPhase = "idle"; }, 1000); return; }
+  if (quitPhase === "draining") { event.preventDefault(); return; }
+  const pending = shutdownNativeResources();
+  if (!pending) return;
+  quitPhase = "draining";
+  event.preventDefault();
+  const release = () => { quitPhase = "releasing"; app.quit(); };
+  pending.then(release, release);
+});
 app.on("will-quit", () => { shutdownNativeResources(); try { globalShortcut.unregisterAll(); } catch {} });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 

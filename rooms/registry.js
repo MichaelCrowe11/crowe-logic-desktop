@@ -21,12 +21,63 @@ const VENDORED = path.join(__dirname, "agents.vendored.json");
 const TIERS = ["plan", "readonly", "edit", "execute"];
 const tierRank = (t) => { const i = TIERS.indexOf(String(t)); return i < 0 ? 0 : i; };
 
+/* The mark each worker wears: one of the eight CLI thinking marks, drawn by
+   renderer/marks.js. Named here rather than in the vendored roster because
+   which motion suits which colleague is a reading of the worker, not a fact
+   the upstream registry records, and the snapshot is regenerated. Chosen so
+   no template seats two workers with the same mark (scripts/test-marks.js
+   holds that), and by what each motion says: the organism breathes, the
+   auditor is an aperture, infrastructure is a gear, orchestration assembles,
+   reasoning orbits, a schedule sweeps, a formulation folds, a market blooms.
+   A worker missing here still gets a mark: markFor hashes the id into the
+   eight, deterministically, so nothing ever shows the house whorl by
+   accident. */
+const MARKS = {
+  "crowe-logic": "coalesce",            // orchestration assembles the pieces
+  "crowelm-frontier": "convergent",     // reasoning circles the problem
+  operator: "meshwork",                 // infrastructure is machinery
+  "compliance-audit": "iris",           // the auditor's aperture
+  "commerce-support": "hexbloom",       // the customer reach opens out
+  "product-formulation": "facet",       // a formulation folded together
+  "drug-discovery": "convergent",       // molecules in orbit
+  "ai-strategy": "facet",               // options folded into a plan
+  "cultivation-intelligence": "mycelial", // the organism, breathing
+  "computational-chemist": "coalesce",  // a model assembled
+  "extraction-formulation": "meridian", // a separation is a phase sweep
+  "mycology-research": "hexbloom",      // fruiting
+  "regulatory-affairs": "iris",         // the rule reads you
+  "facility-design": "facet",           // architecture folds
+  scheduling: "meridian",               // the week swept end to end
+  sop: "coalesce",                      // a procedure assembled step by step
+  revenue: "meshwork",                  // what actually earns, ticking over
+  email: "convergent",                  // messages that come back round
+  auction: "convergent",                // bids converging
+  studio: "iris",                       // a camera's aperture
+};
+const markOf = (id) => MARKS[String(id)] || "";
+/* What a worker is called in the app. The upstream registry names its agents
+   with the company in front (Crowe Operator, Crowe Studio Director), which is
+   right in a catalogue and wrong in a contact list inside an app already
+   called Crowe Logic: every row would begin with the same word. The company
+   prefix comes off here, once, so the engine, the rail, the thread and the web
+   bundle all agree. The orchestrator would be left as "Logic", which reads as
+   the app rather than a colleague, so it is named for what it does. CroweLM is
+   a product name, not the prefix, and stays. The vendored snapshot is not
+   edited: it is regenerated from upstream and this rule survives that. */
+const NAMES = { "crowe-logic": "Orchestrator" };
+function displayName(a) {
+  if (!a) return "";
+  if (NAMES[a.id]) return NAMES[a.id];
+  const stripped = String(a.name || "").replace(/^Crowe\s+/, "").trim();
+  return stripped || String(a.name || a.id || "");
+}
+
 let cache = null;
 function loadAgents() {
   if (cache) return cache;
   try {
     const d = JSON.parse(fs.readFileSync(VENDORED, "utf8"));
-    cache = Array.isArray(d.agents) ? d.agents : [];
+    cache = (Array.isArray(d.agents) ? d.agents : []).map((a) => (a && a.id ? { ...a, name: displayName(a), ...(markOf(a.id) ? { mark: markOf(a.id) } : {}) } : a));
   } catch {
     // A missing snapshot means no rooms, not a crash on boot. The caller shows
     // an empty roster and the rest of the app is untouched.
@@ -140,7 +191,9 @@ function listTemplates() {
 function getTemplate(id) { return listTemplates().find((t) => t.id === String(id)) || null; }
 
 module.exports = {
+  displayName,
   listAgents, getAgent, isJoinable, listTemplates, getTemplate,
   roomCeiling, effectiveTier, writeCapable, tierRank, TIERS,
+  MARKS, markOf,
   _resetCache: () => { cache = null; },
 };

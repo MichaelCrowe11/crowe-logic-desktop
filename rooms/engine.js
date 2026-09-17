@@ -63,6 +63,36 @@ const SYSTEM = ":system";
 const isHuman = (author) => author === HUMAN;
 const isReserved = (author) => author === HUMAN || author === ROUTINE || author === SYSTEM;
 
+/* Reactions: the tapbacks a phone puts on a bubble, as words a worker can act
+   on rather than pictures. Four, fixed. A reaction lives on the message it
+   answers, one per (who, kind), toggled. It is not a message: it does not move
+   the room in the rail and does not count as unread. The seat whose message it
+   is reads it on its next turn as a line after that message, which is how
+   "Why" becomes an instruction without anyone typing a sentence. The renderer
+   keeps the same four in renderer/messages.js; scripts/test-messages.js holds
+   the two lists to each other. */
+const REACTIONS = ["good", "more", "no", "why"];
+const REACTION_LABEL = { good: "Good", more: "More", no: "No", why: "Why" };
+function react(room, messageId, kind, by = HUMAN) {
+  const k = String(kind || "").toLowerCase();
+  if (!REACTIONS.includes(k)) return { error: `unknown reaction; one of ${REACTIONS.join(", ")}` };
+  const m = byId(room, messageId);
+  if (!m) return { error: "no such message" };
+  if (isReserved(m.author)) return { error: "a reaction goes on a worker's message" };
+  const list = Array.isArray(m.reactions) ? m.reactions : (m.reactions = []);
+  const i = list.findIndex((r) => r && r.by === by && r.kind === k);
+  const on = i < 0;
+  if (on) list.push({ by, kind: k, at: Date.now() }); else list.splice(i, 1);
+  if (!list.length) delete m.reactions;
+  return { ok: true, on, message: m };
+}
+// What the operator said about a message, in words, for the seat that wrote it.
+function reactionLine(m) {
+  const mine = (Array.isArray(m.reactions) ? m.reactions : []).filter((r) => r && r.by === HUMAN && REACTION_LABEL[r.kind]);
+  if (!mine.length) return "";
+  return `[Reaction to your last message: ${mine.map((r) => REACTION_LABEL[r.kind]).join(", ")}]`;
+}
+
 // ─── Messages ────────────────────────────────────────────────────────────────
 
 /* One door for every message. A stable id and a sequence number are what let
@@ -180,6 +210,8 @@ function viewFor(room, agentId) {
       out.push({ role: "user", content: `[${who}${where}]\n${m.content}` });
     } else if (m.author === agentId) {
       out.push({ role: "assistant", content: withOwnProgress(m, progressOf) + askText(m) });
+      const rx = reactionLine(m);
+      if (rx) out.push({ role: "user", content: rx });
     } else {
       const who = displayName(m.author);
       const kind = m.kind === "critique" ? `${who}, reviewing` : who;
@@ -880,6 +912,7 @@ function summary(room) {
     spentUsd: room.spentUsd || 0, halted: room.halted || "",
     unread: unreadCount(room), preview: preview(room),
     working: room.agents.some((a) => a.state === "working" || a.state === "queued"),
+    workingAgents: room.agents.filter((a) => a.state === "working" || a.state === "queued").map((a) => a.agentId),
     routines: (room.routines || []).filter((r) => r.enabled).length,
     openAsk: room.messages.some((m) => m.ask && m.ask.state === "open"),
   };
@@ -891,6 +924,7 @@ module.exports = {
   speak, critique, revise, runOne, forward,
   pushMessage, byId, preview, unreadCount, markRead, summary,
   normalizeAsk, extractAsk, answerAsk,
+  REACTIONS, REACTION_LABEL, react, reactionLine,
   addRoutine, updateRoutine, removeRoutine, dueRoutines, claimRoutine, runRoutine, nextRunAt, graceMs, EVERY,
   noteCost, overBudget, projectRound, roomTier,
   toSession, fromSession, toPlainMessages,

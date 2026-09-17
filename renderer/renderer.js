@@ -202,15 +202,59 @@ function addUser(text) {
   wrap.innerHTML = `<div class="who"><div class="u">You</div></div><div class="body"><p>${esc(text)}</p></div>`;
   transcript.appendChild(wrap); attachCopyButton(wrap, text); pinned = true; scrollBottom(true);
 }
-function addAssistant() {
+/* Worker marks. Each worker in the registry wears one of the eight CLI
+   thinking marks (renderer/marks.js): the rail, the room head, the roster, the
+   thread bubbles, both pickers and the chat avatar draw the worker's own mark
+   instead of a repeated whorl, and it moves only while that worker reasons.
+   The index is the registry roster as rooms.agents() hands it over, fetched
+   once, so a row that knows only an agent id still finds the explicit mark;
+   an id the index has not seen falls to markFor's deterministic hash, never
+   to the house mark. */
+const workerIndex = new Map();
+let workerIndexPending = null;
+function ensureWorkerIndex() {
+  if (workerIndex.size) return Promise.resolve(workerIndex);
+  if (!workerIndexPending) {
+    let ask;
+    try { ask = window.crowe && window.crowe.rooms && window.crowe.rooms.agents ? window.crowe.rooms.agents() : null; } catch { ask = null; }
+    workerIndexPending = Promise.resolve(ask).then((r) => { learnWorkers(r && r.agents); return workerIndex; }).catch(() => workerIndex);
+  }
+  return workerIndexPending;
+}
+function learnWorkers(agents) { for (const a of agents || []) if (a && a.id) workerIndex.set(a.id, a); }
+const workerOf = (id) => workerIndex.get(String(id)) || { id: String(id || "crowe-logic") };
+/* The main chat's turns are routed to an expert by the harness; the avatar
+   wears the worker that expert corresponds to, and Crowe Logic otherwise. */
+const EXPERT_WORKER = { cultivation: "cultivation-intelligence", reasoning: "crowelm-frontier", "long-context": "crowelm-frontier", verifier: "compliance-audit" };
+const expertWorker = (expert) => EXPERT_WORKER[String(expert || "")] || "crowe-logic";
+function mountWorkerMark(host, worker, state) {
+  if (!host) return null;
+  if (window.CroweMarks) {
+    const handle = CroweMarks.mount(host, worker, { state: state || "rest" });
+    // Mounted from a bare id before the roster arrived: the hash stands in,
+    // and the registry's own choice replaces it the moment the index lands.
+    const id = worker && (worker.id || worker.agentId);
+    if (id && !worker.mark && !workerIndex.has(id)) ensureWorkerIndex().then(() => { const w = workerIndex.get(id); if (w && host.isConnected) handle.retarget(w); });
+    return handle;
+  }
+  if (window.CroweMark) return CroweMark.mount(host, { state: state === "reasoning" ? "reasoning" : "rest", small: true });
+  return null;
+}
+
+function addAssistant(workerId) {
   clearWelcome();
+  const worker = workerOf(workerId || "crowe-logic");
   const wrap = document.createElement("div"); wrap.className = "msg assistant";
-  wrap.innerHTML = `<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"></div>`;
+  // The markup is reproduced by plan.js say(); scripts/test-plan.js holds the
+  // two together, so the label is set after, not written differently here.
+  wrap.innerHTML = '<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"></div>';
+  const markEl = wrap.querySelector(".who-mark");
+  if (worker.name && worker.name !== "Crowe Logic") markEl.setAttribute("aria-label", worker.name);
   transcript.appendChild(wrap);
   const body = wrap.querySelector(".body");
-  const markEl = wrap.querySelector(".who-mark");
-  // 26px slot with 3.5px of padding, so ~19px of drawing — the small cut.
-  if (window.CroweMark) body._mark = CroweMark.mount(markEl, { state: "rest", small: true });
+  // 26px slot with 3.5px of padding, so ~19px of drawing. The worker's own
+  // mark, reasoning while the turn runs and landing when it ends.
+  body._mark = mountWorkerMark(markEl, worker, "rest");
   return body;
 }
 function renderText(body, text) {
@@ -236,6 +280,9 @@ function stageLabel(name) {
   if (name === "run_shell") return "executing";
   if (name === "write_file" || name === "edit_file") return "editing";
   if (name === "open_url") return "browsing";
+  if (name === "export_document") return "exporting";
+  if (name === "generate_image") return "drawing";
+  if (name === "share_preview") return "publishing";
   if (name && name.startsWith("mcp__")) return "calling " + name.split("__")[1];
   return "retrieving";
 }
@@ -404,6 +451,9 @@ function addToolCard(body, ev) {
   const card = document.createElement("div"); card.className = "toolcard running";
   const arg = ev.name === "run_shell" ? (ev.args.command || "")
     : ev.name === "open_url" ? (ev.args.url || "")
+    : ev.name === "export_document" ? `${ev.args.filename || "document"}.${ev.args.format || ""}`
+    : ev.name === "generate_image" ? (ev.args.prompt || "")
+    : ev.name === "share_preview" ? (ev.args.stop ? "stop " + (ev.args.id || "all") : (ev.args.dir || (ev.args.port ? "port " + ev.args.port : "")))
     : ev.name === "search" ? (ev.args.pattern || "")
     : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
@@ -454,7 +504,10 @@ function addApproval(body, ev) {
   const card = document.createElement("div");
   card.className = `editcard gatecard risk-${ev.risk === "review" ? "review" : "strict"}`;
   card.dataset.approvalId = String(ev.id);
-  card.innerHTML = `<div class="ec-head"><span class="ec-title">${ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone"}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
+  // A preview link is strict-risk because it reaches the public internet, not
+  // because it cannot be undone: stop takes it down. The heading says which.
+  const heading = ev.kind === "share_preview" ? "Opens a public link" : ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone";
+  card.innerHTML = `<div class="ec-head"><span class="ec-title">${heading}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
     <div class="gc-why">This ${esc(ev.why || "action needs your approval")}.</div>
     <div class="ec-diff"><div class="dl ctx">${esc(ev.detail || "")}</div></div>
     <div class="ec-actions"><button class="approve">Allow once</button><button class="reject">Deny</button><span class="ec-hint">a allow · r deny</span></div>`;
@@ -650,7 +703,7 @@ async function send(text, opts = {}) {
   if (text.length > INPUT_MAX_CHARS) { setComposerStatus(`Over the ${INPUT_MAX_CHARS.toLocaleString()} character limit`, "error"); return; }
   addUser(text); messages.push({ role: "user", content: text });
   input.value = ""; syncComposerInput();
-  const body = addAssistant(); let runText = "";
+  const body = addAssistant(expertWorker(opts.role)); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   // Chronological streaming: each burst of text gets its own block appended
@@ -767,7 +820,13 @@ async function send(text, opts = {}) {
       addNotice(body, `Stopped at this turn's ${ev.limit || "ceiling"}: ${spent}. Raise it in Settings if this turn needed more.`, "budget");
     }
     else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
-    else if (ev.type === "route") { addRouteNode(body, ev); showThinking(body, "reasoning"); if (ev.model) { $("hud-model").textContent = ev.model; setModelBadge(ev.model); } }
+    else if (ev.type === "route") {
+      addRouteNode(body, ev); showThinking(body, "reasoning");
+      // The avatar follows the routing: a cultivation turn wears the grower's
+      // mark, a verification pass the auditor's, the rest Crowe Logic's.
+      if (mark && mark.retarget) mark.retarget(workerOf(expertWorker(ev.expert)));
+      if (ev.model) { $("hud-model").textContent = ev.model; setModelBadge(ev.model); }
+    }
     // The account's plan does not include the routed model. Said in plain words
     // above the route card, once per turn, instead of the gateway's 403.
     else if (ev.type === "plan") { finishSaid(); addNotice(body, ev.text, "plan"); }
@@ -816,7 +875,7 @@ async function send(text, opts = {}) {
      and the answer arriving is the biggest event of the turn. */
   if (!body.querySelector(".err, .stopped")) {
     settleHeader();
-    if (mark) mark.ping();
+    if (mark) { if (mark.done) mark.done(); else mark.ping(); }
   }
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) {
@@ -1432,40 +1491,48 @@ async function refreshRoomList() {
   const host = $("room-list"); if (!host) return;
   let list = [];
   try { list = await window.crowe.rooms.list(); } catch { return; }
+  await ensureWorkerIndex();
   host.innerHTML = "";
-  if (!list.length) { host.innerHTML = '<div class="card-empty">No rooms yet. A room is a standing colleague: give it a brief and a routine and it speaks first.</div>'; return; }
-  for (const r of list) {
+  if (!list.length) { host.innerHTML = '<div class="card-empty">No conversations yet. Message a worker and it keeps the thread, works while you are away, and speaks first when it has something for you.</div>'; return; }
+  const M = window.CroweMessages;
+  const now = Date.now();
+  // Newest conversation on top, the way a phone orders texts.
+  const rows = list.map((r) => ({ r, m: M ? M.rowModel(r, now) : { id: r.id, title: r.title || "Conversation", preview: r.preview || "", time: "", unread: r.unread || 0, state: r.working ? "working" : "idle", solo: (r.agents || []).length === 1, agents: r.agents || [], names: r.names || [] } }))
+    .sort((x, y) => (y.r.updatedAt || 0) - (x.r.updatedAt || 0));
+  for (const { r, m } of rows) {
     const row = document.createElement("div");
-    row.className = "sess-row room-row" + (r.unread ? " has-unread" : "") + (r.working ? " is-working" : "") + (r.openAsk ? " has-ask" : "");
+    row.className = "sess-row room-row msg-row" + (m.unread ? " has-unread" : "") + (m.state === "working" ? " is-working" : "") + (m.state === "waiting" ? " has-ask" : "") + (m.solo ? " is-solo" : "");
     const open = panels.find((p) => p.type === "room" && p.roomId === r.id);
     if (open && open.id === activePanelId) row.classList.add("current");
-    const names = r.names || [];
     row.innerHTML = `<div class="room-avatars" aria-hidden="true"></div>
       <div class="sess-main">
-        <div class="sess-title"><span class="room-row-title"></span></div>
+        <div class="msg-top"><span class="room-row-title"></span><span class="msg-time"></span></div>
         <div class="room-row-preview"></div>
       </div>
-      <span class="room-row-dot" aria-label="${r.unread ? esc(String(r.unread)) + " unread" : ""}"></span>
-      <button class="sess-del" title="Delete">Delete</button>`;
-    row.querySelector(".room-row-title").textContent = r.title || "Room";
-    row.querySelector(".room-row-preview").textContent = r.openAsk ? "Waiting on your decision" : (r.preview || names.join(", "));
-    // Up to three seats as marks, the first turning while the room works, and
-    // the rest as a count - the same stack a group thread wears anywhere.
+      <span class="room-row-dot" aria-label="${m.unread ? esc(String(m.unread)) + " unread" : ""}"></span>
+      <button class="sess-del" title="Delete conversation">Delete</button>`;
+    row.querySelector(".room-row-title").textContent = m.title;
+    row.querySelector(".msg-time").textContent = m.time;
+    row.querySelector(".room-row-preview").textContent = m.preview;
+    // One worker: its own mark, turning while it works. A group: up to three
+    // marks and a count, the stack a group thread wears anywhere. The summary
+    // names the seats that are working, so only those marks move.
     const av = row.querySelector(".room-avatars");
-    const ids = r.agents || [];
+    const ids = m.agents;
+    const busySeats = new Set(Array.isArray(r.workingAgents) ? r.workingAgents : (m.state === "working" && ids.length ? [ids[0]] : []));
     ids.slice(0, 3).forEach((id, i) => {
-      const m = document.createElement("span"); m.className = "room-avatar"; m.title = names[i] || id;
-      av.appendChild(m);
-      if (window.CroweMark) CroweMark.mount(m, { state: r.working && i === 0 ? "reasoning" : "rest", small: true });
+      const mk = document.createElement("span"); mk.className = "room-avatar"; mk.title = m.names[i] || id;
+      av.appendChild(mk);
+      mountWorkerMark(mk, workerOf(id), busySeats.has(id) ? "reasoning" : "rest");
     });
     if (ids.length > 3) { const more = document.createElement("span"); more.className = "room-avatar-more"; more.textContent = `+${ids.length - 3}`; av.appendChild(more); }
     row.addEventListener("click", (e) => {
       if (e.target.closest(".sess-del")) return;
-      openRoomPanel(r.id, r.title);
+      openRoomPanel(r.id, m.title);
     });
     row.querySelector(".sess-del").addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete the room "${r.title || "Room"}"? Its transcript and routines go with it.`)) return;
+      if (!confirm(`Delete the conversation with ${m.title}? Its thread and routines go with it.`)) return;
       await window.crowe.rooms.delete(r.id);
       for (const p of panels.filter((p) => p.type === "room" && p.roomId === r.id)) closePanel(p.id);
       refreshRoomList();
@@ -1503,8 +1570,11 @@ async function mountRoom(p, body, seed = {}) {
   wrap.innerHTML = `
     <div class="room-head">
       <span class="room-logotype" role="img" aria-label="Crowe Logic"></span>
+      <span class="room-worker-mark" aria-hidden="true" hidden></span>
       <span class="room-name"></span>
-      <span class="room-tier" title="The tier this room may run at: the lowest ceiling among its agents, clamped by your autonomy setting"></span>
+      <span class="room-state" aria-live="polite"></span>
+      <span class="room-tier" title="The tier this conversation may run at: the lowest ceiling among its workers, clamped by your autonomy setting"></span>
+      <button class="room-add ghost sm" type="button" title="Add a worker to this conversation">Add</button>
       <button class="room-details ghost sm" type="button" aria-pressed="false" title="Brief, routines and activity">Details</button>
     </div>
     <div class="room-main">
@@ -1524,7 +1594,7 @@ async function mountRoom(p, body, seed = {}) {
         <form class="room-composer">
           <button class="room-attach ghost sm" type="button" title="Attach files" aria-label="Attach files">+</button>
           <input class="room-input" autocomplete="off" spellcheck="false"
-                 placeholder="Message the room. @name addresses one seat, @room addresses everyone" aria-label="Message the room">
+                 placeholder="Message" aria-label="Message">
           <button class="room-mic ghost sm" type="button" title="Dictate" aria-label="Dictate" aria-pressed="false">Mic</button>
           <button class="room-send primary sm" type="submit">Send</button>
           <div class="room-suggest hidden" role="listbox"></div>
@@ -1619,7 +1689,7 @@ async function mountRoom(p, body, seed = {}) {
           <span class="seat-state"></span>
           <span class="seat-cost"></span>`;
         roster.appendChild(el);
-        const mark = window.CroweMark ? CroweMark.mount(el.querySelector(".seat-mark"), { state: "rest", small: true }) : null;
+        const mark = mountWorkerMark(el.querySelector(".seat-mark"), workerOf(a.agentId), "rest");
         seat = { el, mark, state: "" };
         seats.set(a.agentId, seat);
       }
@@ -1629,11 +1699,33 @@ async function mountRoom(p, body, seed = {}) {
       seat.el.querySelector(".seat-cost").textContent = `${money(a.cost?.usd)} · ${calls} ${calls === 1 ? "call" : "calls"}`;
       seat.el.dataset.state = a.state || "idle";
       if (seat.state !== a.state) {
+        const was = seat.state;
         seat.state = a.state;
-        if (seat.mark) seat.mark.setState(MARK_STATE[a.state] || "rest");
+        if (seat.mark) {
+          // A seat that was working and is now done gets the landing beat,
+          // once; every other change is a state the mark holds.
+          if ((was === "working" || was === "queued") && a.state === "done" && seat.mark.done) seat.mark.done();
+          else seat.mark.setState(MARK_STATE[a.state] || "rest");
+        }
       }
     }
     for (const [id, seat] of seats) if (!(state?.agents || []).some((a) => a.agentId === id)) { seat.el.remove(); seats.delete(id); }
+    syncThreadMarks();
+    drawLive();
+  }
+
+  /* Only the newest bubble of a seat that is working moves; the rest of the
+     thread holds still, or a long thread would be a wall of motion. */
+  function syncThreadMarks() {
+    const Marks = window.CroweMarks; if (!Marks) return;
+    const busySeats = new Set((state?.agents || []).filter((a) => a.state === "working" || a.state === "queued").map((a) => a.agentId));
+    const last = new Map();
+    for (const el of thread.querySelectorAll(".rmsg[data-author]")) if (el.dataset.author) last.set(el.dataset.author, el);
+    for (const svg of thread.querySelectorAll(".rmsg[data-author] .rmsg-mark svg.wm-mark")) {
+      const row = svg.closest(".rmsg"); const author = row.dataset.author;
+      const want = busySeats.has(author) && last.get(author) === row ? "reasoning" : "rest";
+      if (svg.dataset.state !== want && svg.dataset.state !== "done") Marks.setMarkState(svg, want);
+    }
   }
 
   /* The thread. Appended, never rebuilt, for the same reason as the roster:
@@ -1643,6 +1735,7 @@ async function mountRoom(p, body, seed = {}) {
      reply when the turn ends, a question is answered - so each element is
      re-stated in place when its message changes. */
   const drawnMsgs = new Map();   // id -> { el, sig }
+  const typing = new Map();      // seat id -> the typing bubble standing in for its answer
   const fmtTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const fmtDivider = (ms) => {
     const d = new Date(ms), now = new Date();
@@ -1652,20 +1745,22 @@ async function mountRoom(p, body, seed = {}) {
     return `${day} ${fmtTime(ms)}`;
   };
   // The content itself, not its length: a note rewritten to the same length must still repaint.
-  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${m.content || ""}`;
+  const sigOf = (m) => `${m.kind}|${m.ask ? m.ask.state + m.ask.chosen : ""}|${m.quote || ""}|${(m.reactions || []).map((r) => r.by + ":" + r.kind).join(",")}|${m.content || ""}`;
   const nearBottom = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight < 90;
   let pendingNew = 0;
 
-  function renderMsg(el, m, prev) {
+  function renderMsg(el, m, prev, pos) {
     const mine = m.author === ":operator";
     const isRoutine = m.author === ":routine";
     const isNote = m.author === ":system";
-    const continued = prev && !mine && !isRoutine && !isNote && prev.author === m.author && prev.kind !== "critique" && m.kind !== "critique" && prev.kind !== "relay" && m.kind !== "relay" && (m.at - prev.at) < 5 * 60 * 1000;
+    // A run is what a phone groups: the same sender, a few minutes apart, no question or critique between. messages.js says where a bubble sits in one.
+    const continued = pos ? !pos.first : Boolean(prev && !mine && !isRoutine && !isNote && prev.author === m.author && prev.kind !== "critique" && m.kind !== "critique" && prev.kind !== "relay" && m.kind !== "relay" && (m.at - prev.at) < 5 * 60 * 1000);
     const startsRound = m.kind === "critique" && (!prev || prev.kind !== "critique");
     el.className = "rmsg" + (mine ? " from-operator" : "") + (m.kind === "progress" ? " is-progress" : "")
       + (m.kind === "critique" ? " is-critique" : "") + (startsRound ? " starts-round" : "")
       + (isRoutine ? " is-routine" : "") + (isNote ? " is-note" : "") + (m.kind === "relay" ? " is-relay" : "")
-      + (m.ask ? " is-ask" : "") + (continued ? " is-continued" : "");
+      + (m.ask ? " is-ask" : "") + (continued ? " is-continued" : "")
+      + (pos && pos.first ? " run-first" : "") + (pos && pos.last ? " run-last" : "");
     el.dataset.id = m.id || "";
     if (isRoutine || isNote) {
       el.innerHTML = `<div class="rmsg-line"><span class="rmsg-line-tag">${isRoutine ? "Routine" : "Note"}</span><span class="rmsg-line-text"></span></div>`;
@@ -1676,18 +1771,38 @@ async function mountRoom(p, body, seed = {}) {
     const tag = m.kind === "critique" ? "reviewing the others"
       : m.kind === "relay" ? `from ${m.from?.roomTitle || "another room"}`
       : m.kind === "progress" ? "notes" : "";
-    el.innerHTML = `<div class="rmsg-head">
-        <span class="rmsg-mark" aria-hidden="true"></span>
-        <span class="rmsg-who">${m.kind === "relay" ? "Message from " : ""}${esc(who)}</span>
-        ${tag ? `<span class="rmsg-tag">${esc(tag)}</span>` : ""}
-        <span class="rmsg-time">${esc(fmtTime(m.at || Date.now()))}</span>
-      </div>
-      ${m.quote ? `<div class="rmsg-quote" title="Answering this question">${esc(m.quote)}</div>` : ""}
-      <div class="rmsg-body">${md(m.content || "")}</div>
-      <div class="rmsg-ask hidden"></div>
-      ${!mine ? '<div class="rmsg-actions"><button class="rmsg-forward ghost sm" type="button" title="Carry this message into another room">Forward</button></div>' : ""}`;
-    // The operator is a person, not a mark. Only agents wear one.
-    if (!mine && window.CroweMark) CroweMark.mount(el.querySelector(".rmsg-mark"), { state: "rest", small: true });
+    /* The bubble. The mark stands beside the run, not in every head, the way a
+       phone puts one avatar by the last bubble of a run; CSS shows it on
+       run-last only. The head (who, tag, time) shows on the first bubble of a
+       run in a group thread and never on the operator's own. */
+    el.innerHTML = `<span class="rmsg-mark" aria-hidden="true"></span>
+      <div class="rmsg-col">
+        <div class="rmsg-head">
+          <span class="rmsg-who">${m.kind === "relay" ? "Message from " : ""}${esc(who)}</span>
+          ${tag ? `<span class="rmsg-tag">${esc(tag)}</span>` : ""}
+          <span class="rmsg-time">${esc(fmtTime(m.at || Date.now()))}</span>
+        </div>
+        ${m.quote ? `<div class="rmsg-quote" title="Answering this question">${esc(m.quote)}</div>` : ""}
+        <div class="rmsg-body">${md(m.content || "")}</div>
+        <div class="rmsg-reactions" hidden></div>
+        <div class="rmsg-ask hidden"></div>
+        ${!mine ? `<div class="rmsg-actions">${m.kind !== "progress" ? `<span class="rmsg-react" role="group" aria-label="React to this message">${((window.CroweMessages || {}).REACTIONS || []).map((r) => `<button type="button" class="rmsg-react-btn" data-kind="${r.kind}" title="${esc(r.label)}: the worker reads this on its next turn">${esc(r.label)}</button>`).join("")}</span>` : ""}<button class="rmsg-forward ghost sm" type="button" title="Carry this message into another room">Forward</button></div>` : ""}
+      </div>`;
+    /* Reactions. The bar sits with the other actions and shows on hover; a
+       chip on the bubble's corner shows what has been said about it, gold
+       when it was the operator, and a tap on a chip of your own takes it off. */
+    {
+      const M = window.CroweMessages;
+      const chips = M ? M.reactionChips(m) : [];
+      const rx = el.querySelector(".rmsg-reactions");
+      rx.hidden = !chips.length;
+      rx.innerHTML = chips.map((c) => `<button type="button" class="rmsg-chip${c.mine ? " mine" : ""}" data-kind="${c.kind}" title="${c.mine ? "Take this reaction off" : "React the same way"}">${esc(c.label)}${c.count > 1 ? ` <i>${c.count}</i>` : ""}</button>`).join("");
+      const toggle = async (kind) => { const r = await window.crowe.rooms.react(p.roomId, m.id, kind); if (r?.error) note(r.error, "is-error"); await refresh(); };
+      el.querySelectorAll(".rmsg-react-btn, .rmsg-chip").forEach((b) => b.addEventListener("click", () => toggle(b.dataset.kind)));
+    }
+    // The operator is a person, not a mark. Only agents wear one, their own.
+    el.dataset.author = m.author || "";
+    if (!mine) mountWorkerMark(el.querySelector(".rmsg-mark"), workerOf(m.author), "rest");
     else el.querySelector(".rmsg-mark").remove();
     if (!m.content) el.querySelector(".rmsg-body").remove();
     if (m.ask) {
@@ -1714,15 +1829,20 @@ async function mountRoom(p, body, seed = {}) {
 
   function drawThread() {
     const msgs = state?.messages || [];
+    const M = window.CroweMessages;
     const wasNear = nearBottom();
     let appended = 0, appendedTheirs = 0;
     for (const [i, m] of msgs.entries()) {
       const prev = i ? msgs[i - 1] : null;
       const id = m.id || `i${i}`;
+      // Where the bubble sits in its run changes when the next one lands, so
+      // a drawn row has its run classes re-stated without a remount.
+      const pos = M ? M.runPosition(msgs, i) : null;
       const have = drawnMsgs.get(id);
       if (have) {
         const sig = sigOf(m);
-        if (have.sig !== sig) { renderMsg(have.el, m, prev); have.sig = sig; }
+        if (have.sig !== sig) { renderMsg(have.el, m, prev, pos); have.sig = sig; }
+        else if (pos) { have.el.classList.toggle("run-first", pos.first); have.el.classList.toggle("run-last", pos.last); have.el.classList.toggle("is-continued", !pos.first); }
         continue;
       }
       // The rule separates stretches of time, not messages: a divider where
@@ -1733,18 +1853,56 @@ async function mountRoom(p, body, seed = {}) {
         thread.appendChild(d);
       }
       const el = document.createElement("div");
-      renderMsg(el, m, prev);
+      renderMsg(el, m, prev, pos);
       thread.appendChild(el);
       drawnMsgs.set(id, { el, sig: sigOf(m) });
       appended++;
       if (m.author !== ":operator" && m.author !== ":system") appendedTheirs++;
     }
+    syncThreadMarks();
+    drawLive();
     if (!appended) return;
     if (wasNear || drawnMsgs.size === appended) { thread.scrollTop = thread.scrollHeight; pendingNew = 0; pill.classList.add("hidden"); }
     else if (appendedTheirs) { pendingNew += appendedTheirs; pill.textContent = `${pendingNew} new message${pendingNew === 1 ? "" : "s"}`; pill.classList.remove("hidden"); }
   }
   pill.addEventListener("click", () => { thread.scrollTop = thread.scrollHeight; pendingNew = 0; pill.classList.add("hidden"); });
   thread.addEventListener("scroll", () => { if (nearBottom()) { pendingNew = 0; pill.classList.add("hidden"); } });
+
+  /* What a phone shows besides the bubbles. "Delivered" or "Read" under the
+     last thing the operator sent, and nowhere else; a typing bubble, wearing
+     the seat's mark, for each seat that is working and has not answered. Both
+     are derived from the room state every paint, never stored, so they cannot
+     say something the transcript does not. Called from the thread draw and
+     from the roster draw, which is what the live events repaint. */
+  function drawLive() {
+    const M = window.CroweMessages; if (!M) return;
+    const msgs = state?.messages || [];
+    const d = M.deliveryState(msgs, state?.agents);
+    let st = thread.querySelector(".rmsg-status");
+    const target = d && drawnMsgs.get(d.id)?.el;
+    if (!target) { if (st) st.remove(); }
+    else {
+      if (!st) { st = document.createElement("div"); st.className = "rmsg-status"; st.setAttribute("aria-live", "polite"); }
+      st.dataset.state = d.state;
+      st.textContent = M.deliveryLabel(d, fmtTime);
+      if (target.nextElementSibling !== st) target.insertAdjacentElement("afterend", st);
+    }
+    const ids = M.typingSeats(state?.agents);
+    for (const [id, el] of typing) if (!ids.includes(id)) { el.remove(); typing.delete(id); }
+    for (const id of ids) {
+      let el = typing.get(id);
+      if (!el) {
+        el = document.createElement("div"); el.className = "rmsg-typing"; el.dataset.seat = id; el.setAttribute("role", "status");
+        el.innerHTML = `<span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-dots" aria-hidden="true"><i></i><i></i><i></i></span>`;
+        mountWorkerMark(el.querySelector(".rmsg-mark"), workerOf(id), "reasoning");
+        typing.set(id, el);
+      }
+      const label = M.typingLabel([nameOf(id)]);
+      el.setAttribute("aria-label", label); el.title = label;
+      if (thread.lastElementChild !== el) thread.appendChild(el);   // always the last thing in the thread
+    }
+    if (ids.length && nearBottom()) thread.scrollTop = thread.scrollHeight;
+  }
 
   /* The projected call count rides on the button itself. A round that is about
      to make three calls should say three before it is pressed, not after. */
@@ -1768,7 +1926,39 @@ async function mountRoom(p, body, seed = {}) {
   }
 
   function drawHead() {
-    wrap.querySelector(".room-name").textContent = state?.title || "Room";
+    const M = window.CroweMessages;
+    const workers = state?.agents || [];
+    const names = workers.map((a) => a.name || a.agentId);
+    const solo = workers.length === 1;
+    // One worker: no sender names on the bubbles, the way a text thread with one person has none.
+    wrap.classList.toggle("is-solo", solo);
+    const generic = !state?.title || state.title === "Untitled room" || state.title === "Room";
+    const shown = generic ? (M ? M.conversationTitle(workers.map((a) => ({ name: a.name, id: a.agentId }))) : names.join(", ") || "Conversation") : state.title;
+    wrap.querySelector(".room-name").textContent = shown;
+    // The dock tab says the same thing the head does; "Untitled room" is a storage default, not a name.
+    if (p.title !== shown) { p.title = shown; renderDockTabs(); }
+    // One worker: its mark where the logotype was, its state beside its name,
+    // no roster strip. A group keeps the roster, the way a group text shows
+    // everyone in it.
+    const logo = wrap.querySelector(".room-logotype"), wm = wrap.querySelector(".room-worker-mark");
+    if (logo) logo.hidden = solo;
+    if (wm) {
+      wm.hidden = !solo;
+      if (solo) {
+        const w = workers[0];
+        if (wm.dataset.mounted !== w.agentId) { mountWorkerMark(wm, workerOf(w.agentId), "rest"); wm.dataset.mounted = w.agentId; wm.dataset.wstate = ""; }
+        const ms = w.state === "working" || w.state === "queued" ? "reasoning" : w.state === "failed" ? "failed" : "rest";
+        if (wm.dataset.wstate !== ms) {
+          const was = wm.dataset.wstate; wm.dataset.wstate = ms;
+          if (window.CroweMarks) CroweMarks.setMarkState(wm, was === "reasoning" && ms === "rest" && w.state === "done" ? "done" : ms);
+          else if (window.CroweMark) CroweMark.setState(wm, ms);
+        }
+      }
+    }
+    const st = wrap.querySelector(".room-state");
+    if (st) st.textContent = solo ? (workers[0].state === "working" || workers[0].state === "queued" ? "working" : workers[0].state === "failed" ? "failed" : "") : `${workers.length} workers`;
+    if (roster) roster.hidden = solo;
+    if (input && M) input.placeholder = M.composerPlaceholder(names);
     const tier = state?.tier || "";
     const tierEl = wrap.querySelector(".room-tier");
     // Named plainly. "readonly" is the tier id; "reads only" is what it does.
@@ -1776,6 +1966,35 @@ async function mountRoom(p, body, seed = {}) {
     tierEl.hidden = !tier;
     setRoomWorking((state?.agents || []).some((a) => a.state === "working" || a.state === "queued"));
   }
+
+  // ── Add a worker to this conversation: the group-text move ──
+  wrap.querySelector(".room-add")?.addEventListener("click", async () => {
+    let pop = wrap.querySelector(".room-add-pop");
+    if (pop) { pop.remove(); return; }
+    const { agents = [] } = await window.crowe.rooms.agents();
+    learnWorkers(agents);
+    const seated = new Set((state?.agents || []).map((a) => a.agentId));
+    const M = window.CroweMessages;
+    const spaces = (window.crowe && window.crowe.installSpaces) || null;
+    const choices = (M ? M.visibleWorkers(agents, spaces) : agents).filter((a) => !seated.has(a.id));
+    pop = document.createElement("div"); pop.className = "room-add-pop";
+    pop.innerHTML = `<div class="rap-head">Add to conversation</div><input class="rap-search" placeholder="Search workers" aria-label="Search workers"><div class="rap-list" role="listbox"></div>`;
+    const listEl = pop.querySelector(".rap-list");
+    const draw = (q) => {
+      listEl.innerHTML = "";
+      for (const a of (M ? M.filterWorkers(choices, q) : choices)) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "rap-row"; b.setAttribute("role", "option");
+        b.innerHTML = `<span class="rap-mark" aria-hidden="true"></span><span class="rap-main"><span class="rap-name"></span><span class="rap-role"></span></span>`;
+        b.querySelector(".rap-name").textContent = a.name || a.id; b.querySelector(".rap-role").textContent = a.role || a.domain || "";
+        mountWorkerMark(b.querySelector(".rap-mark"), a, "rest");
+        b.addEventListener("click", async () => { pop.remove(); await window.crowe.rooms.join(p.roomId, a.id); await refresh(); refreshRoomListSoon(); });
+        listEl.appendChild(b);
+      }
+      if (!listEl.children.length) listEl.innerHTML = '<div class="card-empty">Everyone available is already here.</div>';
+    };
+    pop.querySelector(".rap-search").addEventListener("input", (e) => draw(e.target.value));
+    wrap.querySelector(".room-head").after(pop); draw(""); pop.querySelector(".rap-search").focus();
+  });
 
   // ── The side pane: brief, routines, activity ──
   const titleEl = wrap.querySelector(".rs-title");
@@ -1896,6 +2115,7 @@ async function mountRoom(p, body, seed = {}) {
   window.addEventListener("focus", onFocus);
 
   async function refresh() {
+    await ensureWorkerIndex();
     const r = await window.crowe.rooms.load(p.roomId);
     if (r?.error) { thread.innerHTML = `<div class="card-empty">${esc(r.error)}</div>`; return; }
     state = { ...r.room, messages: r.messages || [] };
@@ -1934,7 +2154,7 @@ async function mountRoom(p, body, seed = {}) {
       const holder = document.createElement("div"); holder.className = "rmsg is-gate"; holder.dataset.gateFor = roomAgent;
       const meta = ev.meta && typeof ev.meta === "object" ? ev.meta : null;
       holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">${meta ? "asks to act through " + esc(meta.connector || "a connector") : "asks to act"}</span></div>`;
-      if (window.CroweMark) CroweMark.mount(holder.querySelector(".rmsg-mark"), { state: "reasoning", small: true });
+      mountWorkerMark(holder.querySelector(".rmsg-mark"), workerOf(roomAgent), "reasoning");
       thread.appendChild(holder);
       // The card's own label names all three: which seat, which connector, which tool.
       addApproval(holder, meta ? { ...ev, kind: `${who} · ${meta.connector || "connector"} · ${meta.tool || ev.kind || "tool"}` } : ev);
@@ -1965,6 +2185,8 @@ async function mountRoom(p, body, seed = {}) {
     for (const a of (state?.agents || [])) a.state = "queued";
     drawHead(); drawRoster(); await drawRounds();
     try {
+      // main broadcasts "message" the moment the operator's text is stored, so
+      // the thread draws it as it is sent; the turn's own repaint follows.
       const out = await fn();
       if (out?.error) note(out.error, "is-error");
       if (out?.room) state = { ...out.room, messages: state.messages };
@@ -2012,12 +2234,16 @@ async function mountRoom(p, body, seed = {}) {
   wrap.querySelector(".room-composer").addEventListener("submit", async (e) => {
     e.preventDefault();
     const raw = input.value.trim(); if ((!raw && !attached.length) || busy) return;
-    input.value = ""; suggest.classList.add("hidden");
+    input.value = ""; suggest.classList.add("hidden"); composerEl.classList.remove("has-text");
     const text = await withAttachments(raw || "See the attached files.");
     await round(() => window.crowe.rooms.say(p.roomId, text));
   });
   bCrit.addEventListener("click", () => round(() => window.crowe.rooms.critique(p.roomId)));
   bRev.addEventListener("click", () => round(() => window.crowe.rooms.revise(p.roomId)));
+
+  // Send lights up when there is something to send, the way a phone's does.
+  const composerEl = wrap.querySelector(".room-composer");
+  input.addEventListener("input", () => composerEl.classList.toggle("has-text", input.value.trim().length > 0));
 
   // @mention autocomplete off the room's own roster, so a handle that is not in
   // this room is never offered.
@@ -2078,77 +2304,88 @@ async function mountRoom(p, body, seed = {}) {
   const composer = document.createElement("div");
   composer.className = "room-compose";
   wrap.classList.add("composing");
+  if (p.title !== "New message") { p.title = "New message"; renderDockTabs(); }
   wrap.prepend(composer);
 
   const { agents = [], templates = [] } = await window.crowe.rooms.agents();
+  learnWorkers(agents);
   const picked = new Set();
+  const M = window.CroweMessages;
+  const spaces = (window.crowe && window.crowe.installSpaces) || null;
+  const workers = M ? M.visibleWorkers(agents, spaces) : agents;
+  const groups = M ? M.visibleTemplates(templates, workers) : templates;
 
-  const byDomain = agents.reduce((m, a) => ((m[a.domain || "other"] = m[a.domain || "other"] || []).push(a), m), {});
+  /* New message: a contact list, not a template menu. The worker is the thing
+     you choose; a group is several of them. Templates survive as suggested
+     groups underneath, offered only when every seat in them is a worker this
+     edition shows. Name, brief and budget wait under Details, where they
+     belong: a first message should cost one tap. */
   composer.innerHTML = `
-    <div class="rc-head">
-      <span class="rc-logotype" role="img" aria-label="Crowe Logic"></span>
-      <b>Open a room</b>
-      <span>A room is a standing colleague: seat the specialists, give it a brief, and it keeps the thread. A room earns its cost when a decision has more than one binding constraint; where there is only one, one seat is the right answer.</span>
+    <div class="rc-head msg-new-head">
+      <b>New message</b>
+      <span>Pick a worker to message, or several for a group. It keeps the thread, works while you are away, and can speak first on a routine.</span>
     </div>
-    ${seed.repo ? `<div class="rc-base">Base checkout: <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>. The room works from this workspace.</div>` : ""}
-    <div class="rc-templates"></div>
-    <div class="rc-own">
-      <div class="rc-sub">Or compose your own</div>
-      <div class="rc-agents"></div>
-      <textarea class="rc-brief" rows="2" maxlength="4000" aria-label="Standing brief" placeholder="Standing brief, optional. What this room is for, said once; every seat carries it on every turn."></textarea>
+    ${seed.repo ? `<div class="rc-base">Working from <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>.</div>` : ""}
+    <input class="msg-search" placeholder="Search workers" aria-label="Search workers" autocomplete="off">
+    <div class="rc-agents msg-contacts" role="listbox" aria-label="Workers"></div>
+    <div class="rc-templates msg-groups"></div>
+    <details class="msg-details">
+      <summary>Details, optional</summary>
+      <textarea class="rc-brief" rows="2" maxlength="4000" aria-label="Standing brief" placeholder="Standing brief. What this conversation is for, said once; every worker carries it on every turn."></textarea>
       <div class="rc-actions">
-        <input class="rc-name" placeholder="Name this room" aria-label="Room name">
-        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Room budget in dollars"></label>
-        <span class="rc-count"></span>
-        <button class="rc-open primary sm" disabled>Open</button>
+        <input class="rc-name" placeholder="Name this conversation" aria-label="Conversation name">
+        <label class="rc-budget">Budget <input class="rc-budget-input" type="number" min="0" step="0.25" value="1.00" aria-label="Budget in dollars"></label>
       </div>
+    </details>
+    <div class="msg-start">
+      <span class="rc-count"></span>
+      <button class="rc-open primary sm" disabled>Start conversation</button>
     </div>`;
 
-  mountMotionLogotype(composer.querySelector(".rc-logotype"), "");
-
-  const tWrap = composer.querySelector(".rc-templates");
-  for (const t of templates) {
-    const b = document.createElement("button");
-    b.type = "button";
-    // Bake-off is demoted rather than hidden: it says of itself that it makes
-    // no domain claim, and a menu that presents it as an equal argument is
-    // recommending a model comparison as if it were a decision.
-    b.className = "rc-template" + (t.id === "bake-off" ? " is-lesser" : "");
-    b.innerHTML = `<b>${esc(t.name)}</b><span>${esc(t.purpose || "")}</span>
-      <em class="rc-seats">${t.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
-    if (window.CroweMark) b.querySelectorAll(".rc-seat-mark").forEach((el) => CroweMark.mount(el, { state: "rest", small: true }));
-    b.addEventListener("click", () => open({ template: t.id }));
-    tWrap.appendChild(b);
-  }
-
   const aWrap = composer.querySelector(".rc-agents");
+  const tWrap = composer.querySelector(".rc-templates");
   const countEl = composer.querySelector(".rc-count");
   const openBtn = composer.querySelector(".rc-open");
   const nameEl = composer.querySelector(".rc-name");
   if (seed.repo && seed.repo.label) nameEl.value = String(seed.repo.label).slice(0, 60);
 
   const syncPick = () => {
-    countEl.textContent = picked.size
-      ? `${picked.size} agent${picked.size === 1 ? "" : "s"}${picked.size === 1 ? ": a room of one is a single colleague with a thread of its own" : ""}`
-      : "";
-    openBtn.disabled = picked.size === 0;
+    const chosen = workers.filter((w) => picked.has(w.id));
+    countEl.textContent = chosen.length ? (chosen.length === 1 ? `Message ${chosen[0].name || chosen[0].id}` : `Group of ${chosen.length}: ${M ? M.conversationTitle(chosen) : chosen.map((w) => w.name).join(", ")}`) : "";
+    openBtn.textContent = chosen.length > 1 ? "Start group" : "Start conversation";
+    openBtn.disabled = chosen.length === 0;
+    aWrap.querySelectorAll(".msg-contact").forEach((el) => el.classList.toggle("on", picked.has(el.dataset.id)));
   };
-
-  for (const [domain, list] of Object.entries(byDomain)) {
-    const g = document.createElement("div"); g.className = "rc-group";
-    g.innerHTML = `<div class="rc-domain">${esc(domain)}</div>`;
-    for (const a of list) {
+  const drawContacts = (q) => {
+    aWrap.innerHTML = "";
+    const shown = M ? M.filterWorkers(workers, q) : workers;
+    for (const a of shown) {
       const b = document.createElement("button");
-      b.type = "button"; b.className = "rc-agent"; b.title = a.role || "";
-      b.innerHTML = `<b>${esc(a.name)}</b><span>${esc(a.autonomyCeiling || "plan")}</span>`;
-      b.addEventListener("click", () => {
-        if (picked.has(a.id)) { picked.delete(a.id); b.classList.remove("on"); }
-        else { picked.add(a.id); b.classList.add("on"); }
-        syncPick();
-      });
-      g.appendChild(b);
+      b.type = "button"; b.className = "msg-contact" + (picked.has(a.id) ? " on" : ""); b.dataset.id = a.id; b.setAttribute("role", "option"); b.title = a.role || "";
+      b.innerHTML = `<span class="msg-contact-mark" aria-hidden="true"></span><span class="msg-contact-main"><b></b><span></span></span><span class="msg-contact-tier"></span>`;
+      b.querySelector("b").textContent = a.name || a.id;
+      b.querySelector(".msg-contact-main span").textContent = a.role || a.domain || "";
+      b.querySelector(".msg-contact-tier").textContent = a.autonomyCeiling || "";
+      mountWorkerMark(b.querySelector(".msg-contact-mark"), a, "rest");
+      b.addEventListener("click", () => { if (picked.has(a.id)) picked.delete(a.id); else picked.add(a.id); syncPick(); });
+      aWrap.appendChild(b);
     }
-    aWrap.appendChild(g);
+    if (!shown.length) aWrap.innerHTML = '<div class="card-empty">No worker matches that.</div>';
+  };
+  composer.querySelector(".msg-search").addEventListener("input", (e) => drawContacts(e.target.value));
+  drawContacts("");
+
+  if (groups.length) {
+    const sub = document.createElement("div"); sub.className = "rc-sub"; sub.textContent = "Start a group"; tWrap.appendChild(sub);
+    for (const g of groups) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "rc-template msg-group" + (g.id === "bake-off" ? " is-lesser" : "");
+      b.innerHTML = `<b>${esc(g.name)}</b><span>${esc(g.purpose || "")}</span>
+        <em class="rc-seats">${g.agents.map((a) => `<i><span class="rc-seat-mark" aria-hidden="true"></span>${esc(a.name || a.id)}</i>`).join("")}</em>`;
+      b.querySelectorAll(".rc-seat-mark").forEach((el, i) => mountWorkerMark(el, g.agents[i] || workerOf(""), "rest"));
+      b.addEventListener("click", () => open({ template: g.id }));
+      tWrap.appendChild(b);
+    }
   }
   syncPick();
 
@@ -2172,7 +2409,7 @@ async function mountRoom(p, body, seed = {}) {
 
   openBtn.addEventListener("click", () => open({
     agentIds: [...picked],
-    title: nameEl.value.trim() || "Room",
+    title: nameEl.value.trim() || (M ? M.conversationTitle(workers.filter((w) => picked.has(w.id))) : "Conversation"),
   }));
 }
 
@@ -4411,7 +4648,9 @@ async function renderPlugins() {
         // Keys are entered by the user, stored in the plugin's config section,
         // and passed to the server as env — never rendered back.
         const env = document.createElement("div"); env.className = "plug-env";
-        env.innerHTML = p.envPrompts.map((e) => `<input type="password" data-key="${esc(e.key)}" placeholder="${esc(e.label)}" spellcheck="false">`).join("");
+        // A prompt marked secret: false is a host or an address, typed in the
+        // clear so a slip can be seen; everything else stays a password field.
+        env.innerHTML = p.envPrompts.map((e) => `<input type="${e.secret === false ? "text" : "password"}" data-key="${esc(e.key)}" placeholder="${esc(e.label)}" spellcheck="false" autocomplete="off">`).join("");
         const go = document.createElement("button"); go.type = "button"; go.className = "primary sm"; go.textContent = "Connect";
         go.addEventListener("click", () => doEnable(collectEnv(env)));
         env.appendChild(go); row.appendChild(env);
@@ -4855,8 +5094,9 @@ function dismissLaunch() {
   // spent nowhere else — the rings stay still, and the letterforms never move
   // after their entrance.
   //
-  // CroweMark survives only on transcript avatars, at `rest`: a hundred of
-  // them turning at once would spend the signal the indicator depends on.
+  // Workers wear their own marks (renderer/marks.js): one of the CLI's eight
+  // thinking marks each, moving only while that worker reasons, so a hundred
+  // of them at rest do not spend the signal the indicator depends on.
   liveLockups();
   dismissLaunch();
   const roomNew = $("room-new");

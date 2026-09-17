@@ -224,28 +224,62 @@
     {
       "id": "channel-analytics",
       "name": "Channel Analytics",
-      "description": "Southwest Mushrooms YouTube channel performance.",
+      "description": "Southwest Mushrooms YouTube channel performance, read from the channel manager's nightly snapshot: subscribers, 28-day revenue and monetized playbacks, the Shorts and long-form split, recent uploads with voiced and machine flags, the Studio-only task register, the daily brief, and Stripe checkouts carrying a YouTube tag. Reads cost no quota and need no credential; a fresh collect is the one edit-tier tool.",
       "category": "audience",
       "spaces": [
         "projects"
       ],
       "official": true,
-      "available": false,
-      "mcp": null,
+      "available": true,
+      "mcp": {
+        "command": "${NODE}",
+        "args": [
+          "${APP}/plugins/channel-analytics/server.js"
+        ],
+        "env": {}
+      },
       "envPrompts": [
         {
-          "key": "YT_API_KEY",
-          "label": "YouTube Data API key"
+          "key": "SWM_CHANNEL_MANAGER_DIR",
+          "label": "Folder of the channel manager (default ~/swm-channel-manager)"
+        },
+        {
+          "key": "SWM_CHANNEL_EVIDENCE_DIR",
+          "label": "Folder of the daily briefs (default ~/crowe-evidence/swm-channel)"
+        },
+        {
+          "key": "SWM_CHANNEL_MANAGER_PYTHON",
+          "label": "Python that runs the manager, for run_collect (default the foundry venv)"
         }
       ],
       "tools": [
         {
-          "match": "*",
+          "match": "get_*",
           "tier": "readonly"
+        },
+        {
+          "match": "list_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "read_*",
+          "tier": "readonly"
+        },
+        {
+          "match": "run_collect",
+          "tier": "edit"
+        },
+        {
+          "match": "*",
+          "tier": "edit"
         }
       ],
       "glyph": "meridian",
-      "chips": []
+      "chips": [
+        "Morning snapshot of the channel, then one next action",
+        "Which uploads in the last 14 days are unvoiced machine Shorts?",
+        "What did YouTube-attributed checkouts do this week?"
+      ]
     },
     {
       "id": "github",
@@ -305,6 +339,50 @@
       "glyph": "meshwork",
       "chips": [
         "List my open pull requests and summarize the review state"
+      ]
+    },
+    {
+      "id": "mail",
+      "name": "Mail",
+      "description": "Send mail from your own account over SMTP with an app password. Sending requires Execute autonomy, and every message stops at an approval card that shows the whole text unless approvals are switched off.",
+      "category": "communication",
+      "spaces": [
+        "chat",
+        "projects"
+      ],
+      "official": true,
+      "available": true,
+      "mcp": null,
+      "builtin": {
+        "tools": [
+          "send_email"
+        ]
+      },
+      "envPrompts": [
+        {
+          "key": "SMTP_HOST",
+          "label": "SMTP host, with :port if not 587 (465 is implicit TLS)",
+          "secret": false
+        },
+        {
+          "key": "SMTP_USER",
+          "label": "Mail address you send from",
+          "secret": false
+        },
+        {
+          "key": "SMTP_PASSWORD",
+          "label": "App password"
+        }
+      ],
+      "tools": [
+        {
+          "match": "*",
+          "tier": "execute"
+        }
+      ],
+      "glyph": "meridian",
+      "chips": [
+        "Draft a reply to the message I pasted and send it once I approve"
       ]
     },
     {

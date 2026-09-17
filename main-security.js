@@ -104,7 +104,12 @@ function sanitizeConfigPatch(raw) {
     const url = parsedUrl(patch.baseUrl.trim());
     if (url && isSafeGuestUrl(url.toString())) out.baseUrl = url.toString().replace(/\/$/, "").slice(0, 2048);
   }
-  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId"]) {
+  // imageModel overrides the image tool's per-provider default. The harness
+  // checks the id's shape again before it is sent: an OpenAI id is bare
+  // (gpt-image-1, dall-e-3) and an OpenRouter id is a vendor/model slug
+  // (openai/gpt-image-1, google/gemini-2.5-flash-image); an id shaped for the
+  // other provider falls back to that provider's default.
+  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId", "imageModel"]) {
     if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" || key === "reposRoot" ? 4096 : 256);
   }
   // No token. Sign-in writes it in main; nothing in the renderer has a reason
