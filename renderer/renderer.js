@@ -286,8 +286,10 @@ function followMark(body) {
   return {
     end(landed) {
       stopped = true; mo.disconnect(); if (ro) ro.disconnect();
-      // Home after the landing has played where the eye is; at once otherwise.
-      setTimeout(() => who.style.removeProperty("--mark-y"), landed ? 720 : 0);
+      // Home after the landing has played where the eye is; at once otherwise,
+      // in the same task, so a failed or stopped turn never paints a stale offset.
+      if (landed) setTimeout(() => who.style.removeProperty("--mark-y"), 720);
+      else who.style.removeProperty("--mark-y");
     },
   };
 }
