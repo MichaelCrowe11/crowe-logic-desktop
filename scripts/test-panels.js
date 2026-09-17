@@ -1102,21 +1102,103 @@ const tests = [
         if (transcript.querySelector(".msg.assistant .said") && atSecondCard !== null) break;
         await new Promise((r) => setTimeout(r, 16));
       }
+      // The answer is streaming and the target is text now: its first line,
+      // not a card's dot. Read while the turn still runs, before send() ends
+      // the follow, or a broken text branch would pass on the landing alone.
+      // The block is growing as it types, so the offset and the geometry are
+      // read together and re-read once or twice if a placement fell between.
+      let atText = null, textLine = null, streaming = false;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        const said = transcript.querySelector(".msg.assistant .said"); if (!said) continue;
+        streaming = said.classList.contains("streaming");
+        atText = y(); textLine = Math.max(0, said.offsetTop + Math.min(said.offsetHeight, 26) / 2 - 13);
+        if (Math.abs(atText - textLine) <= 1) break;
+      }
       await turn;
       const landedY = y();
       await new Promise((r) => setTimeout(r, 1000));
       // Printed to the runner's stderr under ELECTRON_ENABLE_LOGGING, so a red
       // run on a headless runner says what the mark actually did.
-      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
+      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, atText, textLine, streaming, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
       const result = {
         moved: seen.length >= 2 && seen.every((v, i) => i === 0 || v > seen[i - 1]),
         besideSecondCard: atSecondCard !== null && Math.abs(atSecondCard - (secondCardTop + 14.5 - 13)) <= 1,
+        besideTextWhileStreaming: streaming && textLine !== null && Math.abs(atText - textLine) <= 1,
         stillOutWhenLanding: landedY > 0,
         home: who().style.getPropertyValue("--mark-y") === "",
       };
       restore(); transcript.innerHTML = ""; messages.length = 0;
       return result;`,
-    expect: { moved: true, besideSecondCard: true, stillOutWhenLanding: true, home: true },
+    expect: { moved: true, besideSecondCard: true, besideTextWhileStreaming: true, stillOutWhenLanding: true, home: true },
+  },
+  {
+    // A turn that ran tools and said nothing ends with its cards swapped for a
+    // one-line hint. The landing must play beside that hint, not at the offset
+    // of a card that is no longer there.
+    name: "a tool-only turn lands its mark beside the hint that replaces the cards",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+      ], 120);
+      const turn = send("read it and say nothing");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      let outAtCard = 0;
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      await turn;
+      const hint = transcript.querySelector(".msg.assistant .body .said.hint");
+      const landed = y(), landedY = parseFloat(landed);
+      const hintLine = hint ? Math.max(0, hint.offsetTop + Math.min(hint.offsetHeight, 26) / 2 - 13) : null;
+      await new Promise((r) => setTimeout(r, 1000));
+      console.log("mark-follow tool-only diag", JSON.stringify({ outAtCard, landed, hintLine }));
+      const result = {
+        outWhileTheCardShowed: outAtCard > 0,
+        cardsGone: !transcript.querySelector(".msg.assistant .toolcard"),
+        besideTheHint: hint !== null && landed !== "" && Math.abs(landedY - hintLine) <= 1,
+        home: y() === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { outWhileTheCardShowed: true, cardsGone: true, besideTheHint: true, home: true },
+  },
+  {
+    // Nothing to celebrate on an errored or stopped turn: the mark goes home in
+    // the same task as the turn's end, not a paint later.
+    name: "an errored or stopped turn sends the mark home before the next paint",
+    body: `await __reset();
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      const out = {};
+      for (const last of [{ type: "error", text: "the gateway refused the call" }, { type: "stopped" }]) {
+        const restore = __stubAgentScript(() => [
+          { type: "route", expert: "operator", model: "crowelm" },
+          { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+          { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+          last,
+        ], 120);
+        const turn = send("then fail");
+        let outAtCard = 0; const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+          if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+          await new Promise((r) => setTimeout(r, 16));
+        }
+        await turn;
+        out[last.type] = { outAtCard, homeAtOnce: y() === "", marked: !!transcript.querySelector(".msg.assistant ." + (last.type === "error" ? "err" : "stopped")) };
+        restore(); transcript.innerHTML = ""; messages.length = 0;
+      }
+      console.log("mark-follow fail diag", JSON.stringify(out));
+      return {
+        errorOut: out.error.outAtCard > 0, errorHomeAtOnce: out.error.homeAtOnce, errorMarked: out.error.marked,
+        stoppedOut: out.stopped.outAtCard > 0, stoppedHomeAtOnce: out.stopped.homeAtOnce, stoppedMarked: out.stopped.marked,
+      };`,
+    expect: { errorOut: true, errorHomeAtOnce: true, errorMarked: true, stoppedOut: true, stoppedHomeAtOnce: true, stoppedMarked: true },
   },
   {
     // The chat transcript's listener is registered per turn and used to take

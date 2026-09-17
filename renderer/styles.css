@@ -326,7 +326,8 @@ body:not(.mobile) #workbench.chat-collapsed #chat-restore { display: grid; }
 /* The worker's mark rides beside the newest block while its turn runs, so a
    turn that grows past the viewport keeps its motion in view. renderer.js
    (followMark) sets --mark-y from the newest block and clears it when the turn
-   lands, and the mark glides home to the head of the turn. */
+   lands, and the mark glides home to the head of the turn; an error, a stop or
+   a reduced-motion preference clears it at once instead. */
 .msg.assistant .who { transform: translateY(var(--mark-y, 0px)); transition: transform 360ms var(--ease); }
 @media (prefers-reduced-motion: reduce) { .msg.assistant .who { transition: none; } }
 .msg .body p { margin: 0 0 8px; white-space: pre-wrap; word-wrap: break-word; }
