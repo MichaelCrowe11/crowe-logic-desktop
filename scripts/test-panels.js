@@ -1975,6 +1975,29 @@ const tests = [
       R.remote = orig; __resetSpaces(); return out;`,
     expect: { text: "This workspace has no GitHub remote. Open a checkout of a GitHub repository to see its pull requests and issues.", action: "Repositories" },
   },
+  {
+    // send()'s no-text fallback names what happened: tools ran, so the work is
+    // in the workspace; or nothing ran, so the model returned an empty reply.
+    // acts is an object, and for a week its .length was read, which is never
+    // truthy, so every tool-only turn was told the model returned nothing.
+    name: "a turn that ran tools and said nothing points at the workspace; one that ran nothing names the empty reply",
+    body: `await __reset();
+      const hintAfter = async (script) => {
+        const restore = __stubAgentScript(() => script);
+        await send("go");
+        const h = transcript.querySelector(".msg.assistant .said.hint");
+        const text = h ? h.textContent : "";
+        restore(); transcript.innerHTML = ""; messages.length = 0;
+        return text;
+      };
+      const tools = await hintAfter([
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: "# a line" },
+      ]);
+      const nothing = await hintAfter([]);
+      return { toolsPointAtWorkspace: /^Done/.test(tools), emptyNamed: /returned no text/.test(nothing), tools, nothing };`,
+    expect: { toolsPointAtWorkspace: true, emptyNamed: true },
+  },
 ];
 
 function compare(actual, expected) {
