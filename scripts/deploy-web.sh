@@ -4,15 +4,28 @@
 # working tree, because `scp` exiting 0 says a copy happened, not that the edge
 # serves it.
 #
-#   scripts/deploy-web.sh            deploy + verify
-#   scripts/deploy-web.sh --check    verify only (what is live vs this tree)
+#   scripts/deploy-web.sh                      deploy + verify
+#   scripts/deploy-web.sh --check              verify only (what is live vs this tree)
+#   scripts/deploy-web.sh --stamped-app-html   print the app.html that would ship
 set -euo pipefail
 cd "$(dirname "$0")/.."
 KEY="${SSH_KEY:-$HOME/.ssh/google_compute_engine}"
 HOST="${HOST:-crowelogic@crowelm-chat}"
 D=/var/lib/docker/volumes/caddy_config/_data/crowe-app/renderer
-# [local path]=[served name]
-FILES=(renderer/app.html renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
+
+# app.html loads each asset as name.js?v=<stamp>. The committed stamp is fixed
+# (it last moved on 2026-09-07), so every deploy since shipped a new renderer.js
+# and styles.css to browsers that kept serving the old ones from cache; raised
+# on PR 102. The app.html that ships is rewritten with HEAD's commit time: one
+# stamp per committed tree, so a browser fetches the assets once per deploy,
+# and --check rebuilds the same file from the same commit for its comparison.
+STAMP="$(git log -1 --format=%ct)"
+TMPD="$(mktemp -d)"; trap 'rm -rf "$TMPD"' EXIT
+sed -E "s/\?v=[0-9]+/?v=$STAMP/g" renderer/app.html > "$TMPD/app.html"
+if [ "${1:-}" = "--stamped-app-html" ]; then cat "$TMPD/app.html"; exit 0; fi
+
+# [local path]=[served name]; app.html ships from $TMPD in its stamped form.
+FILES=("$TMPD/app.html" renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
 
 local_hash() { shasum -a 256 "$1" | cut -c1-16; }
 verify() {
@@ -38,7 +51,7 @@ if [ -n "$(git status --short renderer/ mobile/src/)" ]; then
   git status --short renderer/ mobile/src/ >&2; exit 1
 fi
 node scripts/build-rooms-web.js --check
-echo "shipping $(git log -1 --format='%h %s')"
+echo "shipping $(git log -1 --format='%h %s') (asset stamp $STAMP)"
 scp -i "$KEY" "${FILES[@]}" "$HOST:/tmp/"
 ssh -i "$KEY" -o BatchMode=yes "$HOST" "D=$D; B=\$D/.bak-\$(date +%Y%m%d-%H%M%S); sudo mkdir -p \$B && sudo cp -a \$D/*.js \$D/*.html \$D/*.css \$B/ 2>/dev/null; for f in $(for f in "${FILES[@]}"; do basename "$f"; done | tr '\n' ' '); do sudo install -m 0644 -o root -g root /tmp/\$f \$D/\$f && rm -f /tmp/\$f; done && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile && echo \"installed; backup \$B\""
 echo "verifying what the VM serves:"
