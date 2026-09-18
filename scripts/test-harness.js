@@ -1049,6 +1049,86 @@ test("a compose_workflow with nothing usable authors nothing", async () => {
   assert.match(deps.toolResults()[0].result, /^rejected:/);
 });
 
+// ─── Rooms, read-only ────────────────────────────────────────────────────────
+function roomsFixture() {
+  const rooms = [
+    { id: "r-a1", title: "Launch week", names: ["Operator", "Studio Director"], agents: ["studio"], updatedAt: 2000, unread: 2, preview: "The email should go last.", working: false, openAsk: true, spentUsd: 0.4, halted: "" },
+    { id: "r-b2", title: "Grow room", names: ["Operator", "Cultivation"], agents: ["cultivation"], updatedAt: 1000, unread: 0, preview: "Humidity is 88", working: true, openAsk: false, spentUsd: 0, halted: "" },
+  ];
+  const messages = {
+    "r-a1": [
+      { seq: 1, at: 1000, author: ":operator", authorName: "Operator", kind: "", content: "What are the next steps for launch week?" },
+      { seq: 2, at: 1100, author: "studio", authorName: "Studio Director", kind: "progress", content: "reading the plan" },
+      { seq: 3, at: 1200, author: "studio", authorName: "Studio Director", kind: "", content: "Three steps: cut the film, post the community note, email the list.",
+        ask: { question: "Which first?", options: [{ id: "o1", label: "The film" }, { id: "o2", label: "The email" }], state: "open" } },
+      { seq: 4, at: 1300, author: "cultivation", authorName: "Cultivation", kind: "relay", content: "Humidity is 88 and holding.", from: { roomTitle: "Grow room" } },
+      { seq: 5, at: 1400, author: "studio", authorName: "Studio Director", kind: "critique", content: "The email should go last.", reactions: [{ by: ":operator", kind: "good" }] },
+    ],
+    "r-b2": [{ seq: 1, at: 900, author: "cultivation", authorName: "Cultivation", kind: "", content: "Humidity is 88" }],
+  };
+  const calls = [];
+  const rooms_ = { list: () => { calls.push("list"); return rooms; },
+    load: (id) => { calls.push("load:" + id); return messages[id] ? { summary: rooms.find((r) => r.id === id), messages: messages[id] } : null; } };
+  return { calls, rooms: rooms_ };
+}
+test("rooms tools ride only on a ctx that main gave a rooms hook, and never on the verifier", async () => {
+  const names = (tools) => tools.map((t) => t.function.name);
+  assert.ok(!names(H.allTools(makeCtx(), {}, {})).some((n) => n === "list_rooms" || n === "read_room"));
+  const withRooms = makeCtx({}, { rooms: roomsFixture().rooms });
+  const offered = names(H.allTools(withRooms, {}, {}));
+  assert.ok(offered.includes("list_rooms") && offered.includes("read_room"), offered.join(","));
+  assert.ok(!names(H.verifierTools(withRooms, "execute")).some((n) => n === "list_rooms" || n === "read_room"));
+  assert.match(String(await H.execTool(makeCtx(), "read_room", {}, {})), /^blocked: Rooms are not reachable/);
+  assert.match(String(await H.execTool(makeCtx(), "list_rooms", {}, {})), /^blocked: Rooms are not reachable/);
+  assert.match(String(await H.buildSystemPrompt(withRooms)), /list_rooms and read_room/);
+  assert.doesNotMatch(String(await H.buildSystemPrompt(makeCtx())), /read_room/);
+});
+test("list_rooms names every room, newest activity first, with unread and open questions", async () => {
+  const out = String(await H.execTool(makeCtx({}, { rooms: roomsFixture().rooms }), "list_rooms", {}, {}));
+  assert.match(out, /^2 rooms, newest activity first:/);
+  assert.ok(out.indexOf("r-a1") < out.indexOf("r-b2"), out);
+  assert.match(out, /"Launch week"  with Operator, Studio Director/);
+  assert.match(out, /2 unread; a question waits for the user/);
+  assert.match(out, /"Grow room".*\[a worker is working\]/);
+  assert.match(out, /last: The email should go last\./);
+});
+test("read_room with no room opens the most recently active one and renders asks, relays and reviews, not progress", async () => {
+  const f = roomsFixture();
+  const out = String(await H.execTool(makeCtx({}, { rooms: f.rooms }), "read_room", {}, {}));
+  assert.match(out, /^Room "Launch week" \(r-a1\) with Operator, Studio Director\. Opened as the most recently active room\./);
+  assert.match(out, /2 unread for the user\. A question is open for the user\. Spent \$0\.40\./);
+  assert.match(out, /Showing the last 4 of 4 messages \(seq 1 to 5\)\./);
+  assert.match(out, /Operator: What are the next steps for launch week\?/);
+  assert.match(out, /Studio Director: Three steps: cut the film, post the community note, email the list\.\n\[Asked the user: Which first\?  Options: A\) The film  B\) The email  \(open, waiting for the user\)\]/);
+  assert.match(out, /Cultivation, relayed from the room "Grow room": Humidity is 88 and holding\./);
+  assert.match(out, /Studio Director, reviewing: The email should go last\.\n\[reactions: good\]/);
+  assert.doesNotMatch(out, /reading the plan/);
+  assert.match(out, /Read only: to speak in this room, the user messages it from the rail\.$/);
+  assert.deepStrictEqual(f.calls, ["list", "load:r-a1"]);
+});
+test("read_room finds a room by partial title, pages with limit and before, and refuses guessed ids and ambiguous titles", async () => {
+  const f = roomsFixture(); const ctx = makeCtx({}, { rooms: f.rooms });
+  assert.match(String(await H.execTool(ctx, "read_room", { room: "grow" }, {})), /^Room "Grow room" \(r-b2\)/);
+  const one = String(await H.execTool(ctx, "read_room", { room: "Launch week", limit: 1 }, {}));
+  assert.match(one, /Showing the last 1 of 4 messages \(seq 5 to 5\)\. Earlier: read_room again with before=5\./);
+  assert.doesNotMatch(one, /Three steps/);
+  const early = String(await H.execTool(ctx, "read_room", { room: "r-a1", before: 3 }, {}));
+  assert.match(early, /Showing the last 1 of 1 message before seq 3 \(seq 1 to 1\)\./);
+  assert.match(early, /What are the next steps/); assert.doesNotMatch(early, /Three steps/);
+  const none = String(await H.execTool(ctx, "read_room", { room: "r-zz" }, {}));
+  assert.match(none, /^rejected: no room named "r-zz"\. The rooms are:\n/);
+  assert.ok(!f.calls.includes("load:r-zz"), "a guessed id must never reach the store");
+  assert.match(String(await H.execTool(ctx, "read_room", { room: "w" }, {})), /^rejected: "w" matches 2 rooms; name one by id:/);
+  const empty = makeCtx({}, { rooms: { list: () => [], load: () => null } });
+  assert.strictEqual(await H.execTool(empty, "list_rooms", {}, {}), "No rooms yet. The user starts one from the Messages rail.");
+  assert.strictEqual(await H.execTool(empty, "read_room", { room: "x" }, {}), "No rooms yet. The user starts one from the Messages rail.");
+});
+test("reading a room is not a write: plan mode and a read-only room cap leave it alone", async () => {
+  const f = roomsFixture();
+  assert.match(String(await H.execTool(makeCtx({ autonomy: "plan" }, { rooms: f.rooms }), "read_room", {}, {})), /^Room "Launch week"/);
+  assert.match(String(await H.execTool(makeCtx({ autonomy: "readonly" }, { rooms: f.rooms }), "list_rooms", {}, { expert: "operator", model: "m", tierCap: "readonly" })), /^2 rooms/);
+});
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 (async () => {
   let passed = 0;
