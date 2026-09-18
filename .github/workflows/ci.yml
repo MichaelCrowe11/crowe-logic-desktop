@@ -227,3 +227,7 @@ jobs:
           name: smoke-shots
           path: /tmp/crowe-shots/
           if-no-files-found: ignore
+          # Screenshots are for reading a failed run, not for keeping. The
+          # account's artifact storage is shared across every repo and small,
+          # so they leave after three days instead of the default ninety.
+          retention-days: 3
