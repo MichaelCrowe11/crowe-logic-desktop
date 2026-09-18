@@ -1301,7 +1301,8 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
         // The plane's remaining quota arrives as the ceiling the harness
         // already enforces, so it ends a turn with a reserve and a closing
         // call rather than as a second, blunter stop.
-        const ctx = { ...harnessCtx, loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        // Rooms are readable from the person's own seat only; see roomsForHarness.
+        const ctx = { ...harnessCtx, rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
         const r = await harness.runAgent(ctx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
           send,
@@ -1859,6 +1860,30 @@ function loadRoom(id) {
     if (room) liveRooms.set(id, room);
     return room;
   } catch { return null; }
+}
+/* The chat seat's read-only window onto Rooms (harness list_rooms/read_room).
+   Summaries are the rail's own; messages carry the display name main can
+   resolve and the harness cannot, and System notes stay out because the engine
+   keeps them for the person, never for a model. Only the chat run gets this
+   hook: a room seat runs on harnessCtx and so cannot read a sibling room
+   except through the operator's relay. */
+function roomsForHarness() {
+  const summaries = () => listRoomIds().map((id) => { const room = loadRoom(id); return room ? roomsEngine.summary(room) : null; }).filter(Boolean);
+  return {
+    list: summaries,
+    load: (id) => {
+      if (!/^r-[A-Za-z0-9_-]{1,80}$/.test(String(id || ""))) return null;
+      const room = loadRoom(id); if (!room) return null;
+      return {
+        summary: roomsEngine.summary(room),
+        messages: room.messages.filter((m) => m && m.author !== roomsEngine.SYSTEM).map((m) => ({
+          seq: m.seq, at: m.at, author: m.author, authorName: roomsEngine.displayName(m.author), kind: m.kind || "",
+          content: m.content, ask: m.ask || null, reactions: Array.isArray(m.reactions) ? m.reactions : [],
+          from: m.from ? { roomTitle: m.from.roomTitle } : null,
+        })),
+      };
+    },
+  };
 }
 function listRoomIds() {
   try { return fs.readdirSync(sessionsDir()).filter((f) => f.startsWith("r-") && f.endsWith(".json")).map((f) => f.slice(0, -5)); }
