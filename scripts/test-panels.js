@@ -110,17 +110,19 @@ const PRELUDE = `
      Both helpers hand back a restore. Leaving either behind is the same hazard
      as a leftover space profile: every later test would run against a recorder
      instead of the shim, or would mount this fixture as workflow zero. */
-  window.__stubAgentScript = (script) => {
+  window.__stubAgentScript = (script, gapMs = 0) => {
     const priorRun = window.crowe.agent.run, priorOn = window.crowe.agent.onEvent;
     let listeners = [];
     window.crowe.agent.onEvent = (fn) => {
       listeners.push(fn);
       return () => { listeners = listeners.filter((f) => f !== fn); };
     };
+    // gapMs spaces the events out, for a check that has to look at the turn
+    // while it is still running rather than at what it left behind.
     window.crowe.agent.run = async (messages, id) => {
       for (const ev of script(id || "main")) {
         listeners.slice().forEach((f) => f({ agentId: id || "main", ...ev }));
-        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, gapMs));
       }
       return {};
     };
@@ -1067,6 +1069,54 @@ const tests = [
       restore(); transcript.innerHTML = ""; messages.length = 0;
       return result;`,
     expect: { once: true, noFragment: true, recorded: true },
+  },
+  {
+    // The mark at the head of a turn is the one thing in motion, and a turn of
+    // a few tool cards scrolls that head off the top. While the turn runs the
+    // mark rides beside the newest block (its rail dot for a card, its first
+    // line for text); when the turn lands it plays the landing there and goes
+    // home. Measured against the blocks themselves, not against fixed numbers.
+    name: "the worker's mark rides beside the newest block while a turn runs, and goes home when it lands",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+        { type: "tool_call", id: "t2", name: "run_shell", args: { command: "ls" } },
+        { type: "tool_result", id: "t2", name: "run_shell", result: "ok" },
+        { type: "assistant", text: "Two reads, then done." },
+      ], 200);
+      const turn = send("follow me");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => parseFloat(who() && who().style.getPropertyValue("--mark-y")) || 0;
+      const seen = []; let atSecondCard = null, secondCardTop = null;
+      const deadline = Date.now() + 6000;
+      while (Date.now() < deadline) {
+        const cards = transcript.querySelectorAll(".msg.assistant .toolcard");
+        const v = y(); if (v && seen[seen.length - 1] !== v) seen.push(v);
+        if (cards.length === 2 && atSecondCard === null) {
+          // A timer, not a frame: a hidden window under xvfb paints no frames.
+          await new Promise((r) => setTimeout(r, 60));
+          atSecondCard = y(); secondCardTop = cards[1].offsetTop;
+        }
+        if (transcript.querySelector(".msg.assistant .said") && atSecondCard !== null) break;
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      await turn;
+      const landedY = y();
+      await new Promise((r) => setTimeout(r, 1000));
+      // Printed to the runner's stderr under ELECTRON_ENABLE_LOGGING, so a red
+      // run on a headless runner says what the mark actually did.
+      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
+      const result = {
+        moved: seen.length >= 2 && seen.every((v, i) => i === 0 || v > seen[i - 1]),
+        besideSecondCard: atSecondCard !== null && Math.abs(atSecondCard - (secondCardTop + 14.5 - 13)) <= 1,
+        stillOutWhenLanding: landedY > 0,
+        home: who().style.getPropertyValue("--mark-y") === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { moved: true, besideSecondCard: true, stillOutWhenLanding: true, home: true },
   },
   {
     // The chat transcript's listener is registered per turn and used to take

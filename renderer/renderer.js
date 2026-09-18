@@ -241,6 +241,59 @@ function mountWorkerMark(host, worker, state) {
   return null;
 }
 
+/* While a turn runs, its mark rides beside the newest block instead of
+   holding the head of the turn: a long turn scrolls its head off the top
+   within a few tool cards, and the one thing in motion would then be the one
+   thing out of view. The offset is the newest block's rail dot or first line,
+   written as a custom property the .who column translates by (styles.css). A
+   history render never sets it, so a settled turn wears its mark at the head
+   as before. Observers rather than a call at every append: any block landing
+   or growing moves the target, and the adders are many. */
+const BLOCK_CENTRE = { routecard: 7.5, toolcard: 14.5, editcard: 14.5 };
+function followMark(body) {
+  const who = body.parentNode && body.parentNode.querySelector(".who");
+  if (!who || typeof MutationObserver !== "function") return { end() {} };
+  let pending = false, stopped = false, last = null;
+  const place = () => {
+    pending = false;
+    if (stopped) return;
+    let block = body.lastElementChild;
+    while (block && (block.classList.contains("thinking") || block.classList.contains("message-copy"))) block = block.previousElementSibling;
+    let y = 0;
+    if (block) {
+      const cls = Array.from(block.classList).find((c) => BLOCK_CENTRE[c]);
+      const centre = cls ? BLOCK_CENTRE[cls] : Math.min(block.offsetHeight, 26) / 2;
+      y = Math.max(0, Math.min(block.offsetTop + centre - 13, body.offsetHeight - 26));
+    }
+    y = Math.round(y);
+    if (y === last) return;
+    last = y;
+    who.style.setProperty("--mark-y", y + "px");
+  };
+  // One placement per burst of changes. A frame callback coalesces to the
+  // paint, but a hidden or occluded window gets no frames (CI under xvfb, a
+  // minimised app) and the turn still runs there, so a short timer stands
+  // behind it; whichever comes first places, the other finds nothing to do.
+  const queue = () => {
+    if (pending || stopped) return;
+    pending = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(place);
+    setTimeout(place, 24);
+  };
+  const mo = new MutationObserver(queue); mo.observe(body, { childList: true });
+  const ro = typeof ResizeObserver === "function" ? new ResizeObserver(queue) : null;
+  if (ro) ro.observe(body);
+  return {
+    end(landed) {
+      stopped = true; mo.disconnect(); if (ro) ro.disconnect();
+      // Home after the landing has played where the eye is; at once otherwise,
+      // in the same task, so a failed or stopped turn never paints a stale offset.
+      if (landed) setTimeout(() => who.style.removeProperty("--mark-y"), 720);
+      else who.style.removeProperty("--mark-y");
+    },
+  };
+}
+
 function addAssistant(workerId) {
   clearWelcome();
   const worker = workerOf(workerId || "crowe-logic");
@@ -705,6 +758,7 @@ async function send(text, opts = {}) {
   input.value = ""; syncComposerInput();
   const body = addAssistant(expertWorker(opts.role)); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
+  const follow = followMark(body);
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   // Chronological streaming: each burst of text gets its own block appended
   // after the tool cards that produced it, revealed as it arrives. Settled
@@ -877,6 +931,7 @@ async function send(text, opts = {}) {
     settleHeader();
     if (mark) { if (mark.done) mark.done(); else mark.ping(); }
   }
+  follow.end(!body.querySelector(".err, .stopped"));
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) {
     // No prose came back. If tools ran, the work is in the workspace (or, on
