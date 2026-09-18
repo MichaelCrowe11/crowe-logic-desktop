@@ -303,7 +303,8 @@
     if (done) done(outcome || "close");
   }
   function renderAiModal(mode, review) {
-    const allow = !review.blocked && review.localOnly !== true && !review.allowed && review.status !== "signin";
+    const reviewOnly = mode === "review";
+    const allow = !reviewOnly && !review.blocked && review.localOnly !== true && !review.allowed && review.status !== "signin";
     const buttons = mode === "policy"
       ? '<div class="row"><button type="button" class="ghost sm" data-ai="back">Back</button><button type="button" class="primary sm" data-ai="close">Done</button></div>'
       : `<div class="row"><button type="button" class="ghost sm" data-ai="policy">Privacy Policy</button><button type="button" class="ghost sm" data-ai="close">${allow ? "Not now" : "Close"}</button>${allow ? '<button type="button" class="primary sm" data-ai="allow">Allow</button>' : ""}</div>`;
@@ -333,6 +334,15 @@
     });
   }
   aiModal.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      const focusable = [...aiModal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      if (focusable.length) {
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); return; }
+        if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); return; }
+      }
+    }
     if (e.key === "Escape") { e.preventDefault(); closeAiModal("close"); }
   });
   window.presentAiModal = presentAiModal;

@@ -402,10 +402,21 @@ const tests = [
                     review: __shown("#m-ai-review"), allow: __shown("#m-ai-allow"),
                     summary: /verified CroweLM routes/i.test((document.getElementById("m-ai-summary") || {}).textContent || ""),
                     foot: /does not recall data already sent/i.test(section ? section.textContent : "") };
+      document.getElementById("m-ai-review").click();
+      await __settle(80);
+      const buttons = [...document.querySelectorAll('#m-ai-privacy [data-ai]')];
+      const last = buttons[buttons.length - 1];
+      if (last) last.focus();
+      if (last) last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+      out.reviewOnly = !__shown('#m-ai-privacy [data-ai="allow"]');
+      out.tabWraps = buttons.length ? document.activeElement === buttons[0] : false;
+      const close = document.querySelector('#m-ai-privacy [data-ai="close"]');
+      if (close) close.click();
+      await __settle(80);
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { present: true, shown: true, badge: "Sign in first", review: true, allow: true, summary: true, foot: true },
+    expect: { present: true, shown: true, badge: "Sign in first", review: true, allow: true, summary: true, foot: true, reviewOnly: true, tabWraps: true },
   },
   {
     name: "Settings updates the AI sharing controls after allow and revoke",
