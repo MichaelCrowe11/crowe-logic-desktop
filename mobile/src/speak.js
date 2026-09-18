@@ -43,6 +43,16 @@
     if (preferred === "phone") return fallback(said);
     const t = await token();
     if (!t || !t.bearer) { say("Sign in to hear replies", "note"); return; }
+    if (window.croweAIPrivacy && window.croweAIPrivacy.reviewSpeech) {
+      const review = await window.croweAIPrivacy.reviewSpeech(preferred, said.innerText).catch(() => null);
+      if (review && review.blocked) { say(review.error || "This remote reply voice is blocked until its recipients are verified.", "error"); return; }
+      if (review && !review.allowed) {
+        const choice = window.presentAiModal ? await window.presentAiModal(review, "consent") : "close";
+        if (choice !== "allow") { say("AI sharing not allowed. The reply stayed on screen.", "note"); return; }
+        const saved = await window.croweAIPrivacy.allow(review).catch(() => ({ ok: false }));
+        if (!saved || !saved.ok) { say((saved && saved.error) || "The phone could not save your AI sharing choice.", "error"); return; }
+      }
+    }
     let list;
     try { list = await voices(t.base, t.bearer); } catch { return fallback(said); }
     const allowed = list.voices.filter((v) => v.allowed && v.configured).map((v) => v.voice);

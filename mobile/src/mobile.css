@@ -606,3 +606,10 @@ body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .sur
 /* Diagnostics in Settings */
 .m-diag-log { font: 11px/1.45 ui-monospace, "JetBrains Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 8px; padding: 10px; border: 1px solid rgba(127, 127, 140, 0.25); border-radius: 8px; color: var(--muted, #b8b8bf); }
 .m-diag-actions { display: flex; gap: 8px; }
+.m-ai-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.m-ai-foot, .m-ai-note { margin: 8px 0 0; color: var(--muted); font-size: var(--fs-sm); }
+.m-ai-card { display: flex; flex-direction: column; gap: 12px; }
+.m-ai-block { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.m-ai-block b { display: block; margin-bottom: 6px; }
+.m-ai-block ul { margin: 0; padding-left: 18px; }
+.m-ai-block li + li { margin-top: 4px; }

@@ -213,7 +213,7 @@
     cameraPane.innerHTML = [
       '<div class="m-home-inner">',
       '<header class="m-fi-head"><div class="m-kicker">Field inspection · CroweLM Vision</div><h1 class="m-title">Photograph a block</h1>',
-      '<p class="m-home-sub">The block face is read by CroweLM Vision, running Claude Fable 5.1. Each check returns a graded finding, marked on the photo, and is recorded against its lot.</p></header>',
+      '<p class="m-home-sub">If you allow AI sharing, the block face and your note are sent through Crowe Logic\'s gateway to CroweLM Vision. Each check returns a graded finding, marked on the photo, and is recorded against its lot.</p></header>',
       `<section class="m-fi-frame${last ? "" : " is-empty"}"><div class="m-fi-view">`,
       last && last.thumb ? `<img class="m-fi-img" src="${last.thumb}" alt="last capture">` : "",
       '<div class="m-fi-lattice"></div><i class="m-fi-c c1"></i><i class="m-fi-c c2"></i><i class="m-fi-c c3"></i><i class="m-fi-c c4"></i><i class="m-fi-cross"></i>',
@@ -238,7 +238,7 @@
      is already attached by the picker, so the question goes out at once and the
      answer streams where every answer streams. */
   if (window.crowePhone && window.crowePhone.onChange) {
-    window.crowePhone.onChange(() => {
+    window.crowePhone.onChange(async () => {
       if (!cameraArmed) return;
       const photos = window.crowePhone.images ? window.crowePhone.images() : [];
       if (!photos.length) return;
@@ -250,10 +250,152 @@
       if (chatBtn && body.dataset.space !== "chat") chatBtn.click();
       setPane("agent");
       const q = pendingLot ? `${VISION_PROMPT} This is lot ${pendingLot}.` : VISION_PROMPT;
-      if (typeof send === "function") send(q);
+      const st = window.crowe && window.crowe.auth && window.crowe.auth.status ? await window.crowe.auth.status().catch(() => ({ user: null })) : { user: null };
+      if (!st.user) { if (typeof setComposerStatus === "function") setComposerStatus("Sign in to send the photo. It stayed attached.", "note"); return; }
+      if (typeof send === "function") send(q, { vision: true });
       else { const inp = $("input"); if (inp) { inp.value = q; inp.dispatchEvent(new Event("input")); } }
     });
   }
+
+  const aiPrivacy = () => window.croweAIPrivacy || null;
+  const aiModal = document.createElement("div");
+  aiModal.id = "m-ai-privacy";
+  aiModal.className = "modal hidden";
+  body.appendChild(aiModal);
+  const aiView = { mode: "consent", review: null, resolve: null };
+  let aiReturnFocus = null;
+  let aiFocusHint = null;
+  const composeSay = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
+  const chatInput = () => $("input");
+  document.addEventListener("focusin", (e) => { if (e.target && !aiModal.contains(e.target)) aiFocusHint = e.target; }, true);
+  function seedChatDraft(text) {
+    const chat = [...document.querySelectorAll("#m-tabs .m-tab")].find((t) => t.textContent.trim() === "Chat");
+    if (chat) chat.click();
+    const input = chatInput();
+    if (!input) return;
+    input.value = [input.value.trim(), String(text || "").trim()].filter(Boolean).join(input.value.trim() ? "\n" : "");
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+  }
+  function aiList(items) {
+    return `<ul>${(items || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
+  }
+  function aiStatusLabel(status) {
+    if (!status) return "Checking";
+    if (status.allowed) return "Allowed";
+    if (status.status === "signin") return "Sign in first";
+    if (status.status === "gateway") return "Blocked";
+    return "Not allowed";
+  }
+  function closeAiModal(outcome) {
+    const back = aiReturnFocus;
+    aiModal.classList.add("hidden");
+    aiModal.innerHTML = "";
+    aiReturnFocus = null;
+    const done = aiView.resolve;
+    aiView.resolve = null;
+    setTimeout(() => {
+      const target = back && back !== document.body && back.isConnected && typeof back.focus === "function"
+        ? back
+        : (chatInput() || $("send") || $("settings-btn"));
+      if (target && typeof target.focus === "function") { try { target.focus(); } catch {} }
+    }, 0);
+    if (done) done(outcome || "close");
+  }
+  function renderAiModal(mode, review) {
+    const reviewOnly = mode === "review";
+    const allow = !reviewOnly && !review.blocked && review.localOnly !== true && !review.allowed && review.status !== "signin";
+    const buttons = mode === "policy"
+      ? '<div class="row"><button type="button" class="ghost sm" data-ai="back">Back</button><button type="button" class="primary sm" data-ai="close">Done</button></div>'
+      : `<div class="row"><button type="button" class="ghost sm" data-ai="policy">Privacy Policy</button><button type="button" class="ghost sm" data-ai="close">${allow ? "Not now" : "Close"}</button>${allow ? '<button type="button" class="primary sm" data-ai="allow">Allow</button>' : ""}</div>`;
+    const titleId = mode === "policy" ? "m-ai-policy-title" : "m-ai-consent-title";
+    aiModal.innerHTML = mode === "policy"
+      ? `<div class="modal-card m-ai-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><h2 id="${titleId}">Privacy Policy</h2><p>This phone keeps sessions, grow-log rows, reminders, and saved settings in app-private storage. On iOS, sign-in tokens are moved into the Keychain when the native vault plugin is present.</p><p>If you use Crowe Logic AI features, the app sends the message, the conversation context needed to answer it, selected model metadata, tool context/results, and any photo you choose to Crowe Logic's gateway at ${esc(review.host || "the configured gateway")}. Repository docs describe CroweLM as running on Crowe Logic-managed Azure and Cloudflare infrastructure.</p><p>The phone's own reply voice, on-device dictation, local grow log, and unsent drafts stay on this device until you send them. Revoking permission stops future sends where the app can stop them, but does not recall data already sent.</p><p>Do not publish stronger retention, training, or equal-protection claims until the gateway and provider terms are confirmed outside this repository.</p>${buttons}</div>`
+      : `<div class="modal-card m-ai-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><h2 id="${titleId}">Allow AI data sharing?</h2><p>Crowe Logic will ask before the first supported AI send on this Crowe ID and gateway. If you allow it, the app may send data for ${esc(review.feature || "AI features")}.</p><section class="m-ai-block"><b>Who receives it</b>${aiList((review.recipients || []).map((r) => `${r.name}: ${r.service}`))}</section><section class="m-ai-block"><b>What can be sent</b>${aiList(review.data || [])}</section><section class="m-ai-block"><b>Why</b>${aiList(review.purposes || [])}</section><section class="m-ai-block"><b>Stays local unless you send it</b>${aiList(review.localNotes || review.localOnly || [])}</section><p class="m-ai-note">${esc(review.blocked ? review.error : review.summary || "")}</p><p class="m-ai-note">${esc(review.revocationNote || "")}</p>${buttons}</div>`;
+    aiModal.querySelectorAll("[data-ai]").forEach((btn) => btn.addEventListener("click", async () => {
+      if (btn.dataset.ai === "policy") return renderAiModal("policy", review);
+      if (btn.dataset.ai === "back") return renderAiModal("consent", review);
+      if (btn.dataset.ai === "allow") return closeAiModal("allow");
+      closeAiModal("close");
+    }));
+    const first = aiModal.querySelector('[data-ai="allow"], [data-ai="policy"], [data-ai="back"], [data-ai="close"]');
+    const card = aiModal.querySelector(".modal-card");
+    if (first && typeof first.focus === "function") first.focus();
+    else if (card && typeof card.focus === "function") card.focus();
+  }
+  async function presentAiModal(review, mode) {
+    return new Promise((resolve) => {
+      aiView.resolve = resolve;
+      aiView.mode = mode || "consent";
+      aiView.review = review;
+      aiReturnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : aiFocusHint;
+      aiModal.classList.remove("hidden");
+      renderAiModal(aiView.mode, review);
+    });
+  }
+  aiModal.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      const focusable = [...aiModal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      if (focusable.length) {
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); return; }
+        if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); return; }
+      }
+    }
+    if (e.key === "Escape") { e.preventDefault(); closeAiModal("close"); }
+  });
+  window.presentAiModal = presentAiModal;
+  async function ensureAiPermission(text, opts = {}) {
+    const ai = aiPrivacy();
+    if (!ai || !ai.reviewTurn) return true;
+    const st = window.crowe && window.crowe.auth && window.crowe.auth.status ? await window.crowe.auth.status().catch(() => ({ user: null })) : { user: null };
+    if (!st.user) return true;
+    const review = await ai.reviewTurn(text, opts).catch(() => null);
+    if (!review) return true;
+    if (review.blocked) { composeSay(review.error || "This AI route is blocked until its recipients are verified.", "error"); return false; }
+    if (review.allowed) return true;
+    const choice = await presentAiModal(review, "consent");
+    if (choice !== "allow") {
+      composeSay(opts.vision ? "AI sharing not allowed. The photo stayed attached." : "AI sharing not allowed. Your draft stayed here.", "note");
+      return false;
+    }
+    const saved = await ai.allow(review).catch(() => ({ ok: false, error: "The phone could not save your AI sharing choice." }));
+    if (!saved.ok) { composeSay(saved.error || "The phone could not save your AI sharing choice.", "error"); return false; }
+    return true;
+  }
+  const rawSend = typeof send === "function" ? send : null;
+  if (rawSend) {
+    window.send = async (text, opts = {}) => {
+      if (!(await ensureAiPermission(text, opts || {}))) return false;
+      rawSend(text, opts);
+      return true;
+    };
+  }
+  [["home-composer", "home-input", ""], ["cult-composer", "cult-input", "cultivation"]].forEach(([formId, fieldId, role]) => {
+    const form = $(formId), field = $(fieldId);
+    if (!form || !field || !rawSend) return;
+    form.addEventListener("submit", (e) => {
+      if (form.dataset.aiConsentReady === "1") { delete form.dataset.aiConsentReady; return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const text = field.value.trim();
+      if (!text) return;
+      Promise.resolve((async () => {
+        if (!(await ensureAiPermission(text, role ? { role } : {}))) return;
+        form.dataset.aiConsentReady = "1";
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else {
+          setSpace("chat");
+          const input = chatInput();
+          if (input) { input.value = text; syncComposerInput(); }
+          rawSend(text, role ? { role } : {});
+          field.value = "";
+          delete form.dataset.aiConsentReady;
+        }
+      })()).catch(() => {});
+    }, true);
+  });
 
   /* After a vision reply: one row under the answer to log it against a lot. The
      journal gets the verdict as a dated entry; the camera roll keeps the
@@ -747,8 +889,13 @@
     const d = (e && e.detail) || {};
     if (d.kind === "ask" && d.text) {
       __tapTab("Chat");
-      if (typeof send === "function") { send(d.text); }
-      else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
+      const submit = async () => {
+        const st = window.crowe && window.crowe.auth && window.crowe.auth.status ? await window.crowe.auth.status().catch(() => ({ user: null })) : { user: null };
+        if (!st.user) { seedChatDraft(d.text); say("Sign in to send that Siri question. It is waiting in Chat.", "note"); return; }
+        if (!(await ensureAiPermission(d.text, { shortcut: true }))) { seedChatDraft(d.text); return; }
+        if (rawSend) rawSend(d.text);
+      };
+      submit().catch(() => seedChatDraft(d.text));
     } else if (d.kind === "log-block") {
       __tapTab("Cultivation");
       const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');
@@ -843,7 +990,7 @@
   voiceSection.className = "key-manager m-voice";
   voiceSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Reply voice</b>',
-    "<span>What the speaker button uses to read a reply. Michael's voice needs a paid plan; the Crowe Logic voice is the gateway's own; the phone's voice never leaves the device.</span></div></div>",
+    "<span>Remote reply voices send the latest assistant reply to Crowe Logic's voice service. The phone's own voice never leaves this device.</span></div></div>",
     '<label class="m-voice-row">Voice <select id="m-voice"><option value="michael">Michael\'s voice</option><option value="neural">Crowe Logic voice</option><option value="phone">This phone\'s voice</option></select></label>',
   ].join("");
   diagSection.parentNode && diagSection.parentNode.insertBefore(voiceSection, diagSection);
@@ -854,6 +1001,54 @@
     const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "michael";
     try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to michael */ }
     say(v === "michael" ? "Replies read in Michael's voice" : v === "neural" ? "Replies read in the Crowe Logic voice" : "Replies read by this phone", "note");
+  });
+  const aiSection = document.createElement("section");
+  aiSection.className = "key-manager m-ai";
+  aiSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>AI data sharing</b>',
+    '<span id="m-ai-summary">Checking the current status.</span></div><span id="m-ai-status" class="badge">Checking</span></div>',
+    '<div class="m-ai-actions"><button id="m-ai-review" class="ghost sm" type="button">Review disclosure</button><button id="m-ai-allow" class="ghost sm" type="button">Allow</button><button id="m-ai-revoke" class="ghost sm" type="button">Stop sharing</button></div>',
+    '<p class="m-ai-foot">Stopping sharing prevents future sends where the app can stop them. It does not recall data already sent.</p>',
+  ].join("");
+  diagSection.parentNode && diagSection.parentNode.insertBefore(aiSection, diagSection);
+  async function settingsAiReview() {
+    const ai = aiPrivacy(); if (!ai) return null;
+    if (ai.reviewTurn) {
+      const routed = await ai.reviewTurn("Review the verified CroweLM disclosure.", {}).catch(() => null);
+      if (routed) return routed;
+    }
+    return ai.review ? ai.review().catch(() => null) : null;
+  }
+  async function renderAiSettings() {
+    const ai = aiPrivacy();
+    const status = ai && ai.status ? await ai.status().catch(() => null) : null;
+    const badge = $("m-ai-status"), summary = $("m-ai-summary"), allowBtn = $("m-ai-allow"), revokeBtn = $("m-ai-revoke");
+    if (badge) badge.textContent = aiStatusLabel(status);
+    if (summary) summary.textContent = status ? `${status.summary} Applies only to verified CroweLM routes.` : "AI sharing status is unavailable in this build.";
+    if (allowBtn) allowBtn.hidden = Boolean(status && status.allowed);
+    if (revokeBtn) revokeBtn.hidden = !Boolean(status && status.allowed);
+  }
+  $("m-ai-review").addEventListener("click", async () => {
+    const review = await settingsAiReview();
+    if (review) await presentAiModal(review, "review");
+  });
+  $("m-ai-allow").addEventListener("click", async () => {
+    const ai = aiPrivacy(); if (!ai || !ai.allow) return;
+    const review = await settingsAiReview();
+    if (!review) return;
+    const choice = await presentAiModal(review, "consent");
+    if (choice !== "allow") return;
+    const saved = await ai.allow(review).catch(() => ({ ok: false, error: "The phone could not save your AI sharing choice." }));
+    if (!saved.ok) say(saved.error || "The phone could not save your AI sharing choice.", "error");
+    else say("AI sharing allowed for supported CroweLM routes on this Crowe ID.", "note");
+    renderAiSettings();
+  });
+  $("m-ai-revoke").addEventListener("click", async () => {
+    const ai = aiPrivacy(); if (!ai) return;
+    if (!window.confirm("Stop sharing data with Crowe Logic AI features on this phone?\n\nFuture supported AI sends will be blocked until you allow them again. Data already sent cannot be recalled.")) return;
+    const out = await ai.revoke("settings").catch(() => ({ ok: false, stopped: 0 }));
+    say(`AI sharing turned off.${out && out.stopped ? ` ${out.stopped} run${out.stopped === 1 ? "" : "s"} stopped.` : ""} Data already sent cannot be recalled.`, "note");
+    renderAiSettings();
   });
   const diagText = async () => {
     const rows = window.crowe && window.crowe.diag ? await window.crowe.diag.list().catch(() => []) : [];
@@ -892,7 +1087,8 @@
     else say((r && r.error) || "The reminder could not be set.", "error");
     renderPending(); if (typeof renderHome === "function") renderHome();
   });
-  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); }, 50));
+  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); renderAiSettings(); }, 50));
+  if (window.croweAIPrivacy && window.croweAIPrivacy.onChange) window.croweAIPrivacy.onChange(() => { if ($("m-ai-status")) renderAiSettings(); });
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
   window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
 
