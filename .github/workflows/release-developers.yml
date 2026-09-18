@@ -85,3 +85,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
           if-no-files-found: error
+          # Same rule as release.yml: the publish step on the release machine
+          # downloads these within hours, and the account's artifact storage
+          # is shared and small. Three days, not ninety.
+          retention-days: 3
