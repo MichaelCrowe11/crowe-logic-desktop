@@ -33,6 +33,18 @@ check(/if \(pendingSignIn\) \{ if \(pendingSignIn\.authUrl\) shell\.openExternal
 check(/if \(pendingSignIn === pending\) pendingSignIn = null;/.test(mainSrc), "finishing a sign-in must clear the pending attempt");
 check(/pending\.authUrl = authUrl;/.test(mainSrc), "the pending attempt must remember its page so a second click can reopen it");
 check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remain navigable");
+
+// Rooms are readable from the person's own chat seat and from nowhere else. The
+// hook rides the chat run's ctx; harnessCtx, which a room seat runs on, never
+// carries it, because a seat that could read a sibling room would bypass the
+// operator's relay, the one sanctioned path between rooms.
+const harnessCtxSrc = (mainSrc.match(/\nconst harnessCtx = \{[\s\S]*?\n\};/) || [""])[0];
+check(harnessCtxSrc.length > 0, "harnessCtx must be findable for the rooms pin");
+check(!/^\s{2}rooms:/m.test(harnessCtxSrc), "harnessCtx must not carry the rooms hook");
+check(/const ctx = \{ \.\.\.harnessCtx, rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook");
+check((mainSrc.match(/rooms: roomsForHarness\(\)/g) || []).length === 1, "the rooms hook is handed out in exactly one place");
+check(/harness\.runAgent\(harnessCtx, messages\.slice\(\)/.test(mainSrc), "room seats must run on the bare harnessCtx");
+check(/if \(!\/\^r-\[A-Za-z0-9_-\]\{1,80\}\$\/\.test\(String\(id \|\| ""\)\)\) return null;/.test(mainSrc), "the rooms hook must load only r- ids");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
 check(isTrustedPermissionUrl("https://crowelogic.com/call", entry), "the exact Crowe Logic origin must be trusted");
