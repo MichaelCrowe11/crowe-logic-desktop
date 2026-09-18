@@ -241,6 +241,68 @@ function mountWorkerMark(host, worker, state) {
   return null;
 }
 
+/* While a turn runs, its mark rides beside the newest block instead of
+   holding the head of the turn: a long turn scrolls its head off the top
+   within a few tool cards, and the one thing in motion would then be the one
+   thing out of view. The offset is the newest block's rail dot or first line,
+   written as a custom property the .who column translates by (styles.css). A
+   history render never sets it, so a settled turn wears its mark at the head
+   as before. Observers rather than a call at every append: any block landing
+   or growing moves the target, and the adders are many. */
+const BLOCK_CENTRE = { routecard: 7.5, toolcard: 14.5, editcard: 14.5 };
+function followMark(body) {
+  const who = body.parentNode && body.parentNode.querySelector(".who");
+  if (!who || typeof MutationObserver !== "function") return { end() {} };
+  let pending = false, stopped = false, last = null;
+  const place = () => {
+    pending = false;
+    if (stopped) return;
+    let block = body.lastElementChild;
+    while (block && (block.classList.contains("thinking") || block.classList.contains("message-copy"))) block = block.previousElementSibling;
+    let y = 0;
+    if (block) {
+      const cls = Array.from(block.classList).find((c) => BLOCK_CENTRE[c]);
+      const centre = cls ? BLOCK_CENTRE[cls] : Math.min(block.offsetHeight, 26) / 2;
+      y = Math.max(0, Math.min(block.offsetTop + centre - 13, body.offsetHeight - 26));
+    }
+    y = Math.round(y);
+    if (y === last) return;
+    last = y;
+    who.style.setProperty("--mark-y", y + "px");
+  };
+  // One placement per burst of changes. A frame callback coalesces to the
+  // paint, but a hidden or occluded window gets no frames (CI under xvfb, a
+  // minimised app) and the turn still runs there, so a short timer stands
+  // behind it; whichever comes first places, the other finds nothing to do.
+  const queue = () => {
+    if (pending || stopped) return;
+    pending = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(place);
+    setTimeout(place, 24);
+  };
+  const mo = new MutationObserver(queue); mo.observe(body, { childList: true });
+  const ro = typeof ResizeObserver === "function" ? new ResizeObserver(queue) : null;
+  if (ro) ro.observe(body);
+  return {
+    end(landed) {
+      mo.disconnect(); if (ro) ro.disconnect();
+      // A landed turn is placed once more, now: the caller may just have swapped
+      // the body (a tool-only turn's cards give way to a hint), and the landing
+      // must play beside what the body ends with, never beside a node that is
+      // gone. Then home, after the landing has played where the eye is. Under
+      // reduced motion the ring holds still and the glide is off, so a held
+      // offset would only be a later jump: home at once. An errored or stopped
+      // turn has nothing to play: home at once, in this task, not on a zero
+      // timer that lets one paint wear the stale offset.
+      const hold = landed && !(typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+      if (hold) place();
+      stopped = true;
+      if (hold) setTimeout(() => who.style.removeProperty("--mark-y"), 720);
+      else who.style.removeProperty("--mark-y");
+    },
+  };
+}
+
 function addAssistant(workerId) {
   clearWelcome();
   const worker = workerOf(workerId || "crowe-logic");
@@ -705,6 +767,7 @@ async function send(text, opts = {}) {
   input.value = ""; syncComposerInput();
   const body = addAssistant(expertWorker(opts.role)); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
+  const follow = followMark(body);
   let runTok = 0, spentCost = 0; const acts = { cmds: 0, edits: 0, tools: 0 };
   // Chronological streaming: each burst of text gets its own block appended
   // after the tool cards that produced it, revealed as it arrives. Settled
@@ -890,6 +953,9 @@ async function send(text, opts = {}) {
       ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
       : '<p class="said hint">The model returned no text. Send it again.</p>';
   }
+  // After the fallback above, so the mark lands beside the hint when the cards
+  // have just gone; before the colophon, which the mark never follows.
+  follow.end(!body.querySelector(".err, .stopped"));
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
@@ -1018,12 +1084,13 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"});const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
+  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"}).catch(err=>({ok:false,error:err?.message||String(err)}));const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
      one or not - and left no ordinary shell to run anything else from. The
-     agent panel is the one place the CLI is entered for you. */
+     agent panel's console is a plain shell too; nothing is typed into any
+     terminal for you. Commands go in when the operator wants them. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
@@ -1035,7 +1102,7 @@ window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 async function mountWorkspaceAgent(p, body, seed={}) {
   body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>CLI AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
+  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
   const slot=body.querySelector(".agent-terminal-slot");
   const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
@@ -1044,9 +1111,11 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   /* The panel head wears the logotype, same as the header and the thinking
      indicator — one mark everywhere, and here the motion is doing work: turning
      rotors mean the runtime is alive and reasoning, still ones mean it is
-     waiting on you. The <small> beside it reads "CLI AGENT" rather than "CROWE
-     LOGIC CLI AGENT" because the drawing already says the name and setting it
-     twice, once drawn and once in caps, just looks like nobody checked.
+     waiting on you. The <small> beside it reads "AGENT" rather than "CROWE
+     LOGIC AGENT" because the drawing already says the name and setting it
+     twice, once drawn and once in caps, just looks like nobody checked. It no
+     longer says "CLI": the console below is a plain shell and the objective
+     runs on the gateway agent, so there is no CLI in this panel to name.
 
      This replaced a CroweMark whorl. Nothing is lost: the whorl's states were
      idle / reasoning / failed, and only "reasoning" ever animated, which is
@@ -1089,10 +1158,15 @@ async function mountWorkspaceAgent(p, body, seed={}) {
   const CHIP={booting:"BOOTING",running:"ACTIVE",verified:"DONE",waiting:"PAUSED",failed:"OFFLINE",idle:"READY"};
   const setState=(chipState,markState,label)=>{chip.dataset.state=chipState;chip.textContent=CHIP[chipState]||chipState.toUpperCase();mark.setState(markState);if(label)status.textContent=label};
   const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
-  /* This panel is the one place the Crowe Logic CLI is entered for you. When
-     the tier withholds the shell the dock still works - the objective runs on
-     the gateway - so this is a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"});if(r?.ok!==false){window.crowe.pty.input(p.id,"crowe-logic\r");setState("idle","idle","Crowe Logic CLI ready");addEvent("runtime","crowe-logic entered automatically")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
+  /* The console is a plain shell. It used to type "crowe-logic" and Enter into
+     the PTY the moment it opened, so every agent panel was a CLI session whether
+     the operator wanted one or not - and the name did not match the binary this
+     package ships (`crowe`), so on a clean machine the first line of every
+     console was "command not found". Nothing is typed for you now; the shell
+     waits at its prompt for whatever the operator wants to run. The objective
+     runs on the gateway agent, not in this shell, so when the tier withholds
+     the shell the dock still works - a degraded panel, not a dead one. */
+  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"}).catch(err=>({ok:false,error:err?.message||String(err)}));if(r?.ok!==false){setState("idle","idle","Ready");addEvent("runtime","console shell ready")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
   terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
   t.onData(data=>window.crowe.pty.input(p.id,data));
   const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;

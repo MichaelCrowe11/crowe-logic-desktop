@@ -110,17 +110,19 @@ const PRELUDE = `
      Both helpers hand back a restore. Leaving either behind is the same hazard
      as a leftover space profile: every later test would run against a recorder
      instead of the shim, or would mount this fixture as workflow zero. */
-  window.__stubAgentScript = (script) => {
+  window.__stubAgentScript = (script, gapMs = 0) => {
     const priorRun = window.crowe.agent.run, priorOn = window.crowe.agent.onEvent;
     let listeners = [];
     window.crowe.agent.onEvent = (fn) => {
       listeners.push(fn);
       return () => { listeners = listeners.filter((f) => f !== fn); };
     };
+    // gapMs spaces the events out, for a check that has to look at the turn
+    // while it is still running rather than at what it left behind.
     window.crowe.agent.run = async (messages, id) => {
       for (const ev of script(id || "main")) {
         listeners.slice().forEach((f) => f({ agentId: id || "main", ...ev }));
-        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, gapMs));
       }
       return {};
     };
@@ -1069,6 +1071,136 @@ const tests = [
     expect: { once: true, noFragment: true, recorded: true },
   },
   {
+    // The mark at the head of a turn is the one thing in motion, and a turn of
+    // a few tool cards scrolls that head off the top. While the turn runs the
+    // mark rides beside the newest block (its rail dot for a card, its first
+    // line for text); when the turn lands it plays the landing there and goes
+    // home. Measured against the blocks themselves, not against fixed numbers.
+    name: "the worker's mark rides beside the newest block while a turn runs, and goes home when it lands",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+        { type: "tool_call", id: "t2", name: "run_shell", args: { command: "ls" } },
+        { type: "tool_result", id: "t2", name: "run_shell", result: "ok" },
+        { type: "assistant", text: "Two reads, then done." },
+      ], 200);
+      const turn = send("follow me");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => parseFloat(who() && who().style.getPropertyValue("--mark-y")) || 0;
+      const seen = []; let atSecondCard = null, secondCardTop = null;
+      const deadline = Date.now() + 6000;
+      while (Date.now() < deadline) {
+        const cards = transcript.querySelectorAll(".msg.assistant .toolcard");
+        const v = y(); if (v && seen[seen.length - 1] !== v) seen.push(v);
+        if (cards.length === 2 && atSecondCard === null) {
+          // A timer, not a frame: a hidden window under xvfb paints no frames.
+          await new Promise((r) => setTimeout(r, 60));
+          atSecondCard = y(); secondCardTop = cards[1].offsetTop;
+        }
+        if (transcript.querySelector(".msg.assistant .said") && atSecondCard !== null) break;
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      // The answer is streaming and the target is text now: its first line,
+      // not a card's dot. Read while the turn still runs, before send() ends
+      // the follow, or a broken text branch would pass on the landing alone.
+      // The block is growing as it types, so the offset and the geometry are
+      // read together and re-read once or twice if a placement fell between.
+      let atText = null, textLine = null, streaming = false;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        const said = transcript.querySelector(".msg.assistant .said"); if (!said) continue;
+        streaming = said.classList.contains("streaming");
+        atText = y(); textLine = Math.max(0, said.offsetTop + Math.min(said.offsetHeight, 26) / 2 - 13);
+        if (Math.abs(atText - textLine) <= 1) break;
+      }
+      await turn;
+      const landedY = y();
+      await new Promise((r) => setTimeout(r, 1000));
+      // Printed to the runner's stderr under ELECTRON_ENABLE_LOGGING, so a red
+      // run on a headless runner says what the mark actually did.
+      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, atText, textLine, streaming, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
+      const result = {
+        moved: seen.length >= 2 && seen.every((v, i) => i === 0 || v > seen[i - 1]),
+        besideSecondCard: atSecondCard !== null && Math.abs(atSecondCard - (secondCardTop + 14.5 - 13)) <= 1,
+        besideTextWhileStreaming: streaming && textLine !== null && Math.abs(atText - textLine) <= 1,
+        stillOutWhenLanding: landedY > 0,
+        home: who().style.getPropertyValue("--mark-y") === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { moved: true, besideSecondCard: true, besideTextWhileStreaming: true, stillOutWhenLanding: true, home: true },
+  },
+  {
+    // A turn that ran tools and said nothing ends with its cards swapped for a
+    // one-line hint. The landing must play beside that hint, not at the offset
+    // of a card that is no longer there.
+    name: "a tool-only turn lands its mark beside the hint that replaces the cards",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+      ], 120);
+      const turn = send("read it and say nothing");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      let outAtCard = 0;
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      await turn;
+      const hint = transcript.querySelector(".msg.assistant .body .said.hint");
+      const landed = y(), landedY = parseFloat(landed);
+      const hintLine = hint ? Math.max(0, hint.offsetTop + Math.min(hint.offsetHeight, 26) / 2 - 13) : null;
+      await new Promise((r) => setTimeout(r, 1000));
+      console.log("mark-follow tool-only diag", JSON.stringify({ outAtCard, landed, hintLine }));
+      const result = {
+        outWhileTheCardShowed: outAtCard > 0,
+        cardsGone: !transcript.querySelector(".msg.assistant .toolcard"),
+        besideTheHint: hint !== null && landed !== "" && Math.abs(landedY - hintLine) <= 1,
+        home: y() === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { outWhileTheCardShowed: true, cardsGone: true, besideTheHint: true, home: true },
+  },
+  {
+    // Nothing to celebrate on an errored or stopped turn: the mark goes home in
+    // the same task as the turn's end, not a paint later.
+    name: "an errored or stopped turn sends the mark home before the next paint",
+    body: `await __reset();
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      const out = {};
+      for (const last of [{ type: "error", text: "the gateway refused the call" }, { type: "stopped" }]) {
+        const restore = __stubAgentScript(() => [
+          { type: "route", expert: "operator", model: "crowelm" },
+          { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+          { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+          last,
+        ], 120);
+        const turn = send("then fail");
+        let outAtCard = 0; const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+          if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+          await new Promise((r) => setTimeout(r, 16));
+        }
+        await turn;
+        out[last.type] = { outAtCard, homeAtOnce: y() === "", marked: !!transcript.querySelector(".msg.assistant ." + (last.type === "error" ? "err" : "stopped")) };
+        restore(); transcript.innerHTML = ""; messages.length = 0;
+      }
+      console.log("mark-follow fail diag", JSON.stringify(out));
+      return {
+        errorOut: out.error.outAtCard > 0, errorHomeAtOnce: out.error.homeAtOnce, errorMarked: out.error.marked,
+        stoppedOut: out.stopped.outAtCard > 0, stoppedHomeAtOnce: out.stopped.homeAtOnce, stoppedMarked: out.stopped.marked,
+      };`,
+    expect: { errorOut: true, errorHomeAtOnce: true, errorMarked: true, stoppedOut: true, stoppedHomeAtOnce: true, stoppedMarked: true },
+  },
+  {
     // The chat transcript's listener is registered per turn and used to take
     // every event on the channel. With a panel or a workflow node running
     // alongside a chat turn, that meant the transcript drew another agent's
@@ -1508,6 +1640,48 @@ const tests = [
       return { closedSlot: closed.slot, closedStreamGrows: closed.grow === "1",
         openSlot: open.slot, openStreamFixed: open.grow === "0" };`,
     expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
+  },
+  {
+    // The agent panel used to type "crowe-logic" and Enter into its console the
+    // moment the PTY came up, so every agent panel opened as a CLI session (and
+    // every plain terminal once did too). Terminals are shells now. This stands
+    // in a PTY that says yes and records every byte written to it, mounts each
+    // terminal-backed panel type, and asserts nothing was typed for the
+    // operator. The source check closes the other door: no call site may hand
+    // pty.input a string literal, so an auto-enter cannot return on a path this
+    // stub does not walk.
+    name: "no terminal types a command for the operator on start",
+    body: `const real = window.crowe.pty; const typed = []; const opened = [];
+      window.crowe.pty = { ...real, start: async (o) => ({ ok: true, id: o.id }), input: (id, data) => typed.push(String(data)), resize() {}, close: async () => ({ ok: true }) };
+      try {
+        for (const [type, seed] of [["agent", { title: "Probe agent" }], ["terminal", {}], ["system", {}]]) opened.push(await addPanel(type, seed));
+        await new Promise((r) => setTimeout(r, 150));
+        const src = await (await fetch("renderer.js")).text();
+        const literal = /pty\\.input\\([^,)]+,\\s*["'\`]/.test(src);
+        const head = document.querySelector('[data-id="' + opened[0].id + '"] .agent-operation-head small');
+        return { typed: typed.join("|"), literal, label: head ? head.textContent : null, mounted: opened.length };
+      } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
+    expect: { typed: "", literal: false, label: "AGENT", mounted: 3 },
+  },
+  {
+    // The IPC used to throw when node-pty could not spawn (a fresh checkout's
+    // spawn-helper has no execute bit), and the panel awaited it with no catch:
+    // an unhandled rejection and a state label stuck on "starting". A thrown
+    // start is the same refusal as a returned one, printed where the operator
+    // can read it, on both terminal-backed panel kinds.
+    name: "a pty that throws on start leaves the panel refused, with the reason on screen",
+    body: `const real = window.crowe.pty; const opened = [];
+      window.crowe.pty = { ...real, start: async () => { throw new Error("posix_spawnp failed."); }, input() {}, resize() {}, close: async () => ({ ok: true }) };
+      try {
+        const t = await addPanel("terminal"); const a = await addPanel("agent", { title: "Probe agent" }); opened.push(t, a);
+        await new Promise((r) => setTimeout(r, 200));
+        const el = (p) => document.querySelector('.workspace-panel[data-id="' + p.id + '"]');
+        const shown = (p) => el(p).querySelector(".xterm") ? terminalPanels.get(p.id).term.buffer.active : null;
+        const text = (p) => { const b = shown(p); if (!b) return ""; let s = ""; for (let i = 0; i < b.length; i++) s += (b.getLine(i)?.translateToString(true) || "") + "\\n"; return s; };
+        return { termState: el(t).querySelector(".terminal-state").textContent, termSaysWhy: /posix_spawnp/.test(text(t)),
+          agentChip: el(a).querySelector(".agent-operation-chip").textContent, agentEvent: /posix_spawnp/.test(el(a).querySelector(".agent-event-stream").textContent) };
+      } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
+    expect: { termState: "no shell", termSaysWhy: true, agentChip: "READY", agentEvent: true },
   },
   {
     name: "lane navigation exposes the current page and follows programmatic changes",

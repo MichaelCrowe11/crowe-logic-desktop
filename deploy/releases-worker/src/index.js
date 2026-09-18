@@ -373,6 +373,57 @@ async function ingest(request, env) {
   return Response.json({ key, size: written.size, etag: written.httpEtag });
 }
 
+// Install counting. Nothing counted downloads until now: a Workers Analytics
+// query for the account came back empty because no dataset was ever written.
+// One data point goes to the crowe_releases dataset per installer or update
+// feed request the bucket answered. HEADs and 404s never reach this, so probes
+// and dead links are not installs. The shape is what the funnel report queries:
+//   blobs    channel (stable or developers), platform (mac, win, linux),
+//            artifact kind (dmg, zip, exe, appimage, deb, yml), the requested
+//            path, the caller's country, and the response status as text.
+//            electron-updater fetches a differential update as many 206 range
+//            requests, so an install is a 200 and the 206s are traffic.
+//   doubles  a count of one, then the bytes served.
+//   index    the artifact kind, so the feed polls every launch makes cannot
+//            sample the installer rows away.
+// Blockmaps, SHA256SUMS and brand assets are served but not counted. A failed
+// write must never cost anyone a download, so the binding is optional and the
+// write is best effort.
+const KINDS = [
+  [/\.dmg$/i, "dmg", "mac"],
+  [/\.zip$/i, "zip", "mac"],
+  [/\.exe$/i, "exe", "win"],
+  [/\.AppImage$/i, "appimage", "linux"],
+  [/\.deb$/i, "deb", "linux"],
+  [/\.yml$/i, "yml", null],
+];
+
+function artifactOf(path) {
+  const hit = KINDS.find(([re]) => re.test(path));
+  if (!hit) return null;
+  const [, kind, platform] = hit;
+  const dir = /\/channel\/(mac|win|linux)\//.exec(path);
+  return { kind, platform: platform || (dir ? dir[1] : "") };
+}
+
+function channelOf(path) {
+  return path.startsWith(`/${CHANNELS.developers.prefix}/`) ? "developers" : "stable";
+}
+
+function recordServe(env, request, path, status, bytes) {
+  const artifact = artifactOf(path);
+  if (!artifact || !env.crowe_releases || typeof env.crowe_releases.writeDataPoint !== "function") return;
+  try {
+    env.crowe_releases.writeDataPoint({
+      indexes: [artifact.kind],
+      blobs: [channelOf(path), artifact.platform, artifact.kind, path, (request.cf && request.cf.country) || "", String(status)],
+      doubles: [1, Number.isFinite(bytes) ? bytes : 0],
+    });
+  } catch {
+    // Counting is not serving.
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -454,6 +505,7 @@ export default {
       }
 
       if (request.method === "HEAD") { object.body?.cancel?.(); return new Response(null, { status, headers }); }
+      recordServe(env, request, path, status, Number(headers.get("content-length")));
       return new Response(object.body, { status, headers });
     }
 
