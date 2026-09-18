@@ -125,6 +125,29 @@ check("the developer edition config narrows the app and changes nothing else", (
   return `${dev.appId}, ${dev.directories.output}/`;
 });
 
+check("the developer edition installs beside the full app on Linux", () => {
+  // The deb is named after deb.packageName, falling back to package.json's
+  // name (app-builder-lib/out/targets/FpmTarget.js, computeFpmMetaInfoOptions);
+  // the binary, the /usr/bin symlink, the .desktop file and the icons after
+  // linux.executableName, falling back to that name lowercased
+  // (app-builder-lib/out/linuxPackager.js). The full app sets neither, so both
+  // of its names are crowe-logic-desktop, and an edition that also set neither
+  // would replace it on `apt install`. Worked out here the way app-builder-lib
+  // does, so the check still holds if the full app names them one day.
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  const devName = (dev.extraMetadata && dev.extraMetadata.name) || pkg.name;
+  const fullPackage = (pkg.build.deb && pkg.build.deb.packageName) || pkg.name;
+  const fullExe = (pkg.build.linux && pkg.build.linux.executableName) || pkg.build.executableName || pkg.name.toLowerCase();
+  const devPackage = (dev.deb && dev.deb.packageName) || devName;
+  const devExe = (dev.linux && dev.linux.executableName) || dev.executableName || devName.toLowerCase();
+  assert(devPackage !== fullPackage, `both editions' deb package is named ${fullPackage}`);
+  assert(devExe !== fullExe, `both editions' Linux executable is named ${fullExe}`);
+  assert(/^[a-z0-9][a-z0-9+.-]+$/.test(devPackage), `${devPackage} is not a valid Debian package name`);
+  assert(JSON.stringify(dev.linux.target) === JSON.stringify(pkg.build.linux.target)
+    && JSON.stringify(dev.deb.depends) === JSON.stringify(pkg.build.deb.depends), "the edition's Linux config drifted from package.json");
+  return `${devPackage} beside ${fullPackage}, ${devExe} beside ${fullExe}`;
+});
+
 check("the DMG stapler finds each edition's artifacts and feed from its config", () => {
   // staple-dmg.js patches the update feed by name after stapling. The developer
   // edition writes developers-mac.yml into release-developers/, so a stapler

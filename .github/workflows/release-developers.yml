@@ -1,0 +1,87 @@
+name: Release developers
+
+# Builds Crowe Logic for Developers (electron-builder.developer.js) for Windows
+# and Linux and uploads what electron-builder wrote to release-developers/ as
+# run artifacts. Nothing here publishes: no GitHub release, no R2 write, no
+# feed update. The publisher downloads the artifacts and runs
+# `npm run publish:rclone:developers` (or publish:r2:developers) from a release
+# machine, which preflights, uploads under desktop/developers/ and verifies.
+#
+# Windows is signed through Azure Trusted Signing with the same secrets
+# release.yml uses for the full app (PR 81); the signature is proven on the
+# runner before the artifact is uploaded. macOS is not built here:
+# the developer DMGs are notarized and stapled on a release machine with
+# `npm run dist:developers:mac`, exactly as the full app's are.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build. Empty builds the branch this run was dispatched from."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  build:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            command: npm run dist:developers -- --win
+            artifact: developers-windows
+            paths: |
+              release-developers/*.exe
+              release-developers/*.blockmap
+              release-developers/developers.yml
+          - os: ubuntu-latest
+            command: npm run dist:developers -- --linux
+            artifact: developers-linux
+            paths: |
+              release-developers/*.AppImage
+              release-developers/*.deb
+              release-developers/*.blockmap
+              release-developers/developers-linux.yml
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Windows Authenticode through Azure Trusted Signing, the same way
+      # release.yml signs the full app: electron-builder reads win.azureSignOptions
+      # from package.json (inherited by electron-builder.developer.js) and
+      # authenticates with this EnvironmentCredential. Without it signtool waits
+      # on a digest submission that never answers and the job dies at its
+      # timeout, which is what the first 0.24.9 developers run did.
+      - env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: ${{ matrix.command }}
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release-developers -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "no installer built" }
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host ("status: " + $sig.Status + " | signer: " + $sig.SignerCertificate.Subject + " | timestamp: " + $sig.TimeStamperCertificate.Subject)
+          if ($sig.Status -ne "Valid") { throw ("installer signature is " + $sig.Status) }
+      - run: ls -l release-developers
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
