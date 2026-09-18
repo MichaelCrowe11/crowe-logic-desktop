@@ -28,9 +28,9 @@ const src = fs.readFileSync(
 // export turned into a local binding and handing back what the tests need.
 const load = new Function(`
   ${src.replace('export default', 'const handler =')}
-  return { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey };
+  return { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey, artifactOf };
 `);
-const { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey } = load();
+const { versionedKeysFor, catalog, renderPage, handler, feedKey, validIngestKey, artifactOf } = load();
 
 let failed = 0;
 let ran = 0;
@@ -422,6 +422,146 @@ path: CroweLogic-0.14.0-x64.dmg
     ]) {
       assert.ok(!validIngestKey(bad), `accepted ${bad}`);
     }
+  });
+
+  // Install counting. The worker writes one data point per installer or feed
+  // it serves to the crowe_releases Analytics Engine dataset, in the shape
+  // the funnel report queries. Nothing about the response may change for it,
+  // and a request that is not an install (HEAD, 404, a blockmap) writes nothing.
+  const OBJECTS = {
+    'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg': 'installer bytes',
+    'desktop/0.14.0/CroweLogic-0.14.0-arm64.zip.blockmap': 'blockmap',
+    'desktop/0.14.0/SHA256SUMS': 'sums',
+    'desktop/channel/mac/latest-mac.yml': MANIFESTS['desktop/channel/mac/latest-mac.yml'],
+    'desktop/channel/win/latest.yml': MANIFESTS['desktop/channel/win/latest.yml'],
+    'desktop/developers/channel/linux/developers-linux.yml': 'version: 0.14.0\nfiles: []\n',
+    [`desktop/developers/0.14.0/${DEV_DMG}`]: 'developer bytes',
+    'brand/mark.svg': '<svg/>',
+  };
+  function countingEnv() {
+    const points = [];
+    return {
+      points,
+      RELEASES: {
+        async get(key, options) {
+          const full = OBJECTS[key];
+          if (full === undefined) return null;
+          const object = { size: full.length, httpEtag: '"x"', writeHttpMetadata() {} };
+          if (!options || !options.range) return { ...object, body: full };
+          return { ...object, body: full.slice(4, 9), range: { offset: 4, length: 5 } };
+        },
+      },
+      crowe_releases: { writeDataPoint(point) { points.push(point); } },
+    };
+  }
+  // The handler reads url, method, headers and cf off the request, so a plain
+  // object stands in for one where a country has to be attached.
+  const fromCountry = (url, country, init = {}) => ({
+    url, method: init.method || 'GET', headers: new Headers(init.headers || {}), cf: { country },
+  });
+
+  await check('artifact kinds and platforms are read off the path', () => {
+    assert.deepStrictEqual(artifactOf('/desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg'), { kind: 'dmg', platform: 'mac' });
+    assert.deepStrictEqual(artifactOf('/desktop/channel/mac/CroweLogic-0.14.0-arm64.zip'), { kind: 'zip', platform: 'mac' });
+    assert.deepStrictEqual(artifactOf('/desktop/0.14.0/Crowe Logic Setup 0.14.0.exe'), { kind: 'exe', platform: 'win' });
+    assert.deepStrictEqual(artifactOf('/desktop/0.14.0/Crowe Logic-0.14.0.AppImage'), { kind: 'appimage', platform: 'linux' });
+    assert.deepStrictEqual(artifactOf('/desktop/0.14.0/crowe-logic-desktop_0.14.0_amd64.deb'), { kind: 'deb', platform: 'linux' });
+    assert.deepStrictEqual(artifactOf('/desktop/channel/mac/latest-mac.yml'), { kind: 'yml', platform: 'mac' });
+    assert.deepStrictEqual(artifactOf('/desktop/channel/win/latest.yml'), { kind: 'yml', platform: 'win' });
+    assert.deepStrictEqual(artifactOf('/desktop/developers/channel/linux/developers-linux.yml'), { kind: 'yml', platform: 'linux' });
+    for (const notCounted of [
+      '/desktop/0.14.0/CroweLogic-0.14.0-arm64.zip.blockmap',
+      '/desktop/0.14.0/SHA256SUMS',
+      '/brand/mark.svg',
+      '/desktop/0.14.0/notes.md',
+    ]) {
+      assert.strictEqual(artifactOf(notCounted), null, `${notCounted} counted`);
+    }
+  });
+
+  await check('a served installer writes one data point in the agreed shape', async () => {
+    const env = countingEnv();
+    const path = '/desktop/channel/mac/CroweLogic-0.14.0-arm64.dmg';
+    const res = await handler.fetch(fromCountry(`https://x${path}`, 'US'), env);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(env.points, [{
+      indexes: ['dmg'],
+      blobs: ['stable', 'mac', 'dmg', path, 'US', '200'],
+      doubles: [1, 'installer bytes'.length],
+    }]);
+  });
+
+  await check('feeds are counted per platform and edition, and the response does not change', async () => {
+    const env = countingEnv();
+    const before = await handler.fetch(new Request('https://x/desktop/channel/mac/latest-mac.yml'), { RELEASES: env.RELEASES });
+    const after = await handler.fetch(new Request('https://x/desktop/channel/mac/latest-mac.yml'), env);
+    assert.strictEqual(after.status, 200);
+    assert.strictEqual(await after.text(), await before.text());
+    assert.deepStrictEqual([...after.headers].sort(), [...before.headers].sort(), 'the feed response changed');
+    await handler.fetch(new Request('https://x/desktop/channel/win/latest.yml'), env);
+    await handler.fetch(new Request('https://x/desktop/developers/channel/linux/developers-linux.yml'), env);
+    assert.deepStrictEqual(env.points.map((p) => p.blobs.slice(0, 3)), [
+      ['stable', 'mac', 'yml'],
+      ['stable', 'win', 'yml'],
+      ['developers', 'linux', 'yml'],
+    ]);
+    // No country on the request is an empty blob, not a crash and not "undefined".
+    assert.strictEqual(env.points[0].blobs[4], '');
+    assert.deepStrictEqual(env.points[0].doubles, [1, OBJECTS['desktop/channel/mac/latest-mac.yml'].length]);
+  });
+
+  await check('a developer installer is counted on the developers channel', async () => {
+    const env = countingEnv();
+    await handler.fetch(new Request(`https://x/desktop/developers/channel/mac/${DEV_DMG}`), env);
+    assert.strictEqual(env.points.length, 1);
+    assert.deepStrictEqual(env.points[0].blobs.slice(0, 3), ['developers', 'mac', 'dmg']);
+  });
+
+  await check('a range request is recorded as a 206 with the bytes it served', async () => {
+    const env = countingEnv();
+    const res = await handler.fetch(
+      new Request('https://x/desktop/channel/mac/CroweLogic-0.14.0-arm64.dmg', { headers: { range: 'bytes=4-8' } }),
+      env
+    );
+    assert.strictEqual(res.status, 206);
+    assert.strictEqual(env.points.length, 1);
+    assert.strictEqual(env.points[0].blobs[5], '206');
+    assert.deepStrictEqual(env.points[0].doubles, [1, 5]);
+  });
+
+  await check('HEADs, 404s, blockmaps, checksums and brand assets write nothing', async () => {
+    const env = countingEnv();
+    const head = await handler.fetch(new Request('https://x/desktop/channel/mac/CroweLogic-0.14.0-arm64.dmg', { method: 'HEAD' }), env);
+    assert.strictEqual(head.status, 200);
+    const missing = await handler.fetch(new Request('https://x/desktop/channel/mac/CroweLogic-9.9.9-arm64.dmg'), env);
+    assert.strictEqual(missing.status, 404);
+    const missingFeed = await handler.fetch(new Request('https://x/desktop/channel/linux/latest-linux.yml'), env);
+    assert.strictEqual(missingFeed.status, 404);
+    for (const served of [
+      'https://x/desktop/0.14.0/CroweLogic-0.14.0-arm64.zip.blockmap',
+      'https://x/desktop/0.14.0/SHA256SUMS',
+      'https://x/brand/mark.svg',
+    ]) {
+      assert.strictEqual((await handler.fetch(new Request(served), env)).status, 200);
+    }
+    assert.deepStrictEqual(env.points, []);
+  });
+
+  await check('a missing or failing binding never costs a download', async () => {
+    const plain = countingEnv();
+    delete plain.crowe_releases;
+    assert.strictEqual((await handler.fetch(new Request('https://x/desktop/channel/mac/latest-mac.yml'), plain)).status, 200);
+    const broken = countingEnv();
+    broken.crowe_releases.writeDataPoint = () => { throw new Error('analytics down'); };
+    const res = await handler.fetch(new Request('https://x/desktop/channel/mac/CroweLogic-0.14.0-arm64.dmg'), broken);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(await res.text(), 'installer bytes');
+  });
+
+  await check('wrangler.jsonc binds the crowe_releases dataset under that name', () => {
+    const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'deploy', 'releases-worker', 'wrangler.jsonc'), 'utf8'));
+    assert.deepStrictEqual(config.analytics_engine_datasets, [{ binding: 'crowe_releases', dataset: 'crowe_releases' }]);
+    assert.ok(src.includes('env.crowe_releases'), 'the worker does not write through the crowe_releases binding');
   });
 
   console.log(`\n${ran - failed}/${ran} passed`);
