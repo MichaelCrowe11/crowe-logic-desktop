@@ -949,7 +949,7 @@ async function send(text, opts = {}) {
     // vision round as "Done. See the workspace." until 0.25.3; see
     // mobile-bridge.js for the retry that now precedes this.
     const phone = document.body.classList.contains("mobile");
-    body.innerHTML = acts.length
+    body.innerHTML = (acts.cmds + acts.edits + acts.tools)
       ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
       : '<p class="said hint">The model returned no text. Send it again.</p>';
   }
