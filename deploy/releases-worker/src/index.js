@@ -207,7 +207,7 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
     <p class="sub">${escapeHtml(edition.sub)}</p>
     <span class="ver">v${rel.version}</span>
     <div class="grid">
-      ${card(channel, "Windows", "64-bit installer", "Run the installer and follow the setup prompts. Windows may show a SmartScreen warning while code-signing validation is completed.", rel, rel.windows)}
+      ${card(channel, "Windows", "64-bit installer", "Run the installer and follow the setup prompts. The installer is signed with Azure Trusted Signing and SmartScreen names Michael Crowe as the publisher; if it still asks, choose More info, then Run anyway, and check the SHA-256 against SHA256SUMS.", rel, rel.windows)}
       ${card(channel, "macOS", "Apple Silicon dmg", `Open the dmg and drag ${edition.name} to Applications. The dmg and the app inside it are Developer ID signed, Apple notarized, and stapled.`, rel, rel.macos, rel.macosIntel, "Download for Intel")}
       ${card(channel, "Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
     </div>
