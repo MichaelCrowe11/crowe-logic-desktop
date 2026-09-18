@@ -60,7 +60,8 @@ function loadPreloadSurface() {
 // mobile-bridge.js runs in a webview. Give it the smallest globals it touches
 // at load: storage it can write to, a fetch that fails the way an offline
 // device does, and no Capacitor, which is the browser-preview path.
-function loadMobileSurface(fetchImpl, capacitor) {
+function loadMobileSurface(fetchImpl, capacitor, opts = {}) {
+  const autoAiConsent = opts.autoAiConsent !== false;
   const store = new Map();
   const win = {
     Capacitor: capacitor || null,
@@ -85,6 +86,17 @@ function loadMobileSurface(fetchImpl, capacitor) {
   const src = read("mobile/src/mobile-bridge.js");
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
   assert(win.crowe, "mobile-bridge.js did not install window.crowe");
+  const setConfig = win.crowe.setConfig;
+  win.crowe.setConfig = async (next) => {
+    const out = await setConfig(next);
+    if (autoAiConsent && next && next.token && win.croweAIPrivacy && win.croweAIPrivacy.reviewTurn && win.croweAIPrivacy.allow) {
+      const review = await win.croweAIPrivacy.reviewTurn("test", {}).catch(() => null);
+      if (review && review.ok && !review.blocked && review.status !== "signin" && !review.allowed) {
+        await win.croweAIPrivacy.allow(review).catch(() => null);
+      }
+    }
+    return out;
+  };
   // The picker grant lives on window.crowePhone, beside window.crowe rather
   // than on it — the surface parity walk below must see exactly the desktop's
   // shape. Exposed for the phone-file checks without widening the surface.
@@ -104,6 +116,8 @@ function fakeGateway(turns) {
     return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
   };
 }
+const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Every callable path in an exposed surface, one level of grouping deep —
 // which is as deep as the bridge goes.
@@ -356,6 +370,125 @@ function methodPaths(surface) {
     return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
   });
 
+  await check("supported AI sends are blocked before consent and no payload leaves the phone", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asked.push(JSON.parse(init.body || "{}"));
+      return new Response(JSON.stringify({ content: "should not happen" }), { status: 200, headers: { "content-type": "application/json" } });
+    }, null, { autoAiConsent: false });
+    await bridge.setConfig({ model: "crowelm", token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }) });
+    const review = await loadMobileSurface.lastWindow.croweAIPrivacy.reviewTurn("hello");
+    assert(review && review.allowed === false && review.model === "crowelm", `review returned ${JSON.stringify(review)}`);
+    const chat = await bridge.chat([{ role: "user", content: "hello" }]);
+    assert(/Allow AI data sharing/.test(chat.error || ""), `chat answered ${JSON.stringify(chat)}`);
+    const run = await bridge.agent.run([{ role: "user", content: "hello" }]);
+    assert(/Allow AI data sharing/.test(run.error || ""), `agent answered ${JSON.stringify(run)}`);
+    assert(asked.length === 0, `the gateway still saw ${asked.length} request(s): ${JSON.stringify(asked)}`);
+    return "chat and agent both refused before fetch/native";
+  });
+
+  await check("consent is bound to the current Crowe ID and revoke stops an in-flight run", async () => {
+    const asked = [];
+    let aborted = 0;
+    const bridge = loadMobileSurface((url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return Promise.resolve(new Response("{}", { status: 200 }));
+      asked.push(JSON.parse(init.body || "{}"));
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => {
+          aborted += 1;
+          const e = new Error("aborted");
+          e.name = "AbortError";
+          reject(e);
+        }, { once: true });
+      });
+    }, null, { autoAiConsent: false });
+    await bridge.setConfig({ model: "crowelm", token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }) });
+    const win = loadMobileSurface.lastWindow;
+    const review = await win.croweAIPrivacy.reviewTurn("hello");
+    const granted = await win.croweAIPrivacy.allow(review);
+    assert(granted && granted.ok, `consent did not save: ${JSON.stringify(granted)}`);
+    const pending = bridge.agent.run([{ role: "user", content: "hello" }]);
+    await wait(20);
+    const revoked = await win.croweAIPrivacy.revoke("test");
+    const out = await pending;
+    assert(revoked && revoked.stopped === 1, `revoke reported ${JSON.stringify(revoked)}`);
+    assert(aborted === 1, `the in-flight request was not aborted (${aborted})`);
+    assert(out && out.done === false && !out.error, `the run returned ${JSON.stringify(out)} instead of stopping`);
+    const after = await bridge.chat([{ role: "user", content: "again" }]);
+    assert(/Allow AI data sharing/.test(after.error || ""), `post-revoke chat answered ${JSON.stringify(after)}`);
+    await bridge.setConfig({ token: jwt({ email: "other@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }) });
+    const changed = await bridge.chat([{ role: "user", content: "hello" }]);
+    assert(/Allow AI data sharing/.test(changed.error || ""), `consent carried across accounts: ${JSON.stringify(changed)}`);
+    assert(asked.length === 1, `expected exactly one outbound request before revoke, got ${asked.length}`);
+    return "saved once, revoked aborts, account change invalidates";
+  });
+
+  await check("an unknown upstream model is blocked before consent or fetch", async () => {
+    const asked = [];
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+      asked.push(JSON.parse(init.body || "{}").model);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }, null, { autoAiConsent: false });
+    await bridge.setConfig({ model: "crowelm", token: jwt({ email: "grower@example.com", crowd_tier: "pro", crowe_tier: "pro", exp: Math.floor(Date.now() / 1000) + 3600 }) });
+    const win = loadMobileSurface.lastWindow;
+    const review = await win.croweAIPrivacy.review();
+    await win.croweAIPrivacy.allow(review);
+    const out = await bridge.agent.run([{ role: "user", content: "Reason through two architecture trade-offs for me." }]);
+    assert(/GPT-5\.6-Sol/.test(out.error || ""), `the model block was not surfaced: ${JSON.stringify(out)}`);
+    assert(asked.length === 0, `the gateway was still called for ${JSON.stringify(asked)}`);
+    return "reasoning route blocked locally until recipient metadata exists";
+  });
+
+  await check("remote reply voices are blocked before consent and call the gateway only after allow", async () => {
+    const statuses = [], calls = [];
+    const btn = { classList: { add() {}, remove() {} }, setAttribute() {}, title: "", onclick: null };
+    const said = { innerText: "Read this aloud." };
+    const local = new Map([["crowe-reply-voice", "michael"]]);
+    const win = {
+      crowe: {
+        getConfig: async () => ({ baseUrl: "https://api.crowelogic.com" }),
+        auth: { status: async () => ({ user: { email: "grower@example.com" } }) },
+        diag: { note: () => {} },
+      },
+      crowePhone: { accessToken: () => "token" },
+      croweAIPrivacy: {
+        reviewSpeech: async () => ({ allowed: false, blocked: false, status: "missing", feature: "remote reply voice", recipients: [{ name: "Crowe Logic, Inc.", service: "Crowe Logic gateway" }], data: ["assistant text"], purposes: ["read a reply aloud"], localOnly: ["The phone's own voice stays local."], summary: "not allowed", revocationNote: "cannot recall sent data" }),
+        allow: async () => ({ ok: true }),
+      },
+      presentAiModal: async () => "close",
+      URL: { createObjectURL: () => "blob:test", revokeObjectURL: () => {} },
+      Audio: function Audio() { this.play = () => Promise.resolve(); this.pause = () => {}; },
+      speechSynthesis: { speaking: false, speak() {}, cancel() {} },
+    };
+    const sandbox = {
+      window: win,
+      document: { getElementById: (id) => (id === "voice-output" ? btn : null), querySelectorAll: () => [said] },
+      fetch: async (url) => {
+        calls.push(String(url));
+        if (String(url).includes("/voices")) return new Response(JSON.stringify({ voices: [{ voice: "michael", allowed: true, configured: true }], max_chars: 1500 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response("audio", { status: 200, headers: { "x-crowe-voice": "michael", "x-crowe-chars": "16" } });
+      },
+      localStorage: { getItem: (k) => local.get(k) || null, setItem: (k, v) => local.set(k, String(v)) },
+      setComposerStatus: (text, state) => statuses.push({ text, state }),
+      Audio: win.Audio,
+      URL: win.URL,
+      speechSynthesis: win.speechSynthesis,
+    };
+    new Function(...Object.keys(sandbox), read("mobile/src/speak.js"))(...Object.values(sandbox));
+    btn.onclick();
+    await wait(20);
+    assert(calls.length === 0, `speech fetched before consent: ${JSON.stringify(calls)}`);
+    assert(statuses.some((x) => /AI sharing not allowed/.test(x.text)), `decline status missing: ${JSON.stringify(statuses)}`);
+    statuses.length = 0;
+    win.presentAiModal = async () => "allow";
+    btn.onclick();
+    await wait(20);
+    assert(calls.some((x) => x.includes("/api/gateway/speech/voices")) && calls.some((x) => x.includes("/api/gateway/speech")), `speech calls missing after allow: ${JSON.stringify(calls)}`);
+    return "remote speech waits for allow; phone voice path stays local";
+  });
+
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.
@@ -407,7 +540,7 @@ function methodPaths(surface) {
 
   await check("a read-only tier is not handed a tool that writes", async () => {
     const bridge = loadMobileSurface(fakeGateway([[{ delta: { content: "ok" } }]]));
-    await bridge.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    await bridge.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }), autonomy: "readonly" });
     await bridge.agent.run([{ role: "user", content: "log something" }]);
     assert(!(await bridge.grow.list("log")).length, "a read-only turn still wrote a record");
 
@@ -418,7 +551,7 @@ function methodPaths(surface) {
       [{ delta: { tool_calls: [{ index: 0, id: "c", function: { name: "log_grow", arguments: '{"type":"log","record":{"date":"2026-07-30","subject":"x","entry":"y"}}' } }] } }],
       [{ delta: { content: "understood" } }],
     ]));
-    await bridge2.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    await bridge2.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }), autonomy: "readonly" });
     const events = [];
     const off2 = await bridge2.agent.onEvent((ev) => events.push(ev));
     await bridge2.agent.run([{ role: "user", content: "log something" }]);
@@ -440,7 +573,7 @@ function methodPaths(surface) {
     const win = loadMobileSurface.lastWindow;
     assert(win.crowePhone, "mobile-bridge.js did not install window.crowePhone");
     win.crowePhone.add("notes.md", "water block 12 tomorrow");
-    await bridge.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    await bridge.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }), autonomy: "readonly" });
     const seen = [];
     const off = await bridge.agent.onEvent((ev) => seen.push(ev));
     const result = await bridge.agent.run([{ role: "user", content: "read my note" }]);
@@ -634,7 +767,7 @@ function methodPaths(surface) {
         'data: {"choices":[{"delta":{"content":"Whole "}}]}\ndata: {"choices":[{"delta":{"content":"answer."}}]}\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\ndata: [DONE]\n' }; } },
     } };
     const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
-    await bridge.setConfig({ token: "a.b.c" });
+    await bridge.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }) });
     const result = await bridge.agent.run([{ role: "user", content: "hi" }]);
     const chat = seen.find((o) => String(o.url).includes("/api/gateway/chat"));
     assert(chat, "the fallback never reached the gateway");
@@ -837,7 +970,7 @@ function methodPaths(surface) {
     ]));
     const win = loadMobileSurface.lastWindow;
     win.crowePhone.add("notes.md", "original");
-    await bridge.setConfig({ token: "a.b.c", autonomy: "edit" });
+    await bridge.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }), autonomy: "edit" });
     const off = await bridge.agent.onEvent(() => {});
     await bridge.agent.run([{ role: "user", content: "rewrite my note to say rewritten" }]);
     off();
@@ -849,7 +982,7 @@ function methodPaths(surface) {
     ]));
     const win2 = loadMobileSurface.lastWindow;
     win2.crowePhone.add("notes.md", "original");
-    await bridge2.setConfig({ token: "a.b.c", autonomy: "readonly" });
+    await bridge2.setConfig({ token: jwt({ email: "grower@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }), autonomy: "readonly" });
     const seen2 = [];
     const off2 = await bridge2.agent.onEvent((ev) => seen2.push(ev));
     await bridge2.agent.run([{ role: "user", content: "rewrite it" }]);

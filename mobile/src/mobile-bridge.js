@@ -492,6 +492,173 @@
     return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "",
              tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
   }
+  const AI_PRIVACY_KEY = "ai-privacy-consent";
+  const AI_PRIVACY_VERSION = "2026-09-18.mobile.ai-sharing.v1";
+  const AI_GATEWAY_HOST = /(^|\.)crowelogic\.com$/i;
+  const AI_RECIPIENTS = Object.freeze([
+    { name: "Crowe Logic, Inc.", service: "Crowe Logic gateway", detail: "Receives requests at the configured Crowe Logic gateway and routes the enabled CroweLM features." },
+    { name: "Microsoft Azure", service: "Crowe Logic-managed Azure infrastructure", detail: "Repository docs describe CroweLM as running on Crowe Logic-managed Azure deployments." },
+    { name: "Cloudflare", service: "Crowe Logic-managed Cloudflare infrastructure", detail: "Repository docs describe CroweLM routing over Crowe Logic-managed Cloudflare deployments." },
+  ]);
+  const AI_PURPOSES = Object.freeze([
+    "generate chat and agent replies you ask for",
+    "analyze a photo you choose or take for CroweLM Vision",
+    "read an assistant reply aloud when you choose a remote reply voice",
+  ]);
+  const AI_LOCAL_ONLY = Object.freeze([
+    "Dictation uses Apple's on-device speech recognizer in the iOS app target.",
+    "The phone's own reply voice stays on this device.",
+    "Grow-log rows, reminders, and unsent drafts stay local until you send them.",
+  ]);
+  const AI_BASE_DATA = Object.freeze([
+    "your message text and the conversation context needed to answer it",
+    "the selected model and feature metadata",
+    "grow-log context, tool definitions, and tool results that the turn includes",
+    "text files or machine output that the agent reads and feeds back into the same turn",
+  ]);
+  const aiWatchers = new Set();
+  let aiConsentRevision = 0;
+  function aiGateway(baseUrl) {
+    try {
+      const url = new URL(String(baseUrl || ""));
+      return url.protocol === "https:" && AI_GATEWAY_HOST.test(url.hostname) ? url : null;
+    } catch { return null; }
+  }
+  async function aiRecord() {
+    const got = await store.get(AI_PRIVACY_KEY);
+    return got && typeof got === "object" ? got : null;
+  }
+  function aiKey(baseUrl, account) {
+    return [AI_PRIVACY_VERSION, "crowelogic-managed-ai", String(baseUrl || ""), String(account || "").trim().toLowerCase()].join("|");
+  }
+  function aiStatusText(code, detail) {
+    if (code === "allowed") return `Allowed for ${detail.account || "this Crowe ID"} on ${detail.host}.`;
+    if (code === "signin") return "Sign in with Crowe ID before allowing AI data sharing.";
+    if (code === "gateway") return "AI sharing is blocked until the gateway points to a verified Crowe Logic HTTPS host.";
+    if (code === "model") return detail.message || "This route is blocked until its recipient list is verified.";
+    if (code === "missing") return "Not allowed yet. The app will ask before the first supported AI send.";
+    return "Permission needs to be reviewed again before another AI send.";
+  }
+  async function aiNotify(kind) {
+    const detail = await aiStatus();
+    detail.kind = kind || "changed";
+    for (const fn of aiWatchers) { try { fn(detail); } catch {} }
+    try { window.dispatchEvent(new CustomEvent("crowe:ai-privacy", { detail })); } catch {}
+  }
+  async function aiStatus() {
+    await ready;
+    const baseUrl = base();
+    const gateway = aiGateway(baseUrl);
+    const user = currentUser();
+    const account = String(user?.email || "").trim().toLowerCase();
+    const rec = await aiRecord();
+    const key = gateway && account ? aiKey(baseUrl, account) : "";
+    const allowed = Boolean(rec && gateway && account && rec.key === key && rec.version === AI_PRIVACY_VERSION);
+    const status = !gateway ? "gateway"
+      : !account ? "signin"
+        : allowed ? "allowed"
+          : !rec ? "missing"
+            : "stale";
+    return {
+      status,
+      allowed,
+      account,
+      baseUrl,
+      host: gateway ? gateway.host : "",
+      version: AI_PRIVACY_VERSION,
+      grantedAt: allowed ? Number(rec.grantedAt || 0) : 0,
+      recipients: AI_RECIPIENTS.map((x) => ({ ...x })),
+      purposes: AI_PURPOSES.slice(),
+      localNotes: AI_LOCAL_ONLY.slice(),
+      summary: aiStatusText(status, { account, host: gateway ? gateway.host : "" }),
+    };
+  }
+  async function aiDisclosure(extra = {}) {
+    const status = await aiStatus();
+    const data = AI_BASE_DATA.slice();
+    if (extra.photos) data.push("photos you take, choose, or share into the app, plus any caption or lot note that goes with them");
+    if (extra.voice) data.push("up to 1,500 characters of the assistant reply and the remote reply voice you picked");
+    const seen = new Set();
+    return {
+      ...status,
+      ok: true,
+      key: status.account && status.host ? aiKey(status.baseUrl, status.account) : "",
+      scopeId: "crowelogic-managed-ai",
+      endpoints: [`${status.baseUrl.replace(/\/$/, "")}/api/gateway/chat`, `${status.baseUrl.replace(/\/$/, "")}/api/gateway/speech`],
+      feature: extra.feature || "AI features",
+      model: extra.model || "",
+      data: data.filter((item) => (seen.has(item) ? false : (seen.add(item), true))),
+      localOnly: false,
+      localNotes: status.localNotes || AI_LOCAL_ONLY.slice(),
+      revocationNote: "Turning this off stops future sends where the app can stop them. It cannot recall data already sent.",
+      blocked: false,
+      error: "",
+    };
+  }
+  async function aiReviewTurn(text, opts = {}) {
+    const route = routeTurn([{ role: "user", content: String(text || "") }], String(opts.role || ""));
+    const model = opts.vision || phoneImages.size ? VISION_MODEL : (route.model || config.model || DEFAULTS.model);
+    const review = await aiDisclosure({ feature: opts.vision || phoneImages.size ? "chat, agent, and vision" : "chat and agent", model, photos: Boolean(opts.vision || phoneImages.size) });
+    if (review.status === "gateway") return { ...review, blocked: true, ok: false, error: aiStatusText("gateway", {}) };
+    if (review.status === "signin") return review;
+    if (!/^crowelm(?:-|$)/i.test(model || "")) {
+      return {
+        ...review,
+        ok: false,
+        blocked: true,
+        model,
+        error: `This turn would use ${model}, but this build does not have repository-verified recipient details for that route. Choose a CroweLM model or wait for a disclosure update.`,
+        summary: aiStatusText("model", { message: `Blocked: ${model} needs verified recipient details.` }),
+      };
+    }
+    return review;
+  }
+  async function aiReviewSpeech(voice, text) {
+    const picked = String(voice || "").trim().toLowerCase();
+    if (picked === "phone") return { ok: true, localOnly: true, localNotes: AI_LOCAL_ONLY.slice(), blocked: false, allowed: true, feature: "phone reply voice" };
+    const review = await aiDisclosure({ feature: "remote reply voice", voice: Boolean(String(text || "").trim()) });
+    if (review.status === "gateway") return { ...review, blocked: true, ok: false, error: aiStatusText("gateway", {}) };
+    return review;
+  }
+  async function aiAllow(review) {
+    await ready;
+    if (!review || review.localOnly === true) return { ok: false, error: "Nothing to allow for this local-only feature." };
+    if (!review.host || !review.account || !review.key) return { ok: false, error: "Sign in with Crowe ID before allowing AI data sharing." };
+    const record = {
+      key: review.key,
+      version: AI_PRIVACY_VERSION,
+      baseUrl: review.baseUrl,
+      account: review.account,
+      grantedAt: Date.now(),
+      scopeId: review.scopeId || "crowelogic-managed-ai",
+      recipients: AI_RECIPIENTS.map((x) => x.name),
+    };
+    const ok = await store.set(AI_PRIVACY_KEY, record);
+    if (!ok) return { ok: false, error: "The phone could not save your AI sharing choice. Check device storage and try again." };
+    aiConsentRevision += 1;
+    await aiNotify("allowed");
+    return { ok: true, grantedAt: record.grantedAt };
+  }
+  async function aiRevoke(reason) {
+    await ready;
+    await store.remove(AI_PRIVACY_KEY);
+    aiConsentRevision += 1;
+    let stopped = 0;
+    for (const run of runs.values()) {
+      run.aborted = true;
+      try { run.controller?.abort(); } catch {}
+      stopped += 1;
+    }
+    await diag("privacy:revoked", { reason: String(reason || "user").slice(0, 40), stopped });
+    await aiNotify("revoked");
+    return { ok: true, stopped };
+  }
+  async function aiAllowed(review) {
+    if (!review || review.localOnly === true) return true;
+    if (!review.ok || review.blocked || !review.account || !review.key) return false;
+    const rec = await aiRecord();
+    return Boolean(rec && rec.version === AI_PRIVACY_VERSION && rec.key === review.key);
+  }
   // Native first on a device, and deliberately WITHOUT the try-fetch-then-fall-
   // back-to-native pattern the gateway calls use. Everything redeemed here is
   // single use: an authorization code, or a refresh token Keycloak rotates.
@@ -694,6 +861,19 @@
     await ready;
     if (!config.token) return { error: 'Not signed in. Tap "Sign in with Crowe ID" to continue.' };
     const useModel = model || config.model;
+    const review = await aiDisclosure({
+      feature: /"type":"image_url"/.test(JSON.stringify(messages || [])) ? "chat, agent, and vision" : "chat and agent",
+      model: useModel,
+      photos: /"type":"image_url"/.test(JSON.stringify(messages || [])),
+    });
+    if (!/^crowelm(?:-|$)/i.test(useModel || "")) {
+      await diag("privacy:blocked", { kind: "model", model: String(useModel).slice(0, 80) });
+      return { error: `This turn would use ${useModel}, but this build does not have repository-verified recipient details for that route. Choose a CroweLM model or wait for a disclosure update.` };
+    }
+    if (!(await aiAllowed(review))) {
+      await diag("privacy:blocked", { kind: "consent", model: String(useModel).slice(0, 80), gate: review.status });
+      return { error: review.status === "signin" ? 'Sign in with Crowe ID before allowing AI data sharing.' : 'Allow AI data sharing in Settings, or on the first supported send, before Crowe Logic can transmit this request.' };
+    }
     const t0 = Date.now();
     const url = `${base()}/api/gateway/chat`;
     const headers = { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` };
@@ -1277,7 +1457,6 @@
   }
 
   function systemPrompt(route) {
-    const user = currentUser();
     /* What the model is told about its own reach has to track what
        toolsForTurn() actually handed it. This paragraph used to say flatly that
        there was no shell and none was coming, which was true until the phone
@@ -1328,7 +1507,6 @@
       "Write for a small screen held in one hand, often in a grow room: short paragraphs, the answer first,",
       "no long tables, no ASCII diagrams. Give the number or the action before the reasoning.",
       route.expert && route.expert !== "operator" ? `You are answering as the ${route.expert} expert.` : "",
-      user && user.email ? `The signed-in user is ${user.email}.` : "",
       `Today is ${new Date().toISOString().slice(0, 10)}.`,
     ].filter(Boolean).join("\n");
   }
@@ -1380,7 +1558,7 @@
         diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
       emit({ ...ev, agentId: id });
     };
-    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
+    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), signedIn: Boolean(currentUser()) });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
     const budget = Number(config.turnBudgetUsd) > 0 ? Number(config.turnBudgetUsd) : 0;
     let text = "";
@@ -2333,6 +2511,17 @@
     getConfig: async () => { await ready; return publicConfig(); },
     setConfig: async (patch) => { await ready; await saveConfig(patch || {}); return publicConfig(); },
   });
+  window.croweAIPrivacy = {
+    status: () => aiStatus(),
+    review: () => aiDisclosure(),
+    reviewTurn: (text, opts) => aiReviewTurn(text, opts),
+    reviewSpeech: (voice, text) => aiReviewSpeech(voice, text),
+    allow: (review) => aiAllow(review),
+    revoke: (reason) => aiRevoke(reason),
+    onChange(fn) { aiWatchers.add(fn); return () => aiWatchers.delete(fn); },
+    version: AI_PRIVACY_VERSION,
+    revision: () => aiConsentRevision,
+  };
 
   /* ─── Boot defaults the renderer reads before mobile-ui.js exists ──────────
      Both of these are localStorage keys renderer.js consults while it builds

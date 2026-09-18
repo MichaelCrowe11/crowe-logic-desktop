@@ -393,6 +393,38 @@ const tests = [
     expect: { onScreen: true, fullWidth: true, saveReachable: true },
   },
   {
+    name: "Settings shows the AI data-sharing controls",
+    body: `document.getElementById("settings-btn").click();
+      await __settle();
+      const section = document.querySelector(".m-ai");
+      const out = { present: Boolean(section), shown: section ? section.checkVisibility() : false,
+                    badge: (document.getElementById("m-ai-status") || {}).textContent || "",
+                    review: __shown("#m-ai-review"), allow: __shown("#m-ai-allow"), foot: /does not recall data already sent/i.test(section ? section.textContent : "") };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return out;`,
+    expect: { present: true, shown: true, badge: "Sign in first", review: true, allow: true, foot: true },
+  },
+  {
+    name: "a declined AI send opens the disclosure and keeps the draft in the composer",
+    body: `await window.crowe.setConfig({ token: "h." + btoa(JSON.stringify({ email: "grower@example.com", exp: 9999999999 })).replace(/=+$/,"") + ".s" });
+      const input = document.getElementById("input");
+      input.value = "Please summarize this project.";
+      input.dispatchEvent(new Event("input"));
+      document.getElementById("send").click();
+      await __settle(150);
+      const card = __box("#m-ai-privacy .modal-card");
+      const out = { open: __shown("#m-ai-privacy .modal-card"),
+                    onScreen: card ? card.bottom <= window.innerHeight + 1 && card.top >= 0 : false,
+                    allow: __shown('#m-ai-privacy [data-ai="allow"]'),
+                    preserved: input.value === "Please summarize this project." };
+      const close = document.querySelector('#m-ai-privacy [data-ai="close"]');
+      if (close) close.click();
+      await __settle(120);
+      return { ...out, closed: document.getElementById("m-ai-privacy").classList.contains("hidden") };`,
+    expect: { open: true, onScreen: true, allow: true, preserved: true, closed: true },
+  },
+  {
     name: "no field is small enough to make iOS zoom the page",
     // Under 16px, focusing a field zooms the viewport, and an app that cannot
     // zoom back out leaves the user magnified with no way home.
