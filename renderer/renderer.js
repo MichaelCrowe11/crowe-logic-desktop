@@ -285,10 +285,19 @@ function followMark(body) {
   if (ro) ro.observe(body);
   return {
     end(landed) {
-      stopped = true; mo.disconnect(); if (ro) ro.disconnect();
-      // Home after the landing has played where the eye is; at once otherwise,
-      // in the same task, so a failed or stopped turn never paints a stale offset.
-      if (landed) setTimeout(() => who.style.removeProperty("--mark-y"), 720);
+      mo.disconnect(); if (ro) ro.disconnect();
+      // A landed turn is placed once more, now: the caller may just have swapped
+      // the body (a tool-only turn's cards give way to a hint), and the landing
+      // must play beside what the body ends with, never beside a node that is
+      // gone. Then home, after the landing has played where the eye is. Under
+      // reduced motion the ring holds still and the glide is off, so a held
+      // offset would only be a later jump: home at once. An errored or stopped
+      // turn has nothing to play: home at once, in this task, not on a zero
+      // timer that lets one paint wear the stale offset.
+      const hold = landed && !(typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+      if (hold) place();
+      stopped = true;
+      if (hold) setTimeout(() => who.style.removeProperty("--mark-y"), 720);
       else who.style.removeProperty("--mark-y");
     },
   };
@@ -931,7 +940,6 @@ async function send(text, opts = {}) {
     settleHeader();
     if (mark) { if (mark.done) mark.done(); else mark.ping(); }
   }
-  follow.end(!body.querySelector(".err, .stopped"));
   if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) {
     // No prose came back. If tools ran, the work is in the workspace (or, on
@@ -945,6 +953,9 @@ async function send(text, opts = {}) {
       ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
       : '<p class="said hint">The model returned no text. Send it again.</p>';
   }
+  // After the fallback above, so the mark lands beside the hint when the cards
+  // have just gone; before the colophon, which the mark never follows.
+  follow.end(!body.querySelector(".err, .stopped"));
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
 }
