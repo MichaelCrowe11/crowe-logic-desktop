@@ -263,8 +263,11 @@
   aiModal.className = "modal hidden";
   body.appendChild(aiModal);
   const aiView = { mode: "consent", review: null, resolve: null };
+  let aiReturnFocus = null;
+  let aiFocusHint = null;
   const composeSay = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
   const chatInput = () => $("input");
+  document.addEventListener("focusin", (e) => { if (e.target && !aiModal.contains(e.target)) aiFocusHint = e.target; }, true);
   function seedChatDraft(text) {
     const chat = [...document.querySelectorAll("#m-tabs .m-tab")].find((t) => t.textContent.trim() === "Chat");
     if (chat) chat.click();
@@ -285,10 +288,18 @@
     return "Not allowed";
   }
   function closeAiModal(outcome) {
+    const back = aiReturnFocus;
     aiModal.classList.add("hidden");
     aiModal.innerHTML = "";
+    aiReturnFocus = null;
     const done = aiView.resolve;
     aiView.resolve = null;
+    setTimeout(() => {
+      const target = back && back !== document.body && back.isConnected && typeof back.focus === "function"
+        ? back
+        : (chatInput() || $("send") || $("settings-btn"));
+      if (target && typeof target.focus === "function") { try { target.focus(); } catch {} }
+    }, 0);
     if (done) done(outcome || "close");
   }
   function renderAiModal(mode, review) {
@@ -296,25 +307,34 @@
     const buttons = mode === "policy"
       ? '<div class="row"><button type="button" class="ghost sm" data-ai="back">Back</button><button type="button" class="primary sm" data-ai="close">Done</button></div>'
       : `<div class="row"><button type="button" class="ghost sm" data-ai="policy">Privacy Policy</button><button type="button" class="ghost sm" data-ai="close">${allow ? "Not now" : "Close"}</button>${allow ? '<button type="button" class="primary sm" data-ai="allow">Allow</button>' : ""}</div>`;
+    const titleId = mode === "policy" ? "m-ai-policy-title" : "m-ai-consent-title";
     aiModal.innerHTML = mode === "policy"
-      ? `<div class="modal-card m-ai-card"><h2>Privacy Policy</h2><p>This phone keeps sessions, grow-log rows, reminders, and saved settings in app-private storage. On iOS, sign-in tokens are moved into the Keychain when the native vault plugin is present.</p><p>If you use Crowe Logic AI features, the app sends the message, the conversation context needed to answer it, selected model metadata, tool context/results, and any photo you choose to Crowe Logic's gateway at ${esc(review.host || "the configured gateway")}. Repository docs describe CroweLM as running on Crowe Logic-managed Azure and Cloudflare infrastructure.</p><p>The phone's own reply voice, on-device dictation, local grow log, and unsent drafts stay on this device until you send them. Revoking permission stops future sends where the app can stop them, but does not recall data already sent.</p><p>Do not publish stronger retention, training, or equal-protection claims until the gateway and provider terms are confirmed outside this repository.</p>${buttons}</div>`
-      : `<div class="modal-card m-ai-card"><h2>Allow AI data sharing?</h2><p>Crowe Logic will ask before the first supported AI send on this Crowe ID and gateway. If you allow it, the app may send data for ${esc(review.feature || "AI features")}.</p><section class="m-ai-block"><b>Who receives it</b>${aiList((review.recipients || []).map((r) => `${r.name}: ${r.service}`))}</section><section class="m-ai-block"><b>What can be sent</b>${aiList(review.data || [])}</section><section class="m-ai-block"><b>Why</b>${aiList(review.purposes || [])}</section><section class="m-ai-block"><b>Stays local unless you send it</b>${aiList(review.localNotes || review.localOnly || [])}</section><p class="m-ai-note">${esc(review.blocked ? review.error : review.summary || "")}</p><p class="m-ai-note">${esc(review.revocationNote || "")}</p>${buttons}</div>`;
+      ? `<div class="modal-card m-ai-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><h2 id="${titleId}">Privacy Policy</h2><p>This phone keeps sessions, grow-log rows, reminders, and saved settings in app-private storage. On iOS, sign-in tokens are moved into the Keychain when the native vault plugin is present.</p><p>If you use Crowe Logic AI features, the app sends the message, the conversation context needed to answer it, selected model metadata, tool context/results, and any photo you choose to Crowe Logic's gateway at ${esc(review.host || "the configured gateway")}. Repository docs describe CroweLM as running on Crowe Logic-managed Azure and Cloudflare infrastructure.</p><p>The phone's own reply voice, on-device dictation, local grow log, and unsent drafts stay on this device until you send them. Revoking permission stops future sends where the app can stop them, but does not recall data already sent.</p><p>Do not publish stronger retention, training, or equal-protection claims until the gateway and provider terms are confirmed outside this repository.</p>${buttons}</div>`
+      : `<div class="modal-card m-ai-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><h2 id="${titleId}">Allow AI data sharing?</h2><p>Crowe Logic will ask before the first supported AI send on this Crowe ID and gateway. If you allow it, the app may send data for ${esc(review.feature || "AI features")}.</p><section class="m-ai-block"><b>Who receives it</b>${aiList((review.recipients || []).map((r) => `${r.name}: ${r.service}`))}</section><section class="m-ai-block"><b>What can be sent</b>${aiList(review.data || [])}</section><section class="m-ai-block"><b>Why</b>${aiList(review.purposes || [])}</section><section class="m-ai-block"><b>Stays local unless you send it</b>${aiList(review.localNotes || review.localOnly || [])}</section><p class="m-ai-note">${esc(review.blocked ? review.error : review.summary || "")}</p><p class="m-ai-note">${esc(review.revocationNote || "")}</p>${buttons}</div>`;
     aiModal.querySelectorAll("[data-ai]").forEach((btn) => btn.addEventListener("click", async () => {
       if (btn.dataset.ai === "policy") return renderAiModal("policy", review);
       if (btn.dataset.ai === "back") return renderAiModal("consent", review);
       if (btn.dataset.ai === "allow") return closeAiModal("allow");
       closeAiModal("close");
     }));
+    const first = aiModal.querySelector('[data-ai="allow"], [data-ai="policy"], [data-ai="back"], [data-ai="close"]');
+    const card = aiModal.querySelector(".modal-card");
+    if (first && typeof first.focus === "function") first.focus();
+    else if (card && typeof card.focus === "function") card.focus();
   }
   async function presentAiModal(review, mode) {
     return new Promise((resolve) => {
       aiView.resolve = resolve;
       aiView.mode = mode || "consent";
       aiView.review = review;
+      aiReturnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : aiFocusHint;
       aiModal.classList.remove("hidden");
       renderAiModal(aiView.mode, review);
     });
   }
+  aiModal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeAiModal("close"); }
+  });
   window.presentAiModal = presentAiModal;
   async function ensureAiPermission(text, opts = {}) {
     const ai = aiPrivacy();
@@ -981,23 +1001,30 @@
     '<p class="m-ai-foot">Stopping sharing prevents future sends where the app can stop them. It does not recall data already sent.</p>',
   ].join("");
   diagSection.parentNode && diagSection.parentNode.insertBefore(aiSection, diagSection);
+  async function settingsAiReview() {
+    const ai = aiPrivacy(); if (!ai) return null;
+    if (ai.reviewTurn) {
+      const routed = await ai.reviewTurn("Review the verified CroweLM disclosure.", {}).catch(() => null);
+      if (routed) return routed;
+    }
+    return ai.review ? ai.review().catch(() => null) : null;
+  }
   async function renderAiSettings() {
     const ai = aiPrivacy();
     const status = ai && ai.status ? await ai.status().catch(() => null) : null;
     const badge = $("m-ai-status"), summary = $("m-ai-summary"), allowBtn = $("m-ai-allow"), revokeBtn = $("m-ai-revoke");
     if (badge) badge.textContent = aiStatusLabel(status);
-    if (summary) summary.textContent = status ? status.summary : "AI sharing status is unavailable in this build.";
+    if (summary) summary.textContent = status ? `${status.summary} Applies only to verified CroweLM routes.` : "AI sharing status is unavailable in this build.";
     if (allowBtn) allowBtn.hidden = Boolean(status && status.allowed);
     if (revokeBtn) revokeBtn.hidden = !Boolean(status && status.allowed);
   }
   $("m-ai-review").addEventListener("click", async () => {
-    const ai = aiPrivacy(); if (!ai || !ai.review) return;
-    const review = await ai.review().catch(() => null);
+    const review = await settingsAiReview();
     if (review) await presentAiModal(review, "review");
   });
   $("m-ai-allow").addEventListener("click", async () => {
-    const ai = aiPrivacy(); if (!ai || !ai.review) return;
-    const review = await ai.review().catch(() => null);
+    const ai = aiPrivacy(); if (!ai || !ai.allow) return;
+    const review = await settingsAiReview();
     if (!review) return;
     const choice = await presentAiModal(review, "consent");
     if (choice !== "allow") return;

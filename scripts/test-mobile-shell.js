@@ -399,11 +399,36 @@ const tests = [
       const section = document.querySelector(".m-ai");
       const out = { present: Boolean(section), shown: section ? section.checkVisibility() : false,
                     badge: (document.getElementById("m-ai-status") || {}).textContent || "",
-                    review: __shown("#m-ai-review"), allow: __shown("#m-ai-allow"), foot: /does not recall data already sent/i.test(section ? section.textContent : "") };
+                    review: __shown("#m-ai-review"), allow: __shown("#m-ai-allow"),
+                    summary: /verified CroweLM routes/i.test((document.getElementById("m-ai-summary") || {}).textContent || ""),
+                    foot: /does not recall data already sent/i.test(section ? section.textContent : "") };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { present: true, shown: true, badge: "Sign in first", review: true, allow: true, foot: true },
+    expect: { present: true, shown: true, badge: "Sign in first", review: true, allow: true, summary: true, foot: true },
+  },
+  {
+    name: "Settings updates the AI sharing controls after allow and revoke",
+    body: `await window.crowe.setConfig({ token: "h." + btoa(JSON.stringify({ email: "grower@example.com", exp: 9999999999 })).replace(/=+$/,"") + ".s" });
+      document.getElementById("settings-btn").click();
+      await __settle();
+      document.getElementById("m-ai-allow").click();
+      await __settle(80);
+      document.querySelector('#m-ai-privacy [data-ai="allow"]').click();
+      await __settle(120);
+      const allowed = { allowedBadge: document.getElementById("m-ai-status").textContent.trim(),
+                        allowHidden: document.getElementById("m-ai-allow").hidden,
+                        revokeShown: !document.getElementById("m-ai-revoke").hidden };
+      window.confirm = () => true;
+      document.getElementById("m-ai-revoke").click();
+      await __settle(120);
+      const revoked = { revokedBadge: document.getElementById("m-ai-status").textContent.trim(),
+                        allowShown: !document.getElementById("m-ai-allow").hidden,
+                        revokeHidden: document.getElementById("m-ai-revoke").hidden };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return { ...allowed, ...revoked };`,
+    expect: { allowedBadge: "Allowed", allowHidden: true, revokeShown: true, revokedBadge: "Not allowed", allowShown: true, revokeHidden: true },
   },
   {
     name: "a declined AI send opens the disclosure and keeps the draft in the composer",
@@ -416,13 +441,19 @@ const tests = [
       const card = __box("#m-ai-privacy .modal-card");
       const out = { open: __shown("#m-ai-privacy .modal-card"),
                     onScreen: card ? card.bottom <= window.innerHeight + 1 && card.top >= 0 : false,
+                    role: document.querySelector("#m-ai-privacy .modal-card")?.getAttribute("role"),
+                    modal: document.querySelector("#m-ai-privacy .modal-card")?.getAttribute("aria-modal"),
+                    labelled: Boolean(document.querySelector("#m-ai-privacy .modal-card")?.getAttribute("aria-labelledby")),
+                    focusInside: document.getElementById("m-ai-privacy").contains(document.activeElement),
                     allow: __shown('#m-ai-privacy [data-ai="allow"]'),
                     preserved: input.value === "Please summarize this project." };
       const close = document.querySelector('#m-ai-privacy [data-ai="close"]');
       if (close) close.click();
       await __settle(120);
-      return { ...out, closed: document.getElementById("m-ai-privacy").classList.contains("hidden") };`,
-    expect: { open: true, onScreen: true, allow: true, preserved: true, closed: true },
+      const active = document.activeElement;
+      return { ...out, closed: document.getElementById("m-ai-privacy").classList.contains("hidden"),
+               restored: active === input || active === document.getElementById("send") };`,
+    expect: { open: true, onScreen: true, role: "dialog", modal: "true", labelled: true, focusInside: true, allow: true, preserved: true, closed: true, restored: true },
   },
   {
     name: "no field is small enough to make iOS zoom the page",
