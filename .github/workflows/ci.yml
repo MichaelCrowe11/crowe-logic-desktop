@@ -210,6 +210,16 @@ jobs:
           CROWE_ALLOW_PLAINTEXT_AUTH: "1"
         run: xvfb-run -a npx electron scripts/test-plugin-fork.js
 
+      # scripts/smoke-packaged-mac.sh puts a packaged build under test on a
+      # throwaway profile with --user-data-dir, a Chromium switch Electron maps
+      # onto userData. Nothing in this repo makes that so, and a bump that
+      # stopped honouring it would land the smoke on the live profile beside
+      # the running app. This pins the mapping for the Electron shipped here.
+      - name: Run the user-data-dir pin (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-user-data-dir.js
+
       - name: Upload smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4

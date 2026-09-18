@@ -154,4 +154,7 @@ newline-delimited JSON on stdio when run by node and the same messages over
 its parent port when forked by the app. Dates and video ids are
 validated before they touch a path; sections are allowlisted; the two folders
 it reads are the only two it opens, and `~/.swm-yt-creds` is never one of
-them. `scripts/test-channel-analytics.js` drives it over its own wire.
+them. `scripts/test-channel-analytics.js` drives it over its own wire,
+`scripts/test-plugin-fork.js` drives it through main.js as a utility process,
+and `scripts/smoke-packaged-mac.sh` proves the same in a packaged build on a
+throwaway profile (see BUILD-AND-RELEASE.md).
