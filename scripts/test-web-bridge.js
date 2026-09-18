@@ -829,7 +829,8 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     // copy, so reword it there without rewording it here and this fails rather
     // than the web quietly going back to promising a terminal.
     const ui = read("renderer/web-ui.js");
-    const rr = read("renderer/renderer.js");
+    // The first-run card's sentences are constants in renderer/first-run.js.
+    const rr = read("renderer/renderer.js") + read("renderer/first-run.js");
     const ih = read("renderer/index.html");
     const needles = [...ui.matchAll(/\["((?:[^"\\]|\\.)*)",\s*\n?\s*"(?:[^"\\]|\\.)*"\]/g)].map((m) => m[1]);
     assert(needles.length >= 4, `expected the COPY table to yield needles, got ${needles.length}`);

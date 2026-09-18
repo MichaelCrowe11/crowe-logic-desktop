@@ -114,7 +114,7 @@ function sanitizeConfigPatch(raw) {
   }
   // No token. Sign-in writes it in main; nothing in the renderer has a reason
   // to, and a document that could would be choosing where the bearer goes.
-  for (const key of ["autoApprove", "telemetry", "onboarded", "verifier"]) {
+  for (const key of ["autoApprove", "telemetry", "onboarded", "verifier", "useHomeWorkspace"]) {
     if (typeof patch[key] === "boolean") out[key] = patch[key];
   }
   if (AUTONOMY.has(patch.autonomy)) out.autonomy = patch.autonomy;

@@ -87,16 +87,12 @@
      its three steps assume a local workspace. Matched on the desktop's own
      sentences; the test holds the needles. */
   const COPY = [
-    ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
-     "This is the operator over your CroweLM gateway, in your browser: reasoning, routing to the right expert, and rooms of specialists. Terminal, files and git live in the desktop app."],
-    ["Open the project folder the agent should work in (the button below, or Cmd+O).",
+    ["Open a folder, pick how much the agent may do, and ask for a change. Autonomy sets what it does on its own; approvals set what waits for your yes.",
+     "Ask for a change, and pick how much the agent may do. Reasoning, routing to the right expert and rooms of specialists run here; terminal, files and git live in the desktop app."],
+    ["Choose the folder the agent should work in.",
      "When a turn needs a terminal, files or git, the desktop app runs it on your own machine."],
     ["Give the agent a task. Try",
      "Ask it something. Try"],
-    ["Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.",
-     "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table, the rooms and the named agents."],
-    ["Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.",
-     "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day. Personal, Pro and Max open the whole CroweLM table."],
     ["summarize this repo", "summarize where this project stands"],
     ["run the tests and fix what fails", "talk me through two ways to approach this"],
   ];
@@ -126,10 +122,11 @@
       stripFolderButton(root);
       root.querySelectorAll(".said").forEach(webCopy);
     });
-    // A browser cannot open a local folder; the desktop's button would promise one.
-    // Stripped in the mutation pass as well as on the event, because the card can
-    // be built before this script has registered its listener.
-    const stripFolderButton = (root) => root.querySelectorAll(".onboarding-actions button").forEach((b) => { if (/Open a project folder/.test(b.textContent)) b.remove(); });
+    // A browser cannot open a local folder; the desktop's picker (step two of
+    // the card) would promise one. Stripped in the mutation pass as well as on
+    // the event, because the card can be built before this script has
+    // registered its listener.
+    const stripFolderButton = (root) => root.querySelectorAll(".onboarding-folder").forEach((el) => el.remove());
     stripFolderButton(transcript);
     new MutationObserver((records) => {
       webWelcome(transcript);

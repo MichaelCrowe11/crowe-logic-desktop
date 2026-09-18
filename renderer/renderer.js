@@ -756,6 +756,10 @@ async function send(text, opts = {}) {
   // would both pass the guard above and start two turns from one prompt.
   sendGate = true;
   try {
+    // The workspace first: it is local, and it is the boundary the turn would
+    // run in. Not yet read is not yet known, so the read is awaited.
+    if (workspaceBlocked === null) await refreshStatus();
+    if (workspaceBlocked) { showWorkspacePrompt(); setComposerStatus(window.CroweFirstRun.COMPOSER_BLOCKED, "note"); return; }
     // Re-validate live: a token that expired since launch must not eat the turn.
     if (!(await refreshAuth())) { showSignInPrompt(); setComposerStatus("Sign in to send", "note"); return; }
   } finally { sendGate = false; }
@@ -994,9 +998,12 @@ if (composerFoot && typeof ResizeObserver === "function") {
   }).observe(composerFoot);
 }
 syncComposerInput();
-// First run: the workspace is the home folder until a project is opened, and
-// the first chip then opens a folder instead of asking the agent to summarise ~.
-let atHome = false;
+// First run: the workspace is the home folder until a project is opened. The
+// composer holds until one is, or until the user says home is what they want
+// (config.useHomeWorkspace); the first chip opens a folder meanwhile. `null`
+// is not yet read: a send before the first status read waits for it.
+let atHome = false, workspaceBlocked = null, workspaceName = "";
+const INPUT_PLACEHOLDER = input.placeholder;
 function applyWelcomeChips() {
   const F = window.CroweFirstRun; if (!F) return;
   // The phone and web shells rewrite the welcome for a device that has no folder
@@ -1004,12 +1011,16 @@ function applyWelcomeChips() {
   const welcome = transcript.querySelector(".welcome");
   if (welcome && (welcome.dataset.mobile === "1" || welcome.dataset.web === "1")) return;
   const chips = transcript.querySelectorAll(".welcome .chips .chip");
-  const model = F.welcomeChips(atHome);
-  chips.forEach((c, i) => { if (!model[i]) return; c.textContent = model[i].text; c.dataset.action = model[i].action; });
+  const model = F.welcomeChips(Boolean(workspaceBlocked), workspaceName);
+  chips.forEach((c, i) => {
+    if (!model[i]) return;
+    c.textContent = model[i].text; c.dataset.action = model[i].action;
+    if (model[i].prompt) c.dataset.prompt = model[i].prompt; else delete c.dataset.prompt;
+  });
 }
 function bindChips() {
   applyWelcomeChips();
-  transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => (c.dataset.action === "open-folder" ? pickRepoFolder() : send(c.textContent))));
+  transcript.querySelectorAll(".chip").forEach((c) => (c.onclick = () => (c.dataset.action === "open-folder" ? pickRepoFolder() : send(c.dataset.prompt || c.textContent))));
 }
 bindChips();
 const WELCOME_HTML = transcript.innerHTML;
@@ -2572,7 +2583,7 @@ async function loadTree(dir) {
   const tree = $("files-tree");
   // The home folder is where a fresh install lands; listing it is the one
   // thing this pane must not do quietly. Ask for a project instead.
-  if (!dir && atHome && window.CroweFirstRun) {
+  if (!dir && workspaceBlocked && window.CroweFirstRun) {
     tree.innerHTML = "";
     const why = document.createElement("div"); why.className = "frow files-empty"; why.textContent = window.CroweFirstRun.FILES_EMPTY_HOME; tree.appendChild(why);
     const go = document.createElement("button"); go.type = "button"; go.className = "primary sm files-open"; go.textContent = "Open a project folder";
@@ -2620,7 +2631,11 @@ async function refreshStatus() {
   const c = await window.crowe.getConfig();
   if (c.textPace) setTextPace(c.textPace);
   setCwd(c.cwd);
-  atHome = window.CroweFirstRun ? window.CroweFirstRun.workspaceIsHome(c.cwd, c.homeDir) : false;
+  const F = window.CroweFirstRun;
+  atHome = F ? F.workspaceIsHome(c.cwd, c.homeDir) : false;
+  workspaceBlocked = F ? F.workspaceBlocked(c.cwd, c.homeDir, c.useHomeWorkspace) : false;
+  workspaceName = F && !atHome ? F.workspaceName(c.cwd) : "";
+  applyWorkspaceHold();
   applyWelcomeChips();
   refreshModelBadge(c);
   const total = (c.mcp || []).reduce((n, s) => n + s.tools, 0);
@@ -3203,6 +3218,50 @@ async function pickRepoFolder() {
   if (!r || r.canceled) return;
   if (r.error) { appendOutput("open folder: " + r.error); return; }
   await afterWorkspaceChange();
+}
+/* The hold on the composer while the workspace is home and home was not
+   chosen. The buttons are the picker: the folder dialog, and home on purpose,
+   the second only while the hold is on, since with a project open it has no
+   job. One card per hold, not one per attempt, and it goes when the hold does.
+   The placeholder carries the ask while the composer is empty, so the hold is
+   visible before the first Enter. */
+function workspaceAskButtons(withHome) {
+  const F = window.CroweFirstRun;
+  const pick = document.createElement("button"); pick.type = "button"; pick.className = "primary sm"; pick.textContent = F.CHOOSE_FOLDER;
+  pick.addEventListener("click", () => pickRepoFolder());
+  if (!withHome) return [pick];
+  const home = document.createElement("button"); home.type = "button"; home.className = "ghost sm use-home"; home.textContent = F.USE_HOME;
+  home.addEventListener("click", () => useHomeWorkspace());
+  return [pick, home];
+}
+function showWorkspacePrompt() {
+  const F = window.CroweFirstRun; if (!F) return;
+  const open = transcript.querySelector(".msg .workspace-prompt");
+  if (open) { open.scrollIntoView({ block: "nearest" }); return; }
+  const b = addAssistant();
+  b.classList.add("workspace-prompt");
+  const p = document.createElement("p"); p.className = "said"; p.textContent = F.WORKSPACE_PROMPT; b.appendChild(p);
+  const row = document.createElement("div"); row.className = "onboarding-actions";
+  for (const btn of workspaceAskButtons(true)) row.appendChild(btn);
+  b.appendChild(row); scrollBottom();
+}
+// Home, on purpose. The flag is read back through refreshStatus, so a save
+// that did not land leaves the hold in place.
+async function useHomeWorkspace() {
+  await window.crowe.setConfig({ useHomeWorkspace: true });
+  await afterWorkspaceChange();
+}
+function applyWorkspaceHold() {
+  const F = window.CroweFirstRun; if (!F) return;
+  input.placeholder = workspaceBlocked ? F.COMPOSER_BLOCKED : INPUT_PLACEHOLDER;
+  if (workspaceBlocked) return;
+  // The hold is over: the card that asked, and the home button on the
+  // onboarding card, have nothing left to ask. A transcript the card alone
+  // filled gets its welcome back rather than standing empty.
+  const asked = transcript.querySelectorAll(".msg .workspace-prompt");
+  asked.forEach((b) => (b.closest(".msg") || b).remove());
+  transcript.querySelectorAll(".onboarding-folder .use-home").forEach((el) => el.remove());
+  if (asked.length && !transcript.querySelector(".msg") && !transcript.querySelector(".welcome")) resetWelcome();
 }
 async function assignRepoToRoom(dir, label) {
   const r = await window.crowe.repos.open(dir);
@@ -5012,7 +5071,7 @@ function showSignInPrompt() {
   clearWelcome();
   const b = addAssistant();
   b.innerHTML = '<p class="said"></p>';
-  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
+  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with Crowe ID.";
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
@@ -5023,24 +5082,31 @@ $("userbadge").addEventListener("click", async () => { await window.crowe.auth.l
 // ── First-run onboarding ──
 // Shown once, on a machine with no Crowe ID session and no onboarded flag.
 // Walks sign-in → pick workspace → first task, then marks itself done in config.
+// The copy is renderer/first-run.js; the web and phone shells rewrite the
+// sentences they cannot keep, and their tests hold the needles.
 async function maybeShowOnboarding(cfg) {
   if (authed) return;
   if (cfg && cfg.onboarded) return;
+  const F = window.CroweFirstRun; if (!F) return;
   clearWelcome();
   const b = addAssistant();
   b.innerHTML = [
-    '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
+    '<p class="said"><strong>Welcome to Crowe Logic.</strong> ' + esc(F.ONBOARDING_INTRO) + "</p>",
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
-    "<li>" + esc(window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
-    "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
+    "<li>" + esc(F.ONBOARDING_STEP_SIGN_IN) + "</li>",
+    '<li class="onboarding-step-folder">' + esc(F.ONBOARDING_STEP_FOLDER) + "</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
   ].join("");
+  // Step two is the picker, not a description of one.
+  const picker = document.createElement("span"); picker.className = "onboarding-folder";
+  for (const btn of workspaceAskButtons(Boolean(workspaceBlocked))) picker.appendChild(btn);
+  b.querySelector(".onboarding-step-folder").appendChild(picker);
   const row = document.createElement("div");
   row.className = "onboarding-actions";
   const signinBtn = document.createElement("button");
-  signinBtn.className = "primary"; signinBtn.textContent = "Sign in with Crowe ID";
+  signinBtn.className = workspaceBlocked ? "ghost" : "primary"; signinBtn.textContent = "Sign in with Crowe ID";
   signinBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await doSignIn(); });
   const laterBtn = document.createElement("button");
   laterBtn.className = "ghost"; laterBtn.textContent = "Explore first";
@@ -5048,13 +5114,7 @@ async function maybeShowOnboarding(cfg) {
   // shell (the mark and an empty body) standing in the transcript as a blank
   // operator bubble. Remove the message.
   laterBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); (b.closest(".msg") || b).remove(); });
-  // At home there is no project yet; opening one is the first move and the
-  // button says so. With a project open, sign-in leads.
-  const folderBtn = document.createElement("button");
-  folderBtn.className = atHome ? "primary" : "ghost"; folderBtn.textContent = "Open a project folder";
-  folderBtn.addEventListener("click", async () => { await window.crowe.setConfig({ onboarded: true }); await pickRepoFolder(); });
-  if (atHome) { signinBtn.className = "ghost"; row.appendChild(folderBtn); row.appendChild(signinBtn); }
-  else { row.appendChild(signinBtn); row.appendChild(folderBtn); }
+  row.appendChild(signinBtn);
   row.appendChild(laterBtn);
   b.appendChild(row);
   // Platform shells rewrite promises the local desktop can keep but they

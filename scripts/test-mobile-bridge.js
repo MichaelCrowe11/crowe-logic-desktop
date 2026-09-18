@@ -907,7 +907,9 @@ function methodPaths(surface) {
 
   console.log("copy");
   const uiSrc = read("mobile/src/mobile-ui.js");
-  const rendererSrc = read("renderer/renderer.js");
+  // The first-run card's sentences are constants in renderer/first-run.js,
+  // drawn by renderer.js; a needle may live in either.
+  const rendererSrc = read("renderer/renderer.js") + read("renderer/first-run.js");
 
   await check("every sentence mobile-ui rewrites still exists in the renderer", () => {
     const table = uiSrc.slice(uiSrc.indexOf("const COPY = ["), uiSrc.indexOf("function mobiliseCopy"));
