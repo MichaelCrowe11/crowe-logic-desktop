@@ -264,6 +264,23 @@ path: CroweLogic-0.14.0-x64.dmg
     assert.ok(html.includes('<title>Crowe Logic releases</title>') && html.includes('<h1>Crowe Logic desktop</h1>'), 'the full page changed its heading');
   });
 
+  await check('the Windows card states the signing as it is on both editions', async () => {
+    // Windows installers have been signed through Azure Trusted Signing since 0.24.9
+    // (release.yml and release-developers.yml both gate on Get-AuthenticodeSignature
+    // reading Valid). The page used to say validation was still being completed,
+    // which read as "unsigned" to a careful downloader.
+    const both = { ...MANIFESTS, ...DEV_MANIFESTS };
+    for (const [html, page] of [
+      [renderPage(await catalog(envWith(MANIFESTS))), 'full'],
+      [renderPage(await catalog(envWith(both), 'developers'), 'developers'), 'developers'],
+    ]) {
+      assert.ok(html.includes('signed with Azure Trusted Signing'), `${page} page does not say the installer is signed`);
+      assert.ok(html.includes('SmartScreen names Michael Crowe as the publisher'), `${page} page does not name the publisher SmartScreen shows`);
+      assert.ok(!html.includes('code-signing validation'), `${page} page still implies signing is pending`);
+      assert.ok(!html.includes('not code signed'), `${page} page claims the installer is unsigned`);
+    }
+  });
+
   await check('the developer page links its own prefix and nothing of the full edition', async () => {
     const both = { ...MANIFESTS, ...DEV_MANIFESTS };
     const html = renderPage(await catalog(envWith(both), 'developers'), 'developers');
