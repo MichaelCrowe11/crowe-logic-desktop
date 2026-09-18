@@ -346,17 +346,23 @@
     const form = $(formId), field = $(fieldId);
     if (!form || !field || !rawSend) return;
     form.addEventListener("submit", (e) => {
+      if (form.dataset.aiConsentReady === "1") { delete form.dataset.aiConsentReady; return; }
       e.preventDefault();
       e.stopImmediatePropagation();
       const text = field.value.trim();
       if (!text) return;
       Promise.resolve((async () => {
         if (!(await ensureAiPermission(text, role ? { role } : {}))) return;
-        setSpace("chat");
-        const input = chatInput();
-        if (input) { input.value = text; syncComposerInput(); }
-        rawSend(text, role ? { role } : {});
-        field.value = "";
+        form.dataset.aiConsentReady = "1";
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else {
+          setSpace("chat");
+          const input = chatInput();
+          if (input) { input.value = text; syncComposerInput(); }
+          rawSend(text, role ? { role } : {});
+          field.value = "";
+          delete form.dataset.aiConsentReady;
+        }
       })()).catch(() => {});
     }, true);
   });
@@ -1045,7 +1051,7 @@
     renderPending(); if (typeof renderHome === "function") renderHome();
   });
   $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); renderAiSettings(); }, 50));
-  if (window.croweAIPrivacy && window.croweAIPrivacy.onChange) window.croweAIPrivacy.onChange(() => renderAiSettings());
+  if (window.croweAIPrivacy && window.croweAIPrivacy.onChange) window.croweAIPrivacy.onChange(() => { if ($("m-ai-status")) renderAiSettings(); });
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
   window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
 
