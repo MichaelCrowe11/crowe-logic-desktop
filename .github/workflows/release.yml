@@ -103,6 +103,13 @@ jobs:
         with:
           name: ${{ runner.os == 'macOS' && 'macos-unsigned-do-not-ship' || matrix.artifact }}
           path: ${{ matrix.paths }}
+          # The Windows and Linux installers live on the GitHub release and on
+          # R2 once published; the macOS artifact is never shipped at all. The
+          # artifact copies only exist for the publish step on the release
+          # machine, which runs within hours. Three days covers that, and it
+          # keeps the account's shared artifact storage from filling (it hit
+          # the quota on 2026-09-16 with ninety days of release builds).
+          retention-days: 3
       - if: startsWith(github.ref, 'refs/tags/') && runner.os != 'macOS'
         uses: softprops/action-gh-release@v2
         with:
