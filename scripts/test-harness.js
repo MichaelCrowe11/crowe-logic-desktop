@@ -1129,6 +1129,29 @@ test("reading a room is not a write: plan mode and a read-only room cap leave it
   assert.match(String(await H.execTool(makeCtx({ autonomy: "readonly" }, { rooms: f.rooms }), "list_rooms", {}, { expert: "operator", model: "m", tierCap: "readonly" })), /^2 rooms/);
 });
 
+test("a whole turn: the seat is offered the rooms tools, calls them, and reads the room back as a tool result", async () => {
+  const f = roomsFixture(); const ctx = makeCtx({}, { rooms: f.rooms });
+  let offered = null, systemLine = "";
+  const deps = makeDeps((stage, n, msgs, tools) => {
+    if (stage !== "execute") return reply([], "ok");
+    if (n === 0) {
+      offered = tools.map((t) => t.function.name); systemLine = String((msgs[0] && msgs[0].content) || "");
+      return reply([call("list_rooms", {}, "c1")]);
+    }
+    if (n === 1) return reply([call("read_room", { room: "launch" }, "c2")]);
+    return reply([], "From the room: cut the film first, then the community note, then the email.");
+  });
+  const out = await H.runAgent(ctx, [{ role: "user", content: "look at the group chat for next steps" }], deps);
+  assert.ok(offered && offered.includes("list_rooms") && offered.includes("read_room"), String(offered));
+  assert.match(systemLine, /list_rooms and read_room read the user's Rooms/);
+  const results = deps.toolResults();
+  assert.strictEqual(results.length, 2);
+  assert.match(results[0].result, /^2 rooms, newest activity first:/);
+  assert.match(results[1].result, /^Room "Launch week" \(r-a1\)[\s\S]*Which first\?/);
+  assert.match(out.text, /cut the film first/);
+  assert.deepStrictEqual(f.calls, ["list", "list", "load:r-a1"]);
+});
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 (async () => {
   let passed = 0;
