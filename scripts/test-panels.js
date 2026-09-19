@@ -2155,7 +2155,8 @@ const tests = [
       await __settle();
       const patch = JSON.stringify(patches[patches.length - 1]);
       const cardGone = !transcript.querySelector(".msg .workspace-prompt");
-      const liftedPlaceholder = input.placeholder;
+      const liftedOpen = input.placeholder === (TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER);
+      const captionAfter = $("composer-status").textContent;
       const welcomeBack = !!transcript.querySelector(".welcome");
       const homeChip = transcript.querySelector(".welcome .chips .chip").textContent;
       cfg = Object.assign({}, cfg, { cwd: "/Users/x/demo", useHomeWorkspace: false });
@@ -2165,11 +2166,11 @@ const tests = [
       window.crowe.getConfig = origGet; window.crowe.setConfig = origSet;
       input.value = ""; input.dispatchEvent(new Event("input"));
       await refreshStatus(); resetWelcome(); setComposerStatus("Ready");
-      return { heldPlaceholder, chipHeld, cards, labels, users, status, state, draft, patch, cardGone, liftedPlaceholder, welcomeBack, homeChip, projectChip, projectPrompt,
-        restored: input.placeholder === INPUT_PLACEHOLDER };`,
+      return { heldPlaceholder, chipHeld, cards, labels, users, status, state, draft, patch, cardGone, liftedOpen, captionAfter, welcomeBack, homeChip, projectChip, projectPrompt,
+        restored: input.placeholder === (TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER) };`,
     expect: { heldPlaceholder: "Choose a project folder to start", chipHeld: "Open a project folder to start|open-folder", cards: 1,
       labels: "Choose a folder|Use my home folder", users: 0, status: "Choose a project folder to start", state: "note", draft: "hello",
-      patch: '{"useHomeWorkspace":true}', cardGone: true, liftedPlaceholder: "Describe the outcome, constraints, and checks...", welcomeBack: true,
+      patch: '{"useHomeWorkspace":true}', cardGone: true, liftedOpen: true, captionAfter: "Ready", welcomeBack: true,
       homeChip: "List the files here and summarize the project", projectChip: "List the files in demo and summarize the project",
       projectPrompt: "List the files in the current workspace and summarize the project", restored: true },
   },

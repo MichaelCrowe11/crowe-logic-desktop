@@ -85,12 +85,16 @@ app.whenReady().then(async () => {
       homeBtn: !!document.querySelector("#transcript .onboarding-folder .use-home"), placeholder: document.getElementById("input").placeholder }; })()`);
     const cfg2 = await js(`window.crowe.getConfig()`);
     check(!lifted.card && !lifted.homeBtn && cfg2.useHomeWorkspace === true, "home on purpose: card gone, home button gone, flag saved");
-    check(lifted.placeholder === "Describe the outcome, constraints, and checks...", `the composer is open again (${lifted.placeholder})`);
+    const openHint = await js(`TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER`);
+    const caption = await js(`document.getElementById("composer-status").textContent`);
+    check(lifted.placeholder === openHint, `the composer is open again (${lifted.placeholder})`);
+    check(caption === "Ready", `the caption rests (${caption})`);
     await shot("03-hold-lifted-home-light");
 
     // A project folder, chosen: the welcome's first chip names it, and what it
     // sends is about the workspace, not the name.
-    await js(`window.crowe.repos.open(${JSON.stringify(PROJECT)})`);
+    // The same path the sidebar takes: open, then let the renderer read the new workspace.
+    await js(`window.crowe.repos.open(${JSON.stringify(PROJECT)}).then(() => afterWorkspaceChange())`);
     await sleep(600);
     await js(`(function(){ [...document.querySelectorAll("#transcript .msg")].forEach((m) => m.remove()); resetWelcome(); return true; })()`);
     await sleep(400);

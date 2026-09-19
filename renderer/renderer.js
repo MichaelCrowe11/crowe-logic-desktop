@@ -3253,8 +3253,11 @@ async function useHomeWorkspace() {
 }
 function applyWorkspaceHold() {
   const F = window.CroweFirstRun; if (!F) return;
-  input.placeholder = workspaceBlocked ? F.COMPOSER_BLOCKED : INPUT_PLACEHOLDER;
+  input.placeholder = composerPlaceholder();
   if (workspaceBlocked) return;
+  // The caption that explained the hold has nothing left to explain.
+  const caption = $("composer-status");
+  if (caption && caption.textContent === F.COMPOSER_BLOCKED) { if (running) setComposerStatus("Running", "running"); else setComposerStatus("Ready"); }
   // The hold is over: the card that asked, and the home button on the
   // onboarding card, have nothing left to ask. A transcript the card alone
   // filled gets its welcome back rather than standing empty.
@@ -3527,6 +3530,13 @@ const TIER_HINT = {
   edit: "Ask anything. It can edit files, with your review.",
   execute: "Ask anything. It can run commands and edit files.",
 };
+// One writer for the composer placeholder: the hold wins over the tier hint,
+// so switching tiers cannot hide "Choose a project folder to start".
+function composerPlaceholder() {
+  const F = window.CroweFirstRun;
+  if (workspaceBlocked && F) return F.COMPOSER_BLOCKED;
+  return TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER;
+}
 function setAutonomyBadge(tier) {
   document.querySelectorAll("#autonomy .seg-btn").forEach((b) => {
     const on = b.dataset.tier === tier;
@@ -3534,7 +3544,7 @@ function setAutonomyBadge(tier) {
   });
   $("autonomy").dataset.tier = tier;
   document.body.dataset.tier = tier;
-  input.placeholder = TIER_HINT[tier] || "Describe the outcome, constraints, and checks...";
+  input.placeholder = composerPlaceholder();
   try { localStorage.setItem("crowe-tier", tier); } catch {}
 }
 document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListener("click", async () => {
