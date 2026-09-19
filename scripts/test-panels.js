@@ -2122,6 +2122,94 @@ const tests = [
       return { toolsPointAtWorkspace: /^Done/.test(tools), emptyNamed: /returned no text/.test(nothing), tools, nothing };`,
     expect: { toolsPointAtWorkspace: true, emptyNamed: true },
   },
+  {
+    // The Cloud browser card: one per session, updated in place by later
+    // events, the live view address kept off the DOM, and Open mounting a
+    // cloud browser panel in a <webview> with no popups that the deck never
+    // saves. A second Open focuses the panel rather than opening another.
+    name: "a browser event draws one Cloud browser card per session, updates it in place, and Open mounts a cloud browser panel",
+    body: `await __reset();
+      const thumb = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+      const live = "https://browser.invalid/v1/sessions/s_t1/view?token=st_test_token";
+      const restore = __stubAgentScript(() => [
+        { type: "tool_call", id: "t1", name: "browser_open", args: { url: "https://example.com/docs/start" } },
+        { type: "browser", session_id: "s_t1", url: "https://example.com/docs/start", title: "Start", thumb, live_view_url: live, expires_at: "2026-09-18T18:40:00Z" },
+        { type: "tool_result", id: "t1", name: "browser_open", result: "opened https://example.com/docs/start" },
+        { type: "tool_call", id: "t2", name: "browser_click", args: { ref: "e1" } },
+        { type: "browser", session_id: "s_t1", url: "https://example.com/docs/next", title: "Next", thumb, live_view_url: live, expires_at: "2026-09-18T18:40:00Z" },
+        { type: "tool_result", id: "t2", name: "browser_click", result: "clicked e1." },
+        // A turn that says nothing ends as the "Done" hint and its cards go with
+        // it (send()'s no-text fallback); a real browsing turn ends in prose.
+        { type: "assistant", text: "The next page is open." },
+      ]);
+      await send("browse");
+      const cards = [...transcript.querySelectorAll(".browsercard")];
+      const card = cards[0];
+      const args = [...transcript.querySelectorAll(".toolcard .tc-arg")].map((a) => a.textContent);
+      const out = { cards: cards.length, chip: card ? card.querySelector(".bc-url").textContent : "", full: card ? card.querySelector(".bc-url").title : "",
+        title: card ? card.querySelector(".bc-title").textContent : "", thumb: Boolean(card && card.querySelector(".bc-thumb").src.startsWith("data:image/jpeg")),
+        leaked: transcript.innerHTML.includes("st_test_token"), toolCards: transcript.querySelectorAll(".toolcard").length,
+        clickArg: args[1] || args.join("|") };
+      if (!card) { restore(); transcript.innerHTML = ""; messages.length = 0; return out; }
+      card.querySelector(".bc-open").click();
+      await __settle();
+      const p = panels.find((x) => x.type === "cloud-browser");
+      const el = p && panelDeck.querySelector('[data-id="' + p.id + '"]');
+      out.panel = Boolean(p); out.panelUrl = Boolean(p && p.url === live); out.header = el ? el.querySelector(".cb-url").textContent : "";
+      out.view = el ? (el.querySelector("webview") ? "webview" : el.querySelector("iframe") ? "iframe" : "none") : "none";
+      out.popups = Boolean(el && el.querySelector("webview") && el.querySelector("webview").hasAttribute("allowpopups"));
+      out.saved = JSON.stringify(JSON.parse(localStorage.getItem("crowe-workspace-panels") || "{}")).includes("cloud-browser");
+      out.tab = [...__tabs()].some((t) => t.title === "Cloud browser");
+      card.querySelector(".bc-open").click(); await __settle();
+      out.panelsAfterSecondOpen = panels.filter((x) => x.type === "cloud-browser").length;
+      if (p) closePanel(p.id);
+      out.closed = panels.filter((x) => x.type === "cloud-browser").length;
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return out;`,
+    expect: { cards: 1, chip: "example.com/docs/next", full: "https://example.com/docs/next", title: "Next", thumb: true, leaked: false, toolCards: 2, clickArg: "e1",
+      panel: true, panelUrl: true, header: "example.com/docs/next", view: "webview", popups: false, saved: false, tab: true, panelsAfterSecondOpen: 1, closed: 0 },
+  },
+  {
+    // Settings reads which credential is in force, never a value. Signed in,
+    // the sentence says no key is needed and there is no key field; signed
+    // out, the masked field with Save and Remove writing through the key
+    // store; and the modal's own Save carries the URL alone, whatever was
+    // left in the field.
+    name: "Crowe Browser in Settings: the badge and the sentence follow the credential, the key row shows only signed out, and a pasted key goes through the key store",
+    body: `const origCfg = window.crowe.getConfig; const out = {};
+      const read = () => [$("browser-state").textContent, $("cfg-browser-note").textContent,
+        $("cfg-browser-keyrow").classList.contains("hidden") ? "no field" : "field", $("cfg-browser-key").placeholder,
+        $("cfg-browser-key-remove").disabled ? "remove off" : "remove on"].join("|");
+      for (const auth of ["crowe-id", "key", "none"]) {
+        window.crowe.getConfig = async () => ({ ...(await origCfg()), croweBrowserAuth: auth });
+        renderBrowserSettings(await window.crowe.getConfig());
+        out[auth] = read();
+      }
+      window.crowe.getConfig = origCfg;
+      const K = window.crowe.keys, origSet = K.set, origRemove = K.remove, origSetConfig = window.crowe.setConfig;
+      const stores = []; let patched = null;
+      K.set = async (id, key) => { stores.push(id + ":" + key); return { ok: true }; };
+      K.remove = async (id) => { stores.push("remove:" + id); return { ok: true }; };
+      window.crowe.setConfig = async (p) => { patched = p; return origCfg(); };
+      $("cfg-browser-key").value = " cbk_pasted "; $("cfg-browser-key-save").click(); await __settle();
+      out.saved = stores.join(","); out.cleared = $("cfg-browser-key").value === "";
+      out.afterSave = $("browser-state").textContent;
+      $("cfg-browser-key-remove").disabled = false; $("cfg-browser-key-remove").click(); await __settle();
+      out.removed = stores.slice(-1)[0];
+      $("settings").classList.remove("hidden"); $("cfg-browser-url").value = "https://browser.crowelogic.com"; $("cfg-browser-key").value = "cbk_left_in_field";
+      $("cfg-save").click(); await __settle();
+      out.patch = patched && patched.croweBrowser ? JSON.stringify(patched.croweBrowser) : String(patched);
+      out.patchLeak = JSON.stringify(patched || {}).includes("cbk_");
+      out.closed = $("settings").classList.contains("hidden");
+      K.set = origSet; K.remove = origRemove; window.crowe.setConfig = origSetConfig;
+      return out;`,
+    expect: {
+      "crowe-id": "Crowe ID|Your Crowe ID signs you in to the cloud browser. No key is needed.|no field|paste the service key|remove off",
+      key: "Key|Sign in with Crowe ID, or paste a service key.|field|key set; paste to replace|remove on",
+      none: "Not set|Sign in with Crowe ID, or paste a service key.|field|paste the service key|remove off",
+      saved: "croweBrowser:cbk_pasted", cleared: true, afterSave: "Not set", removed: "remove:croweBrowser",
+      patch: '{"url":"https://browser.crowelogic.com"}', patchLeak: false, closed: true },
+  },
 ];
 
 function compare(actual, expected) {

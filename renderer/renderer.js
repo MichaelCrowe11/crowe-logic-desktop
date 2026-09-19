@@ -341,7 +341,7 @@ function renderText(body, text) {
 function stageLabel(name) {
   if (name === "run_shell") return "executing";
   if (name === "write_file" || name === "edit_file") return "editing";
-  if (name === "open_url") return "browsing";
+  if (name === "open_url" || (name && name.startsWith("browser_"))) return "browsing";
   if (name === "export_document") return "exporting";
   if (name === "generate_image") return "drawing";
   if (name === "share_preview") return "publishing";
@@ -517,6 +517,8 @@ function addToolCard(body, ev) {
     : ev.name === "generate_image" ? (ev.args.prompt || "")
     : ev.name === "share_preview" ? (ev.args.stop ? "stop " + (ev.args.id || "all") : (ev.args.dir || (ev.args.port ? "port " + ev.args.port : "")))
     : ev.name === "search" ? (ev.args.pattern || "")
+    : ev.name === "browser_type" ? `${ev.args.ref || ev.args.selector || "field"}: ${String(ev.args.text || "").length} characters`
+    : ev.name && ev.name.startsWith("browser_") ? (ev.args.url || ev.args.ref || ev.args.selector || ev.args.key || (ev.args.dy != null ? `${ev.args.dy} px` : ""))
     : (ev.args.path || JSON.stringify(ev.args));
   const label = ev.name && ev.name.startsWith("mcp__") ? ev.name.replace(/^mcp__/, "mcp:") : ev.name;
   card.innerHTML = `<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">${esc(label || "tool")}</span><span class="tc-arg">${esc(arg)}</span></div>`;
@@ -596,6 +598,58 @@ function expireApproval(id) {
   card.classList.add("rejected");
   const actions = card.querySelector(".ec-actions");
   if (actions) actions.innerHTML = '<span class="ec-status">no answer, so it was denied</span>';
+}
+/* The Cloud browser card. One per session inside the turn, drawn on the
+   first `browser` event and updated in place by every later one: the
+   thumbnail is the page as it is now, the chip is where the browser is, the
+   title is the page's, and Open puts the live view in a panel. The live view
+   address carries the session's token, so it is kept as a property on the
+   card and the panel that opens it, and never written into the transcript,
+   the panel store, or a log line. Like the tool and approval cards, it is not
+   rebuilt from a saved session. */
+function browserUrlChip(u) {
+  try {
+    const p = new URL(String(u));
+    const path = p.pathname === "/" ? "" : p.pathname;
+    return p.host + (path.length > 40 ? path.slice(0, 38) + "..." : path);
+  } catch { return String(u || "").slice(0, 60); }
+}
+const cssId = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, ""));
+function addBrowserCard(body, ev) {
+  if (!body || !ev || !ev.session_id) return null;
+  const sid = String(ev.session_id);
+  let card = body.querySelector(`.browsercard[data-session="${cssId(sid)}"]`);
+  if (!card) {
+    card = document.createElement("div"); card.className = "browsercard";
+    card.dataset.session = sid;
+    card.innerHTML = `<div class="bc-head"><span class="bc-kicker">Cloud browser</span><span class="bc-url" title=""></span><button class="bc-open ghost sm" type="button">Open</button></div>
+      <div class="bc-shot"><img class="bc-thumb" alt="The page in the cloud browser" hidden></div>
+      <div class="bc-title" hidden></div>`;
+    const open = card.querySelector(".bc-open");
+    open.title = window.crowe.mobile ? "Opens the live view in the phone browser" : "Opens the live view in a panel";
+    open.addEventListener("click", () => openCloudBrowser(card));
+    body.appendChild(card); scrollBottom();
+  }
+  if (typeof ev.live_view_url === "string" && ev.live_view_url) card.__live = ev.live_view_url;
+  if (typeof ev.url === "string" && ev.url) card.__page = ev.url;
+  const chip = card.querySelector(".bc-url");
+  chip.textContent = card.__page ? browserUrlChip(card.__page) : "starting"; chip.title = card.__page || "";
+  const title = card.querySelector(".bc-title");
+  title.textContent = String(ev.title || ""); title.hidden = !ev.title;
+  const img = card.querySelector(".bc-thumb");
+  if (typeof ev.thumb === "string" && /^data:image\//.test(ev.thumb)) { img.src = ev.thumb; img.hidden = false; }
+  card.querySelector(".bc-open").disabled = !card.__live;
+  return card;
+}
+function openCloudBrowser(card) {
+  const live = card.__live, page = card.__page || "", sid = card.dataset.session;
+  if (!live) return;
+  // The phone has no engine to embed, so the live view opens in its browser,
+  // the way the Browser panel hands pages off there.
+  if (window.crowe.mobile && window.crowe.mobile.openExternal) { Promise.resolve(window.crowe.mobile.openExternal(live)).catch(() => {}); return; }
+  const have = panels.find((p) => p.type === "cloud-browser" && p.sessionId === sid);
+  if (have) { focusPanel(have.id); return; }
+  addPanel("cloud-browser", { url: live, sessionId: sid, pageUrl: page, title: "Cloud browser" });
 }
 // The receipt from the independent check. Checks are listed with their evidence
 // because a verdict with nothing behind it is the thing this pass exists to stop.
@@ -874,6 +928,8 @@ async function send(text, opts = {}) {
     else if (ev.type === "edit_proposal") { finishSaid(); hideThinking(body); addEditProposal(body, ev); }
     else if (ev.type === "approval_request") { finishSaid(); hideThinking(body); addApproval(body, ev); }
     else if (ev.type === "approval_expired") { expireApproval(ev.id); }
+    // The cloud browser moved: draw its card, or update the one already here.
+    else if (ev.type === "browser") { finishSaid(); addBrowserCard(body, ev); }
     else if (ev.type === "verdict") { finishSaid(); hideThinking(body); addVerdict(body, ev); }
     else if (ev.type === "budget") {
       finishSaid();
@@ -1023,7 +1079,9 @@ const panelDeck = $("panel-deck");
 let panels = [], panelSeq = 0, activeLegacy = null, activePanelId = null;
 const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
-function panelState() { return { layout: $("panel-layout").value, panels: panels.map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
+// A cloud browser panel is not saved: its address carries a session token, and
+// the session does not outlive the app. It comes back from the card's Open.
+function panelState() { return { layout: $("panel-layout").value, panels: panels.filter((p) => p.type !== "cloud-browser").map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
 function savePanelState() {
   try { localStorage.setItem("crowe-workspace-panels", JSON.stringify(panelState())); } catch {}
 }
@@ -1057,12 +1115,13 @@ function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySe
 const BROWSER_HOME = "https://crowelogic.com/foundry/";
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room"};
-  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "" };
+  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
+  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
   else if(type === "agent") await mountWorkspaceAgent(p, body, seed);
   else if(type === "browser") mountBrowser(p, body);
+  else if(type === "cloud-browser") mountCloudBrowser(p, body);
   else if(type === "workflow") mountWorkflow(p, body);
   else if(type === "agents") mountAgentFleet(p, body);
   else if(type === "workbench") mountWorkbench(p, body);
@@ -1261,6 +1320,35 @@ function mountBrowser(p, body) {
    system browser, which on iOS is SFSafariViewController - the sanctioned
    in-app browser, and the only one where a login can complete against the
    cookies the user already has. */
+/* The live view of a cloud browser session, opened from the card. The same
+   guest hardening as the Browser panel: a <webview> wearing the honest user
+   agent, none of the attributes main's will-attach-webview strips, no
+   allowpopups, and main refuses any page in it that is not https. On the web
+   shell it is a sandboxed <iframe>; on the phone the card hands the address to
+   the system browser instead and this panel only says so. The header follows
+   the page URL through later `browser` events for the same session. Never
+   saved with the deck: the address carries the session's token. */
+function mountCloudBrowser(p, body) {
+  body.style.position="relative";
+  const bar=document.createElement("div");bar.className="browser-tools cloud-browser-tools";
+  bar.innerHTML='<span class="cb-kicker">Cloud browser</span><span class="cb-url" title=""></span><button class="cb-reload ghost sm" type="button">Reload</button>';
+  const host=document.createElement("div");host.className="browser-host cloud-browser-host";
+  body.append(bar,host);
+  const urlEl=bar.querySelector(".cb-url");
+  const setUrl=(u)=>{p.pageUrl=u||"";urlEl.textContent=u?browserUrlChip(u):"waiting for the page";urlEl.title=u||""};
+  setUrl(p.pageUrl);
+  let view=null;
+  if(window.crowe&&window.crowe.mobile){
+    host.innerHTML='<p class="bh-note">The live view opens in the phone browser from the Cloud browser card.</p>';
+  }else if(/Electron\//.test(navigator.userAgent)){
+    view=document.createElement("webview");view.setAttribute("useragent",browserUserAgent());view.src=p.url;host.appendChild(view);
+  }else{
+    view=document.createElement("iframe");view.className="cloud-browser-frame";view.setAttribute("sandbox","allow-scripts allow-same-origin allow-forms");view.referrerPolicy="no-referrer";view.title="Cloud browser live view";view.src=p.url;host.appendChild(view);
+  }
+  bar.querySelector(".cb-reload").onclick=()=>{if(!view)return;try{if(typeof view.reload==="function")view.reload();else view.src=p.url}catch{view.src=p.url}};
+  const off=window.crowe.agent.onEvent((ev)=>{if(ev&&ev.type==="browser"&&String(ev.session_id)===p.sessionId&&ev.url)setUrl(ev.url)});
+  p.onClose=()=>{try{off()}catch{}};
+}
 function mountBrowserHandoff(p, body) {
   p.history=p.history||[]; p.bookmarks=p.bookmarks||[];
   const bar=document.createElement("div");bar.className="browser-tools";
@@ -2227,6 +2315,20 @@ async function mountRoom(p, body, seed = {}) {
       thread.scrollTop = thread.scrollHeight;
     }
     else if (ev.type === "approval_expired") { expireApproval(ev.id); note(`${who}: no answer in time, so the action was denied`, "is-blocked"); }
+    else if (ev.type === "browser") {
+      // The seat's cloud browser, as a card in this thread under the seat that
+      // drives it; later events for the same session update it in place.
+      note(`${who}: cloud browser at ${String(ev.url || "").slice(0, 120)}`, "is-tool");
+      let holder = thread.querySelector(`.rmsg.is-browser[data-session="${cssId(ev.session_id)}"]`);
+      if (!holder) {
+        holder = document.createElement("div"); holder.className = "rmsg is-browser"; holder.dataset.session = String(ev.session_id || "");
+        holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">is browsing</span></div>`;
+        mountWorkerMark(holder.querySelector(".rmsg-mark"), workerOf(roomAgent), "reasoning");
+        thread.appendChild(holder);
+      }
+      addBrowserCard(holder, ev);
+      thread.scrollTop = thread.scrollHeight;
+    }
     else return;
     drawHead(); drawRoster();
   });
@@ -2502,7 +2604,7 @@ document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(
 
 // ── Dock: one tab strip for pinned views and every open panel ──
 const dockTabs = $("dock-tabs");
-const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", operator:"Operator", workflow:"Workflows", agents:"Agent fleet", workbench:"Workbench" };
+const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", "cloud-browser":"Cloud browser", operator:"Operator", workflow:"Workflows", agents:"Agent fleet", workbench:"Workbench" };
 function applyStackVisibility(){
   const stacked = panelDeck.classList.contains("stack");
   if (stacked && !panels.some((p)=>p.id===activePanelId)) activePanelId = panels.length ? panels[panels.length-1].id : null;
@@ -2786,9 +2888,53 @@ $("settings-btn").addEventListener("click", async () => {
   const live = (c.mcp || []).map((s) => `${s.name} (${s.tools} tools)`).join(", ");
   $("cfg-mcp-live").textContent = live ? `Connected: ${live}` : "No MCP servers connected.";
   $("cfg-status").textContent = (c.hasToken ? "Token set. " : "No token yet. ") + (c.ptyAvailable ? "PTY ready." : "PTY unavailable.");
-  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion(); renderSense();
+  renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion(); renderSense(); renderBrowserSettings(c);
   modal.classList.remove("hidden");
 });
+/* Crowe Browser in Settings. The URL is shown as stored. The bridge reports
+   which credential is in force, never a value: "crowe-id" when the person is
+   signed in, "key" when a service key is in the encrypted store, "none"
+   otherwise. Signed in, the sentence says no key is needed and the key row
+   is not shown; signed out, the row offers the key, masked, with Save and
+   Remove writing through the key store, the way the Key Manager rows do. A
+   bridge that reports no Crowe Browser block (the web and phone builds)
+   hides the section rather than offering a field that saves nowhere. */
+const BROWSER_AUTH_COPY = {
+  "crowe-id": { badge: "Crowe ID", note: "Your Crowe ID signs you in to the cloud browser. No key is needed." },
+  key: { badge: "Key", note: "Sign in with Crowe ID, or paste a service key." },
+  none: { badge: "Not set", note: "Sign in with Crowe ID, or paste a service key." },
+};
+function renderBrowserSettings(c) {
+  const sec = $("cfg-browser"), url = $("cfg-browser-url"), key = $("cfg-browser-key"), badge = $("browser-state");
+  if (!sec || !url || !key) return;
+  const cb = c && c.croweBrowser;
+  sec.classList.toggle("hidden", !cb);
+  if (!cb) return;
+  const auth = BROWSER_AUTH_COPY[c.croweBrowserAuth] ? c.croweBrowserAuth : "none";
+  url.value = cb.url || ""; key.value = "";
+  if (badge) badge.textContent = BROWSER_AUTH_COPY[auth].badge;
+  if ($("cfg-browser-note")) $("cfg-browser-note").textContent = BROWSER_AUTH_COPY[auth].note;
+  if ($("cfg-browser-keyrow")) $("cfg-browser-keyrow").classList.toggle("hidden", auth === "crowe-id");
+  key.placeholder = auth === "key" ? "key set; paste to replace" : "paste the service key";
+  if ($("cfg-browser-keystate")) $("cfg-browser-keystate").textContent = auth === "key" ? "Set" : "Not set";
+  if ($("cfg-browser-key-remove")) $("cfg-browser-key-remove").disabled = auth !== "key";
+}
+if ($("cfg-browser-key-save")) {
+  const ipcWords = (e) => String((e && e.message) || e || "").replace(/^Error invoking remote method '[^']+': Error: /, "") || "The key could not be saved.";
+  $("cfg-browser-key-save").addEventListener("click", async () => {
+    const input = $("cfg-browser-key"), k = input.value.trim();
+    if (!k) return;
+    let r = null;
+    try { r = await window.crowe.keys.set("croweBrowser", k); } catch (e) { r = { error: ipcWords(e) }; }
+    input.value = "";
+    if (!r || r.error) { $("cfg-status").textContent = (r && r.error) || ipcWords(null); return; }
+    renderBrowserSettings(await window.crowe.getConfig());
+  });
+  $("cfg-browser-key-remove").addEventListener("click", async () => {
+    try { await window.crowe.keys.remove("croweBrowser"); } catch (e) { $("cfg-status").textContent = ipcWords(e); }
+    renderBrowserSettings(await window.crowe.getConfig());
+  });
+}
 /* Crowe Sense in Settings. The fields are the node's address for a direct
    read or its id for the relay; the badge is what the last poll found. */
 async function renderSense() {
@@ -2809,6 +2955,12 @@ $("cfg-save").addEventListener("click", async () => {
   if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   if ($("cfg-repos-root") && $("cfg-repos-root").value.trim()) patch.reposRoot = $("cfg-repos-root").value.trim();
   const tok = $("cfg-token").value.trim(); if (tok) patch.token = tok;
+  // Crowe Browser: the URL alone. The key row has its own Save, through the
+  // key store; a key left in the field is not sent anywhere from here.
+  if ($("cfg-browser") && !$("cfg-browser").classList.contains("hidden")) {
+    patch.croweBrowser = { url: $("cfg-browser-url").value.trim() || "https://browser.crowelogic.com" };
+    $("cfg-browser-key").value = "";
+  }
   const mcpRaw = $("cfg-mcp").value.trim();
   if (mcpRaw) { try { patch.mcpServers = JSON.parse(mcpRaw); } catch { $("cfg-status").textContent = "MCP JSON is invalid."; return; } }
   await window.crowe.setConfig(patch);
@@ -3070,6 +3222,9 @@ async function loadSession(id) {
   rebuildTranscript();
   renderSessions();
 }
+/* A saved session is the messages: user and assistant text. The cards a turn
+   drew while it ran (tool cards, approvals, verdicts, the Cloud browser card)
+   are views of that turn and are not rebuilt here. */
 function rebuildTranscript() {
   transcript.innerHTML = "";
   let any = false;

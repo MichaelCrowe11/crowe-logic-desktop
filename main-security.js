@@ -3,6 +3,7 @@
 const path = require("path");
 const { fileURLToPath } = require("url");
 const { normalizeSense } = require("./sense");
+const { normalizeBaseUrl } = require("./browser-client");
 
 const TRUSTED_WEB_ORIGINS = new Set([
   "https://crowelogic.com",
@@ -126,6 +127,14 @@ function sanitizeConfigPatch(raw) {
   }
   if (Object.hasOwn(patch, "mcpServers")) out.mcpServers = sanitizeMcpServers(patch.mcpServers);
   if (patch.sense && typeof patch.sense === "object") out.sense = normalizeSense(patch.sense);
+  // Crowe Browser: an https service URL (loopback http for a local fake). The
+  // key is not a config field: it goes to the encrypted store through
+  // crowe:keys:set, and a key that arrives here is dropped, like the token.
+  if (patch.croweBrowser && typeof patch.croweBrowser === "object" && !Array.isArray(patch.croweBrowser)) {
+    const cb = {};
+    if (typeof patch.croweBrowser.url === "string") { const u = normalizeBaseUrl(patch.croweBrowser.url); if (u) cb.url = u; }
+    if (Object.keys(cb).length) out.croweBrowser = cb;
+  }
   return out;
 }
 
