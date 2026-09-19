@@ -29,6 +29,9 @@ check(isAppDocument(appUrl, entry), "the packaged renderer must remain navigable
 // browser joins the pending attempt instead of opening a second listener on the same ports.
 const mainSrc = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
 check(/let pendingSignIn = null;/.test(mainSrc), "sign-in must track the pending attempt");
+// The CLI's sign-in store is the CLI's. The app may read it to seed its own sign-in and never deletes it.
+check(/readFileSync\(CLI_AUTH_JSON, "utf8"\)/.test(mainSrc), "the app may read the CLI sign-in store as a seed");
+check(!/unlinkSync\(CLI_AUTH_JSON\)/.test(mainSrc) && !/LEGACY_AUTH_JSON/.test(mainSrc), "the app never deletes the CLI sign-in store");
 check(/if \(pendingSignIn\) \{ if \(pendingSignIn\.authUrl\) shell\.openExternal\(pendingSignIn\.authUrl\); return pendingSignIn\.promise; \}/.test(mainSrc), "a click during a pending sign-in must reopen its page and join its promise");
 check(/if \(pendingSignIn === pending\) pendingSignIn = null;/.test(mainSrc), "finishing a sign-in must clear the pending attempt");
 check(/pending\.authUrl = authUrl;/.test(mainSrc), "the pending attempt must remember its page so a second click can reopen it");
