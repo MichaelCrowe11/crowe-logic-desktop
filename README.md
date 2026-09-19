@@ -6,7 +6,7 @@ Desktop app that chats with language models through the CroweLM gateway and lets
 
 working
 
-Version 0.24.7 (`package.json`). The macOS and Linux update feeds serve 0.24.7. The Windows feed serves 0.24.0, dated 2026-08-03, so Windows is six patch releases behind. The phone app under `mobile/` is at 0.25.6 and has its own README.
+Version 0.24.13 (`package.json`), released 2026-09-17. All six update feeds serve 0.24.13: the stable channel and the Crowe Logic for Developers channel, each for macOS, Windows and Linux. Windows and Linux installers are built on CI for every tag; the Windows installer has been signed through Azure Trusted Signing since 0.24.9. The phone app under `mobile/` is at 0.25.7 and has its own README.
 
 ## Install and first run
 
@@ -52,14 +52,14 @@ Same harness, same tiers, same gates, same verifier, same journal. It denies
 approvals when there is no terminal to ask, and it exits non-zero on a failed
 verdict. See [docs/CLI.md](docs/CLI.md).
 
-The test suite that does not need a display, run today:
+The test suite that does not need a display, run on 2026-09-17 against 0.24.13:
 
 ```
 $ node scripts/test-harness.js
-harness: 83 tests passed
+harness: 105 tests passed
 
 $ node scripts/test-electron-security.js
-electron-security: 102 checks passed
+electron-security: 122 checks passed
 
 $ node scripts/test-sense.js
 14 passed, 0 failed
@@ -74,12 +74,12 @@ $ node scripts/test-mobile-bridge.js
 all mobile bridge checks passed
 
 $ node scripts/test-brand-copy.js
-ok      brand copy: 21 files, no em dashes, no emoji, rings on --focus
+ok      brand copy: 25 files, no em dashes, no emoji, rings on --focus
 ```
 
-Also passed today: `test-plan.js`, `test-version-parity.js` (5/5), `test-qr.js`, `test-packaging.js`, `test-web-bridge.js`.
+Also passed that day: `test-plan.js`, `test-version-parity.js` (5/5), `test-qr.js`, `test-packaging.js`, `test-web-bridge.js`, `test-cli.js` (31), `test-cloud.js` (37), `test-mail.js` (47), `test-export-document.js` (30), `test-generate-image.js` (21), `test-share-preview.js` (40), `test-channel-analytics.js`, `test-marks.js`, `test-messages.js`, `test-activity.js`, `test-repos.js`. The Electron-hosted suites ran on the same Mac: `test-panels.js` 104/104, `test-mobile-shell.js` 29/29, `test-icons.js` 17/17.
 
-Not run today: `npm start`, the Electron-hosted tests (`test-panels.js`, `test-icons.js`, `test-mobile-shell.js`, `test-install-spaces.js`, `test-rooms-live.js`), and every `npm run build:*`. Building installers needs signing credentials; `docs/BUILD-AND-RELEASE.md` lists them.
+Not run that day: `npm start`, `test-install-spaces.js`, `test-rooms-live.js`, and every `npm run build:*`. Building installers needs signing credentials; `docs/BUILD-AND-RELEASE.md` lists them. The installed 0.24.13 apps, stable and Developers, were launched instead on a throwaway profile with `scripts/smoke-packaged-mac.sh --app`, which checks the fuses, the bundled server's utility process and that the live profile is never opened.
 
 ## What runs today
 
@@ -104,10 +104,19 @@ Each item names the file that holds it.
 - Install-time choice of spaces through `CROWE_SPACES` or `croweSpaces` in the packaged `package.json`. `main.js`.
 - Update checks through `electron-updater` against the release feeds named under `build.publish` in `package.json`. `main.js`.
 - A phone build of the same renderer in a Capacitor shell. `mobile/`.
+- Messages: Rooms read as conversations with workers. A worker's bubbles carry its mark, texts group into runs, your last text shows Delivered and Read, a typing bubble shows while a worker works, and a reaction (Good, More, No, Why) on a worker's bubble is read by that worker on its next turn. Workers are named as colleagues: Operator, Studio Director, Orchestrator. `renderer/messages.js`, `renderer/renderer.js`, tested in `scripts/test-messages.js` and `scripts/test-panels.js`.
+- Worker marks: each worker wears one of eight thinking marks as vector, animated only while it reasons and still under reduced motion. The mark at the head of a turn rides beside the newest block while the turn runs and goes home when it lands. `renderer/marks.js`, `renderer/renderer.js` `followMark`, tested in `scripts/test-marks.js` and `scripts/test-panels.js`.
+- An Activity pane beside the chat that shows the agent's work as it happens, with a Follow mode. `renderer/activity.js`, tested in `scripts/test-activity.js`.
+- The chat seat can read Rooms: `list_rooms` and `read_room`, read-only, offered to your own seat and never to a room seat, so one room learns of another only through your relay. `harness.js`, `main.js` `roomsForHarness`, tested in `scripts/test-harness.js` and pinned in `scripts/test-electron-security.js`.
+- Tools that always ask before they act: `export_document` (Markdown in, a PDF, HTML or Markdown file out under `exports/`), `generate_image` (a picture from a prompt through your own image key, saved under `assets/generated/`), `share_preview` (a temporary public link to a folder or a local port, with an expiry and a stop). `export-document.js`, `share-preview.js`, `harness.js`, each tested in its `scripts/test-*.js`.
+- Channel Analytics: the first server bundled in the app, a read-only connector over a channel manager's state, started as a utility process from the packaged app. `plugins/channel-analytics/server.js`, tested in `scripts/test-channel-analytics.js` and `scripts/test-plugin-fork.js`.
+- A Repositories lane in Projects: the workspace's GitHub remote, its pull requests and issues, every call a read. `repos.js`, `renderer/renderer.js`, tested in `scripts/test-repos.js`.
+- Terminals are plain shells: every terminal-backed panel opens your login shell at its prompt and types nothing. `main.js`, `renderer/renderer.js`.
+- The release rail: `release.yml` builds Windows and Linux on every tag and signs the Windows installer through Azure Trusted Signing behind a `Get-AuthenticodeSignature` gate; the macOS build is notarized and stapled on the release machine; `scripts/publish-rclone.sh` publishes to R2 with a version, size and SHA-512 preflight; `scripts/verify-release.js` proves every feed and every named file resolve, after each publish and daily on a schedule. `scripts/smoke-packaged-mac.sh` launches a packaged build on a throwaway profile.
 
 ## Roadmap
 
-Not built. `docs/ROADMAP.md` carries the working list and says which rows were checked against code and when. Two items we can confirm are not done today: an automatic Windows build, and Windows code signing. The Windows feed is still on 0.24.0.
+Not built. `docs/ROADMAP.md` carries the working list and says which rows were checked against code and when. The two items an earlier README named as not done, an automatic Windows build and Windows code signing, are done: `release.yml` builds Windows and Linux on every tag and the Windows installer is signed through Azure Trusted Signing. What the roadmap still lists as open is backend and legal work, not distribution: gateway limits and plan enforcement, auth keepalive edge cases, counsel review of the legal drafts, and the price ladder.
 
 ## Limits
 
@@ -115,7 +124,7 @@ This is a client. Without a Crowe ID and a reachable CroweLM gateway, chat does 
 
 The app runs shell commands, edits files, and browses the web on the user's behalf when the autonomy tier allows it. The tier gates, the approval prompts, and the secret scan are tested in this repo and nowhere else. No outside review of the security of this app has been done. Do not point it at a machine or a repository you cannot afford to have changed.
 
-Verified today only from this clone: dependency install, the Electron version, and the tests listed above. Not verified today: a launch of the window, an installer build, sign-in against the live gateway, the Windows build, or the phone build. The Windows installer on the update feed is 0.24.0 while macOS and Linux are on 0.24.7.
+Verified on 2026-09-17 from this clone and this Mac: dependency install, the Electron version, the tests listed above, a launch of the installed 0.24.13 apps on a throwaway profile, and the published release itself: `scripts/verify-release.js 0.24.13 --full` passed for both channels, every installer matching its feed's SHA-512; the macOS app assessed by Gatekeeper as Notarized Developer ID with a stapled ticket; the Windows installer's Authenticode signature reported Valid in the v0.24.13 release run, signer Michael Crowe, timestamped by Microsoft. Not verified that day: sign-in against the live gateway, a Windows or Linux launch, or the phone build. Linux artifacts are not code-signed; their integrity rests on the feed's SHA-512 and `SHA256SUMS`.
 
 The old README compared this app with other agent tools and claimed a market position. Nothing in this repository measures that, so it is gone.
 

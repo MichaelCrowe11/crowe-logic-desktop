@@ -1,23 +1,22 @@
 # Crowe Logic desktop — roadmap & ship-readiness
 
-Status: last verified 2026-09-07 while preparing 0.24.6. Companions: HARNESS-ARCHITECTURE.md,
+Status: last verified 2026-09-17 against the 0.24.13 release, its release run and the live feeds. Companions: HARNESS-ARCHITECTURE.md,
 PLUGINS.md, RESEARCH-PRODUCTIVITY.md (how we would measure whether any of this
 helps anyone — a design, not a result).
 
-**Read the CI and release rows below before trusting anything else here.** Every
-GitHub Actions run in this repository has ended in `startup_failure` at 0s since
-at least 2026-08-25, and so has every run in crowe-logic-foundry, including
-Dependabot's own dynamic workflows (`"path": "BuildFailed"`, empty workflow
-name). The workflow YAML parses and the repository's Actions permissions are
-`enabled`, so this is account-level, not a file in this repo. Everything the
-rail does is therefore not happening: no automatic Windows build, no test gate
-on push, and no daily `verify-release.yml` proof that the live feeds resolve.
-`npm test` is green locally, and the manual mac and linux release path is the
-only verified publish path from this machine.
+**CI is back, and the rail runs.** The account-level Actions outage that began
+around 2026-08-25 (every run `startup_failure` at 0s, here and in
+crowe-logic-foundry) had ended by 2026-09-10. Since then `ci.yml` has gated
+every pull request, `release.yml` has built Windows and Linux for every tag from
+0.24.8 and signed the Windows installer from 0.24.9, and the daily
+`verify-release.yml` schedule has passed every day since at least 2026-09-14.
+The paragraph that stood here through 0.24.6 said none of that was happening.
+It was true when written; its history is kept under "On CI" below.
 
-Every "done" below was re-checked against the code on 2026-08-11, with the
-source noted. Rows that cannot be verified from this repo (anything backend or
-vendor-side) say so rather than claiming a state.
+Every row below was re-checked on 2026-09-17 against the code, the v0.24.13
+release run and the live feeds, with the source noted. Rows that cannot be
+verified from this repo (anything backend or vendor-side) say so rather than
+claiming a state.
 
 ## Where we are (shipped, verified)
 
@@ -44,6 +43,16 @@ vendor-side) say so rather than claiming a state.
   stream, rooms (multi-agent threads) with live tests, the mobile companion
   (Capacitor iOS/Android under /mobile, paired over QR), a spaces registry
   with install-time selection, and shell/nav fixes each release.
+- 0.24.1–0.24.13: the release rail on CI (Windows and Linux built for every tag
+  from 0.24.8, the Windows installer signed through Azure Trusted Signing from
+  0.24.9, feeds verified after each publish and daily), a Crowe Logic for
+  Developers channel with its own feeds on all three platforms, Rooms rebuilt
+  as colleagues you message (the Messages rail, bubbles and runs, Delivered and
+  Read, reactions the seat reads, worker marks that ride the turn), an Activity
+  pane, tools that always ask (export_document, generate_image, share_preview,
+  send_email), the Channel Analytics connector as a utility process, a
+  Repositories lane, plain-shell terminals, a headless CLI, and the chat seat
+  reading Rooms (0.24.13).
 - Loop discipline: every release = implement → adversarial review workflow →
   fix → screenshot/e2e smoke → build → asar check → install → commit.
 
@@ -73,24 +82,25 @@ Crowe Logic's defensible lanes are different:
 **Private/invited beta: yes, today.** The core loop is real, reviewed, and
 stable; sign-in, routing, plugins, and the workbench all work end to end.
 
-**Public: no — the gaps are distribution-grade, not product-grade:**
+**Public: close. The distribution gaps below are closed; what remains is
+backend, vendor and legal work:**
 
 | Gap | Why it blocks public | State |
 |---|---|---|
 | ~~mac code signing + notarization~~ | app is Notarized Developer ID, auto-notarize hook wired | done (0.9.0) |
-| Auto-update (electron-updater to R2) | can't ship fixes to installed users | mac and linux feeds live on 0.24.4; **win feed frozen at 0.24.0**; the daily `verify-release.yml` proof has not run since CI died |
-| Windows/Linux parity builds + smoke | half the audience | `release.yml` has the matrix, but it needs a runner: **no Windows build exists for 0.24.1-0.24.4** and the download page says "Not in this release" |
+| ~~Auto-update (electron-updater to R2)~~ | can't ship fixes to installed users | done: all six feeds (stable and Developers, mac, win, linux) serve 0.24.13; `verify-release.js 0.24.13 --full` passed for both channels on 2026-09-17; the daily `verify-release.yml` schedule green since at least 2026-09-14 |
+| ~~Windows/Linux parity builds~~ + smoke | half the audience | builds done: `release.yml` builds both on every tag since 0.24.8 and the v0.24.13 run's `Get-AuthenticodeSignature` gate read Valid; the download page offers all three. Launch smoke is macOS only (`scripts/smoke-packaged-mac.sh --app`); a Windows or Linux launch of the packaged app is still by hand |
 | ~~Crash reporting + minimal telemetry~~ | flying blind post-launch | done, `main.js:59`; network submission opt-out |
 | ~~First-run onboarding (sign-in to first task)~~ | funnel dies without it | done; 3-step card with sign-in and explore |
-| CI (smoke suite on push) | regressions ship silently | **broken since ~2026-08-25**: the workflow is correct and the suite is green locally, but no run starts. Account-level Actions problem, fix at github.com/settings/billing |
-| R2 publish + live verification | a release that uploads but does not resolve fails on a user's machine | 0.24.6 preparation fixes a hard-coded temporary checkout in the rclone publisher and adds version/size/SHA-512 preflight before uploads; 0.24.5 is the last published release on the mac and linux channels, the win channel still serves 0.24.0 because CI never built it; the daily cron re-check is down with CI |
+| ~~CI (smoke suite on push)~~ | regressions ship silently | done: runs start and pass again since 2026-09-10 (the outage was account-level); every pull request merged for 0.24.9 through 0.24.13 waited on a green `ci.yml` |
+| ~~R2 publish + live verification~~ | a release that uploads but does not resolve fails on a user's machine | done: `publish-rclone.sh` runs a version, size and SHA-512 preflight, `verify-release.js` runs after every publish and daily; 0.24.13 verified on both channels 2026-09-17, every file matching its feed hash and `SHA256SUMS` covering every artifact |
 | ~~Dependency updates~~ | advisories accumulated with nothing filing fixes | done; dependabot files weekly grouped PRs, audit clean at 0 findings |
-| Windows signing cert | SmartScreen warning kills trust | CI plumbing wired (`release.yml` reads WINDOWS_CERTIFICATE secrets, builds unsigned while unset); the cert itself is a vendor purchase (OV/EV or Azure Trusted Signing) |
+| ~~Windows signing cert~~ | SmartScreen warning kills trust | done: Azure Trusted Signing (`win.azureSignOptions`, signer CN Michael Crowe, Microsoft timestamp) on every release from 0.24.9. SmartScreen reputation accrues per certificate, so a warning may still show until it does; organization validation would name the company instead of the person |
 | Gateway hardening: rate limits, plan enforcement, health endpoint | abuse + cost exposure | open, backend (not verifiable here) |
 | Auth keepalive polish (refresh edge cases seen in testing) | silent sign-outs feel broken | open, refresh exists but edge cases unconfirmed |
-| Legal/support: privacy policy, EULA surfacing, support channel | table stakes | drafts in `docs/legal/` grounded in actual app behaviour; needs counsel review, confirmed contact addresses, and surfacing in the installer/download page |
-| ~~A way to pay from inside the app~~ | the installed app could not sell; every checkout surface was excluded from the package | done, on main and unreleased: `renderer/plan.js`, `crowe:billing:*` in main.js, Stripe opens in the system browser, tier picked up on focus via the refresh token. `scripts/test-plan.js` |
-| One price ladder across Stripe and the catalog | the catalog Worker sells Pro at $99 while Stripe has a live "Crowe Logic Pro Monthly" at $149, among 23 overlapping recurring prices | open, vendor-side: archive the dead prices, one product per tier |
+| Legal/support: privacy policy, EULA surfacing, support channel | table stakes | support page live at crowelogic.com/support (2026-09-14); drafts in `docs/legal/` grounded in actual app behaviour still need counsel review, confirmed contact addresses, and surfacing in the installer/download page |
+| ~~A way to pay from inside the app~~ | the installed app could not sell; every checkout surface was excluded from the package | done and shipped since 0.24.7: `renderer/plan.js`, `crowe:billing:*` in main.js, Stripe opens in the system browser, tier picked up on focus via the refresh token. `scripts/test-plan.js` |
+| One price ladder across Stripe and the catalog | the catalog Worker sells Pro at $99 while Stripe has a live "Crowe Logic Pro Monthly" at $149, among 23 overlapping recurring prices | open, vendor-side, not re-checked from this repo on 2026-09-17: archive the dead prices, one product per tier |
 | Automated test coverage beyond the smoke suite | smoke asserts panels mount, not that they behave | largely closed, see below |
 
 **On CI:** this table previously read "DONE" from the day the workflow file
@@ -104,25 +114,35 @@ so nothing was actually being verified: Electron's `chrome-sandbox` ships
 without the SUID bit and aborted before the app loaded, and once that was
 fixed the suite passed and then crashed on quit because no one killed the PTYs.
 Both are fixed and the run is green. Treat "the workflow exists" and "the
-workflow passes" as different claims.
+workflow passes" as different claims. The second outage was account-level and
+ran from about 2026-08-25 to 2026-09-10; the status note at the top of this
+file described it while it lasted, and runs have started and passed since.
 
 **On testing:** what was one smoke script is now a chained suite (`npm test`):
-thirteen node checks (harness, rooms, mobile bridge, version sync and parity,
-QR, packaging, companion, contrast, preview/mark drift, releases worker,
-release verification) and six Electron suites that assert behaviour in a real
-DOM (icons, panels: 67 checks, mobile shell: 22 checks, install-time spaces in
-two configurations, live rooms). The panel system and the phone shell, the
-most stateful code in the app, are the best-covered.
+some thirty node checks (harness 105, electron security 122, rooms, mobile
+bridge, CLI 31, cloud 37, mail 47, export document 30, generate image 21, share
+preview 40, channel analytics, repositories, messages, marks, activity, version
+sync and parity, QR, packaging, companion, contrast, preview/mark drift,
+releases worker, release verification) and seven Electron suites that assert
+behaviour in a real DOM (icons 17, panels 104, mobile shell 29, install-time
+spaces in two configurations, live rooms, the plugin fork). Beyond `npm test`,
+`scripts/smoke-packaged-mac.sh` launches a packaged build on a throwaway
+profile and `scripts/verify-release.js` meets a published release the way an
+updater does. The panel system and the phone shell, the most stateful code in
+the app, are the best-covered.
 
-**Path to public beta.** Distribution is not continuously verified while CI
-is down. Restore working runners and Windows parity, verify the published
-update feeds, reconcile the price catalog, and close the vendor certificate,
-backend limits, and legal review items before claiming public-launch readiness.
+**Path to public beta.** Distribution is continuously verified again: CI gates
+every pull request, `release.yml` builds and signs all three platforms, and the
+feeds are proven daily. Left before claiming public-launch readiness: gateway
+limits and plan enforcement (backend), auth keepalive edge cases, counsel
+sign-off on the legal drafts, the price ladder, and SmartScreen reputation for
+the Windows certificate.
 
 ## Horizons
 
-- **H1 (now → public beta):** the three open rows above — vendor cert,
-  gateway limits, counsel sign-off — then open the download page.
+- **H1 (now → public beta):** the open rows above, gateway limits, auth
+  keepalive, counsel sign-off and the price ladder; the download page is
+  already open.
 - **H2 (1.0):** GitHub plugin GA + Git pane PR tab; gateway /plugins registry
   (Phase 2, Codex); health/evals lanes live; featured-role catalog flags
   live; Crowe Sense plugin server (first domain plugin).
