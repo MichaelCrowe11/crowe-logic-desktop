@@ -97,18 +97,21 @@ jobs:
           if ($sig.Status -ne "Valid") { throw ("installer signature is " + $sig.Status) }
       - if: runner.os == 'Linux'
         run: ${{ matrix.command }}
-      # The macOS artifact is uploaded under a name the R2 publish job ignores,
-      # so an unnotarized build can never reach the update channel.
-      - uses: actions/upload-artifact@v7
+      # The macOS job is a packaging check: its build is unsigned and never
+      # ships, so nothing of it is kept (17 such artifacts had grown to 7.8 GB
+      # by 2026-09-17). The Windows and Linux installers live on the GitHub
+      # release and on R2 once published; the artifact copies exist only for
+      # the publish step on the release machine, which runs within hours, so
+      # three days covers that and keeps the account's shared artifact storage
+      # from filling (it hit the quota on 2026-09-16 with ninety days of release
+      # builds). The release step below does not depend on the upload, so a
+      # full quota cannot block a tag.
+      - if: runner.os != 'macOS'
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
-          name: ${{ runner.os == 'macOS' && 'macos-unsigned-do-not-ship' || matrix.artifact }}
+          name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
-          # The Windows and Linux installers live on the GitHub release and on
-          # R2 once published; the macOS artifact is never shipped at all. The
-          # artifact copies only exist for the publish step on the release
-          # machine, which runs within hours. Three days covers that, and it
-          # keeps the account's shared artifact storage from filling (it hit
-          # the quota on 2026-09-16 with ninety days of release builds).
           retention-days: 3
       - if: startsWith(github.ref, 'refs/tags/') && runner.os != 'macOS'
         uses: softprops/action-gh-release@v3
