@@ -996,7 +996,7 @@ const tests = [
       el.querySelector(".wf-compose-go").click();
       await __settle();
       const result = {
-        failed: /^Failed · the agent did not return a workflow/.test(el.querySelector(".wf-compose-state").textContent),
+        failed: /^Failed · the agent did not return a mission/.test(el.querySelector(".wf-compose-state").textContent),
         nodes: el.querySelectorAll(".wf-node").length,
         empty: !!el.querySelector(".wf-empty"),
         enabled: !el.querySelector(".wf-compose-go").disabled,

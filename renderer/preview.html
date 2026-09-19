@@ -15,7 +15,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1789815701809" />
+  <link rel="stylesheet" href="styles.css?v=1789830024274" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -114,7 +114,7 @@
         <button class="sn-item" data-lane="issues">Issues</button>
         <span class="sn-group">Work</span>
         <button class="sn-item" data-lane="deepwork">Deep work</button>
-        <span class="sn-group">Models</span>
+        <span class="sn-group">Engines</span>
         <button class="sn-item" data-lane="training">Training</button>
         <button class="sn-item" data-lane="evals">Evals</button>
         <button class="sn-item" data-lane="deployments">Deployments</button>
@@ -194,7 +194,7 @@
           <div class="card"><div class="card-h">Recent sessions</div><div id="home-sessions" class="card-b"></div></div>
           <div class="card"><div class="card-h">Who answers what</div><div id="home-routing" class="card-b"></div></div>
           <div class="card"><div class="card-h">Gateway</div><div id="home-gateway" class="card-b"></div></div>
-          <div class="card"><div class="card-h">Models</div><div id="home-models" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Engines</div><div id="home-models" class="card-b"></div></div>
         </div>
         <div class="surface-status">
           <span id="ss-gw"><span class="ss-dot"></span>gateway</span>
@@ -262,7 +262,7 @@
             <textarea id="input" rows="2" maxlength="50000" aria-label="Message Crowe Logic" aria-describedby="composer-help" placeholder="Describe the outcome, constraints, and checks..."></textarea>
             <div class="composer-foot">
               <div class="composer-mode">
-                <div id="autonomy" class="seg" role="group" aria-label="Autonomy: what the agent may do without asking" title="Autonomy: what the agent may do without asking">
+                <div id="autonomy" class="seg" role="group" aria-label="Operating envelope: what the agent may do without asking" title="Operating envelope: what the agent may do without asking">
                   <button type="button" class="seg-btn" data-tier="plan" aria-pressed="false">Plan</button>
                   <button type="button" class="seg-btn" data-tier="readonly" aria-pressed="false">Read</button>
                   <button type="button" class="seg-btn" data-tier="edit" aria-pressed="false">Edit</button>
@@ -374,7 +374,7 @@
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
       <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
-      <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
+      <label class="chk"><input id="cfg-auto" type="checkbox" /> Authorize file edits automatically (skip the diff review)</label>
       <!-- The phone companion. Nothing here listens until Start is pressed, and
            the code is only drawn while it is running: a pairing QR left on a
            screen is a shell token left on a screen. -->
@@ -383,11 +383,11 @@
       <!-- Guardrails sits below Spaces deliberately: the space checkboxes have to
            stay above the fold of a scrolling card, and test-panels.js hit-tests
            them where they are drawn to keep it that way. -->
-      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the operating envelope. The operating mode decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
         <label>Reply pace
           <select id="cfg-pace">
             <option value="reading">Reading pace (the phone's default)</option>
-            <option value="brisk">Brisk, keeps up with the model</option>
+            <option value="brisk">Brisk, keeps up with the engine</option>
             <option value="instant">Instant</option>
           </select>
         </label>
@@ -421,7 +421,7 @@
            names the credential in force; the key row shows only when nobody
            is signed in, and a pasted key goes to the encrypted store through
            the key store bridge, never through the config. -->
-      <section id="cfg-browser" class="key-manager"><div class="settings-section-head"><div><b>Crowe Browser</b><span>A browser in the cloud that the agent drives and you watch from a card in the thread. Clicking and typing need Execute autonomy.</span></div><span id="browser-state" class="badge">Not set</span></div>
+      <section id="cfg-browser" class="key-manager"><div class="settings-section-head"><div><b>Crowe Browser</b><span>A browser in the cloud that the agent drives and you watch from a card in the thread. Clicking and typing need the Execute operating mode.</span></div><span id="browser-state" class="badge">Not set</span></div>
         <label>Service URL <input id="cfg-browser-url" type="text" placeholder="https://browser.crowelogic.com" spellcheck="false" /></label>
         <p id="cfg-browser-note" class="hint">Sign in with Crowe ID, or paste a service key.</p>
         <div id="cfg-browser-keyrow" class="key-provider"><div><b>Service key</b><span id="cfg-browser-keystate">Not set</span></div><input id="cfg-browser-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="paste the service key" /><button id="cfg-browser-key-save" class="ghost sm">Save</button><button id="cfg-browser-key-remove" class="ghost sm" disabled>Remove</button></div>
@@ -460,9 +460,9 @@
         <button id="panel-add-operator" class="pal-row" title="Operator control panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
           <span>Operator control</span></button>
-        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent workflows">
+        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent missions">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
-          <span>Workflows</span></button>
+          <span>Missions</span></button>
         <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
           <span>Agent fleet</span></button>
@@ -491,14 +491,14 @@
   <script src="council.js"></script>
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
-  <script src="preview-shim.js?v=1789815701809"></script>
-  <script src="mark-geometry.js?v=1789815701809"></script>
-  <script src="mark.js?v=1789815701809"></script>
-  <script src="messages.js?v=1789815701809"></script>
-  <script src="marks.js?v=1789815701809"></script>
-  <script src="first-run.js?v=1789815701809"></script>
-  <script src="activity.js?v=1789815701809"></script>
-<script src="renderer.js?v=1789815701809"></script>
+  <script src="preview-shim.js?v=1789830024274"></script>
+  <script src="mark-geometry.js?v=1789830024274"></script>
+  <script src="mark.js?v=1789830024274"></script>
+  <script src="messages.js?v=1789830024274"></script>
+  <script src="marks.js?v=1789830024274"></script>
+  <script src="first-run.js?v=1789830024274"></script>
+  <script src="activity.js?v=1789830024274"></script>
+<script src="renderer.js?v=1789830024274"></script>
   <script src="plan.js"></script>
 </body>
 </html>

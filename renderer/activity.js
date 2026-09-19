@@ -99,7 +99,7 @@
       return { state, card, target: { pane: "git", path: ev.path || "" } };
     }
     if (ev.type === "approval_request") {
-      const card = push(state, { kind: "approval", tool: ev.kind || "action", callId: ev.id || null, verb: "is waiting for approval:", detail: ev.title || ev.kind || "an action", args: {}, status: "waiting", output: ev.why || "", startedAt: now, endedAt: null, agentId: ev.agentId || "main" });
+      const card = push(state, { kind: "approval", tool: ev.kind || "action", callId: ev.id || null, verb: "is waiting for authorization:", detail: ev.title || ev.kind || "an action", args: {}, status: "waiting", output: ev.why || "", startedAt: now, endedAt: null, agentId: ev.agentId || "main" });
       return { state, card, target: { pane: "activity" } };
     }
     if (ev.type === "approval_expired" || ev.type === "approval_resolved") {
