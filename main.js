@@ -2579,13 +2579,12 @@ app.whenReady().then(async () => {
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
-  let preview = null;
-  try { preview = require("./share-preview").stopAllForQuit("the app is quitting"); } catch { preview = null; }
   // Cloud browsers are ended the same way: best effort, bounded by the
   // client's own end timeout, and the server's idle timer finishes the rest.
+  // Their teardown is chained onto the preview hold, so the one quit waits on
+  // both; with no preview up, the browsers are the hold.
   const browsers = browserSessions.owners().length ? browserSessions.endAll().catch(() => {}) : null;
-  if (!preview && !browsers) return null;
-  return Promise.all([preview, browsers].filter(Boolean));
+  try { return require("./share-preview").stopAllForQuit("the app is quitting")?.then(() => browsers) ?? browsers; } catch { return browsers; }
 }
 /* Electron does not wait on a promise from before-quit, and the SIGKILL that
    follows the grace period lives in this process, so a cloudflared that sat
