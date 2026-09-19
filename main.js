@@ -456,24 +456,26 @@ app.on("web-contents-created", (_event, contents) => {
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
 const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
 const CROWE_ID_CLIENT = "crowe-cli";
-const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
+// The CLI's own sign-in store. It is live, not legacy: `crowe login` in a terminal
+// writes it and every CLI command reads it. This app may read it once to seed its
+// own sign-in and must never delete it; deleting it signed the CLI out on every
+// desktop start, sign-in and sign-out.
+const CLI_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
 function persistTokens(d) {
   saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
-function migrateLegacyAuth() {
+function adoptCliSignIn() {
   const cfg = loadConfig();
   if (cfg.token || cfg.refreshToken) return;
   let legacy = {};
-  try { legacy = JSON.parse(fs.readFileSync(LEGACY_AUTH_JSON, "utf8")); } catch {}
+  try { legacy = JSON.parse(fs.readFileSync(CLI_AUTH_JSON, "utf8")); } catch {}
   let oldConfig = {};
   try { oldConfig = JSON.parse(fs.readFileSync(configPath(), "utf8")); } catch {}
   const token = legacy.access_token || oldConfig.token || "";
   const refreshToken = legacy.refresh_token || oldConfig.refreshToken || "";
   if (token || refreshToken) saveConfig({ token, refreshToken });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
 function currentUser() {
   const c = loadConfig(); if (!c.token) return null;
@@ -549,7 +551,7 @@ function signIn() {
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => {
-  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  saveConfig({ token: "", refreshToken: "" });
   // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
   browserSessions.endAll().catch(() => {});
   return { ok: true };
@@ -2565,7 +2567,7 @@ ipcMain.handle("crowe:update:install", () => { if (autoUpdater) autoUpdater.quit
 ipcMain.handle("crowe:update:state", () => updateState);
 
 app.whenReady().then(async () => {
-  migrateLegacyAuth();
+  adoptCliSignIn();
   migrateLegacyPluginSecrets();
   initCrashReporting();
   createWindow();
