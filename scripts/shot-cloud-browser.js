@@ -35,6 +35,9 @@ const OUT = process.env.CROWE_SHOT_OUT || fs.mkdtempSync(path.join(os.tmpdir(), 
 fs.mkdirSync(OUT, { recursive: true });
 app.setPath("userData", PROFILE);
 app.setPath("sessionData", PROFILE);
+// The key is seeded through the file on purpose: main.js moves it into the
+// encrypted store on the first load, which is the migration a real profile
+// from before the store takes, and the renderer then reads "key" as the auth.
 fs.writeFileSync(path.join(PROFILE, "config.json"), JSON.stringify({
   telemetry: false, cwd: PROJECT, autonomy: "execute", approvals: "high-risk",
   croweBrowser: { url: SERVICE, key: KEY },
@@ -89,7 +92,7 @@ app.whenReady().then(async () => {
     const js = (code) => win.webContents.executeJavaScript(code);
     const shot = async (name) => { const img = await win.webContents.capturePage(); const p = path.join(OUT, name + ".png"); fs.writeFileSync(p, img.toPNG()); console.log("shot:", p); };
     const cfg = await js(`window.crowe.getConfig()`);
-    check(cfg && cfg.croweBrowserKeySet === true && !("key" in (cfg.croweBrowser || {})), "the renderer knows a key is set and never sees it");
+    check(cfg && cfg.croweBrowserAuth === "key" && !("key" in (cfg.croweBrowser || {})), "the renderer knows a key is set and never sees it");
     // Start a turn from the composer, the way a person does. Sign-in is stubbed
     // here only so the turn can begin without a Crowe ID session on this profile.
     await js(`refreshAuth = async () => true; true`);

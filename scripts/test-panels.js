@@ -2169,6 +2169,47 @@ const tests = [
     expect: { cards: 1, chip: "example.com/docs/next", full: "https://example.com/docs/next", title: "Next", thumb: true, leaked: false, toolCards: 2, clickArg: "e1",
       panel: true, panelUrl: true, header: "example.com/docs/next", view: "webview", popups: false, saved: false, tab: true, panelsAfterSecondOpen: 1, closed: 0 },
   },
+  {
+    // Settings reads which credential is in force, never a value. Signed in,
+    // the sentence says no key is needed and there is no key field; signed
+    // out, the masked field with Save and Remove writing through the key
+    // store; and the modal's own Save carries the URL alone, whatever was
+    // left in the field.
+    name: "Crowe Browser in Settings: the badge and the sentence follow the credential, the key row shows only signed out, and a pasted key goes through the key store",
+    body: `const origCfg = window.crowe.getConfig; const out = {};
+      const read = () => [$("browser-state").textContent, $("cfg-browser-note").textContent,
+        $("cfg-browser-keyrow").classList.contains("hidden") ? "no field" : "field", $("cfg-browser-key").placeholder,
+        $("cfg-browser-key-remove").disabled ? "remove off" : "remove on"].join("|");
+      for (const auth of ["crowe-id", "key", "none"]) {
+        window.crowe.getConfig = async () => ({ ...(await origCfg()), croweBrowserAuth: auth });
+        renderBrowserSettings(await window.crowe.getConfig());
+        out[auth] = read();
+      }
+      window.crowe.getConfig = origCfg;
+      const K = window.crowe.keys, origSet = K.set, origRemove = K.remove, origSetConfig = window.crowe.setConfig;
+      const stores = []; let patched = null;
+      K.set = async (id, key) => { stores.push(id + ":" + key); return { ok: true }; };
+      K.remove = async (id) => { stores.push("remove:" + id); return { ok: true }; };
+      window.crowe.setConfig = async (p) => { patched = p; return origCfg(); };
+      $("cfg-browser-key").value = " cbk_pasted "; $("cfg-browser-key-save").click(); await __settle();
+      out.saved = stores.join(","); out.cleared = $("cfg-browser-key").value === "";
+      out.afterSave = $("browser-state").textContent;
+      $("cfg-browser-key-remove").disabled = false; $("cfg-browser-key-remove").click(); await __settle();
+      out.removed = stores.slice(-1)[0];
+      $("settings").classList.remove("hidden"); $("cfg-browser-url").value = "https://browser.crowelogic.com"; $("cfg-browser-key").value = "cbk_left_in_field";
+      $("cfg-save").click(); await __settle();
+      out.patch = patched && patched.croweBrowser ? JSON.stringify(patched.croweBrowser) : String(patched);
+      out.patchLeak = JSON.stringify(patched || {}).includes("cbk_");
+      out.closed = $("settings").classList.contains("hidden");
+      K.set = origSet; K.remove = origRemove; window.crowe.setConfig = origSetConfig;
+      return out;`,
+    expect: {
+      "crowe-id": "Crowe ID|Your Crowe ID signs you in to the cloud browser. No key is needed.|no field|paste the service key|remove off",
+      key: "Key|Sign in with Crowe ID, or paste a service key.|field|key set; paste to replace|remove on",
+      none: "Not set|Sign in with Crowe ID, or paste a service key.|field|paste the service key|remove off",
+      saved: "croweBrowser:cbk_pasted", cleared: true, afterSave: "Not set", removed: "remove:croweBrowser",
+      patch: '{"url":"https://browser.crowelogic.com"}', patchLeak: false, closed: true },
+  },
 ];
 
 function compare(actual, expected) {

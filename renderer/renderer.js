@@ -2891,20 +2891,49 @@ $("settings-btn").addEventListener("click", async () => {
   renderSpacePicker(); renderPlugins(); renderKeyManager(); renderCompanion(); renderSense(); renderBrowserSettings(c);
   modal.classList.remove("hidden");
 });
-/* Crowe Browser in Settings. The URL is shown as stored; the key field is
-   always empty, because the bridge reports only whether a key is set, and
-   the badge says so. A bridge that reports no Crowe Browser block (the web
-   and phone builds) hides the section rather than offering a field that
-   saves nowhere. */
+/* Crowe Browser in Settings. The URL is shown as stored. The bridge reports
+   which credential is in force, never a value: "crowe-id" when the person is
+   signed in, "key" when a service key is in the encrypted store, "none"
+   otherwise. Signed in, the sentence says no key is needed and the key row
+   is not shown; signed out, the row offers the key, masked, with Save and
+   Remove writing through the key store, the way the Key Manager rows do. A
+   bridge that reports no Crowe Browser block (the web and phone builds)
+   hides the section rather than offering a field that saves nowhere. */
+const BROWSER_AUTH_COPY = {
+  "crowe-id": { badge: "Crowe ID", note: "Your Crowe ID signs you in to the cloud browser. No key is needed." },
+  key: { badge: "Key", note: "Sign in with Crowe ID, or paste a service key." },
+  none: { badge: "Not set", note: "Sign in with Crowe ID, or paste a service key." },
+};
 function renderBrowserSettings(c) {
   const sec = $("cfg-browser"), url = $("cfg-browser-url"), key = $("cfg-browser-key"), badge = $("browser-state");
   if (!sec || !url || !key) return;
   const cb = c && c.croweBrowser;
   sec.classList.toggle("hidden", !cb);
   if (!cb) return;
+  const auth = BROWSER_AUTH_COPY[c.croweBrowserAuth] ? c.croweBrowserAuth : "none";
   url.value = cb.url || ""; key.value = "";
-  key.placeholder = c.croweBrowserKeySet ? "key set; paste to replace" : "paste the service key";
-  if (badge) badge.textContent = c.croweBrowserKeySet ? "Ready" : "No key";
+  if (badge) badge.textContent = BROWSER_AUTH_COPY[auth].badge;
+  if ($("cfg-browser-note")) $("cfg-browser-note").textContent = BROWSER_AUTH_COPY[auth].note;
+  if ($("cfg-browser-keyrow")) $("cfg-browser-keyrow").classList.toggle("hidden", auth === "crowe-id");
+  key.placeholder = auth === "key" ? "key set; paste to replace" : "paste the service key";
+  if ($("cfg-browser-keystate")) $("cfg-browser-keystate").textContent = auth === "key" ? "Set" : "Not set";
+  if ($("cfg-browser-key-remove")) $("cfg-browser-key-remove").disabled = auth !== "key";
+}
+if ($("cfg-browser-key-save")) {
+  const ipcWords = (e) => String((e && e.message) || e || "").replace(/^Error invoking remote method '[^']+': Error: /, "") || "The key could not be saved.";
+  $("cfg-browser-key-save").addEventListener("click", async () => {
+    const input = $("cfg-browser-key"), k = input.value.trim();
+    if (!k) return;
+    let r = null;
+    try { r = await window.crowe.keys.set("croweBrowser", k); } catch (e) { r = { error: ipcWords(e) }; }
+    input.value = "";
+    if (!r || r.error) { $("cfg-status").textContent = (r && r.error) || ipcWords(null); return; }
+    renderBrowserSettings(await window.crowe.getConfig());
+  });
+  $("cfg-browser-key-remove").addEventListener("click", async () => {
+    try { await window.crowe.keys.remove("croweBrowser"); } catch (e) { $("cfg-status").textContent = ipcWords(e); }
+    renderBrowserSettings(await window.crowe.getConfig());
+  });
 }
 /* Crowe Sense in Settings. The fields are the node's address for a direct
    read or its id for the relay; the badge is what the last poll found. */
@@ -2926,12 +2955,10 @@ $("cfg-save").addEventListener("click", async () => {
   if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   if ($("cfg-repos-root") && $("cfg-repos-root").value.trim()) patch.reposRoot = $("cfg-repos-root").value.trim();
   const tok = $("cfg-token").value.trim(); if (tok) patch.token = tok;
-  // Crowe Browser: the URL always, the key only when one was pasted, so a
-  // blank field keeps the key that is set.
+  // Crowe Browser: the URL alone. The key row has its own Save, through the
+  // key store; a key left in the field is not sent anywhere from here.
   if ($("cfg-browser") && !$("cfg-browser").classList.contains("hidden")) {
-    const cb = { url: $("cfg-browser-url").value.trim() || "https://browser.crowelogic.com" };
-    const k = $("cfg-browser-key").value.trim(); if (k) cb.key = k;
-    patch.croweBrowser = cb;
+    patch.croweBrowser = { url: $("cfg-browser-url").value.trim() || "https://browser.crowelogic.com" };
     $("cfg-browser-key").value = "";
   }
   const mcpRaw = $("cfg-mcp").value.trim();
