@@ -4,6 +4,19 @@ const C = require("./council");
 const { makeFileExecutor } = require("./council-files");
 const H = require("../harness");
 const R = require("./engine");
+const registry = require("./registry");
+// File authority is the intersection of the operator's configured autonomy and
+// the roster's own ceiling: the tier a Room turn runs at. A read-only or
+// advisory roster cannot be lifted into writing by a grant. A missing or
+// invalid autonomy setting fails closed here; effectiveTier alone would
+// default it to edit, which is right for a Room turn and wrong for a grant.
+// So does a roster identity the registry cannot resolve: roomCeiling drops
+// it from the minimum, and a grant must not be computed around a stranger.
+const fileTier = (room, cfg) => {
+  const ids = room.agents.map(a => a.agentId);
+  if (!registry.TIERS.includes(String(cfg.autonomy)) || !ids.length || ids.some(id => !registry.getAgent(id))) return "plan";
+  return registry.effectiveTier(ids, cfg.autonomy);
+};
 function installCouncilHost(d) {
   const runs = new Map();
   const command = (name, fn) => d.ipcMain.handle(`crowe:rooms:council-${name}`, async (_e, arg = {}) => {
@@ -21,7 +34,7 @@ function installCouncilHost(d) {
     const room = get(id);
     if (runs.has(id) || d.busy(id)) throw new Error("This room is busy. Pause or finish its current turn first.");
     const cfg = d.config();
-    if (spec?.mode === "files" && !["edit", "execute"].includes(cfg.autonomy)) throw new Error("Scoped file autopilot requires Edit or Execute autonomy.");
+    if (spec?.mode === "files" && !registry.writeCapable(fileTier(room, cfg))) throw new Error(`Scoped file autopilot requires an edit-capable room; this room's effective tier is ${fileTier(room, cfg)}.`);
     const catalog = d.catalog();
     const seats = room.agents.map(a => {
       const model = a.model || cfg.model;
@@ -42,7 +55,7 @@ function installCouncilHost(d) {
       const current = d.config();
       if (!current.token) throw new Error("Sign-in ended; council authority is suspended.");
       if (room.council !== state || runs.get(id) !== run) throw new Error("Council authority no longer belongs to this run.");
-      if (contract.mode === "files" && (!['edit', 'execute'].includes(current.autonomy) || require('fs').realpathSync(current.cwd) !== contract.workspace)) throw new Error("Workspace or autonomy changed; a new grant is required.");
+      if (contract.mode === "files" && (!registry.writeCapable(fileTier(room, current)) || require('fs').realpathSync(current.cwd) !== contract.workspace)) throw new Error(`Workspace or autonomy changed (effective tier ${fileTier(room, current)}); a new grant is required.`);
       if (room.agents.length !== seats.length || seats.some(s => !room.agents.some(a => a.agentId === s.id && (a.model || current.model) === s.model))) throw new Error("Roster or model pins changed; votes are invalid.");
     };
     d.queue(id, async () => {
@@ -66,7 +79,10 @@ function installCouncilHost(d) {
         execute: async (proposal, before, grant, live) => {
           authorized();
           const receipt = files ? files.execute(proposal, before, grant, () => { authorized(); return live(); })
-            : { summary: "Council-approved advisory result recorded. No external action or workspace write.", at: Date.now() };
+            // The advisory result is the record itself, so the receipt carries
+            // it: the verifier compares `recorded` with the approved summary
+            // instead of taking a sentence on trust.
+            : { summary: "Council-approved advisory result recorded. No external action or workspace write. The recorded text is reproduced as `recorded`; verification is its equality with the approved proposal summary.", recorded: proposal.summary, kind: proposal.kind, at: Date.now() };
           R.pushMessage(room, { author: R.SYSTEM, kind: "council", content: `Council approved: ${proposal.summary}\n${receipt.summary}` });
           return receipt;
         },
