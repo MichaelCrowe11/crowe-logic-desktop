@@ -183,3 +183,30 @@ Sol and DeepSeek V4 Pro, quorum three of four reviewers. Receipts are in
   unresolved identity fails closed to plan, and a test covers it. That grant
   ended when Grok 4.6's vote exceeded a five-minute timeout; slow seats need
   a longer timeout or a different chair.
+- Step 3 took five more grants. Two died on a single reject from GPT-6 Astra
+  (one on substance, one on a paraphrase of where `noteCost` runs) and one on
+  a false count (DeepSeek read 3429 characters as 3812). Under a single-veto
+  rule one strict seat can deadlock a council, which is the sharpest Step 4
+  finding. Step 3 passed once the strictest critic was seated as proposer:
+  Steps 3a (fan-out spend admission) and 3b (a cycle cost bound from the
+  protocol's own limits, in `docs/council-runs/2026-09-19-protocol-bounds.md`,
+  and never-zero settlement) were approved and verified in arch-8.
+- The `previous` list the proposer and reviewers see reports a finished step
+  as `verified`, and GPT-5.6 Sol read that as "not approved" and rejected
+  Step 4 for being out of order. The list should say approval plainly.
+- Grants now state that design disagreement is an abstention, not a
+  rejection, and that reviewers must not reject on hand-counted length.
+  With that rule and quorum two of four, DeepSeek's principled abstentions
+  stopped ending grants.
+- Step 4 (correlated reviewer failure) was approved and verified in arch-9
+  with GPT-5.6 Sol proposing: host-owned facts, explicit outcomes in the
+  record, constrained rejection grounds, rotating roles, and untrusted
+  evidence framed as such. Two Step 5 drafts by Claude Fable 5.1 then fell to
+  source misquotations caught by Astra and DeepSeek. Precision about the
+  source, not eloquence, is what survives review.
+- Step 5 (oversight metrics derived by the host from the record, never by a
+  model) was approved and verified in arch-10 with Sol proposing. Astra's
+  consolidated plan was then rejected by Sol as out of order for the third
+  time, on the same bare `verified` status. Fixed above: the `previous` list
+  now carries `approved` and a plain `outcome`, per item 3 of the approved
+  Step 4, and a test covers it.
