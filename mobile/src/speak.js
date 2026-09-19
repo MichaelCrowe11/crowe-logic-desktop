@@ -38,6 +38,10 @@
     if (!said) { say("Nothing to read yet", "note"); return; }
     const t = await token();
     if (!t || !t.bearer) { say("Sign in to hear replies", "note"); return; }
+    // Reply text goes to Azure Speech or ElevenLabs through the gateway, which
+    // the data notice does not cover; asked once, here, before the first send.
+    // Declined, the phone's own voice reads the reply and nothing is sent.
+    if (window.croweConsent && !(await window.croweConsent.ask("readAloud"))) return fallback(said);
     let list;
     try { list = await voices(t.base, t.bearer); } catch { return fallback(said); }
     const allowed = list.voices.filter((v) => v.allowed && v.configured).map((v) => v.voice);

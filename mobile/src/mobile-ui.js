@@ -787,6 +787,9 @@
     Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
     dictBtn.onclick = async () => {
       if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
+      // Apple may process the audio on its servers, which the data notice does
+      // not cover; asked once, before the recogniser ever starts.
+      if (window.croweConsent && !(await window.croweConsent.ask("dictation"))) { say("Dictation is off until you allow it", "note"); return; }
       let perm = { speechRecognition: "denied" };
       try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
       if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }

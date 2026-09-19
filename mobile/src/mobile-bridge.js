@@ -104,6 +104,17 @@
     turnBudgetUsd: 2,
     telemetry: true,
     onboarded: false,
+    /* The data notice. Nothing leaves this phone for the gateway or a model
+       until the person has read what is sent and to whom and has allowed it
+       (App Store guidelines 5.1.1(i) and 5.1.2(i)). The record carries the
+       version of the notice it answered, so a notice that names a new
+       recipient is shown again instead of riding on an older yes. Read-aloud
+       and dictation keep their own records because they reach different
+       services (Microsoft Azure Speech or ElevenLabs; Apple) and are asked
+       for separately, the first time each is used. */
+    dataConsent: null,
+    readAloudConsent: null,
+    dictationConsent: null,
     // The machine this phone may drive, and the token that proves it may.
     // Empty means the remote tools do not exist at all — they are not offered
     // to the model, so it cannot claim a shell it has no way to reach.
@@ -113,6 +124,19 @@
     keys: {},
   };
   const TIERS = new Set(["plan", "readonly", "edit", "execute"]);
+  // Bump when the notice names a new recipient or a new kind of data; an
+  // older yes then stops counting and the notice is shown again.
+  const DATA_NOTICE_VERSION = 1;
+  const CONSENT_ERROR = "Allow Crowe Logic to send your messages before sending. The data notice says what is sent and to whom.";
+  const consented = () => Boolean(config.dataConsent && Number(config.dataConsent.version) >= DATA_NOTICE_VERSION);
+  /* The refusal every gateway path answers with before the notice is allowed,
+     and the event mobile-ui.js listens for to put the notice back on screen.
+     Enforced here, under the UI, so no composer, pane, chip or intent can
+     reach the gateway around it. */
+  function consentNeeded() {
+    try { window.dispatchEvent(new CustomEvent("crowe:consent-needed")); } catch { /* no window in tests */ }
+    return { error: CONSENT_ERROR, code: "consent" };
+  }
   let config = { ...DEFAULTS };
   let BUILD = { version: "0.0.0" };
 
@@ -144,6 +168,8 @@
       approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
+      dataConsent: config.dataConsent || null, readAloudConsent: config.readAloudConsent || null,
+      dictationConsent: config.dictationConsent || null, dataNoticeVersion: DATA_NOTICE_VERSION,
       version: BUILD.version, platform: PLATFORM, mobile: true,
       // The paired machine, never its token. publicConfig is what the renderer
       // reads and what a panel could print; the credential stays in the bridge.
@@ -688,6 +714,7 @@
   }
   async function gatewayChat(messages, tools, signal, model, onDelta, _retried) {
     await ready;
+    if (!consented()) return consentNeeded();
     if (!config.token) return { error: 'Not signed in. Tap "Sign in with Crowe ID" to continue.' };
     const useModel = model || config.model;
     const t0 = Date.now();
@@ -1773,6 +1800,8 @@
 
     agent: {
       run: async (messages, id = "main", options = {}) => {
+        await ready;
+        if (!consented()) { const c = consentNeeded(); return { done: false, error: c.error, text: c.error }; }
         if (options && options.licensed) {
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };

@@ -57,11 +57,32 @@ function loadPreloadSurface() {
   return exposed;
 }
 
+const NOTICE_VERSION = Number((/DATA_NOTICE_VERSION = (\d+);/.exec(read("mobile/src/mobile-bridge.js")) || [])[1]);
+if (!NOTICE_VERSION) throw new Error("mobile-bridge.js no longer declares DATA_NOTICE_VERSION");
+
 // mobile-bridge.js runs in a webview. Give it the smallest globals it touches
 // at load: storage it can write to, a fetch that fails the way an offline
 // device does, and no Capacitor, which is the browser-preview path.
-function loadMobileSurface(fetchImpl, capacitor) {
+function loadMobileSurface(fetchImpl, capacitor, opts = {}) {
   const store = new Map();
+  // The data notice gate: mobile-bridge.js refuses every gateway path until
+  // config.dataConsent carries the current DATA_NOTICE_VERSION. Every check
+  // here runs as a phone whose person has already allowed it, except the one
+  // that proves the gate holds, which passes { consent: false }.
+  const CONSENT = { version: NOTICE_VERSION, at: "2026-09-19T00:00:00.000Z" };
+  if (opts.consent !== false) store.set("crowe:config", JSON.stringify({ dataConsent: CONSENT }));
+  // A check that hands the bridge a Preferences plugin keeps its own map, so
+  // the same allowance is merged into what that plugin answers for "config".
+  if (opts.consent !== false && capacitor && capacitor.Plugins && capacitor.Plugins.Preferences) {
+    const P = capacitor.Plugins.Preferences, get = P.get.bind(P);
+    P.get = async (args) => {
+      const r = await get(args);
+      if (!args || args.key !== "config") return r;
+      const cfg = r && r.value ? JSON.parse(r.value) : {};
+      if (!cfg.dataConsent) cfg.dataConsent = CONSENT;
+      return { value: JSON.stringify(cfg) };
+    };
+  }
   const win = {
     Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
@@ -155,6 +176,27 @@ function methodPaths(surface) {
       "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
+  });
+
+  await check("nothing reaches the gateway before the data notice is allowed", async () => {
+    const calls = [];
+    const bridge = loadMobileSurface(async (url) => { calls.push(String(url)); return new Response("{}", { status: 200 }); }, null, { consent: false });
+    const events = [];
+    loadMobileSurface.lastWindow.dispatchEvent = (e) => { events.push(e && e.type); return true; };
+    const run = await bridge.agent.run([{ role: "user", content: "hello" }]);
+    assert(run && run.done === false && /data notice/.test(run.error || ""), `agent.run answered ${JSON.stringify(run)}`);
+    const chat = await bridge.chat([{ role: "user", content: "hello" }]);
+    assert(chat && /data notice/.test(chat.error || "") && chat.code === "consent", `chat answered ${JSON.stringify(chat)}`);
+    assert(!calls.some((u) => u.includes("/api/gateway")), `the gateway was called anyway: ${calls.join(", ")}`);
+    assert(events.includes("crowe:consent-needed"), `the notice was not asked for; events: ${events.join(", ")}`);
+    // Allowed with an OLDER notice version, it must still refuse: a notice that
+    // named a new recipient has to be read again.
+    const stale = loadMobileSurface(async (url) => { calls.push(String(url)); return new Response("{}", { status: 200 }); }, null, { consent: false });
+    await stale.setConfig({ dataConsent: { version: NOTICE_VERSION - 1, at: "2026-09-01T00:00:00.000Z" } });
+    const again = await stale.chat([{ role: "user", content: "hello" }]);
+    assert(again && again.code === "consent", `a stale consent was accepted: ${JSON.stringify(again)}`);
+    assert(!calls.some((u) => u.includes("/api/gateway")), "the gateway was called on a stale consent");
+    return "refused three times, zero gateway calls";
   });
 
   await check("every call answers with a promise, every subscription with a function", () => {

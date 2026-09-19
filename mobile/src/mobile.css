@@ -606,3 +606,28 @@ body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .sur
 /* Diagnostics in Settings */
 .m-diag-log { font: 11px/1.45 ui-monospace, "JetBrains Mono", Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; margin: 6px 0 8px; padding: 10px; border: 1px solid rgba(127, 127, 140, 0.25); border-radius: 8px; color: var(--muted, #b8b8bf); }
 .m-diag-actions { display: flex; gap: 8px; }
+
+/* ─── The data notice (data-notice.js) ──────────────────────────────────────
+   A full sheet under the launch veil (#launch is 90) and over everything else,
+   including the drawer (60) and its scrim (55). It is the disclosure App Store
+   guidelines 5.1.1 and 5.1.2 ask for, so it reads as a page, not a toast: one
+   column, the house serif on the title, the body in the reading size. */
+.m-notice { position: fixed; inset: 0; z-index: 80; display: none; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  background: var(--cream, #f7f3ea); color: var(--ink, #1a1714);
+  padding: calc(22px + env(safe-area-inset-top)) 18px calc(22px + env(safe-area-inset-bottom)); }
+body.dark .m-notice { background: #16130f; }
+.m-notice.open { display: block; }
+body.m-notice-open .m-tabs { display: none; }
+.m-notice-card { max-width: 560px; margin: 0 auto; }
+.m-notice .m-title { font-size: 1.5rem; line-height: 1.2; margin: 0 0 12px; }
+.m-notice-body h2 { font: 600 0.7rem/1.3 Inter, system-ui, -apple-system, sans-serif; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted, #6b6457); margin: 16px 0 6px; }
+.m-notice-body p, .m-notice-body li { font-size: 0.94rem; line-height: 1.5; margin: 0 0 6px; color: var(--ink, #1a1714); }
+.m-notice-body ul { padding-left: 18px; margin: 0; }
+.m-notice-body b { font-weight: 600; }
+.m-notice.compact .m-notice-body p { font-size: 1rem; }
+.m-notice-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 22px; }
+.m-notice-actions button { width: 100%; padding: 13px 16px; font-size: 1rem; border-radius: 12px; }
+.m-notice-policy { display: block; margin: 16px auto 0; background: none; border: none; padding: 8px;
+  color: var(--gold-text, #8c682c); text-decoration: underline; font-size: 0.9rem; cursor: pointer; }
+.m-data-actions { display: flex; flex-wrap: wrap; gap: 8px; }
