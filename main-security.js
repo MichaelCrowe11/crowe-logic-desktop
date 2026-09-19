@@ -127,13 +127,12 @@ function sanitizeConfigPatch(raw) {
   }
   if (Object.hasOwn(patch, "mcpServers")) out.mcpServers = sanitizeMcpServers(patch.mcpServers);
   if (patch.sense && typeof patch.sense === "object") out.sense = normalizeSense(patch.sense);
-  // Crowe Browser: an https service URL (loopback http for a local fake) and
-  // a service key. Either half alone is a valid patch; main keeps the other.
-  // The key is a string the renderer typed, capped; it is never read back out.
+  // Crowe Browser: an https service URL (loopback http for a local fake). The
+  // key is not a config field: it goes to the encrypted store through
+  // crowe:keys:set, and a key that arrives here is dropped, like the token.
   if (patch.croweBrowser && typeof patch.croweBrowser === "object" && !Array.isArray(patch.croweBrowser)) {
     const cb = {};
     if (typeof patch.croweBrowser.url === "string") { const u = normalizeBaseUrl(patch.croweBrowser.url); if (u) cb.url = u; }
-    if (typeof patch.croweBrowser.key === "string") cb.key = patch.croweBrowser.key.trim().slice(0, 512);
     if (Object.keys(cb).length) out.croweBrowser = cb;
   }
   return out;

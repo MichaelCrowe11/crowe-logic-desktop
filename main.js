@@ -66,10 +66,10 @@ const DEFAULTS = {
   // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
   // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
   sense: { ...Sense.SENSE_DEFAULTS },
-  // Crowe Browser, the cloud browser for agents. The service URL and the
-  // service key that creates sessions. The key stays in this process: the
-  // renderer is told whether one is set, never what it is.
-  croweBrowser: { url: Browser.DEFAULT_URL, key: "" },
+  // Crowe Browser, the cloud browser for agents. The service URL alone. The
+  // credential is not config: the signed-in user's Crowe ID token, or the
+  // service key in the encrypted store, both read in this process only.
+  croweBrowser: { url: Browser.DEFAULT_URL },
   // The hosted control plane: off | local | remote. Off is the desktop exactly
   // as it ships today, and it is the default so this changes nothing for an
   // existing install. See cloud/contract.js.
@@ -192,7 +192,9 @@ function loadConfig() {
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     cfg.sense = Sense.normalizeSense(cfg.sense);
-    cfg.croweBrowser = normalizeBrowserConfig(cfg.croweBrowser);
+    // A key still in the file from before the store took it is moved once
+    // on the way through, and the block comes out with the URL alone.
+    cfg.croweBrowser = normalizeBrowserConfig(Browser.migrateKeyIntoStore(configPath(), cfg.croweBrowser, { readStore: readKeyStore, writeStore: writeKeyStore }));
     // Same closed-set rule again: an unrecognised plane mode means no plane,
     // never an unmetered remote one.
     if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
@@ -204,10 +206,10 @@ function loadConfig() {
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
 }
 // The Crowe Browser block as a closed shape: an https URL (the default when
-// the stored one is unusable) and a key string. Anything else is dropped.
+// the stored one is unusable). Anything else, a key included, is dropped.
 function normalizeBrowserConfig(raw) {
   const c = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  return { url: Browser.normalizeBaseUrl(c.url) || Browser.DEFAULT_URL, key: typeof c.key === "string" ? c.key : "" };
+  return { url: Browser.normalizeBaseUrl(c.url) || Browser.DEFAULT_URL };
 }
 function saveConfig(patch) {
   const current = loadConfig();
@@ -228,6 +230,12 @@ const KEY_PROVIDERS = {
   openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1/models", header: "Bearer" },
   groq: { label: "Groq", url: "https://api.groq.com/openai/v1/models", header: "Bearer" },
 };
+// Crowe Browser's service key rests in the same encrypted store, under its
+// own id. It is a credential for a Crowe service, not a model provider, so it
+// is not in KEY_PROVIDERS and appears in no list built from that table: the
+// Key Manager rows, the image tool's providers, the test endpoint.
+const SERVICE_KEYS = { croweBrowser: { label: "Crowe Browser" } };
+const keyStoreAccepts = (id) => Boolean(KEY_PROVIDERS[id] || SERVICE_KEYS[id]);
 function keyStorePath() { return path.join(app.getPath("userData"), "credentials.bin"); }
 function readKeyStore() {
   try {
@@ -248,15 +256,20 @@ function keyStatus() {
 }
 ipcMain.handle("crowe:keys:list", () => ({ encrypted: safeStorage.isEncryptionAvailable(), providers: keyStatus() }));
 ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
-  if (!KEY_PROVIDERS[provider] || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
+  if (!keyStoreAccepts(provider) || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
   const store = readKeyStore(); store[provider] = { value: key.trim(), updatedAt: Date.now() }; writeKeyStore(store);
+  // Cloud browser sessions opened under the old key end; the next tool call
+  // opens one under the new key.
+  if (provider === "croweBrowser") browserSessions.endAll().catch(() => {});
   return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:remove", (_e, { provider }) => {
-  // Same provider gate as set: the store also carries the plugin secrets
-  // namespace, and an unchecked name could clear it in one call.
-  if (!KEY_PROVIDERS[provider]) return { error: "Invalid provider" };
-  const store = readKeyStore(); delete store[provider]; writeKeyStore(store); return { ok: true, providers: keyStatus() };
+  // Same gate as set: the store also carries the plugin secrets namespace,
+  // and an unchecked name could clear it in one call.
+  if (!keyStoreAccepts(provider)) return { error: "Invalid provider" };
+  const store = readKeyStore(); delete store[provider]; writeKeyStore(store);
+  if (provider === "croweBrowser") browserSessions.endAll().catch(() => {});
+  return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
   const spec = KEY_PROVIDERS[provider], secret = readKeyStore()[provider]?.value;
@@ -535,7 +548,12 @@ function signIn() {
   return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
-ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
+ipcMain.handle("crowe:auth:logout", () => {
+  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
+  browserSessions.endAll().catch(() => {});
+  return { ok: true };
+});
 ipcMain.handle("crowe:auth:status", async () => {
   let u = currentUser();
   if (u && u.exp) {
@@ -1197,15 +1215,24 @@ function printToPdf(html) {
 /* Crowe Browser sessions, one per turn owner. The map lives here because the
    sessions outlive turns: the chat's browser stays on its page between
    messages, a Room seat keeps its own until the seat is stopped or the room
-   deleted, and quitting ends them all. The client is built from the config at
-   creation time, so the key is read here and handed to no one; a URL or key
-   changed in Settings applies to the next session, and the live ones under the
-   old service are ended. The harness reaches this through ctx.browser. */
+   deleted, and quitting ends them all. A URL changed in Settings applies to
+   the next session, and the live ones under the old service are ended. The
+   harness reaches this through ctx.browser.
+
+   The credential a session is created with (API.md, Authentication): the
+   signed-in user's Crowe ID access token, refreshed through the one refresh
+   path when it is within a minute of expiry, or the service key from the
+   encrypted store when nobody is signed in. Both are read in this process at
+   request time and handed to no one; the renderer is told which kind is in
+   force, never a value. */
+function browserServiceKey() { const e = readKeyStore().croweBrowser; return e && typeof e.value === "string" ? e.value : ""; }
+function browserAuthKind(cfg) { return Browser.authKind({ getToken: () => (cfg || loadConfig()).token, getKey: browserServiceKey }); }
+const browserCredential = Browser.credentialProvider({ getToken: () => loadConfig().token, getKey: browserServiceKey, refresh: refreshToken });
 const browserSessions = new Browser.BrowserSessions({
   clientFor: () => {
-    const c = loadConfig().croweBrowser;
-    if (!c || !c.url || !c.key) return null;
-    try { return new Browser.CroweBrowserClient({ url: c.url, key: c.key }); } catch { return null; }
+    const cfg = loadConfig();
+    if (!cfg.croweBrowser || !cfg.croweBrowser.url || browserAuthKind(cfg) === "none") return null;
+    try { return new Browser.CroweBrowserClient({ url: cfg.croweBrowser.url, credential: browserCredential }); } catch { return null; }
   },
 });
 const harnessCtx = {
@@ -1747,9 +1774,9 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
-// The Crowe Browser block as the renderer may see it: the URL, and whether a
-// key is set. The key itself never crosses to the renderer.
-const browserConfigView = (c) => ({ croweBrowser: { url: (c.croweBrowser || {}).url || Browser.DEFAULT_URL }, croweBrowserKeySet: Boolean((c.croweBrowser || {}).key) });
+// The Crowe Browser block as the renderer may see it: the URL, and which
+// credential is in force ("crowe-id", "key" or "none"). Never a value.
+const browserConfigView = (c) => ({ croweBrowser: { url: (c.croweBrowser || {}).url || Browser.DEFAULT_URL }, croweBrowserAuth: browserAuthKind(c) });
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
@@ -1764,8 +1791,8 @@ ipcMain.handle("crowe:get-config", () => {
 ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   const patch = sanitizeConfigPatch(rawPatch);
   const before = loadConfig().croweBrowser;
-  // A partial Crowe Browser patch (the URL alone, or the key alone) keeps the
-  // other half; saveConfig merges one level deep and would drop it.
+  // A Crowe Browser patch carries the URL alone; the key goes through the
+  // key store, and sanitizeConfigPatch has already dropped one sent here.
   if (patch && patch.croweBrowser) patch.croweBrowser = normalizeBrowserConfig({ ...before, ...patch.croweBrowser });
   const c = saveConfig(patch);
   // Typing a folder into Settings is opening it, the same as picking one from
@@ -1773,9 +1800,9 @@ ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   if (patch && patch.cwd) { CWD = patch.cwd; rememberWorkspace(CWD); }
   if (patch && patch.mcpServers) await mcpConnectAll();
   if (patch && patch.sense) sensePoller().start();
-  // Sessions opened under the old URL or key are ended; the next tool call
-  // opens one under the new ones.
-  if (patch && patch.croweBrowser && (c.croweBrowser.url !== before.url || c.croweBrowser.key !== before.key)) browserSessions.endAll().catch(() => {});
+  // Sessions opened under the old URL are ended; the next tool call opens
+  // one under the new one.
+  if (patch && patch.croweBrowser && c.croweBrowser.url !== before.url) browserSessions.endAll().catch(() => {});
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
     ...browserConfigView(c),
