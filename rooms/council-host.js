@@ -10,7 +10,13 @@ const registry = require("./registry");
 // advisory roster cannot be lifted into writing by a grant. A missing or
 // invalid autonomy setting fails closed here; effectiveTier alone would
 // default it to edit, which is right for a Room turn and wrong for a grant.
-const fileTier = (room, cfg) => registry.TIERS.includes(String(cfg.autonomy)) ? registry.effectiveTier(room.agents.map(a => a.agentId), cfg.autonomy) : "plan";
+// So does a roster identity the registry cannot resolve: roomCeiling drops
+// it from the minimum, and a grant must not be computed around a stranger.
+const fileTier = (room, cfg) => {
+  const ids = room.agents.map(a => a.agentId);
+  if (!registry.TIERS.includes(String(cfg.autonomy)) || !ids.length || ids.some(id => !registry.getAgent(id))) return "plan";
+  return registry.effectiveTier(ids, cfg.autonomy);
+};
 function installCouncilHost(d) {
   const runs = new Map();
   const command = (name, fn) => d.ipcMain.handle(`crowe:rooms:council-${name}`, async (_e, arg = {}) => {

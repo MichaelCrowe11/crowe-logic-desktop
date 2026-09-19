@@ -35,7 +35,9 @@ The protocol is `propose -> classify -> vote -> execute -> verify`.
   (`registry.effectiveTier`). It is checked when the grant is made and again
   before every model call and every write. A read-only or advisory roster
   cannot be lifted into writing by a grant; a drop in autonomy, a workspace
-  change or a roster change ends the grant.
+  change or a roster change ends the grant. A missing or invalid autonomy
+  setting, or a roster member the registry no longer resolves, is tier
+  `plan`: the Room turn's leniency for both is not inherited by a grant.
 - Desktop file authority permits only full-text replacements of explicitly
   selected, existing UTF-8 files inside the current workspace. At most 12 files,
   each up to 60 KB. The entire selected context must fit the protocol's 200k
@@ -64,7 +66,8 @@ The protocol is `propose -> classify -> vote -> execute -> verify`.
 
 A complete cycle's call allowance is checked before starting it. Calls are
 reserved before each request. Limits are 1 to 10 steps, 5 to 100 logical model
-requests, and 1 to 60 minutes. Each request also has a two-minute timeout.
+requests, and 1 to 60 minutes. Each desktop request also has a two-minute
+timeout; the headless host takes its timeout from a flag and records it.
 A logical request can involve the gateway's normal authentication refresh.
 These are not a hard dollar ceiling or guaranteed upstream token reservation.
 
@@ -174,3 +177,9 @@ Sol and DeepSeek V4 Pro, quorum three of four reviewers. Receipts are in
   invalid, because `effectiveTier` defaults an unknown tier to edit. All four
   reviewers confirmed the finding. Fixed above: the host and the headless host
   both fail closed on an unknown autonomy, and a test covers it.
+- A seventh grant reviewed the fix. GPT-5.6 Sol found that `roomCeiling`
+  drops a roster identity the registry cannot resolve, so a mixed roster with
+  a stale participant was computed around the stranger. Fixed above: an
+  unresolved identity fails closed to plan, and a test covers it. That grant
+  ended when Grok 4.6's vote exceeded a five-minute timeout; slow seats need
+  a longer timeout or a different chair.

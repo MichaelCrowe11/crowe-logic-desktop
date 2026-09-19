@@ -71,6 +71,14 @@ function fixture(options={}){
      assert.match(out.error,/effective tier is plan/);assert(!h.room.council);
    }
  });
+ await test('desktop host fails closed on a roster identity the registry cannot resolve',async()=>{
+   const h=host()(models,()=>({autonomy:'execute',cwd:process.cwd(),token:'t',model:'a'}),()=>({}));
+   h.room.agents[1]={agentId:'retired-stranger',model:'b',state:'idle'};
+   assert.equal(G.getAgent('retired-stranger'),null);
+   assert.equal(G.roomCeiling(h.room.agents.map(a=>a.agentId)),'edit');
+   const out=await h.start({goal:'Correct the fixture',mode:'files',files:['example.txt'],quorum:2,maxSteps:1,maxCalls:8,minutes:5});
+   assert.match(out.error,/effective tier is plan/);assert(!h.room.council);
+ });
  await test('desktop host accepts an edit-capable roster and records advisory receipts with the approved text',async()=>{
    const reply=(messages)=>{const sys=messages[0].content;if(sys.startsWith('Propose'))return {kind:'complete',summary:'Recommendation for the record.',changes:[]};if(sys.startsWith('Act as a safety'))return {decision:'allow',reason:'Advisory, no changes.'};return {decision:'approve',reason:'Matches the recorded evidence.'};};
    const h=host()(models,()=>({autonomy:'edit',cwd:process.cwd(),token:'t',model:'a'}),reply);
