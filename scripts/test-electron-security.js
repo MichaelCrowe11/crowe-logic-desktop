@@ -213,6 +213,20 @@ check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
 check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "the renderer must not be able to write a bearer token through set-config");
+// Crowe Browser: the renderer may set the service URL and key, the URL must be
+// https (loopback http for a local fake), and get-config hands back the URL
+// and whether a key is set, never the key.
+check(Object.hasOwn(sanitizeConfigPatch({ croweBrowser: { url: "https://browser.crowelogic.com/", key: "k" } }), "croweBrowser"), "the renderer must be able to set the Crowe Browser URL and key through set-config");
+check(!Object.hasOwn(sanitizeConfigPatch({ croweBrowser: { url: "http://browser.example/" } }), "croweBrowser"), "a plaintext remote Crowe Browser URL must be dropped");
+check(!Object.hasOwn(sanitizeConfigPatch({ croweBrowser: "https://browser.crowelogic.com" }), "croweBrowser"), "a Crowe Browser block that is not an object must be dropped");
+check(/const browserConfigView = \(c\) => \(\{ croweBrowser: \{ url: .*?\}, croweBrowserKeySet: Boolean\(/.test(main), "get-config must expose the Crowe Browser URL and whether a key is set");
+{
+  const getConfig = (main.match(/ipcMain\.handle\("crowe:get-config", \(\) => \{[\s\S]*?\n\}\);/) || [""])[0];
+  const setConfig = (main.match(/ipcMain\.handle\("crowe:set-config", async \(_e, rawPatch\) => \{[\s\S]*?\n\}\);/) || [""])[0];
+  check(getConfig && setConfig, "the config handlers must be findable for the Crowe Browser key check");
+  check(!/\.key\b/.test(getConfig) && !/\.key\b(?!\s*!==)/.test(setConfig.replace(/c\.croweBrowser\.key !== before\.key/, "")), "neither config handler may hand the Crowe Browser key to the renderer");
+}
+check(/^\s{2}browser: browserSessions,/m.test(harnessCtxSrc), "harnessCtx must carry the cloud browser session pool");
 {
   const companion = fs.readFileSync(path.join(root, "companion.js"), "utf8");
   check(/this\.tierAllows\("run"\)/.test(companion) && /this\.tierAllows\("write"\)/.test(companion), "the companion must refuse runs and writes the tier does not allow");
@@ -227,6 +241,8 @@ check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "
 check(/will-redirect/.test(main) && /guardGuestNavigation/.test(main), "guest redirects must remain under the navigation policy");
 const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "utf8");
 check(!/setAttribute\(["']allowpopups/.test(renderer), "the browser guest must not opt into popups");
+check(!/croweBrowser\.key\b/.test(renderer), "the renderer must never read the Crowe Browser key");
+check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser"\)/.test(renderer), "cloud browser panels, whose address carries a session token, must not be saved with the deck");
 check(!/\sstyle=["']/.test(renderer), "dynamic renderer markup must not contain inline style attributes");
 check(/liftMotionStyle/.test(renderer) && /croweAdoptStyle/.test(renderer), "the logotype's style block must be adopted, not inlined");
 check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not write style attributes, which the policy blocks");

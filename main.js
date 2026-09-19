@@ -13,6 +13,7 @@ const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
 const Repos = require("./repos");
+const Browser = require("./browser-client");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
   hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
@@ -65,6 +66,10 @@ const DEFAULTS = {
   // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
   // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
   sense: { ...Sense.SENSE_DEFAULTS },
+  // Crowe Browser, the cloud browser for agents. The service URL and the
+  // service key that creates sessions. The key stays in this process: the
+  // renderer is told whether one is set, never what it is.
+  croweBrowser: { url: Browser.DEFAULT_URL, key: "" },
   // The hosted control plane: off | local | remote. Off is the desktop exactly
   // as it ships today, and it is the default so this changes nothing for an
   // existing install. See cloud/contract.js.
@@ -187,6 +192,7 @@ function loadConfig() {
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     cfg.sense = Sense.normalizeSense(cfg.sense);
+    cfg.croweBrowser = normalizeBrowserConfig(cfg.croweBrowser);
     // Same closed-set rule again: an unrecognised plane mode means no plane,
     // never an unmetered remote one.
     if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
@@ -196,6 +202,12 @@ function loadConfig() {
     if (typeof cfg.reposRoot !== "string" || !cfg.reposRoot.trim()) cfg.reposRoot = DEFAULTS.reposRoot;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
+}
+// The Crowe Browser block as a closed shape: an https URL (the default when
+// the stored one is unusable) and a key string. Anything else is dropped.
+function normalizeBrowserConfig(raw) {
+  const c = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return { url: Browser.normalizeBaseUrl(c.url) || Browser.DEFAULT_URL, key: typeof c.key === "string" ? c.key : "" };
 }
 function saveConfig(patch) {
   const current = loadConfig();
@@ -1182,9 +1194,24 @@ function printToPdf(html) {
   return job;
 }
 
+/* Crowe Browser sessions, one per turn owner. The map lives here because the
+   sessions outlive turns: the chat's browser stays on its page between
+   messages, a Room seat keeps its own until the seat is stopped or the room
+   deleted, and quitting ends them all. The client is built from the config at
+   creation time, so the key is read here and handed to no one; a URL or key
+   changed in Settings applies to the next session, and the live ones under the
+   old service are ended. The harness reaches this through ctx.browser. */
+const browserSessions = new Browser.BrowserSessions({
+  clientFor: () => {
+    const c = loadConfig().croweBrowser;
+    if (!c || !c.url || !c.key) return null;
+    try { return new Browser.CroweBrowserClient({ url: c.url, key: c.key }); } catch { return null; }
+  },
+});
 const harnessCtx = {
   getCwd: () => CWD,
   setCwd: (p) => { CWD = p; },
+  browser: browserSessions,
   loadConfig,
   proposeEdit,
   // The gate in front of anything that cannot be taken back, and the receipt
@@ -1247,10 +1274,15 @@ const harnessCtx = {
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();
+// A stopped Room seat gives its cloud browser back. The chat's own session
+// stays: stopping a turn is not closing the browser, and the next message
+// finds the page where it was.
+const isSeatId = (id) => /^room:/.test(String(id || ""));
 ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   const run = agentRuns.get(id);
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
   denyPendingApprovals(id);
+  if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
 ipcMain.handle("crowe:agent:stop-all", () => {
@@ -1259,6 +1291,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
     try { if (run.controller) run.controller.abort(); } catch {}
   }
   denyPendingApprovals();
+  browserSessions.dropWhere(isSeatId).catch(() => {});
   return { ok: true, stopped: agentRuns.size };
 });
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
@@ -1714,6 +1747,9 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
 });
 
 // ─── Config + status ─────────────────────────────────────────────────────────
+// The Crowe Browser block as the renderer may see it: the URL, and whether a
+// key is set. The key itself never crosses to the renderer.
+const browserConfigView = (c) => ({ croweBrowser: { url: (c.croweBrowser || {}).url || Browser.DEFAULT_URL }, croweBrowserKeySet: Boolean((c.croweBrowser || {}).key) });
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
@@ -1721,19 +1757,28 @@ ipcMain.handle("crowe:get-config", () => {
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
     reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
+    ...browserConfigView(c),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
 ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   const patch = sanitizeConfigPatch(rawPatch);
+  const before = loadConfig().croweBrowser;
+  // A partial Crowe Browser patch (the URL alone, or the key alone) keeps the
+  // other half; saveConfig merges one level deep and would drop it.
+  if (patch && patch.croweBrowser) patch.croweBrowser = normalizeBrowserConfig({ ...before, ...patch.croweBrowser });
   const c = saveConfig(patch);
   // Typing a folder into Settings is opening it, the same as picking one from
   // the sidebar, so it lands in the same list.
   if (patch && patch.cwd) { CWD = patch.cwd; rememberWorkspace(CWD); }
   if (patch && patch.mcpServers) await mcpConnectAll();
   if (patch && patch.sense) sensePoller().start();
+  // Sessions opened under the old URL or key are ended; the next tool call
+  // opens one under the new ones.
+  if (patch && patch.croweBrowser && (c.croweBrowser.url !== before.url || c.croweBrowser.key !== before.key)) browserSessions.endAll().catch(() => {});
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
+    ...browserConfigView(c),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
@@ -1997,6 +2042,8 @@ ipcMain.handle("crowe:rooms:load", (_e, { id } = {}) => {
 ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
   liveRooms.delete(id);
+  // The room's seats go with it, cloud browsers included.
+  browserSessions.dropWhere((owner) => owner.startsWith(`room:${id}:`)).catch(() => {});
   try { fs.unlinkSync(roomPath(id)); } catch {}
   broadcast("crowe:rooms:changed", { id, reason: "delete" });
   return { ok: true };
@@ -2532,7 +2579,13 @@ app.whenReady().then(async () => {
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
-  try { return require("./share-preview").stopAllForQuit("the app is quitting"); } catch { return null; }
+  let preview = null;
+  try { preview = require("./share-preview").stopAllForQuit("the app is quitting"); } catch { preview = null; }
+  // Cloud browsers are ended the same way: best effort, bounded by the
+  // client's own end timeout, and the server's idle timer finishes the rest.
+  const browsers = browserSessions.owners().length ? browserSessions.endAll().catch(() => {}) : null;
+  if (!preview && !browsers) return null;
+  return Promise.all([preview, browsers].filter(Boolean));
 }
 /* Electron does not wait on a promise from before-quit, and the SIGKILL that
    follows the grace period lives in this process, so a cloudflared that sat
