@@ -109,7 +109,12 @@
         await phase("proposing");
         const before = await deps.snapshot(state.grant);
         if (canonical(before).length > LIMIT) throw new Error("Selected context is too large.");
-        const context = { agreement: state.grant, files: before, previous: state.proposals.map(p => ({ summary: p.proposal.summary, status: p.status })).slice(-10) };
+        // Prior outcomes are stated plainly. A reviewer reading a bare status
+        // of "verified" has rejected the next step as out of order three
+        // times; approval is a host fact, not something a model infers.
+        const outcome = (p) => p.status === "verified" ? "approved, executed and verified" : p.status === "needs-review" ? "approved and executed; verification needs operator review" : p.status;
+        const previous = state.proposals.map(p => ({ summary: p.proposal.summary, status: p.status, approved: ["approved", "executed", "verified", "needs-review"].includes(p.status), outcome: outcome(p) })).slice(-10);
+        const context = { agreement: state.grant, files: before, previous };
         const proposal = normalize(await ask(proposer, "propose", context), state.grant);
         await deps.classify(proposal, state.grant, before);
         const digest = await hash({ contractHash, before, proposal });
