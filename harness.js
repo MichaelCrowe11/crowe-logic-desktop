@@ -1699,10 +1699,19 @@ async function browserAct(state, owner, entry, action, fields) {
   if (err) throw err;
   return res;
 }
+/* A 401 names the credential that was refused. With a Crowe ID token it is a
+   sign-in that has lapsed, and the fix is signing in again; only with the
+   service key is it a key to check. Neither says a key is missing. */
+function browserRefused(e, lead = "error: ") {
+  const said = e && e.message ? ` (${String(e.message).slice(0, 120)})` : "";
+  return e && e.auth === "crowe-id"
+    ? `${lead}Crowe Browser did not accept the Crowe ID sign-in${said}. Ask the user to sign in again, then retry.`
+    : `${lead}Crowe Browser refused the service key${said}. Ask the user to check the key under Crowe Browser in Settings.`;
+}
 function browserFailure(name, e) {
   if (e instanceof BrowserError) {
     if (e.status === 422) return `error: ${name} failed: ${e.message}${browserWhere(e.state)}`;
-    if (e.status === 401) return "error: Crowe Browser refused the service key. Ask the user to check the key under Crowe Browser in Settings.";
+    if (e.status === 401) return browserRefused(e);
     if (e.code === "timeout") return `error: ${e.message}. The page may still be loading; try browser_read.`;
     return `error: ${e.message}`;
   }
@@ -1730,7 +1739,7 @@ function browserSuccess(name, res, fields) {
 }
 async function toolBrowser(ctx, name, args, tier, roomBound, state) {
   const a = args && typeof args === "object" ? args : {};
-  if (!browserOffered(ctx)) return "blocked: Crowe Browser is not set up on this machine. Ask the user to enter the service URL and key under Crowe Browser in Settings.";
+  if (!browserOffered(ctx)) return "blocked: Crowe Browser is not set up on this machine. Ask the user to sign in with Crowe ID, or to paste a service key under Crowe Browser in Settings.";
   if (BROWSER_EXECUTE.has(name) && tier !== "execute") {
     return roomBound ? `blocked: this room runs at "${tier}"; a seat may read pages in the cloud browser, not click or type on them.`
       : `blocked: ${name} acts on a live page, which needs Execute autonomy, and the current mode is "${tier}". Read the page with browser_read, and ask the user to switch autonomy to Execute if they want it acted on.`;
@@ -1796,7 +1805,10 @@ async function toolBrowser(ctx, name, args, tier, roomBound, state) {
   }
 
   let entry;
-  try { entry = await pool.ensure(owner); } catch (e) { return `error: could not start a cloud browser: ${browserErrText(e)}`; }
+  try { entry = await pool.ensure(owner); } catch (e) {
+    if (e instanceof BrowserError && e.status === 401) return browserRefused(e, "error: could not start a cloud browser: ");
+    return `error: could not start a cloud browser: ${browserErrText(e)}`;
+  }
   let res;
   try {
     res = await browserAct(state, owner, entry, action, fields);

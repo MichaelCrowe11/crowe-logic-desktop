@@ -9,8 +9,11 @@
 // reused across turns; a session the server ended (410) replaced once, with a
 // read retried on the restored page and an act refused until a fresh read;
 // reads at any tier and acts at Execute only; a `browser` event after every
-// action carrying the thumbnail and the live view address; and the model's
-// tool results carrying neither.
+// action carrying the thumbnail and the live view address; the model's tool
+// results carrying neither; the signed-in user's Crowe ID token creating the
+// session, refreshed first when it is about to lapse, with the service key
+// only when nobody is signed in; and a key left in config.json moved into
+// the encrypted store once.
 "use strict";
 const assert = require("assert");
 const fs = require("fs");
@@ -18,7 +21,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const H = require("../harness");
-const { CroweBrowserClient, BrowserSessions, BrowserError, normalizeBaseUrl } = require("../browser-client");
+const { CroweBrowserClient, BrowserSessions, BrowserError, normalizeBaseUrl, authKind, credentialProvider, migrateKeyIntoStore, jwtExp } = require("../browser-client");
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
@@ -27,9 +30,16 @@ function test(name, fn) { tests.push({ name, fn }); }
 const THUMB = "data:image/jpeg;base64,VEhVTUI=";       // "THUMB", never a real frame
 const SHOT = "data:image/jpeg;base64,U0hPVA==";        // "SHOT"
 const KEY = "svc_test_key_do_not_print";
+// A Crowe ID access token as the service sees it: three base64url parts, a
+// payload with sub and exp. The fake never checks the signature; it accepts
+// the tokens a test has put in `users`, and forces the owner to user:<sub>.
+const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fakeJwt = ({ sub = "u-1", exp }) => `${b64url({ alg: "RS256", typ: "JWT", kid: "k1" })}.${b64url({ iss: "https://id.crowelogic.com/realms/crowe", sub, exp, typ: "Bearer", azp: "crowe-desktop" })}.sig`;
+const subOf = (jwt) => { try { return JSON.parse(Buffer.from(jwt.split(".")[1], "base64").toString("utf8")).sub || ""; } catch { return ""; } };
 function fakeServer() {
   const sessions = new Map();   // id -> { id, token, url, title, ended, owner }
   const calls = [];             // { method, path, auth, body }
+  const users = new Set();      // Crowe ID tokens the fake accepts
   let n = 0;
   const json = (res, status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
   const err = (res, status, code, message, state) => json(res, status, { error: { code, message }, ...(state ? { state } : {}) });
@@ -43,9 +53,11 @@ function fakeServer() {
       const url = new URL(req.url, "http://x");
       calls.push({ method: req.method, path: url.pathname, auth, body });
       if (req.method === "POST" && url.pathname === "/v1/sessions") {
-        if (auth !== `Bearer ${KEY}`) return err(res, 401, "unauthorized", "bad service key");
+        const bearer = auth.replace(/^Bearer /, "");
+        const user = users.has(bearer) ? subOf(bearer) : "";
+        if (auth !== `Bearer ${KEY}` && !user) return err(res, 401, "unauthorized", /^ey/.test(bearer) ? "token rejected" : "bad service key");
         n += 1;
-        const s = { id: `s_${n}`, token: `st_${n}_secret`, url: (body && body.start_url) || "about:blank", title: "", ended: false, owner: (body && body.owner) || "" };
+        const s = { id: `s_${n}`, token: `st_${n}_secret`, url: (body && body.start_url) || "about:blank", title: "", ended: false, owner: user ? `user:${user}` : (body && body.owner) || "" };
         sessions.set(s.id, s);
         return json(res, 201, { id: s.id, token: s.token, state: "starting",
           connect_url: `ws://127.0.0.1/v1/sessions/${s.id}/cdp?token=${s.token}`,
@@ -87,7 +99,7 @@ function fakeServer() {
   });
   let base = "";
   const start = () => new Promise((resolve) => server.listen(0, "127.0.0.1", () => { base = `http://127.0.0.1:${server.address().port}`; resolve(base); }));
-  return { server, sessions, calls, start, get base() { return base; },
+  return { server, sessions, calls, users, start, get base() { return base; },
     end: (id) => { const s = sessions.get(id); if (s) s.ended = true; },
     live: () => [...sessions.values()].filter((s) => !s.ended).map((s) => s.id),
     close: () => new Promise((r) => server.close(() => r())) };
@@ -387,12 +399,113 @@ test("malformed arguments are refused before the service is reached, and the ver
     assert.strictEqual(fake.sessions.size, 0, "no session was opened for a refused call");
     const state = H.newState(ctx, ctx.loadConfig(), { agentId: "main" }, { expert: "coding", model: "m", verify: true });
     assert.match(await H.execTool(ctx, "browser_read", {}, { expert: "coding", verify: true }, state), /^blocked: the verifier checks the workspace; it does not drive the cloud browser\./);
-    // A wrong key is said in words, once, and no session exists.
+    // A wrong key is said in words, once, as a key to check, and no session exists.
     const bad = makeCtx(fake, { croweBrowser: { url: fake.base, key: "wrong" } });
     const t2 = await turn(bad, [call("browser_open", { url: "https://example.com/" })]);
-    assert.match(t2.deps.results()[0].result, /^error: could not start a cloud browser: bad service key/);
+    assert.match(t2.deps.results()[0].result, /^error: could not start a cloud browser: Crowe Browser refused the service key \(bad service key\)\. Ask the user to check the key under Crowe Browser in Settings\.$/);
     assert.strictEqual(fake.sessions.size, 0);
   } finally { await fake.close(); }
+});
+
+// ─── Credentials ─────────────────────────────────────────────────────────────
+test("the signed-in user's Crowe ID token creates the session, the service key only when nobody is signed in, and a token within a minute of its exp is refreshed first", async () => {
+  const fake = fakeServer(); await fake.start();
+  try {
+    const now = 1800000000000;                                    // a fixed clock
+    const live = fakeJwt({ sub: "u-1", exp: now / 1000 + 3600 });
+    const stale = fakeJwt({ sub: "u-1", exp: now / 1000 + 30 }); // inside the minute
+    const fresh = fakeJwt({ sub: "u-1", exp: now / 1000 + 7200 });
+    fake.users.add(live); fake.users.add(fresh);
+    assert.strictEqual(jwtExp(live), now / 1000 + 3600);
+    assert.strictEqual(jwtExp("not a token"), 0);
+    let token = live, refreshes = 0;
+    const getToken = () => token, getKey = () => KEY;
+    const provider = credentialProvider({ getToken, getKey, refresh: async () => { refreshes += 1; token = fresh; return fresh; }, now: () => now });
+    const pool = new BrowserSessions({ clientFor: () => new CroweBrowserClient({ url: fake.base, credential: provider }) });
+    const ctx = makeCtx(fake, {}, { pool });
+    const creates = () => fake.calls.filter((c) => c.path === "/v1/sessions");
+
+    // Signed in: the token creates the session, the owner is the user, the key is not sent.
+    assert.strictEqual(authKind({ getToken, getKey }), "crowe-id");
+    const t1 = await turn(ctx, [call("browser_open", { url: "https://example.com/" }), call("browser_read", {})]);
+    assert.strictEqual(creates()[0].auth, `Bearer ${live}`);
+    assert.strictEqual(fake.sessions.get("s_1").owner, "user:u-1");
+    assert.strictEqual(refreshes, 0, "a token an hour from its exp is not refreshed");
+    assert.match(t1.deps.results()[0].result, /^opened https:\/\/example\.com\//);
+    await ctx.pool.endAll();
+
+    // Signed out: the key is the fallback.
+    token = "";
+    assert.strictEqual(authKind({ getToken, getKey }), "key");
+    await turn(ctx, [call("browser_open", { url: "https://example.com/" })]);
+    assert.strictEqual(creates()[1].auth, `Bearer ${KEY}`);
+    assert.strictEqual(fake.sessions.get("s_2").owner, "main");
+    await ctx.pool.endAll();
+    assert.strictEqual(authKind({ getToken: () => "", getKey: () => "" }), "none");
+
+    // Within a minute of exp: refreshed through the one path, and the fresh token is what arrives.
+    token = stale;
+    await turn(ctx, [call("browser_open", { url: "https://example.com/" })]);
+    assert.strictEqual(refreshes, 1);
+    assert.strictEqual(creates()[2].auth, `Bearer ${fresh}`);
+    assert.strictEqual(fake.sessions.get("s_3").owner, "user:u-1");
+    await ctx.pool.endAll();
+
+    // A refresh that fails sends the token as it was; the service's 401 is worded as a sign-in, not as a key.
+    let held = stale;
+    const failing = credentialProvider({ getToken: () => held, getKey, refresh: async () => null, now: () => now });
+    const pool2 = new BrowserSessions({ clientFor: () => new CroweBrowserClient({ url: fake.base, credential: failing }) });
+    const ctx2 = makeCtx(fake, {}, { pool: pool2 });
+    const t4 = await turn(ctx2, [call("browser_open", { url: "https://example.com/" })]);
+    const said = t4.deps.results()[0].result;
+    assert.match(said, /^error: could not start a cloud browser: Crowe Browser did not accept the Crowe ID sign-in \(token rejected\)\. Ask the user to sign in again, then retry\.$/);
+    assert.ok(!/key|Settings/.test(said), "a refused token is not reported as a missing key");
+    assert.strictEqual(creates()[3].auth, `Bearer ${stale}`, "the key was not tried behind a held token");
+    assert.strictEqual(fake.sessions.size, 3);
+
+    // The Crowe ID token rides on creation only, never on a session call, and never reaches the model.
+    const onSession = fake.calls.filter((c) => c.path !== "/v1/sessions");
+    assert.ok(onSession.length >= 3 && onSession.every((c) => /^Bearer st_\d+_secret$/.test(c.auth)));
+    for (const t of [t1, t4]) for (const r of t.deps.results()) assert.ok(!r.result.includes(live) && !r.result.includes(fresh) && !r.result.includes(stale), "a token reached the model");
+    // The kind rides on the typed error.
+    const c = new CroweBrowserClient({ url: fake.base, credential: async () => ({ bearer: fakeJwt({ exp: now / 1000 + 9 }), kind: "crowe-id" }) });
+    await assert.rejects(c.createSession({}), (e) => e instanceof BrowserError && e.status === 401 && e.auth === "crowe-id");
+    const k = new CroweBrowserClient({ url: fake.base, key: "nope" });
+    await assert.rejects(k.createSession({}), (e) => e instanceof BrowserError && e.status === 401 && e.auth === "key");
+  } finally { await fake.close(); }
+});
+
+test("a key found in config.json is moved into the key store once and struck from the file", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-browser-migrate-"));
+  const file = path.join(dir, "config.json");
+  const url = "https://browser.crowelogic.com";
+  try {
+    fs.writeFileSync(file, JSON.stringify({ autonomy: "edit", croweBrowser: { url, key: " cbk_moving " } }, null, 2));
+    let store = {}, writes = 0;
+    const io = { readStore: () => store, writeStore: (next) => { writes += 1; store = next; }, now: () => 1234 };
+    const block = migrateKeyIntoStore(file, JSON.parse(fs.readFileSync(file, "utf8")).croweBrowser, io);
+    assert.deepStrictEqual(block, { url }, "the block comes out with the URL alone");
+    assert.deepStrictEqual(store, { croweBrowser: { value: "cbk_moving", updatedAt: 1234 } }, "the key is in the store, trimmed, under its own id");
+    const after = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepStrictEqual(after, { autonomy: "edit", croweBrowser: { url } }, "the key is out of the file and the rest of it is as it was");
+    assert.strictEqual(writes, 1);
+    // The next load finds no key and touches nothing.
+    assert.deepStrictEqual(migrateKeyIntoStore(file, after.croweBrowser, io), { url });
+    assert.strictEqual(writes, 1);
+    // A store that already holds a key keeps its own; the file's is still struck.
+    fs.writeFileSync(file, JSON.stringify({ croweBrowser: { url, key: "cbk_old_backup" } }));
+    migrateKeyIntoStore(file, { url, key: "cbk_old_backup" }, io);
+    assert.strictEqual(store.croweBrowser.value, "cbk_moving");
+    assert.ok(!("key" in JSON.parse(fs.readFileSync(file, "utf8")).croweBrowser));
+    // A store that cannot be written leaves the file as it was, so the key is somewhere; the block still carries no key.
+    fs.writeFileSync(file, JSON.stringify({ croweBrowser: { url, key: "cbk_stays" } }));
+    const out = migrateKeyIntoStore(file, { url, key: "cbk_stays" }, { readStore: () => ({}), writeStore: () => { throw new Error("Native credential encryption is unavailable"); } });
+    assert.deepStrictEqual(out, { url });
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, "utf8")).croweBrowser.key, "cbk_stays");
+    // No block, or a block with no key, is the plain shape.
+    assert.deepStrictEqual(migrateKeyIntoStore(file, undefined, io), {});
+    assert.deepStrictEqual(migrateKeyIntoStore(file, { url, key: 42 }, io), { url });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ─── The client on its own ───────────────────────────────────────────────────

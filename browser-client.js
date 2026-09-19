@@ -3,14 +3,18 @@
 // keep it alive, end it. Pure Node with an injectable fetch, so the harness
 // tests run it against a fake server and nothing here needs Electron.
 //
-// Two authorities, never mixed. The service key creates and lists sessions and
-// is the only thing this file holds that outlives a session; it goes into one
-// request header and nowhere else. Everything on a session takes that
-// session's own token, which the service mints at creation. The token also
-// rides inside live_view_url and thumb_url, so those two strings are bearer
-// credentials: the renderer needs them to draw the card and open the live
-// view, the model and the journal never do.
+// Two authorities, never mixed. A creating credential opens and lists
+// sessions: the signed-in user's Crowe ID access token, or the service key
+// when nobody is signed in (API.md, Authentication). It is read at request
+// time, goes into one request header and nowhere else, and is the only thing
+// this file touches that outlives a session. Everything on a session takes
+// that session's own token, which the service mints at creation. The token
+// also rides inside live_view_url and thumb_url, so those two strings are
+// bearer credentials: the renderer needs them to draw the card and open the
+// live view, the model and the journal never do.
 "use strict";
+
+const fs = require("fs");
 
 const DEFAULT_URL = "https://browser.crowelogic.com";
 const REQUEST_TIMEOUT_MS = 45000;      // the first action waits for the container, up to 30 s by contract
@@ -19,10 +23,11 @@ const MAX_TTL_SECONDS = 3600;
 const MIN_TTL_SECONDS = 60;
 
 class BrowserError extends Error {
-  constructor(message, { status = 0, code = "", state = null, result = null } = {}) {
+  constructor(message, { status = 0, code = "", state = null, result = null, auth = "" } = {}) {
     super(message);
     this.name = "BrowserError";
     this.status = status;
+    this.auth = auth;        // which creating credential the request carried: "crowe-id", "key" or ""
     this.code = code || (status === 410 ? "session_ended" : status === 401 ? "unauthorized" : status === 404 ? "not_found"
       : status === 422 ? "action_failed" : status === 504 ? "timeout" : status === 400 ? "bad_request" : "");
     this.state = state;      // the browser state a 422 carries, so the card still updates
@@ -57,9 +62,12 @@ async function readJson(res) {
 }
 
 class CroweBrowserClient {
-  constructor({ url = DEFAULT_URL, key = "", fetch: fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  /* `credential` is an async function answering { bearer, kind } or null,
+     built by credentialProvider below; `key` alone is the fixed service key,
+     for a script or a test. */
+  constructor({ url = DEFAULT_URL, key = "", credential, fetch: fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     this.baseUrl = normalizeBaseUrl(url);
-    this.key = String(key || "");
+    this.credential = typeof credential === "function" ? credential : async () => (key ? { bearer: String(key), kind: "key" } : null);
     this.fetch = fetchImpl || globalThis.fetch;
     this.timeoutMs = timeoutMs;
     if (!this.baseUrl) throw new BrowserError("Crowe Browser URL is not an https address", { code: "bad_request" });
@@ -69,9 +77,13 @@ class CroweBrowserClient {
   async request(method, path, { body, token, timeoutMs } = {}) {
     const headers = { accept: "application/json" };
     if (body !== undefined) headers["content-type"] = "application/json";
-    // The session token where one is given; the service key otherwise. Never both.
+    // The session token where one is given; the creating credential otherwise. Never both.
+    let auth = "";
     if (token) headers.authorization = `Bearer ${token}`;
-    else if (this.key) headers.authorization = `Bearer ${this.key}`;
+    else {
+      const cred = await this.credential();
+      if (cred && cred.bearer) { headers.authorization = `Bearer ${cred.bearer}`; auth = String(cred.kind || ""); }
+    }
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs || this.timeoutMs);
     let res;
@@ -89,7 +101,7 @@ class CroweBrowserClient {
     if (!res.ok) {
       const err = data && data.error && typeof data.error === "object" ? data.error : {};
       throw new BrowserError(String(err.message || (data && data.raw) || `HTTP ${res.status}`).slice(0, 400),
-        { status: res.status, code: err.code, state: data && data.state ? data.state : null, result: data && data.result ? data.result : null });
+        { status: res.status, code: err.code, state: data && data.state ? data.state : null, result: data && data.result ? data.result : null, auth });
     }
     return data;
   }
@@ -196,4 +208,67 @@ class BrowserSessions {
   }
 }
 
-module.exports = { CroweBrowserClient, BrowserSessions, BrowserError, normalizeBaseUrl, clampTtl, DEFAULT_URL };
+/* ─── Credentials ───────────────────────────────────────────────────────────
+   Which credential creates a session. The signed-in user's Crowe ID access
+   token first, refreshed through `refresh` when it is within a minute of its
+   exp so the service never sees a token about to lapse; the service key only
+   when nobody is signed in. `getToken` and `getKey` are read at call time, so
+   a sign-in or a key saved in Settings applies to the next session with no
+   restart. The kind rides on the BrowserError a 401 raises, so the harness
+   can say "sign in again" for the one and "check the key" for the other.
+   A refresh that fails leaves the token as it was: the service's 401 is the
+   honest answer, and it is worded as a sign-in, not as a missing key. */
+const TOKEN_LEEWAY_MS = 60000;
+function jwtExp(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    return Number(payload.exp) || 0;
+  } catch { return 0; }
+}
+function authKind({ getToken, getKey } = {}) {
+  if (typeof getToken === "function" && getToken()) return "crowe-id";
+  if (typeof getKey === "function" && getKey()) return "key";
+  return "none";
+}
+function credentialProvider({ getToken, getKey, refresh, now = Date.now } = {}) {
+  return async () => {
+    let token = String((typeof getToken === "function" && getToken()) || "");
+    if (token) {
+      const exp = jwtExp(token) * 1000;
+      if (exp && exp < now() + TOKEN_LEEWAY_MS && typeof refresh === "function") {
+        const fresh = await Promise.resolve().then(refresh).catch(() => null);
+        if (fresh) token = String(fresh);
+      }
+      return { bearer: token, kind: "crowe-id" };
+    }
+    const key = String((typeof getKey === "function" && getKey()) || "");
+    return key ? { bearer: key, kind: "key" } : null;
+  };
+}
+
+/* The service key used to rest in config.json (mode 0600). It now lives in
+   the encrypted store under `croweBrowser`, beside the provider keys. The
+   first load that still finds one in the file moves it once: into the store,
+   then out of the file, in that order, so a crash between the two leaves the
+   key somewhere rather than nowhere. A store that already holds a key keeps
+   its own; a store that cannot be written (no native encryption) leaves the
+   file as it was, and the key is not used from there. Returns the block
+   without its key, which is the shape the config carries from here on. */
+function migrateKeyIntoStore(configPath, block, { readStore, writeStore, fs: fsImpl = fs, now = Date.now } = {}) {
+  const c = block && typeof block === "object" && !Array.isArray(block) ? block : {};
+  const rest = { ...c }; delete rest.key;
+  const key = typeof c.key === "string" ? c.key.trim() : "";
+  if (!key) return rest;
+  try {
+    const store = (typeof readStore === "function" && readStore()) || {};
+    if (!(store.croweBrowser && store.croweBrowser.value)) store.croweBrowser = { value: key, updatedAt: now() };
+    writeStore(store);
+    const raw = JSON.parse(fsImpl.readFileSync(configPath, "utf8"));
+    if (raw && raw.croweBrowser && typeof raw.croweBrowser === "object") delete raw.croweBrowser.key;
+    fsImpl.writeFileSync(configPath, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  } catch { /* still in the file; the next load tries again */ }
+  return rest;
+}
+
+module.exports = { CroweBrowserClient, BrowserSessions, BrowserError, normalizeBaseUrl, clampTtl, DEFAULT_URL,
+  authKind, credentialProvider, migrateKeyIntoStore, jwtExp, TOKEN_LEEWAY_MS };
