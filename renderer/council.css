@@ -1,10 +1,10 @@
-/* Council inherits the Crowe paper, ink, gold and worker-mark identity. */
+/* Council inherits the Crowe bone, ink, brass and worker-mark identity. */
 .council-panel { background:var(--panel); color:var(--ink); padding:20px; border-bottom:1px solid var(--line-strong); }
 .council-heading { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .council-emblem { width:38px; height:38px; display:grid; place-items:center; color:var(--gold-text); }
 .council-eyebrow { font:10px var(--mono); letter-spacing:.12em; color:var(--muted); }
 .council-heading h3 { margin:4px 0; font:500 23px var(--display); }
-.council-status { margin-left:auto; padding:5px 8px; background:var(--raised); border:1px solid var(--line-strong); border-radius:20px; font:11px var(--mono); }
+.council-status { margin-left:auto; padding:5px 8px; background:var(--raised); border:1px solid var(--line-strong); border-radius:var(--r-pill); font:11px var(--mono); }
 .council-intro { font:13px/1.6 var(--body); color:var(--muted); margin:14px 0; }
 .council-progress { display:grid; grid-template-columns:repeat(5,1fr); gap:3px; margin:16px 0; }
 .council-progress span { font:10px var(--mono); text-align:center; padding:9px 0; border-bottom:2px solid var(--line-strong); color:var(--muted); transition:color 160ms,border-color 160ms; }
@@ -21,7 +21,7 @@
 .council-controls { display:flex; gap:8px; margin-top:8px; }
 .council-controls button { min-height:40px; flex:1; }
 .council-note { font:12px/1.6 var(--body); overflow-wrap:anywhere; }
-.council-card { margin:14px 0; padding:14px; background:var(--raised); border:1px solid var(--line-strong); border-radius:10px; box-shadow:var(--z1); font:12px/1.6 var(--body); animation:council-arrive 180ms var(--ease); }
+.council-card { margin:14px 0; padding:14px; background:var(--raised); border:1px solid var(--line-strong); border-radius:var(--r-lg); box-shadow:var(--z1); font:12px/1.6 var(--body); animation:council-arrive 180ms var(--ease); }
 .council-card-head { display:flex; justify-content:space-between; gap:12px; text-transform:capitalize; }
 .council-card code { font:10px var(--mono); color:var(--muted); }
 .council-votes { list-style:none; padding:0; margin:12px 0; }
