@@ -281,7 +281,7 @@ function createRoom({ id, title, agentIds, defaultAgent, budgetUsd, template, br
   // Only joinable agents are seated. An id that exists but is retired from
   // rooms is dropped here rather than at display time, so no caller - the
   // composer, a template, or a raw IPC create - can compose around the flag.
-  const ids = (agentIds || []).filter((x) => registry.isJoinable(x));
+  const ids = [...new Set(agentIds || [])].filter((x) => registry.isJoinable(x));
   return {
     id: id || "r-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7),
     kind: "room",
@@ -845,7 +845,7 @@ function toSession(room) {
       template: room.template, brief: room.brief || "", agents: room.agents, defaultAgent: room.defaultAgent,
       budgetUsd: room.budgetUsd, spentUsd: room.spentUsd, cost: room.cost,
       critiqueRounds: room.critiqueRounds, halted: room.halted,
-      seq: room.seq || 0, readSeq: room.readSeq || 0, routines: room.routines || [],
+      seq: room.seq || 0, readSeq: room.readSeq || 0, routines: room.routines || [], council: room.council || null, councilHistory: room.councilHistory || [],
     },
     messages: room.messages,
   };
@@ -873,6 +873,8 @@ function fromSession(d) {
     agents: (d.room.agents || []).map((a) => ({ ...a, state: "idle" })),
     defaultAgent: d.room.defaultAgent || "",
     messages,
+    councilHistory: d.room.councilHistory || [],
+    council: d.room.council ? { ...d.room.council, status: ["proposing", "classifying", "voting", "executing", "verifying", "ready"].includes(d.room.council.status) ? "paused" : d.room.council.status } : null,
     seq,
     // A room from before read marks existed loads as read: nothing in it is
     // news to the person who was there for all of it.

@@ -1729,6 +1729,7 @@ async function mountRoom(p, body, seed = {}) {
       <span class="room-state" aria-live="polite"></span>
       <span class="room-tier" title="The tier this conversation may run at: the lowest ceiling among its workers, clamped by your autonomy setting"></span>
       <button class="room-add ghost sm" type="button" title="Add a worker to this conversation">Add</button>
+      <button class="room-council ghost sm" type="button" title="Scope, voting and autopilot">Council</button>
       <button class="room-details ghost sm" type="button" aria-pressed="false" title="Brief, routines and activity">Details</button>
     </div>
     <div class="room-main">
@@ -1802,6 +1803,12 @@ async function mountRoom(p, body, seed = {}) {
   const side = wrap.querySelector(".room-side");
   const detailsBtn = wrap.querySelector(".room-details");
   const activity = wrap.querySelector(".rs-activity");
+  const councilEl = document.createElement("section");
+  side.prepend(councilEl);
+  const councilUI = window.CroweCouncilUI && window.crowe.rooms.councilState
+    ? window.CroweCouncilUI.mount(councilEl, () => p.roomId, window.crowe.rooms) : null;
+  wrap.querySelector(".room-council").hidden = !councilUI;
+  wrap.querySelector(".room-council").addEventListener("click", () => { setSide(true); councilEl.scrollIntoView({block:"nearest"}); councilUI?.refresh(); });
 
   let state = null, busy = false;
   const money = (n) => "$" + Number(n || 0).toFixed(3);
@@ -2275,6 +2282,7 @@ async function mountRoom(p, body, seed = {}) {
     state = { ...r.room, messages: r.messages || [] };
     p.title = state.title || p.title;
     await paint();
+    if (councilUI) await councilUI.refresh();
     await maybeMarkRead();
   }
 
@@ -2343,7 +2351,7 @@ async function mountRoom(p, body, seed = {}) {
   });
   // The panel outlives no listener: a closed room panel that kept receiving
   // events would repaint a roster that is no longer on screen.
-  p.onClose = () => { try { offEvents(); offChanged(); window.removeEventListener("focus", onFocus); if (recog) recog.stop(); } catch {} };
+  p.onClose = () => { councilUI?.dispose(); try { offEvents(); offChanged(); window.removeEventListener("focus", onFocus); if (recog) recog.stop(); } catch {} };
 
   async function round(fn) {
     if (busy) return;
@@ -2491,7 +2499,7 @@ async function mountRoom(p, body, seed = {}) {
   composer.innerHTML = `
     <div class="rc-head msg-new-head">
       <b>New message</b>
-      <span>Pick a worker to message, or several for a group. It keeps the thread, works while you are away, and can speak first on a routine.</span>
+      <span>Message a model or specialist, or bring several into a group. Open Council to authorize an objective, set limits, and review independent votes.</span>
     </div>
     ${seed.repo ? `<div class="rc-base">Working from <b>${esc(seed.repo.label || "")}</b> <code>${esc(seed.repo.path || "")}</code>.</div>` : ""}
     <input class="msg-search" placeholder="Search workers" aria-label="Search workers" autocomplete="off">

@@ -100,3 +100,9 @@ if (process.argv.includes("--check")) {
   fs.writeFileSync(outPath, bundle);
   console.log(`wrote renderer/rooms-web.js (${bundle.length} bytes; engine ${stamp.engine}, registry ${stamp.registry}, roster ${stamp.vendored})`);
 }
+
+const councilPath = path.join(root, "renderer", "council.js");
+const council = read("rooms/council.js");
+if (process.argv.includes("--check")) {
+  if (!fs.existsSync(councilPath) || fs.readFileSync(councilPath, "utf8") !== council) { console.error("Council browser module is stale."); process.exit(1); }
+} else fs.writeFileSync(councilPath, council);

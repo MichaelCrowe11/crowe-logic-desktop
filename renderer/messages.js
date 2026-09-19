@@ -48,7 +48,7 @@
   function visibleWorkers(agents, spaces) {
     const list = (agents || []).filter((a) => a && a.roomJoinable !== false);
     const developers = Array.isArray(spaces) && spaces.length && !spaces.includes("cultivation");
-    const shown = developers ? list.filter((a) => DEVELOPER_DOMAINS.has(String(a.domain || "").toLowerCase())) : list;
+    const shown = developers ? list.filter((a) => (a.domain === "models" || DEVELOPER_DOMAINS.has(String(a.domain || "").toLowerCase()))) : list;
     return shown.slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   }
   // A template is offered only when every seat in it is a visible worker.

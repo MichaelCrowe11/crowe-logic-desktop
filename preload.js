@@ -113,6 +113,9 @@ contextBridge.exposeInMainWorld("crowe", {
      them, and `say` is the only one that spends money without being asked to -
      which is why `project` exists to price a round before it runs. */
   rooms: {
+    councilState: (id) => ipcRenderer.invoke("crowe:rooms:council-state", { id }),
+    councilStart: (id, spec) => ipcRenderer.invoke("crowe:rooms:council-start", { id, spec }),
+    councilStop: (id, revoke = false) => ipcRenderer.invoke("crowe:rooms:council-stop", { id, revoke }),
     agents: () => ipcRenderer.invoke("crowe:rooms:agents"),
     list: () => ipcRenderer.invoke("crowe:rooms:list"),
     create: (opts) => ipcRenderer.invoke("crowe:rooms:create", opts || {}),

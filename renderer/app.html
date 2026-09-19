@@ -47,6 +47,7 @@
        styles at runtime, and this is what lets them do it under the policy
        above. -->
   <script src="adopted-styles.js?v=1788786753000"></script>
+  <link rel="stylesheet" href="council.css" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -480,7 +481,10 @@
        must define window.CroweRooms before web-bridge.js reads it, or the
        rooms surface answers with a stated reason instead of a roster. -->
   <script src="rooms-web.js?v=1788786753000"></script>
+  <script src="council.js"></script>
+  <script src="rooms-local.js"></script>
   <script src="web-bridge.js?v=1788786753000"></script>
+  <script src="council-ui.js"></script>
   <script src="mark-geometry.js?v=1788786753000"></script>
   <script src="mark.js?v=1788786753000"></script>
   <script src="messages.js?v=1788786753000"></script>

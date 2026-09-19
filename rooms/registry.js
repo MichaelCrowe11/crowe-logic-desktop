@@ -87,7 +87,18 @@ function loadAgents() {
 }
 
 function listAgents() { return loadAgents().filter((a) => a.roomJoinable !== false); }
-function getAgent(id) { return loadAgents().find((a) => a.id === String(id)) || null; }
+function modelAgent(model, name) {
+  if (typeof model !== "string" || !/^[a-zA-Z0-9_./:-]{1,120}$/.test(model)) return null;
+  const id = "model-" + Array.from(model).map(c => c.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+  return { id, name: name || model, model, domain: "models", role: `Direct conversation with ${model}.`, autonomyCeiling: "edit", roomJoinable: true };
+}
+function getAgent(id) {
+  const found = loadAgents().find((a) => a.id === String(id));
+  if (found) return found;
+  const encoded = String(id).match(/^model-((?:[0-9a-f]{4}){1,120})$/);
+  if (!encoded) return null;
+  return modelAgent(encoded[1].match(/.{4}/g).map(c => String.fromCharCode(parseInt(c, 16))).join(""));
+}
 // roomJoinable is the mechanism for retiring an agent from rooms, so it has to
 // be asked at every point that seats one - composition, join, templates - not
 // only where the roster is listed. getAgent still returns a retired agent, so a
@@ -191,7 +202,7 @@ function listTemplates() {
 function getTemplate(id) { return listTemplates().find((t) => t.id === String(id)) || null; }
 
 module.exports = {
-  displayName,
+  displayName, modelAgent,
   listAgents, getAgent, isJoinable, listTemplates, getTemplate,
   roomCeiling, effectiveTier, writeCapable, tierRank, TIERS,
   MARKS, markOf,

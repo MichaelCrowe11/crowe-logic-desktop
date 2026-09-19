@@ -1802,7 +1802,7 @@
         return { done: Boolean(result.done), text: result.text || "", error: result.error };
       },
       stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
-      stopAll: () => { for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true, stopped: runs.size }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true, stopped: runs.size }; },
       onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
@@ -2245,30 +2245,16 @@
        a TypeError at a tap. Every method answers in the shape its caller
        expects - a list is an empty list, an action is a stated reason - which
        is the same contract the plugin and git refusals above keep. */
-    rooms: {
-      agents: async () => ({ agents: [], templates: [] }),
-      list: async () => [],
-      create: async () => ({ error: ROOMS_OFF }),
-      load: async () => ({ error: ROOMS_OFF }),
-      delete: async () => ({ ok: true }),
-      join: async () => ({ error: ROOMS_OFF }),
-      leave: async () => ({ error: ROOMS_OFF }),
-      setAgentModel: async () => ({ error: ROOMS_OFF }),
-      say: async () => ({ error: ROOMS_OFF }),
-      critique: async () => ({ error: ROOMS_OFF }),
-      revise: async () => ({ error: ROOMS_OFF }),
-      project: async () => ({ calls: 0, agents: 0, note: ROOMS_OFF }),
-      update: async () => ({ error: ROOMS_OFF }),
-      markRead: async () => ({ unread: 0 }),
-      answer: async () => ({ error: ROOMS_OFF }),
-      react: async () => ({ error: ROOMS_OFF }),
-      forward: async () => ({ error: ROOMS_OFF }),
-      routineAdd: async () => ({ error: ROOMS_OFF }),
-      routineUpdate: async () => ({ error: ROOMS_OFF }),
-      routineRemove: async () => ({ removed: false, error: ROOMS_OFF }),
-      routineRun: async () => ({ error: ROOMS_OFF }),
-      onChanged: () => () => {},
-      onOpen: () => () => {},
+    rooms: window.CroweLocalRooms && window.CroweRooms ? window.CroweLocalRooms.create({
+      read: async () => (await store.get("rooms")) || [],
+      write: async records => { if (!await store.set("rooms", records)) throw new Error("Room storage could not be saved. Autopilot stopped."); },
+      catalog: async () => { await ready; if (config.token && !catalogCache.models.length) await fetchCatalog(); return catalogCache.models; },
+      chat: async (model, messages, signal) => gatewayChat(messages, [], signal, model),
+      emit,
+    }) : {
+      agents: async () => ({ agents: [], templates: [] }), list: async () => [],
+      create: async () => ({ error: "Room engine is missing; rebuild the mobile payload." }),
+      onChanged: () => () => {}, onOpen: () => () => {},
     },
 
     keys: {
@@ -2327,7 +2313,7 @@
           platform: PLATFORM === "ios" ? "iOS" : PLATFORM === "android" ? "Android" : "browser",
         };
       },
-      stopAll: () => { for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
     },
 
     getConfig: async () => { await ready; return publicConfig(); },

@@ -456,6 +456,8 @@
   };
 
   // The renderer expects rows of [model, display, featured, role, available, tools].
+  let catalogFacts = [];
+  async function roomModelCatalog() { await catalogGet(); return catalogFacts; }
   async function catalogGet() {
     agentModels.clear();
     try {
@@ -482,7 +484,8 @@
     const r = await fetch(`${GW}/models`, { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error(`Catalog unavailable (${r.status}).`);
     const body = await r.json();
-    return ((body && body.data) || []).map((m) => laneRow(m.id));
+    catalogFacts = ((body && body.data) || []).map(m => ({ ...m, engine: m.engine || m.base_model || m.id }));
+    return catalogFacts.map((m) => laneRow(m.id));
   }
 
   /* -------------------------------------------------------------------- run */
@@ -512,12 +515,12 @@
      OWUI carries traffic again with no code change here. */
   let owuiUnopened = OWUI_RETIRED;
 
-  async function streamCompletion({ model, messages, maxTokens, signal, onDelta }) {
+  async function streamCompletion({ model, messages, maxTokens, signal, onDelta, isolated = false }) {
     const body = { model, messages, stream: true, max_tokens: maxTokens || 2048 };
     // A named agent carries its own knowledge; pinning the operator's corpus on
     // top would let one customer's question retrieve from another's pack. A
     // plain lane has no scope of its own, so it gets the operator's.
-    if (!agentModels.has(model)) {
+    if (!isolated && !agentModels.has(model)) {
       body.files = COLLECTIONS.map((cid) => ({ type: "collection", id: cid }));
     }
 
@@ -571,6 +574,7 @@
     const decoder = new TextDecoder();
     let buffer = "";
     let usage = null;
+    let gotModel = "";
     let text = "";
 
     const frame = (line) => {
@@ -579,10 +583,13 @@
       if (!payload || payload === "[DONE]") return;
       let chunk;
       try { chunk = JSON.parse(payload); } catch (_) { return; }
+      if (chunk.model) gotModel = chunk.model;
+      if (isolated && chunk.error) throw new Error("Council model stream failed.");
       if (chunk.usage) usage = chunk.usage;
       const delta = ((chunk.choices || [])[0] || {}).delta || {};
       if (delta.content) {
         text += delta.content;
+        if (isolated && text.length > 200000) throw new Error("Council response exceeded its size limit.");
         if (onDelta) onDelta(delta.content);
       }
     };
@@ -611,7 +618,7 @@
     }
 
     return {
-      text,
+      text, model: gotModel,
       usage: usage
         ? { promptTokens: usage.prompt_tokens || 0, completionTokens: usage.completion_tokens || 0 }
         : null,
@@ -842,7 +849,7 @@
 
   const rooms = ROOMS
     ? {
-        agents: async () => ({ agents: ROOMS.registry.listAgents(), templates: ROOMS.registry.listTemplates() }),
+        agents: async () => ({ agents: [...ROOMS.registry.listAgents(), ...(await roomModelCatalog().catch(() => [])).filter(m => m.available !== false).map(m => ROOMS.registry.modelAgent(m.id)).filter(Boolean)], templates: ROOMS.registry.listTemplates() }),
         list: async () =>
           readRoomRecords().map((d) => { const room = loadRoom(d.id); return room ? ROOMS.engine.summary(room) : null; })
             .filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -960,6 +967,9 @@
         onOpen: () => () => {},
       }
     : {
+        councilState: async () => ({ error: ROOMS_OFF }),
+        councilStart: async () => ({ error: ROOMS_OFF }),
+        councilStop: async () => ({ error: ROOMS_OFF }),
         agents: async () => ({ agents: [], templates: [] }),
         list: async () => [],
         create: async () => ({ error: ROOMS_OFF }),
@@ -984,6 +994,19 @@
         onChanged: () => () => {},
         onOpen: () => () => {},
       };
+
+  if (ROOMS && window.CroweLocalRooms) window.CroweLocalRooms.attachCouncil(rooms, {
+    load: async id => loadRoom(id),
+    save: async room => {
+      const all = readJSON(KEY_SESSIONS, []).filter(s => s && s.id !== room.id);
+      all.unshift(ROOMS.engine.toSession(room));
+      localStorage.setItem(KEY_SESSIONS, JSON.stringify(all.slice(0, 200)));
+    },
+    changed: (room, reason) => emitRoom({ id: room.id, reason, summary: ROOMS.engine.summary(room) }),
+    queue: withRoom, busy: id => roomQueues.has(id),
+    catalog: roomModelCatalog,
+    chat: async (model, messages, signal) => streamCompletion({model, messages, signal, isolated: true}),
+  });
 
   /* ----------------------------------------------------------------- config */
 
@@ -1051,7 +1074,7 @@
     agent: {
       run: agentRun,
       stop: async (id = "main") => { controllers.get(id)?.abort(); return true; },
-      stopAll: async () => { controllers.forEach((c) => c.abort()); controllers.clear(); return true; },
+      stopAll: async () => { window.CroweLocalRooms?.stopAll(); controllers.forEach((c) => c.abort()); controllers.clear(); return true; },
       onEvent,
     },
 
@@ -1283,7 +1306,7 @@
       list: async () => [],
       set: unsupported("Provider keys"), remove: unsupported("Provider keys"), test: unsupported("Provider keys"),
     },
-    operator: { status: async () => ({ running: 0 }), stopAll: async () => true },
+    operator: { status: async () => ({ running: 0 }), stopAll: async () => { window.CroweLocalRooms?.stopAll(); controllers.forEach(c => c.abort()); return true; } },
 
     getConfig: async () => projectConfig(readJSON(KEY_CONFIG, {})),
     setConfig: async (patch) => {

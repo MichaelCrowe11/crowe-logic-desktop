@@ -40,3 +40,5 @@ mobile/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
 mobile/android/keystore.properties
 *.jks
 *.keystore
+
+.council-test/

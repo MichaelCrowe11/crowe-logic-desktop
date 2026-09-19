@@ -1313,6 +1313,7 @@ ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   return { ok: true };
 });
 ipcMain.handle("crowe:agent:stop-all", () => {
+  councilHost.stopAll();
   for (const run of agentRuns.values()) {
     run.aborted = true;
     try { if (run.controller) run.controller.abort(); } catch {}
@@ -1476,6 +1477,7 @@ ipcMain.handle("crowe:operator:status", () => ({
   cwd: CWD, autonomy: loadConfig().autonomy || "edit", version: app.getVersion(), uptime: Math.round(process.uptime()),
 }));
 ipcMain.handle("crowe:operator:stop-all", () => {
+  councilHost.stopAll();
   for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
   denyPendingApprovals();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
@@ -2037,9 +2039,16 @@ function roomRunner(room) {
   };
 }
 
+const councilHost = require("./rooms/council-host").installCouncilHost({
+  ipcMain, loadRoom, changed: (room, reason) => roomChanged(room, reason, { save: false }),
+  save: room => { const file = roomPath(room.id); fs.writeFileSync(file + ".council-tmp", JSON.stringify(roomsEngine.toSession(room)), { mode: 0o600 }); fs.renameSync(file + ".council-tmp", file); },
+  busy: id => roomQueues.has(id), queue: withRoom,
+  config: () => ({ ...loadConfig(), cwd: CWD }), catalog: () => catalogCache.models, chat: gatewayChat,
+});
+
 // The renderer needs the roster and the templates to compose a room at all.
 ipcMain.handle("crowe:rooms:agents", () => ({
-  agents: roomsRegistry.listAgents(),
+  agents: [...roomsRegistry.listAgents(), ...catalogCache.models.filter(m => m.available !== false).map(m => roomsRegistry.modelAgent(m.id)).filter(Boolean)],
   templates: roomsRegistry.listTemplates(),
 }));
 
@@ -2068,6 +2077,7 @@ ipcMain.handle("crowe:rooms:load", (_e, { id } = {}) => {
 
 ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
+  if (councilHost.busy(id)) return { error: "Pause council autopilot before deleting the room." };
   liveRooms.delete(id);
   // The room's seats go with it, cloud browsers included.
   browserSessions.dropWhere((owner) => owner.startsWith(`room:${id}:`)).catch(() => {});
@@ -2151,6 +2161,7 @@ function roomState(room) {
     budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
     critiqueRounds: room.critiqueRounds, maxCritiqueRounds: roomsEngine.MAX_CRITIQUE_ROUNDS,
     halted: room.halted,
+    council: room.council || null,
     routines: room.routines || [],
     unread: roomsEngine.unreadCount(room), seq: room.seq || 0, readSeq: room.readSeq || 0,
   };
@@ -2159,6 +2170,7 @@ function roomState(room) {
 async function runRoomTurn(id, fn) {
   const room = loadRoom(id);
   if (!room) return { error: "no such room" };
+  if (councilHost.busy(id)) return { error: "Pause council autopilot before sending a manual turn." };
   return withRoom(id, async () => {
     room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
     /* speak() stores what the operator said before its first await, so by the

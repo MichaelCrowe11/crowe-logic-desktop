@@ -25,7 +25,7 @@ sed -E "s/\?v=[0-9]+/?v=$STAMP/g" renderer/app.html > "$TMPD/app.html"
 if [ "${1:-}" = "--stamped-app-html" ]; then cat "$TMPD/app.html"; exit 0; fi
 
 # [local path]=[served name]; app.html ships from $TMPD in its stamped form.
-FILES=("$TMPD/app.html" renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
+FILES=("$TMPD/app.html" renderer/council.css renderer/council.js renderer/council-ui.js renderer/rooms-local.js renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
 
 local_hash() { shasum -a 256 "$1" | cut -c1-16; }
 verify() {

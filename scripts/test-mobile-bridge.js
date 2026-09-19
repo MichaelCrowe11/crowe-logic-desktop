@@ -82,6 +82,8 @@ function loadMobileSurface(fetchImpl, capacitor) {
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
   };
+  for (const file of ["rooms-web.js", "council.js", "rooms-local.js"])
+    new Function("window", "setInterval", read("renderer/" + file))(win, () => 0);
   const src = read("mobile/src/mobile-bridge.js");
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
   assert(win.crowe, "mobile-bridge.js did not install window.crowe");

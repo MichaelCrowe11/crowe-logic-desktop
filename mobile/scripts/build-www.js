@@ -29,6 +29,7 @@ const stamp = dev ? String(Date.now()) : version;
 // Files copied verbatim: [from, to]. The renderer's own sources come first
 // because everything else exists to serve them.
 const COPY = [
+  ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
   ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
   ["renderer/adopted-styles.js", "adopted-styles.js"],
@@ -62,6 +63,7 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
+  "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
   "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
@@ -136,7 +138,7 @@ function buildIndex() {
   // window.crowe, and mark-geometry.js is the first of them.
   must(html, '<script src="mark-geometry.js"></script>', "the mark-geometry script tag");
   html = html.replace('<script src="mark-geometry.js"></script>',
-    '<script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
+    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
 
   // The phone chrome mirrors controls the renderer wires up on load, so it goes
   // after renderer.js rather than before it.
