@@ -33,8 +33,8 @@
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css?v=1788786753000" />
@@ -137,7 +137,7 @@
         <button class="sn-item" data-lane="sessions">Sessions</button>
         <span class="sn-group">Work</span>
         <button class="sn-item" data-lane="deepwork">Deep work</button>
-        <span class="sn-group">Models</span>
+        <span class="sn-group">Engines</span>
         <button class="sn-item" data-lane="training">Training</button>
         <button class="sn-item" data-lane="evals">Evals</button>
         <button class="sn-item" data-lane="deployments">Deployments</button>
@@ -206,7 +206,7 @@
           <div class="card"><div class="card-h">Recent sessions</div><div id="home-sessions" class="card-b"></div></div>
           <div class="card"><div class="card-h">Who answers what</div><div id="home-routing" class="card-b"></div></div>
           <div class="card"><div class="card-h">Gateway</div><div id="home-gateway" class="card-b"></div></div>
-          <div class="card"><div class="card-h">Models</div><div id="home-models" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Engines</div><div id="home-models" class="card-b"></div></div>
         </div>
         <div class="surface-status">
           <span id="ss-gw"><span class="ss-dot"></span>gateway</span>
@@ -274,7 +274,7 @@
             <textarea id="input" rows="2" maxlength="50000" aria-label="Message Crowe Logic" aria-describedby="composer-help" placeholder="Describe the outcome, constraints, and checks..."></textarea>
             <div class="composer-foot">
               <div class="composer-mode">
-                <div id="autonomy" class="seg" role="group" aria-label="Autonomy: what the agent may do without asking" title="Autonomy: what the agent may do without asking">
+                <div id="autonomy" class="seg" role="group" aria-label="Operating envelope: what the agent may do without asking" title="Operating envelope: what the agent may do without asking">
                   <button type="button" class="seg-btn" data-tier="plan" aria-pressed="false">Plan</button>
                   <button type="button" class="seg-btn" data-tier="readonly" aria-pressed="false">Read</button>
                   <button type="button" class="seg-btn" data-tier="edit" aria-pressed="false">Edit</button>
@@ -320,7 +320,7 @@
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
           <button id="glass-launcher" class="dock-icon agent-launch" type="button" title="Open a Crowe Logic CLI agent in the workspace" aria-label="Open Crowe Logic agent in workspace">
-            <img src="../assets/mark-simple.svg" alt="">
+            <span class="cl-mark" aria-hidden="true"></span>
           </button>
           <div class="spacer"></div>
           <span id="cwd" class="cwd"></span>
@@ -386,7 +386,7 @@
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
       <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
-      <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
+      <label class="chk"><input id="cfg-auto" type="checkbox" /> Authorize file edits automatically (skip the diff review)</label>
       <!-- The phone companion. Nothing here listens until Start is pressed, and
            the code is only drawn while it is running: a pairing QR left on a
            screen is a shell token left on a screen. -->
@@ -395,7 +395,7 @@
       <!-- Guardrails sits below Spaces deliberately: the space checkboxes have to
            stay above the fold of a scrolling card, and test-panels.js hit-tests
            them where they are drawn to keep it that way. -->
-      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the operating envelope. The operating mode decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
         <label>Ask before an action that cannot be taken back
           <select id="cfg-approvals">
             <option value="high-risk">Irreversible actions only (recommended)</option>
@@ -449,9 +449,9 @@
         <button id="panel-add-operator" class="pal-row" title="Operator control panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
           <span>Operator control</span></button>
-        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent workflows">
+        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent missions">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
-          <span>Workflows</span></button>
+          <span>Missions</span></button>
         <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
           <span>Agent fleet</span></button>

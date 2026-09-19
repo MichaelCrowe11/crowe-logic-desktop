@@ -248,34 +248,34 @@ const STYLE = `
 @page { size: Letter; margin: 0.8in 0.9in; }
 :root { color-scheme: light; }
 html { font-size: 11pt; }
-body { margin: 0; background: #fbf8f1; color: #1d1a16; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.55; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { margin: 0; background: #FBF9F4; color: #121212; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.55; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 main.document { max-width: 46rem; margin: 0 auto; padding: 3rem 1.5rem 4rem; }
-h1, h2, h3, h4, h5, h6 { font-family: Fraunces, Georgia, "Times New Roman", serif; font-weight: 600; line-height: 1.2; letter-spacing: -0.01em; color: #14110d; margin: 1.8em 0 0.5em; break-after: avoid; }
-h1 { font-size: 2.1em; margin-top: 0; padding-bottom: 0.35em; border-bottom: 1px solid #d9cfb8; }
+h1, h2, h3, h4, h5, h6 { font-family: Fraunces, Georgia, "Times New Roman", serif; font-weight: 600; line-height: 1.2; letter-spacing: -0.01em; color: #121212; margin: 1.8em 0 0.5em; break-after: avoid; }
+h1 { font-size: 2.1em; margin-top: 0; padding-bottom: 0.35em; border-bottom: 1px solid #DED8CD; }
 h2 { font-size: 1.5em; } h3 { font-size: 1.2em; } h4 { font-size: 1.05em; } h5, h6 { font-size: 1em; }
 h1 + h2, h2 + h3, h3 + h4 { margin-top: 0.8em; }
 p { margin: 0 0 0.9em; }
-a { color: #6f5410; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a { color: #7A663C; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 code, pre, kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.92em; }
-code { background: #f1ebdd; padding: 0.1em 0.35em; border-radius: 3px; }
-pre { background: #f6f1e5; border: 1px solid #e3dac6; border-radius: 6px; padding: 0.85em 1em; margin: 0 0 1em; overflow-x: auto; line-height: 1.45; break-inside: avoid; }
+code { background: #F4F0E7; padding: 0.1em 0.35em; border-radius: 3px; }
+pre { background: #F4F0E7; border: 1px solid #DED8CD; border-radius: 6px; padding: 0.85em 1em; margin: 0 0 1em; overflow-x: auto; line-height: 1.45; break-inside: avoid; }
 pre code { background: none; padding: 0; font-size: 0.9em; white-space: pre; }
-blockquote { margin: 1em 0; padding: 0.2em 1em; border-left: 3px solid #c9a24a; color: #4a4438; }
+blockquote { margin: 1em 0; padding: 0.2em 1em; border-left: 3px solid #B99A5B; color: #6E6962; }
 blockquote > :last-child { margin-bottom: 0; }
 ul, ol { margin: 0 0 0.9em; padding-left: 1.6em; }
 li { margin: 0.2em 0; }
 li > ul, li > ol { margin: 0.2em 0; }
 li > p { margin: 0.3em 0; }
 li input[type=checkbox] { margin: 0 0.4em 0 0; vertical-align: -1px; }
-hr { border: 0; border-top: 1px solid #d9cfb8; margin: 2em 0; }
+hr { border: 0; border-top: 1px solid #DED8CD; margin: 2em 0; }
 table { border-collapse: collapse; width: 100%; margin: 1em 0 1.4em; font-size: 0.95em; }
-th, td { border: 1px solid #ddd3bd; padding: 0.45em 0.7em; text-align: left; vertical-align: top; }
-th { background: #f1ebdd; font-weight: 600; }
+th, td { border: 1px solid #DED8CD; padding: 0.45em 0.7em; text-align: left; vertical-align: top; }
+th { background: #F4F0E7; font-weight: 600; }
 tr { break-inside: avoid; }
 .align-center { text-align: center; } .align-right { text-align: right; }
 img { max-width: 100%; height: auto; }
-.image-ref { color: #5d5647; font-style: italic; }
-del { color: #635c4c; }
+.image-ref { color: #6E6962; font-style: italic; }
+del { color: #6E6962; }
 @media print { body { background: #fff; } main.document { max-width: none; padding: 0; } a { color: inherit; } }
 `.trim();
 

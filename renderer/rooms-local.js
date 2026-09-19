@@ -44,7 +44,7 @@
           },
           execute:async(p,b,g,live)=>{
             if(!live())throw new Error('Authority expired or was revoked.');
-            window.CroweRooms.engine.pushMessage(room,{author:window.CroweRooms.engine.SYSTEM,kind:'council',content:`Council approved: ${p.summary}`});
+            window.CroweRooms.engine.pushMessage(room,{author:window.CroweRooms.engine.SYSTEM,kind:'council',content:`Council authorized: ${p.summary}`});
             return {summary:'Advisory result recorded in this Room. No external action or file write.',at:Date.now()};
           },
         });

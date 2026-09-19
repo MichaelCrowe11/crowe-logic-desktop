@@ -594,7 +594,7 @@ const GROW_TOOL = { type: "function", function: {
    approval gate of its own. */
 const WORKFLOW_TOOL = { type: "function", function: {
   name: "compose_workflow",
-  description: "Author a workflow in the operator's Runbook: a named set of agent nodes that run in parallel when the operator presses Run on the Workflows canvas. Use this when the user asks to set up, save, or build a repeatable operation as a workflow - produce the artifact, do not paste JSON into chat. Nodes run in parallel and cannot see each other, so every prompt must stand alone, carry its own context, and name its expected output.",
+  description: "Author a workflow in the operator's Runbook: a named set of agent nodes that run in parallel when the operator presses Run on the Missions canvas. Use this when the user asks to set up, save, or build a repeatable operation as a workflow - produce the artifact, do not paste JSON into chat. Nodes run in parallel and cannot see each other, so every prompt must stand alone, carry its own context, and name its expected output.",
   parameters: { type: "object", properties: {
     name: { type: "string", description: "Short workflow name." },
     nodes: { type: "array", items: { type: "object", properties: {
@@ -1619,7 +1619,7 @@ async function execTool(ctx, name, args, route, state) {
       if (!nodes.length) return "rejected: nodes must be a list of {name, prompt} agents - nothing usable was given";
       const wfName = (typeof args.name === "string" && args.name.trim()) || "Composed workflow";
       ctx.authorWorkflow({ name: wfName, nodes });
-      return `authored "${wfName}" in the Runbook with ${nodes.length} agents: ${nodes.map((n) => n.name).join(", ")}. It is on the Workflows canvas, ready to review and run.`;
+      return `authored "${wfName}" in the Runbook with ${nodes.length} agents: ${nodes.map((n) => n.name).join(", ")}. It is on the Missions canvas, ready to review and run.`;
     }
     if (BROWSER_TOOL_NAMES.has(name)) return await toolBrowser(ctx, name, args, tier, roomBound, state);
     return `unknown tool: ${name}`;

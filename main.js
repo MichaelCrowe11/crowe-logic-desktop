@@ -352,7 +352,7 @@ function createWindow() {
   const appEntry = APP_ENTRY;
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#f7f3ea", title: "Crowe Logic", show: false,
+    backgroundColor: "#F4F0E7", title: "Crowe Logic", show: false,
     // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
     // and neither can decode .icns, so pointing at the icns left them on the
     // default Electron icon.
@@ -515,7 +515,7 @@ function signIn() {
       // too, and one stray request must not cancel the user's real callback.
       if (!code || st !== state) { res.writeHead(400, { "Content-Type": "text/plain" }); res.end("not this sign-in"); return; }
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f7f3ea;color:#1a1714;text-align:center;padding-top:14vh"><h2 style="color:#96702c;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
       try { server.close(); } catch {}
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
@@ -1456,7 +1456,7 @@ function spawnShell(cols, rows) {
 }
 ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open an agent terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `the shell is off in "${loadConfig().autonomy || "edit"}" operating mode. Switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   let proc;
   try { proc = spawnShell(cols, rows); }
@@ -1541,10 +1541,10 @@ ipcMain.handle("crowe:git:diff", async (_e, { path: p, staged }) => {
   const r = await gitRun(["diff", ...(staged ? ["--staged"] : []), "--", p || "."]);
   return r.out || r.err || "(no textual diff)";
 });
-ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["add", "--", p]); });
-ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["restore", "--staged", "--", p]); });
+ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["add", "--", p]); });
+ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["restore", "--staged", "--", p]); });
 ipcMain.handle("crowe:git:commit", async (_e, { message }) => {
-  if (gitWritesBlocked()) return { error: "read-only autonomy" };
+  if (gitWritesBlocked()) return { error: "read-only operating mode" };
   if (!message || !message.trim()) return { error: "empty commit message" };
   const r = await gitRun(["commit", "-m", message]);
   return { ok: r.ok, out: (r.out || "") + (r.err || "") };
@@ -1558,9 +1558,9 @@ ipcMain.handle("crowe:git:branches", async () => {
   const r = await gitRun(["branch", "--format=%(refname:short)"]);
   return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
 });
-ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["checkout", "--end-of-options", branch]); });
-ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
-ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["checkout", "--end-of-options", branch]); });
+ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
 
 // ─── Repositories ────────────────────────────────────────────────────────────
 /* The sidebar's repository list: folders this app has opened, and what GitHub
@@ -1763,7 +1763,7 @@ ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
     try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch { return { error: "Could not create the clone folder" }; }
     // Re-checked after the approval and the mkdir: the answer is bound to this
     // destination, and the filesystem is not frozen while the card is up.
-    if (!underRoot(target, root) || fs.existsSync(target)) return { error: "The clone folder changed while waiting for approval" };
+    if (!underRoot(target, root) || fs.existsSync(target)) return { error: "The clone folder changed while waiting for authorization" };
     const r = await new Promise((resolve) => execFile("git", ["clone", "--", url, target], {
       cwd: root, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
       env: { ...harness.safeShellEnv(), GIT_TERMINAL_PROMPT: "0" },
@@ -2532,7 +2532,7 @@ function buildMenu() {
       crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
       crowe("Files", "pane:files", "CmdOrCtrl+3"),
       { type: "separator" },
-      { label: "Autonomy", submenu: [
+      { label: "Operating envelope", submenu: [
         { label: "Plan (explore read-only, then propose a plan)", type: "radio", checked: tier === "plan", click: () => setAutonomy("plan") },
         { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
         { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },

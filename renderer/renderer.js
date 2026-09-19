@@ -492,7 +492,7 @@ function settleHeader() {
   svg.__settling = true;
   setTimeout(() => { svg.__settling = false; }, 700);
   const ease = "cubic-bezier(.16, 1, .3, 1)";
-  const gold = "var(--gold-soft, #c9a227)";
+  const gold = "var(--gold-soft, #D0B471)";
   for (const b of svg.querySelectorAll(".wm-blades")) {
     b.animate([
       { transform: "rotate(-90deg)", color: gold },
@@ -544,7 +544,7 @@ function addEditProposal(body, ev) {
   const rows = ev.diff.map((d) => `<div class="dl ${d.t === '+' ? 'add' : d.t === '-' ? 'del' : 'ctx'}">${esc((d.t === ' ' ? '  ' : d.t + ' ') + d.s)}</div>`).join("");
   card.innerHTML = `<div class="ec-head"><span class="ec-title">Proposed edit</span><span class="ec-path">${esc(ev.path)}</span></div>
     <div class="ec-diff">${rows}</div>
-    <div class="ec-actions"><button class="approve">Approve</button><button class="reject">Reject</button><span class="ec-hint">a approve · r reject</span></div>`;
+    <div class="ec-actions"><button class="approve">Authorize</button><button class="reject">Reject</button><span class="ec-hint">a authorize · r reject</span></div>`;
   card.tabIndex = 0;
   body.appendChild(card); card.focus(); scrollBottom();
   const done = (ok) => { window.crowe.edit.decide(ev.id, ok); card.querySelector(".ec-actions").innerHTML = `<span class="ec-status">${ok ? "applied" : "rejected"}</span>`; card.classList.add(ok ? "applied" : "rejected"); };
@@ -572,7 +572,7 @@ function addApproval(body, ev) {
   // because it cannot be undone: stop takes it down. The heading says which.
   const heading = ev.kind === "share_preview" ? "Opens a public link" : ev.risk === "review" ? "Reaches past the workspace" : "Cannot be undone";
   card.innerHTML = `<div class="ec-head"><span class="ec-title">${heading}</span><span class="ec-path">${esc(ev.kind || "action")}</span></div>
-    <div class="gc-why">This ${esc(ev.why || "action needs your approval")}.</div>
+    <div class="gc-why">This ${esc(ev.why || "action needs your authorization")}.</div>
     <div class="ec-diff"><div class="dl ctx">${esc(ev.detail || "")}</div></div>
     <div class="ec-actions"><button class="approve">Allow once</button><button class="reject">Deny</button><span class="ec-hint">a allow · r deny</span></div>`;
   card.tabIndex = 0;
@@ -757,7 +757,7 @@ function setModelBadge(id) {
   if (!badge) return;
   const label = id ? modelLabel(id) : configuredModelLabel;
   badge.textContent = label;
-  badge.title = id ? `Answering with ${label}` : `Configured model: ${label}. The router may pick a specialist for a turn.`;
+  badge.title = id ? `Answering with ${label}` : `Configured engine: ${label}. The router may pick a specialist for a turn.`;
 }
 let configuredModelId = "crowelm";
 function refreshModelBadge(config) {
@@ -1115,7 +1115,7 @@ function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySe
 const BROWSER_HOME = "https://crowelogic.com/foundry/";
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Workflows",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
+  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Missions",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
   const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
@@ -1408,18 +1408,18 @@ function parseComposedWorkflow(text){
       .filter(n=>n&&typeof n.name==="string"&&typeof n.prompt==="string"&&n.name.trim()&&n.prompt.trim())
       .slice(0,8).map(n=>({name:n.name.trim(),prompt:n.prompt.trim()}));
     if(!nodes.length)return null;
-    return {name:(typeof d.name==="string"&&d.name.trim())||"Composed workflow",nodes};
+    return {name:(typeof d.name==="string"&&d.name.trim())||"Composed mission",nodes};
   }catch{return null}
 }
 function mountWorkflow(p, body) {
   body.classList.add("workflow-surface");
-  let workflows=workflowStore(), active=workflows[0]||{id:`wf-${Date.now().toString(36)}`,name:"New agent workflow",nodes:[],runs:[]};
+  let workflows=workflowStore(), active=workflows[0]||{id:`wf-${Date.now().toString(36)}`,name:"New mission",nodes:[],runs:[]};
   if(!workflows.length){workflows=[active];saveWorkflowStore(workflows)}
-  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Workflow name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run workflow</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation. The Crowe agents design the workflow" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
+  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Mission name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run mission</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation. The Crowe agents design the mission" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
   let aborted=false;
   const persist=()=>{const i=workflows.findIndex(x=>x.id===active.id);if(i<0)workflows.unshift(active);else workflows[i]=active;saveWorkflowStore(workflows)};
   const renderList=()=>{body.querySelector(".wf-list").innerHTML=workflows.map(w=>`<button data-id="${esc(w.id)}" class="${w.id===active.id?"active":""}"><b>${esc(w.name)}</b><small>${w.nodes.length} agents · ${(w.runs||[]).length} runs</small></button>`).join("");body.querySelectorAll(".wf-list button").forEach(b=>b.onclick=()=>{active=workflows.find(w=>w.id===b.dataset.id);render()})};
-  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the workflow, or add nodes by hand.</span></div>';
+  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the mission, or add nodes by hand.</span></div>';
     canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};const t=card.querySelector(".wf-node-prompt");t.onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};
       // The instructions are prose on a page, not a box in a form: the field
       // grows to hold what the agents wrote, because clipped instructions read
@@ -1428,8 +1428,8 @@ function mountWorkflow(p, body) {
       card.querySelector(".wf-node-remove").onclick=()=>{active.nodes.splice(i,1);persist();renderNodes()}});
   };
   const render=()=>{body.querySelector(".wf-name").value=active.name;renderList();renderNodes()};
-  body.querySelector(".wf-name").onchange=e=>{active.name=e.target.value||"Untitled workflow";persist();renderList()};
-  body.querySelector(".wf-new").onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:"New agent workflow",nodes:[],runs:[]};workflows.unshift(active);persist();render()};
+  body.querySelector(".wf-name").onchange=e=>{active.name=e.target.value||"Untitled mission";persist();renderList()};
+  body.querySelector(".wf-new").onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:"New mission",nodes:[],runs:[]};workflows.unshift(active);persist();render()};
   WORKFLOW_TEMPLATES.forEach(t=>{const b=document.createElement("button");b.className="wf-template";b.innerHTML=`<b>${esc(t.name)}</b><small>${t.nodes.length} agents</small>`;b.onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:t.name,nodes:t.nodes.map(n=>({...n})),runs:[]};workflows.unshift(active);persist();render()};body.querySelector(".wf-templates").appendChild(b)});
   body.querySelector(".wf-add").onclick=()=>{active.nodes.push({name:`Crowe Agent ${active.nodes.length+1}`,prompt:"Describe this agent's responsibility and expected output."});persist();renderNodes();renderList()};
   /* Composing is itself a harness turn - it routes, it can fail, and it answers
@@ -1455,7 +1455,7 @@ function mountWorkflow(p, body) {
     }catch(e){failure=failure||(e&&e.message)||String(e)}
     finally{off()}
     const drafted=!failure&&parseComposedWorkflow(text);
-    if(!drafted){composeState.textContent=`Failed · ${(failure||"the agent did not return a workflow").slice(0,90)}`;composeGo.disabled=false;return}
+    if(!drafted){composeState.textContent=`Failed · ${(failure||"the agent did not return a mission").slice(0,90)}`;composeGo.disabled=false;return}
     active={id:`wf-${Date.now().toString(36)}`,name:drafted.name,nodes:drafted.nodes,runs:[]};
     workflows.unshift(active);persist();render();
     composeState.textContent=`Composed ${drafted.nodes.length} agents`;composeSay.value="";composeGo.disabled=false;
@@ -1491,7 +1491,7 @@ function mountWorkflow(p, body) {
       if(ev.type==="route"){routed=`${ev.expert||"operator"} · ${ev.model||""}`.trim();if(routeEl)routeEl.textContent=routed;say("Reasoning")}
       else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))text+=(ev.text||"");
       else if(ev.type==="tool_call"){tools++;say(`Running ${ev.name||"tool"}`)}
-      else if(ev.type==="approval_request"){say("Waiting on your approval");if(dot)dot.classList.add("waiting");if(gate)addApproval(gate,ev)}
+      else if(ev.type==="approval_request"){say("Waiting on your authorization");if(dot)dot.classList.add("waiting");if(gate)addApproval(gate,ev)}
       else if(ev.type==="approval_expired"){expireApproval(ev.id);if(dot)dot.classList.remove("waiting")}
       else if(ev.type==="retry")say(`Retrying (${ev.attempt}/${ev.of})`);
       else if(ev.type==="verdict")verdict=ev;
@@ -1546,7 +1546,7 @@ function mountWorkflow(p, body) {
 function workflowAuthored(ev){
   if(ev.type!=="workflow_authored"||!ev.workflow)return;
   const wfs=workflowStore();
-  wfs.unshift({id:`wf-${Date.now().toString(36)}`,name:String(ev.workflow.name||"Composed workflow"),nodes:(ev.workflow.nodes||[]).map(n=>({name:String(n.name||""),prompt:String(n.prompt||"")})),runs:[]});
+  wfs.unshift({id:`wf-${Date.now().toString(36)}`,name:String(ev.workflow.name||"Composed mission"),nodes:(ev.workflow.nodes||[]).map(n=>({name:String(n.name||""),prompt:String(n.prompt||"")})),runs:[]});
   saveWorkflowStore(wfs);
   const p=panels.find(x=>x.type==="workflow");
   if(!p){addPanel("workflow");return}
@@ -1561,7 +1561,7 @@ function mountAgentFleet(p, body) {
     {name:"Customer Success",role:"Handles follow-up, updates, and retention",prompt:"Act as a customer-success agent. Draft the right follow-up and retention action."},
     {name:"Operations Analyst",role:"Finds missed revenue and operational leakage",prompt:"Act as an operations analyst. Identify revenue leakage, bottlenecks, and corrective actions."},
   ];
-  body.classList.add("agent-fleet");body.innerHTML='<header class="fleet-hero"><div><small>CROWE AGENTS · CUSTOMER CONTROL PLANE</small><h2>Your licensed agent workforce</h2><p>Launch a terminal-backed specialist into the stackable workspace, combine agents in Workflows, or manage the live service at croweagents.com.</p></div><button class="fleet-site primary">Open Crowe Agents</button></header><div class="fleet-license"><span class="health-dot"></span><div><b>Checking workspace license</b><small>Connecting identity, entitlements, and usage.</small></div><select class="fleet-workspace" aria-label="Licensed workspace"></select><button class="fleet-refresh ghost sm">Refresh</button><button class="fleet-billing ghost sm">Manage billing</button><span class="badge">Checking</span></div><div class="fleet-grid"></div>';
+  body.classList.add("agent-fleet");body.innerHTML='<header class="fleet-hero"><div><small>CROWE AGENTS · CUSTOMER CONTROL PLANE</small><h2>Your licensed agent workforce</h2><p>Launch a terminal-backed specialist into the stackable workspace, combine agents in Missions, or manage the live service at croweagents.com.</p></div><button class="fleet-site primary">Open Crowe Agents</button></header><div class="fleet-license"><span class="health-dot"></span><div><b>Checking workspace license</b><small>Connecting identity, entitlements, and usage.</small></div><select class="fleet-workspace" aria-label="Licensed workspace"></select><button class="fleet-refresh ghost sm">Refresh</button><button class="fleet-billing ghost sm">Manage billing</button><span class="badge">Checking</span></div><div class="fleet-grid"></div>';
   body.querySelector(".fleet-site").onclick=()=>navigate("https://croweagents.com");body.querySelector(".fleet-billing").onclick=async()=>{const r=await window.crowe.license.billing();if(r?.error)alert(r.error)};const grid=body.querySelector(".fleet-grid"),license=body.querySelector(".fleet-license"),workspaceSelect=body.querySelector(".fleet-workspace");let licensed=false,workspaceId="";
   const renderLicense=async()=>{license.querySelector("b").textContent="Checking workspace license";const status=await window.crowe.license.status();workspaceSelect.innerHTML=(status.workspaces||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name||x.id)}</option>`).join("");workspaceId=status.selectedWorkspaceId||status.workspaces?.[0]?.id||"";workspaceSelect.value=workspaceId;const workspace=status.workspaces?.find(x=>x.id===workspaceId),allowed=Boolean(workspace?.agents?.allowed);licensed=allowed;workspaceSelect.disabled=!status.workspaces?.length;license.querySelector(".health-dot").classList.toggle("ok",allowed);license.querySelector("b").textContent=!status.authenticated?"Sign in to Crowe ID":allowed?`${workspace.name||workspace.id} license active`:status.error||"Agent license required";license.querySelector("small").textContent=allowed?`${workspace.plan_id||"Managed"} plan · ${workspace.usage?.agent_jobs||0} agent jobs this period`:"Licensed agents remain locked until an active workspace entitlement is found.";license.querySelector(".badge").textContent=allowed?"Licensed":"Locked";grid.querySelectorAll(".launch,.workflow").forEach(button=>button.disabled=!allowed)};
   workspaceSelect.onchange=async()=>{await window.crowe.license.select(workspaceSelect.value);renderLicense()};body.querySelector(".fleet-refresh").onclick=renderLicense;
@@ -1579,7 +1579,8 @@ function workbenchPresets(){try{return JSON.parse(localStorage.getItem("crowe-wo
 function workbenchHistory(){try{return JSON.parse(localStorage.getItem("crowe-workbench-history")||"[]")}catch{return []}}
 function mountWorkbench(p, body) {
   body.classList.add("agent-workbench");
-  body.innerHTML='<aside class="awb-sidebar"><div class="awb-brand"><img src="../assets/mark-simple.svg" alt=""><div><small>AGENT LAB</small><b>Workbench</b></div></div><button class="awb-new primary sm">New run</button><div class="awb-presets"></div><div class="awb-history"></div></aside><main class="awb-main"><header><div><small>COMPOSE, TEST, SHIP</small><h2>Agent Workbench</h2></div><span class="awb-run-state">Ready</span></header><div class="awb-controls"><label>Agent<select class="awb-agent"><option>CroweLM Operator</option><option>Research Agent</option><option>Builder Agent</option><option>Operations Analyst</option></select></label><label>Mode<select class="awb-mode"><option value="single">Single run</option><option value="compare">Compare two agents</option><option value="parallel">Parallel synthesis</option></select></label><label>Context<input class="awb-context" placeholder="URLs, customer context, or constraints"></label></div><details class="awb-advanced"><summary>Run controls</summary><div><label>Temperature<input class="awb-temp" type="range" min="0" max="1" step="0.1" value="0.4"><output>0.4</output></label><label>Output format<select class="awb-format"><option>Markdown</option><option>JSON</option><option>Plain text</option></select></label><label class="awb-tools"><input type="checkbox" checked> Allow workspace tools</label><label class="awb-branch-field">Branches<select class="awb-branches"><option>2</option><option selected>3</option><option>4</option></select></label></div></details><div class="awb-attachments"><button class="awb-attach ghost sm">Attach files</button><span>No attachments</span><div></div></div><textarea class="awb-prompt" rows="7" placeholder="Describe the outcome, constraints, tools, and expected output..."></textarea><div class="awb-actions"><button class="awb-run primary">Run workbench</button><button class="awb-cancel danger hidden">Cancel run</button><button class="awb-save ghost">Save preset</button><button class="awb-copy ghost">Copy outputs</button><button class="awb-workflow ghost">Make workflow</button></div><div class="awb-meter"><span>0 tokens</span><span>$0.0000</span></div><section class="awb-results"></section></main>';
+  body.innerHTML='<aside class="awb-sidebar"><div class="awb-brand"><span class="cl-mark" aria-hidden="true"></span><div><small>AGENT LAB</small><b>Workbench</b></div></div><button class="awb-new primary sm">New run</button><div class="awb-presets"></div><div class="awb-history"></div></aside><main class="awb-main"><header><div><small>COMPOSE, TEST, SHIP</small><h2>Agent Workbench</h2></div><span class="awb-run-state">Ready</span></header><div class="awb-controls"><label>Agent<select class="awb-agent"><option>CroweLM Operator</option><option>Research Agent</option><option>Builder Agent</option><option>Operations Analyst</option></select></label><label>Mode<select class="awb-mode"><option value="single">Single run</option><option value="compare">Compare two agents</option><option value="parallel">Parallel synthesis</option></select></label><label>Context<input class="awb-context" placeholder="URLs, customer context, or constraints"></label></div><details class="awb-advanced"><summary>Run controls</summary><div><label>Temperature<input class="awb-temp" type="range" min="0" max="1" step="0.1" value="0.4"><output>0.4</output></label><label>Output format<select class="awb-format"><option>Markdown</option><option>JSON</option><option>Plain text</option></select></label><label class="awb-tools"><input type="checkbox" checked> Allow workspace tools</label><label class="awb-branch-field">Branches<select class="awb-branches"><option>2</option><option selected>3</option><option>4</option></select></label></div></details><div class="awb-attachments"><button class="awb-attach ghost sm">Attach files</button><span>No attachments</span><div></div></div><textarea class="awb-prompt" rows="7" placeholder="Describe the outcome, constraints, tools, and expected output..."></textarea><div class="awb-actions"><button class="awb-run primary">Run workbench</button><button class="awb-cancel danger hidden">Cancel run</button><button class="awb-save ghost">Save preset</button><button class="awb-copy ghost">Copy outputs</button><button class="awb-workflow ghost">Make workflow</button></div><div class="awb-meter"><span>0 tokens</span><span>$0.0000</span></div><section class="awb-results"></section></main>';
+  if (window.CroweMark) CroweMark.mount(body.querySelector(".awb-brand .cl-mark"), { state: "rest" });
   const prompt=body.querySelector(".awb-prompt"),context=body.querySelector(".awb-context"),mode=body.querySelector(".awb-mode"),state=body.querySelector(".awb-run-state"),results=body.querySelector(".awb-results"),branches=body.querySelector(".awb-branches"),branchField=body.querySelector(".awb-branch-field"),runBtn=body.querySelector(".awb-run"),cancelBtn=body.querySelector(".awb-cancel");
   let attachments=[],runIds=[],usage={tokens:0,cost:0},outputs=[],cancelled=false;
   const branchCount=()=>Math.max(2,Math.min(4,+branches.value||3));
@@ -1598,7 +1599,7 @@ function mountWorkbench(p, body) {
   body.querySelector(".awb-attach").onclick=async()=>{attachments=await window.crowe.fs.pick();body.querySelector(".awb-attachments span").textContent=attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:"No attachments";body.querySelector(".awb-attachments div").innerHTML=attachments.map(x=>`<span title="${esc(x.path)}">${esc(x.name)}</span>`).join("")};
   body.querySelector(".awb-save").onclick=()=>{const name=prompt.value.trim().split(/\s+/).slice(0,6).join(" ")||"Untitled preset",items=workbenchPresets();items.unshift({name,prompt:prompt.value,context:context.value,mode:mode.value});localStorage.setItem("crowe-workbench-presets",JSON.stringify(items.slice(0,30)));renderLibrary()};
   body.querySelector(".awb-copy").onclick=e=>copyText(outputs.map(x=>`## ${cardTitle(x)}\n\n${x.textContent}`).join("\n\n"),e.currentTarget);
-  body.querySelector(".awb-workflow").onclick=()=>{const tasks=outputs.map(x=>({name:cardTitle(x),prompt:x.textContent}));const workflows=workflowStore();workflows.unshift({id:`wf-${Date.now().toString(36)}`,name:prompt.value.trim().split(/\s+/).slice(0,5).join(" ")||"Workbench workflow",nodes:tasks,runs:[]});saveWorkflowStore(workflows);addPanel("workflow")};
+  body.querySelector(".awb-workflow").onclick=()=>{const tasks=outputs.map(x=>({name:cardTitle(x),prompt:x.textContent}));const workflows=workflowStore();workflows.unshift({id:`wf-${Date.now().toString(36)}`,name:prompt.value.trim().split(/\s+/).slice(0,5).join(" ")||"Workbench mission",nodes:tasks,runs:[]});saveWorkflowStore(workflows);addPanel("workflow")};
   cancelBtn.onclick=()=>{cancelled=true;runIds.forEach(id=>window.crowe.agent.stop(id));state.textContent="Cancelled"};
   runBtn.onclick=async()=>{const task=prompt.value.trim();if(!task)return;cancelled=false;state.textContent="Running";runBtn.classList.add("hidden");cancelBtn.classList.remove("hidden");usage={tokens:0,cost:0};
     const parallel=mode.value==="parallel",count=parallel?branchCount():mode.value==="compare"?2:1;renderShells("Agent running...");
@@ -1727,7 +1728,7 @@ async function mountRoom(p, body, seed = {}) {
       <span class="room-worker-mark" aria-hidden="true" hidden></span>
       <span class="room-name"></span>
       <span class="room-state" aria-live="polite"></span>
-      <span class="room-tier" title="The tier this conversation may run at: the lowest ceiling among its workers, clamped by your autonomy setting"></span>
+      <span class="room-tier" title="The tier this conversation may run at: the lowest ceiling among its workers, clamped by your operating envelope"></span>
       <button class="room-add ghost sm" type="button" title="Add a worker to this conversation">Add</button>
       <button class="room-council ghost sm" type="button" title="Scope, voting and autopilot">Council</button>
       <button class="room-details ghost sm" type="button" aria-pressed="false" title="Brief, routines and activity">Details</button>
@@ -2312,7 +2313,7 @@ async function mountRoom(p, body, seed = {}) {
       // The same card the operator thread draws, in this thread, under the
       // seat that asked. Allowing it here is the operator's act; the seat's
       // tier is unchanged by it.
-      note(`${who}: waiting on your approval: ${ev.title || ev.kind || "an action"}`, "is-blocked");
+      note(`${who}: waiting on your authorization: ${ev.title || ev.kind || "an action"}`, "is-blocked");
       const holder = document.createElement("div"); holder.className = "rmsg is-gate"; holder.dataset.gateFor = roomAgent;
       const meta = ev.meta && typeof ev.meta === "object" ? ev.meta : null;
       holder.innerHTML = `<div class="rmsg-head"><span class="rmsg-mark" aria-hidden="true"></span><span class="rmsg-who">${esc(who)}</span><span class="rmsg-tag">${meta ? "asks to act through " + esc(meta.connector || "a connector") : "asks to act"}</span></div>`;
@@ -2612,7 +2613,7 @@ document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(
 
 // ── Dock: one tab strip for pinned views and every open panel ──
 const dockTabs = $("dock-tabs");
-const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", "cloud-browser":"Cloud browser", operator:"Operator", workflow:"Workflows", agents:"Agent fleet", workbench:"Workbench" };
+const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", "cloud-browser":"Cloud browser", operator:"Operator", workflow:"Missions", agents:"Agent fleet", workbench:"Workbench" };
 function applyStackVisibility(){
   const stacked = panelDeck.classList.contains("stack");
   if (stacked && !panels.some((p)=>p.id===activePanelId)) activePanelId = panels.length ? panels[panels.length-1].id : null;
@@ -3080,9 +3081,9 @@ function termTheme() {
   const s = getComputedStyle(document.body);
   const v = (name, fallback) => (s.getPropertyValue(name) || "").trim() || fallback;
   return {
-    background: v("--term-bg", "#0b0e12"),
-    foreground: v("--term-fg", "#eceae4"),
-    cursor: v("--gold", "#d2ad62"),
+    background: v("--term-bg", "#121212"),
+    foreground: v("--term-fg", "#F4F0E7"),
+    cursor: v("--gold", "#D0B471"),
     selectionBackground: v("--line-strong", "rgba(255,255,255,0.16)"),
   };
 }
@@ -3409,7 +3410,7 @@ async function cloneRepo(r, statusEl) {
     if (ev.type === "approval_request" && gateHost) addApproval(gateHost, ev);
     else if (ev.type === "approval_expired") expireApproval(ev.id);
   });
-  setStatus(`Cloning ${r.full} into the clone folder. The command asks for your approval first.`);
+  setStatus(`Cloning ${r.full} into the clone folder. The command asks for your authorization first.`);
   try {
     const res = await window.crowe.repos.clone(r.owner, r.name);
     if (!res || res.error) { setStatus(res && res.denied ? "The clone was denied." : (res && res.error) || "Clone failed.", "error"); return res; }
@@ -3563,7 +3564,7 @@ function workRow(item, repo, cwd) {
   const acts = document.createElement("div"); acts.className = "repo-actions";
   const view = button("ghost sm", "View", "Open on GitHub in the browser panel");
   view.addEventListener("click", () => { if (/^https:\/\//.test(item.url || "")) { setSpace("chat"); navigate(item.url); } });
-  const start = button("primary sm", "Start task", "Open a new session about this, at the autonomy you pick");
+  const start = button("primary sm", "Start task", "Open a new session about this, in the operating mode you pick");
   acts.append(view, start);
   el.append(main, acts);
   start.addEventListener("click", () => {
@@ -3578,13 +3579,13 @@ function workRow(item, repo, cwd) {
    tiers, and picking one sets the same setting the composer's pill shows. */
 function taskPicker(item, repo, cwd) {
   const box = document.createElement("div"); box.className = "task-picker";
-  box.innerHTML = `<span class="tp-label">Autonomy</span>
-    <div class="seg tp-seg" role="group" aria-label="Autonomy for this task">
+  box.innerHTML = `<span class="tp-label">Operating envelope</span>
+    <div class="seg tp-seg" role="group" aria-label="Operating envelope for this task">
       <button type="button" class="seg-btn active" data-tier="readonly" aria-pressed="true">Read</button>
       <button type="button" class="seg-btn" data-tier="edit" aria-pressed="false">Edit</button>
       <button type="button" class="seg-btn" data-tier="execute" aria-pressed="false">Execute</button>
     </div>
-    <span class="tp-hint">Read for review, Edit for a fix, Execute when tests must run. This is the composer's autonomy setting.</span>`;
+    <span class="tp-hint">Read for review, Edit for a fix, Execute when tests must run. This is the composer's operating envelope.</span>`;
   let tier = "readonly";
   box.querySelectorAll(".tp-seg .seg-btn").forEach((b) => b.addEventListener("click", () => {
     tier = b.dataset.tier;
@@ -3626,7 +3627,7 @@ async function startRepoTask(item, repo, tier, cwd) {
 
 // ── Autonomy pill ──
 const TIER_HINT = {
-  plan: "Describe a task. It explores read-only, then writes a plan to approve.",
+  plan: "Describe a task. It explores read-only, then writes a plan for you to authorize.",
   readonly: "Ask anything. Read-only: it can look, not touch.",
   edit: "Ask anything. It can edit files, with your review.",
   execute: "Ask anything. It can run commands and edit files.",
@@ -3884,7 +3885,7 @@ async function refreshHome() {
     <div class="kv"><span class="k">role-tagged</span><span class="v">${roled || "none yet"}</span></div>
     <div class="kv"><span class="k">health</span><span class="v dim">endpoint pending</span></div>`;
   $("ss-gw").classList.toggle("ok", cat.models.length > 0);
-  $("ss-cat").textContent = cat.models.length ? `catalog · ${cat.models.length} models` : "catalog · unreachable";
+  $("ss-cat").textContent = cat.models.length ? `catalog · ${cat.models.length} engines` : "catalog · unreachable";
   $("ss-tier").textContent = "tier · " + (document.body.dataset.tier || "edit");
   $("ss-ver").textContent = cfg.version ? "v" + cfg.version : "";
 }
@@ -5098,10 +5099,10 @@ const PAL_ACTIONS = [
   { label: "Version control (git)", run: () => { setSpace("chat"); switchPane("git"); } },
   { label: "Toggle chat panel", run: () => { setSpace("chat"); toggleChatPanel(); } },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
-  { label: "Autonomy: Plan", run: () => selAutonomy("plan") },
-  { label: "Autonomy: Read-only", run: () => selAutonomy("readonly") },
-  { label: "Autonomy: Edit", run: () => selAutonomy("edit") },
-  { label: "Autonomy: Execute", run: () => selAutonomy("execute") },
+  { label: "Operating mode: Plan", run: () => selAutonomy("plan") },
+  { label: "Operating mode: Read-only", run: () => selAutonomy("readonly") },
+  { label: "Operating mode: Edit", run: () => selAutonomy("edit") },
+  { label: "Operating mode: Execute", run: () => selAutonomy("execute") },
   { label: "New terminal panel", run: () => addPanel("terminal") },
   { label: "Quick open file", run: openQuickOpen },
   { label: "Output (agent events)", run: () => { setSpace("chat"); switchPane("output"); } },
@@ -5335,6 +5336,8 @@ function dismissLaunch() {
   // rail, and a notification click opens the room it came from.
   window.crowe.rooms.onChanged(() => refreshRoomListSoon());
   window.crowe.rooms.onOpen(({ id } = {}) => { if (id) openRoomPanel(id); });
+  // The dock's agent launcher wears the live mark rather than an <img>, so it takes the theme's ink.
+  document.querySelectorAll("#glass-launcher .cl-mark").forEach((el) => { if (window.CroweMark) CroweMark.mount(el, { state: "rest" }); });
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");

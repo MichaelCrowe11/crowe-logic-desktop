@@ -7,14 +7,14 @@
       host.className = "council-panel";
       host.innerHTML = `<header class="council-heading"><span class="council-emblem" aria-hidden="true"></span><div><span class="council-eyebrow">CROWE LOGIC / ROOMS</span><h3>Council autopilot</h3></div><span class="council-status" role="status">Not authorized</span></header>
         <p class="council-intro">A shared objective. Independent votes. Authority stays with you.</p>
-        <div class="council-progress" aria-label="Approval workflow"><span>Propose</span><span>Classify</span><span>Vote</span><span>Execute</span><span>Verify</span></div>
+        <div class="council-progress" aria-label="Authorization process"><span>Propose</span><span>Classify</span><span>Vote</span><span>Execute</span><span>Verify</span></div>
         <form class="council-form">
           <label>Standing objective<textarea name="goal" rows="3" required maxlength="4000" placeholder="Describe the outcome and the constraints the council must respect."></textarea></label>
           <label>Authority<select name="mode"><option value="advisory">Advisory: deliberate and record results</option><option value="files">Files: only the exact paths below</option></select></label>
           <label class="council-files" hidden>Allowed files, one workspace-relative path per line<textarea name="files" rows="3" placeholder="src/example.js"></textarea></label>
-          <div class="council-grid"><label>Approval quorum<input name="quorum" type="number" min="2" max="7" value="2" required></label><label>Maximum steps<input name="maxSteps" type="number" min="1" max="10" value="3" required></label><label>Model-call limit<input name="maxCalls" type="number" min="5" max="100" value="20" required></label><label>Expires in minutes<input name="minutes" type="number" min="1" max="60" value="10" required></label></div>
+          <div class="council-grid"><label>Authorization quorum<input name="quorum" type="number" min="2" max="7" value="2" required></label><label>Maximum steps<input name="maxSteps" type="number" min="1" max="10" value="3" required></label><label>Model-call limit<input name="maxCalls" type="number" min="5" max="100" value="20" required></label><label>Expires in minutes<input name="minutes" type="number" min="1" max="60" value="10" required></label></div>
           <p class="council-boundary">At least three distinct pinned engines. The proposer cannot vote. A rejection or classifier warning stops the cycle. No shell, publishing, payments, or new permissions. Call limits are not a dollar spending guarantee.</p>
-          <label class="council-consent"><input type="checkbox" name="consent" required>I authorize this scope until expiry. Approved file changes apply without another prompt.</label>
+          <label class="council-consent"><input type="checkbox" name="consent" required>I authorize this scope until expiry. Authorized file changes apply without another prompt.</label>
           <button class="primary council-start" type="submit">Authorize and start</button>
         </form>
         <div class="council-controls"><button type="button" class="ghost council-pause">Pause</button><button type="button" class="ghost council-revoke">Revoke authority</button></div>

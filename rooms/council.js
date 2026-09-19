@@ -83,7 +83,7 @@
     const event = async (kind, detail) => { state.events.push({ at: clock(), kind, detail }); await persist(); };
     const check = async () => {
       if (state.revision !== revision || ["paused", "revoked"].includes(state.status)) throw new Error(state.reason || "Authority changed.");
-      if (await hash(state.grant) !== contractHash) throw new Error("The operating agreement changed; approval is invalid.");
+      if (await hash(state.grant) !== contractHash) throw new Error("The operating agreement changed; the authorization is invalid.");
       if (clock() >= state.grant.expiresAt) throw new Error("Authority expired.");
       await deps.authorized(state.grant);
     };
