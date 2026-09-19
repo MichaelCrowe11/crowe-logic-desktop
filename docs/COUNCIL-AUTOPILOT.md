@@ -1,7 +1,9 @@
 # Council autopilot
 
-Implemented on `feat/rooms-council-autopilot`, based on desktop 0.24.14.
-This is a local development implementation, not a published release.
+Implemented on `feat/rooms-council-autopilot`, based on desktop 0.24.14, and
+merged to main at 449a700 on 2026-09-19. The first real councils ran the same
+day; their receipts are in `docs/council-runs/`, and what they taught is at
+the end of this document.
 
 ## Operator workflow
 
@@ -25,6 +27,15 @@ This is a local development implementation, not a published release.
 The protocol is `propose -> classify -> vote -> execute -> verify`.
 
 - Advisory authority records a council-approved result, with no external action.
+  The receipt carries the recorded proposal text as `recorded` and its kind, so
+  the verifier compares the record with the approved summary instead of taking
+  a sentence on trust.
+- Desktop file authority is the intersection of the operator's configured
+  autonomy and the Room roster's own ceiling, the tier a Room turn runs at
+  (`registry.effectiveTier`). It is checked when the grant is made and again
+  before every model call and every write. A read-only or advisory roster
+  cannot be lifted into writing by a grant; a drop in autonomy, a workspace
+  change or a roster change ends the grant.
 - Desktop file authority permits only full-text replacements of explicitly
   selected, existing UTF-8 files inside the current workspace. At most 12 files,
   each up to 60 KB. The entire selected context must fit the protocol's 200k
@@ -107,3 +118,59 @@ Windows filesystem behavior, native iOS/Android packaging or app-store readiness
 Before production release: exercise supported real providers against the JSON
 contract, measure false approvals/refusals and correlated reviewer failures,
 validate native builds, and review the security boundary independently.
+
+## Headless host
+
+`scripts/council-run.js` runs the same protocol module and file executor
+outside Electron, against the local Crowe Logic model runtime (the foundry's
+`cli.headless`, spawned per request with `--no-tools`). The host holds no
+credential and folds each protocol prompt into the user turn, because that
+runner keeps only user and assistant turns. Engine identity comes from a table
+checked against the foundry catalog on 2026-09-19, not a live catalog. Operator
+controls are files in the run directory, `PAUSE` and `REVOKE`. File authority
+needs `--autonomy edit` or `execute` on the command line and is the same
+intersection with the seats' ceiling that the desktop computes; without the
+flag the run is read-only. Records land in `.council-test/runs/<id>/` (state,
+ledger, receipt, every model call), and the ledger states the operator
+autonomy, effective tier and request timeout in effect. Use `--dry-run` to
+validate a grant and take the evidence snapshot without a call.
+
+## What the first real councils taught (2026-09-19)
+
+Five distinct engines sat: GPT-6 Astra, Claude Fable 5.1, Grok 4.6, GPT-5.6
+Sol and DeepSeek V4 Pro, quorum three of four reviewers. Receipts are in
+`docs/council-runs/`.
+
+- The protocol held. Every escalation was the protocol refusing to continue
+  without the operator, never a silent retry or a widened scope.
+- An advisory receipt without recorded content gives the verifier nothing to
+  check, so a strict verifier abstains and every advisory step escalates. Fixed
+  above: receipts carry the recorded text.
+- The proposer prompt did not state the 8000-character summary bound. Two
+  grants ended on that rule alone, one after the goal text stated the bound.
+  Fixed above: the propose prompt now states the bound.
+- The safety classifier ended a grant on a design disagreement before any
+  vote. Its prompt did not separate safety findings from design critique.
+  Fixed above: the classify prompt now sends design objections to the
+  ballot, where they are one vote among many.
+- Grok 4.6 needed 125 seconds for one vote, over the desktop's two-minute
+  request timeout. The headless host defaults to the same two minutes; the
+  first runs set five minutes by flag, and the run record now states the
+  value in effect.
+- A single reviewer that abstains on principle when evidence is incomplete
+  is healthy for votes and fatal as the verifier; seat order decides who
+  verifies, so the operator should seat the verifier deliberately.
+- False approvals are measurable. On a 5071-character proposal under a stated
+  5000-character cap, Grok 4.6 approved and wrote "under the cap"; GPT-5.6 Sol
+  rejected with the correct count. Ballots on checkable facts are the first
+  oversight metric worth collecting.
+- Five architecture grants ran. Step 1 was approved by vote (three approve,
+  one abstain) and then escalated because the verifier abstained on an
+  evidence-free advisory receipt, the defect fixed above. Step 2 was approved
+  and verified. Step 3 was drafted three times and never reached quorum: one
+  classifier escalation, two length rejections. Items 3 to 5 are not agreed.
+- A sixth grant reviewed this branch. Claude Fable 5.1 found that the first
+  version of the new gate failed open when configured autonomy was missing or
+  invalid, because `effectiveTier` defaults an unknown tier to edit. All four
+  reviewers confirmed the finding. Fixed above: the host and the headless host
+  both fail closed on an unknown autonomy, and a test covers it.
