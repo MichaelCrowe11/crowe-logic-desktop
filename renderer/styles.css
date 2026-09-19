@@ -530,6 +530,27 @@ body[data-tier="execute"] { --tier: var(--tier-execute); }
 body.dark .tc-result.collapsed::after { color: var(--gold); }
 .err { color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line); padding: 8px 12px; border-radius: var(--r-md); }
 
+/* The Cloud browser card: a thumbnail of the page the agent is on, the address
+   as a chip, the page title, and Open. Sized like the tool card it sits beside;
+   the thumbnail is the 480 px wide frame the service sends, never upscaled. */
+.browsercard { border: 1px solid var(--line); border-radius: var(--r-md); margin: 8px 0; background: var(--panel);
+  box-shadow: var(--z1); animation: rise 180ms var(--ease); position: relative; max-width: 480px; overflow: hidden; }
+.msg.assistant .browsercard::before { content: ""; position: absolute; left: -23.5px; top: 11px; width: 7px; height: 7px;
+  border-radius: 50%; box-sizing: border-box; background: var(--cream); border: 2px solid var(--tier); }
+.bc-head { display: flex; align-items: center; gap: 8px; padding: 7px 11px; font-family: var(--mono); font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--line); }
+.bc-kicker { color: var(--blue); font-weight: 600; white-space: nowrap; }
+.bc-url { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+  background: var(--cream); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.bc-open { margin-left: auto; white-space: nowrap; }
+.bc-shot { background: var(--cream); min-height: 0; }
+.bc-thumb { display: block; width: 100%; height: auto; }
+.bc-title { padding: 7px 11px; font-size: var(--fs-sm); color: var(--ink); border-top: 1px solid var(--line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-thread .rmsg.is-browser { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
+.room-thread .rmsg.is-browser .rmsg-head { display: flex; padding: 0; }
+.rmsg.is-browser .browsercard { margin: 4px 0 0 24px; }
+
 /* Session colophon: the turn's typeset ledger. */
 .colophon { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 6px;
   border-top: 1px solid var(--line); font-family: var(--mono); font-size: var(--fs-cap); color: var(--muted); }
@@ -1448,6 +1469,13 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .browser-host { flex:1; min-height:0; }
 .browser-host { display:flex; }
 .browser-host webview { display:flex; flex:1 1 auto; width:100%; height:100%; min-height:0; }
+/* The cloud browser panel: the live view fills the body; the bar names the page. */
+.cloud-browser-tools { gap:8px; padding:6px 8px; font-family:var(--mono); font-size:var(--fs-sm); }
+.cb-kicker { color:var(--blue); font-weight:600; white-space:nowrap; }
+.cb-url { flex:1 1 120px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted);
+  background:var(--cream); border:1px solid var(--line); border-radius:999px; padding:2px 9px; }
+.cloud-browser-host iframe.cloud-browser-frame { flex:1 1 auto; width:100%; height:100%; min-height:0; border:0; background:var(--cream); }
+.cloud-browser-host .bh-note { padding:14px; color:var(--muted); font-size:var(--fs-sm); }
 .browser-history { position:absolute; z-index:8; margin:35px 8px 0; max-height:220px; max-width:420px; overflow:auto; background:var(--panel); border:1px solid var(--line); box-shadow:var(--z3); border-radius:7px; }
 .browser-history.hidden { display:none; }
 .browser-list-head { display:flex; align-items:center; justify-content:space-between; padding:7px 9px; border-bottom:1px solid var(--line); }

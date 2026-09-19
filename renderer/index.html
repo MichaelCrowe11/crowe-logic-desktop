@@ -410,6 +410,13 @@
         <label>Node URL, for direct <input id="cfg-sense-url" type="text" placeholder="http://100.101.102.103:8078" /></label>
         <label>Node id, for cloud <input id="cfg-sense-node" type="text" placeholder="cs-a1b2c3" /></label>
       </section>
+      <!-- Crowe Browser, the cloud browser for agents. Below Crowe Sense for the
+           same reason: nothing above the space checkboxes may move. The key
+           field is write-only; the badge is the only thing that says one is set. -->
+      <section id="cfg-browser" class="key-manager"><div class="settings-section-head"><div><b>Crowe Browser</b><span>A browser in the cloud that the agent drives and you watch from a card in the thread. Clicking and typing need Execute autonomy. The key stays on this machine.</span></div><span id="browser-state" class="badge">Off</span></div>
+        <label>Service URL <input id="cfg-browser-url" type="text" placeholder="https://browser.crowelogic.com" spellcheck="false" /></label>
+        <label>Service key <input id="cfg-browser-key" type="password" placeholder="paste to update; blank keeps current" autocomplete="off" /></label>
+      </section>
       <!-- Below Crowe Sense for the reason Sense is below Guardrails: the space
            checkboxes are hit-tested where they are drawn, and nothing above
            them may move. -->
