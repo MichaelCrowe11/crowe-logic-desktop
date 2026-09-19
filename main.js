@@ -51,6 +51,11 @@ const DEFAULTS = {
   mcpServers: {},         // { name: { command, args, env } }
   telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
   onboarded: false,       // set true after the first-run card has been shown
+  // The home folder is the workspace because the user said so (the picker's
+  // "Use my home folder", or home picked in the dialog). Until then a home
+  // workspace holds the composer: it is where a fresh install lands, not a
+  // project anyone chose.
+  useHomeWorkspace: false,
   licenseWorkspaceId: "", // selected Crowe Agents customer workspace
   // Which actions stop for an explicit yes, independently of the autonomy tier:
   // off | high-risk (irreversible only) | strict (anything past the working tree).
@@ -1527,8 +1532,14 @@ function openWorkspace(rawPath) {
   try { stat = fs.statSync(dir); } catch { return { error: "That folder is not there any more" }; }
   if (!stat.isDirectory()) return { error: "That path is not a folder" };
   CWD = dir;
-  saveConfig({ cwd: dir, recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir) });
+  // Picking home from the dialog or the sidebar is choosing it; picking a
+  // project un-chooses it, so home is never the workspace by inertia.
+  saveConfig({ cwd: dir, recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir), useHomeWorkspace: isHomeDir(dir) });
   return { ok: true, cwd: dir };
+}
+function isHomeDir(dir) {
+  const a = path.resolve(dir), b = path.resolve(os.homedir());
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 function isGitCheckout(dir) { return fs.existsSync(path.join(dir, ".git")); }
 async function repoSummary(dir) {
@@ -1718,7 +1729,7 @@ ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
-    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
+    telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), useHomeWorkspace: Boolean(c.useHomeWorkspace), sense: c.sense,
     reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),

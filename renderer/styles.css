@@ -2090,6 +2090,8 @@ button.primary:active, .rc-open:active, .room-send:active {
 .companion-audit { max-height: 180px; overflow: auto; font-family: var(--mono); font-size: 12px; }
 .signin-prompt-action { margin-top: 8px; }
 .onboarding-steps { margin: 4px 0 0 1.2em; line-height: 1.7; }
+/* Step two's picker sits in the sentence: the folder dialog, and home on purpose. */
+.onboarding-folder { display: inline-flex; gap: 8px; flex-wrap: wrap; margin-left: 8px; vertical-align: middle; }
 .onboarding-actions { margin-top: 10px; }
 
 /* The launch veil grades with the same two lights, so the app's first frame

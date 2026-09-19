@@ -2122,6 +2122,101 @@ const tests = [
       return { toolsPointAtWorkspace: /^Done/.test(tools), emptyNamed: /returned no text/.test(nothing), tools, nothing };`,
     expect: { toolsPointAtWorkspace: true, emptyNamed: true },
   },
+  {
+    // A fresh install's workspace is the home folder. Until a folder is chosen,
+    // or home is chosen on purpose, a send draws the picker card and starts no
+    // turn; the draft stays. Home on purpose lifts the hold through config, and
+    // with a project open the first chip names the folder but sends a prompt
+    // about the workspace, never the folder name as an instruction.
+    name: "at the home folder the composer holds until a folder is chosen or home is chosen on purpose",
+    body: `const origGet = window.crowe.getConfig, origSet = window.crowe.setConfig;
+      const home = "/Users/x";
+      let cfg = { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: home, homeDir: home, useHomeWorkspace: false,
+        autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, mcp: [], ptyAvailable: false };
+      const patches = [];
+      window.crowe.getConfig = async () => cfg;
+      window.crowe.setConfig = async (patch) => { patches.push(patch); cfg = Object.assign({}, cfg, patch); return cfg; };
+      resetWelcome(); messages.length = 0;
+      await refreshStatus();
+      const heldPlaceholder = input.placeholder;
+      const firstChip = transcript.querySelector(".welcome .chips .chip");
+      const chipHeld = firstChip.textContent + "|" + firstChip.dataset.action;
+      const users0 = document.querySelectorAll(".msg.user").length;
+      input.value = "hello"; input.dispatchEvent(new Event("input"));
+      await send("hello");
+      await send("hello again");
+      const card = transcript.querySelector(".msg .workspace-prompt");
+      const cards = transcript.querySelectorAll(".msg .workspace-prompt").length;
+      const labels = card ? [...card.querySelectorAll("button")].map((b) => b.textContent).join("|") : "";
+      const users = document.querySelectorAll(".msg.user").length - users0;
+      const status = $("composer-status").textContent, state = $("composer-status").dataset.state, draft = input.value;
+      const homeBtn = card ? [...card.querySelectorAll("button")].find((b) => b.textContent === "Use my home folder") : null;
+      if (homeBtn) homeBtn.click();
+      await __settle();
+      const patch = JSON.stringify(patches[patches.length - 1]);
+      const cardGone = !transcript.querySelector(".msg .workspace-prompt");
+      const liftedOpen = input.placeholder === (TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER);
+      const captionAfter = $("composer-status").textContent;
+      const welcomeBack = !!transcript.querySelector(".welcome");
+      const homeChip = transcript.querySelector(".welcome .chips .chip").textContent;
+      cfg = Object.assign({}, cfg, { cwd: "/Users/x/demo", useHomeWorkspace: false });
+      await refreshStatus();
+      const chip = transcript.querySelector(".welcome .chips .chip");
+      const projectChip = chip.textContent, projectPrompt = chip.dataset.prompt;
+      window.crowe.getConfig = origGet; window.crowe.setConfig = origSet;
+      input.value = ""; input.dispatchEvent(new Event("input"));
+      await refreshStatus(); resetWelcome(); setComposerStatus("Ready");
+      return { heldPlaceholder, chipHeld, cards, labels, users, status, state, draft, patch, cardGone, liftedOpen, captionAfter, welcomeBack, homeChip, projectChip, projectPrompt,
+        restored: input.placeholder === (TIER_HINT[document.body.dataset.tier] || INPUT_PLACEHOLDER) };`,
+    expect: { heldPlaceholder: "Choose a project folder to start", chipHeld: "Open a project folder to start|open-folder", cards: 1,
+      labels: "Choose a folder|Use my home folder", users: 0, status: "Choose a project folder to start", state: "note", draft: "hello",
+      patch: '{"useHomeWorkspace":true}', cardGone: true, liftedOpen: true, captionAfter: "Ready", welcomeBack: true,
+      homeChip: "List the files here and summarize the project", projectChip: "List the files in demo and summarize the project",
+      projectPrompt: "List the files in the current workspace and summarize the project", restored: true },
+  },
+  {
+    // The first-run card said "Pro access unlocks the full CroweLM tiers" and
+    // "the operator over your CroweLM gateway", and step two cited a Cmd+O the
+    // app does not have. It now says what the free tier is, and step two is the
+    // picker itself: the folder dialog, and home on purpose while the hold is
+    // on. With a project open the home button has no job and is not offered.
+    name: "the first-run card names the free tier plainly and makes step two the folder picker",
+    body: `const origGet = window.crowe.getConfig, origStatus = window.crowe.auth.status;
+      const home = "/Users/x";
+      const base = { baseUrl: "https://api.crowelogic.com", hasToken: false, cwd: home, homeDir: home, useHomeWorkspace: false,
+        autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, mcp: [], ptyAvailable: false };
+      window.crowe.getConfig = async () => base;
+      window.crowe.auth.status = async () => ({ user: null });
+      resetWelcome(); messages.length = 0;
+      await refreshStatus(); await refreshAuth();
+      await maybeShowOnboarding({ onboarded: false });
+      const card = transcript.querySelector(".msg.assistant .body");
+      const text = card ? card.textContent : "";
+      const steps = card ? [...card.querySelectorAll(".onboarding-steps li")] : [];
+      const stepTwo = steps[1];
+      const picker = stepTwo ? stepTwo.querySelector(".onboarding-folder") : null;
+      const out = {
+        signIn: text.includes(window.CroweFirstRun.SIGN_IN_COPY),
+        noWall: !/Pro access|operator over your CroweLM gateway|Cmd\\+O|needs no card/.test(text),
+        steps: steps.length,
+        stepTwoText: stepTwo ? stepTwo.firstChild.textContent : "",
+        pickerLabels: picker ? [...picker.querySelectorAll("button")].map((b) => b.textContent).join("|") : "",
+        rowLabels: [...card.querySelectorAll(".onboarding-actions button")].map((b) => b.textContent).join("|"),
+      };
+      (card.closest(".msg") || card).remove();
+      window.crowe.getConfig = async () => Object.assign({}, base, { cwd: "/Users/x/demo" });
+      await refreshStatus();
+      await maybeShowOnboarding({ onboarded: false });
+      const card2 = transcript.querySelector(".msg.assistant .body");
+      out.pickerWithProject = [...card2.querySelectorAll(".onboarding-folder button")].map((b) => b.textContent).join("|");
+      out.signInLeads = card2.querySelector(".onboarding-actions button").className;
+      window.crowe.getConfig = origGet; window.crowe.auth.status = origStatus;
+      await refreshStatus(); await refreshAuth(); resetWelcome();
+      return out;`,
+    expect: { signIn: true, noWall: true, steps: 3, stepTwoText: "Choose the folder the agent should work in.",
+      pickerLabels: "Choose a folder|Use my home folder", rowLabels: "Sign in with Crowe ID|Explore first",
+      pickerWithProject: "Choose a folder", signInLeads: "primary" },
+  },
 ];
 
 function compare(actual, expected) {
