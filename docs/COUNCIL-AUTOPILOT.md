@@ -210,3 +210,6 @@ Sol and DeepSeek V4 Pro, quorum three of four reviewers. Receipts are in
   time, on the same bare `verified` status. Fixed above: the `previous` list
   now carries `approved` and a plain `outcome`, per item 3 of the approved
   Step 4, and a test covers it.
+- The consolidated plan was approved and verified on the twelfth grant, with
+  Sol proposing, after the eleventh ended on a five-minute request timeout
+  during Claude Fable 5.1's vote. The plan is `docs/COUNCIL-ARCHITECTURE-PLAN.md`.
