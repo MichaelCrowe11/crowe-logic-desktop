@@ -366,99 +366,39 @@ body.dark .said li::marker { color: var(--gold); }
   padding: 11px 13px; border-radius: var(--r-md); overflow-x: auto; box-shadow: var(--z1); }
 
 /* ── Living mark (see mark.js + mark-geometry.js) ──────────────────────────
-   The house mark: a gold core with six long blue arms on the hex axes and six
-   short gold arms on the half-axes. The same polygons ship as assets/mark.svg
-   and assets/icon.svg, so the app icon and the running agent are one shape.
+   The Gate Glyph: two jaws framing an aperture, a brass core in the aperture
+   while the gate is open. The same geometry ships as assets/gate-glyph.svg and
+   as the app icon tile, so the icon and the running agent are one shape.
 
-   Motion is the status readout — rotor speed and breath depth say what the
-   agent is doing, which is why no panel needs a separate spinner. The hot blue
-   is held back for the bloom peak; that restraint is what keeps a permanently
-   animating element from reading as noise. */
-/* The tonal scale. Flat ink hyphae plus a flat gold spore was the right
-   drawing for an 18px tray slot and the wrong one for a 104px hero: six thin
-   near-white arms around a mustard hexagon read as a spider, not an organism.
-
-   So the scale runs along the axis the mark already means — gold at the spore,
-   cooling outward as the hyphae grow. One user-space radial gradient (built in
-   mark.js, matching scripts/gen-mark.js exactly) does it for all twelve arms.
-   The stops are custom properties so one drawing serves both themes, and so
-   reasoning can heat the ramp itself rather than flipping every arm flat.
-
-   Small sizes keep the flat cut: mark-simple.svg and the tray images pass no
-   scale at all and are unchanged. A gradient below ~24px is a smudge. */
-@property --cm-mid { syntax: "<color>"; inherits: true; initial-value: #a9702a; }
-@property --cm-tip { syntax: "<color>"; inherits: true; initial-value: #241f19; }
-@property --cm-core { syntax: "<color>"; inherits: true; initial-value: #ffc94a; }
-.cl-mark { position: relative;
-  --cm-root: #f5b01d; --cm-mid: #a9702a; --cm-tip: #241f19;
-  --cm-core: #ffc94a; --cm-core-edge: #d9911a;
-  /* Royal blue. It heats the middle of the ramp rather than replacing the whole
-     arm, so the wash travels outward the way the spin turns. It used to appear
-     only while the agent was reasoning; it is now the mark's resting behaviour
-     too, just slower — see the idle rules below. */
-  --cm-mid-hot: #4d9fe8; --cm-tip-hot: #9ecbf2; --cm-core-hot: #ffe6a8;
-  /* The trough of the heat cycle: the same values the ramp holds when nothing
-     is animating. Declared once here (and once for dark) instead of inside each
-     state, because cmHeat reads them as its 0%/100% keyframe and both idle and
-     reasoning need the same floor. They cannot be var(--cm-mid) — that is the
-     property the animation writes, and it would close the loop on itself. */
-  --cm-mid-rest: #a9702a; --cm-tip-rest: #241f19; --cm-core-rest: #ffc94a;
-  --cm-gold: var(--gold); }
-body.dark .cl-mark {
-  /* Against a dark ground the ramp has to end light or the tips disappear, so
-     it runs bronze → bone. It must not START gold: the arms are 9.4 wide where
-     they leave the core and six of them fill most of the circle there, so a
-     gold root paints a gold ring around the gold spore and the two fuse. Dark
-     collar, bright inoculum. Mirrors SCALE.dark in scripts/gen-mark.js. */
-  --cm-root: #7e5a2a; --cm-mid: #a87f45; --cm-tip: #f0eadc;
-  --cm-core: #ffd264; --cm-core-edge: #da9a1e;
-  --cm-mid-rest: #a87f45; --cm-tip-rest: #f0eadc; --cm-core-rest: #ffd264;
-}
+   Motion is state, not decoration; the directive forbids perpetual ambient
+   movement. At rest and idle the gate holds open and still. While the agent
+   reasons the core pulses (the execution beat). A failure closes the jaws and
+   drains the colour to muted. A tool landing rings once. Jaws are drawn in
+   currentColor, so the host's colour is the drawing's; the core is brass, the
+   one place the signal colour appears on the mark. */
+.cl-mark { position: relative; color: var(--ink); --cm-gold: var(--gold); }
 .cl-mk { width: 100%; height: 100%; overflow: visible; display: block; }
-/* 50% 50%, not 60px 60px. transform-box: view-box measures from the viewBox's
-   own origin, and the live mark now draws on the trimmed ink box (min-x 15.93)
-   rather than the raw 0,0 canvas — a hard 60px there is offset from the spore
-   and the whole mark would orbit instead of spin. The box is square about the
-   centre by construction, so the centre is always 50%. */
-.cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { transform-box: view-box; transform-origin: 50% 50%; }
-.cm-s0 { stop-color: var(--cm-root); } .cm-s1 { stop-color: var(--cm-mid); } .cm-s2 { stop-color: var(--cm-tip); }
-.cm-c0 { stop-color: var(--cm-core); } .cm-c1 { stop-color: var(--cm-core-edge); }
+/* fill-box, not view-box: the core is centred on the grid (32,32) and the
+   viewBox is shifted 3.5 to centre the ink, so a scale about the viewBox centre
+   would walk the core sideways. Each part scales about itself. */
+.cm-jaw, .cm-heart, .cm-ping { transform-box: fill-box; transform-origin: center; }
+.cm-heart { fill: var(--cm-gold); transition: opacity var(--dur-slow) var(--ease); }
+.cm-jaw { transition: transform var(--dur-slow) var(--ease); }
 .cm-ping { stroke: var(--cm-gold); opacity: 0; }
-@keyframes cmSpin { to { transform: rotate(360deg); } }
-@keyframes cmBreath { 0%, 100% { transform: scale(.975); } 50% { transform: scale(1.015); } }
-@keyframes cmWork { 0% { transform: scale(.62); } 42% { transform: scale(1.06); } 66% { transform: scale(.86); } 100% { transform: scale(.62); } }
-@keyframes cmRecede { 0% { opacity: .92; } 42% { opacity: .12; } 70% { opacity: .55; } 100% { opacity: .92; } }
+@keyframes cmPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.22); opacity: .72; } }
 @keyframes cmPing { 0% { transform: scale(.42); opacity: .9; } 100% { transform: scale(2.4); opacity: 0; } }
 @keyframes cmCorePop { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.5); } }
-/* The heat runs on the mark itself, not on the arms: the gradient is one def,
-   so animating its source variables washes every arm at once from the inside
-   out — which is the picture the spin already tells. */
-@keyframes cmHeat {
-  0%, 100% { --cm-mid: var(--cm-mid-rest); --cm-tip: var(--cm-tip-rest); --cm-core: var(--cm-core-rest); }
-  42% { --cm-mid: var(--cm-mid-hot); --cm-tip: var(--cm-tip-hot); --cm-core: var(--cm-core-hot); }
-}
-/* Idle is the mark's normal life, and it is the same performance as reasoning
-   — turning, breathing, the blue washing out through the ramp — played at a
-   quarter speed. It used to be a 46s rotation with no heat at all, which is a
-   rate you cannot perceive; the mark appeared frozen and the blue only ever
-   showed up while the agent was busy. Now it always turns and always thinks.
-   The states still read apart, because what separates them is tempo: 16s
-   against 7.5s, a 9s heat cycle against 1.75s, and reasoning swaps the calm
-   breath for cmWork's deeper pull. Escalation, not on-versus-off. */
-.cl-mark[data-state="idle"] .cm-rotor { animation: cmSpin 16s linear infinite; }
-.cl-mark[data-state="idle"] .cm-breath { animation: cmBreath 6s ease-in-out infinite; }
-.cl-mark[data-state="idle"] { animation: cmHeat 9s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] .cm-rotor { animation: cmSpin 7.5s linear infinite; }
-.cl-mark[data-state="reasoning"] .cm-breath { animation: cmWork 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] .cm-gold { animation: cmRecede 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="reasoning"] { animation: cmHeat 1.75s cubic-bezier(.37,0,.32,1) infinite; }
-.cl-mark[data-state="failed"] { --cm-root: var(--muted); --cm-mid: var(--muted); --cm-tip: var(--muted);
-  --cm-core: var(--muted); --cm-core-edge: var(--muted); --cm-gold: var(--muted); }
-.cl-mark[data-state="failed"] .cm-breath { transform: scale(.9); }
+.cl-mark[data-state="reasoning"] .cm-heart { animation: cmPulse 1.6s cubic-bezier(.37,0,.32,1) infinite; }
+/* Closed: each jaw travels its 3 units and the two meet. CSS px on an SVG
+   element are user units, so 3px here is 3 on the 64 grid at any size. */
+.cl-mark[data-state="failed"] { color: var(--muted); --cm-gold: var(--muted); }
+.cl-mark[data-state="failed"] .cm-heart { opacity: 0; }
+.cl-mark[data-state="failed"] .cm-jaw-c { transform: translateX(3px); }
+.cl-mark[data-state="failed"] .cm-jaw-l { transform: translateX(-3px); }
 .cl-mark.cl-ping-on .cm-ping { animation: cmPing .78s cubic-bezier(.16,1,.3,1); }
 .cl-mark.cl-ping-on .cm-heart { animation: cmCorePop .52s cubic-bezier(.16,1,.3,1); }
 @media (prefers-reduced-motion: reduce) {
-  .cl-mark, .cm-rotor, .cm-breath, .cm-arm, .cm-heart, .cm-ping { animation: none !important; }
+  .cl-mark, .cm-jaw, .cm-heart, .cm-ping { animation: none !important; transition: none !important; }
 }
 
 /* ── Lot trace ──
@@ -1604,7 +1544,7 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 .key-provider>div { display:flex; flex-direction:column; }.key-provider>div span { color:var(--muted); font-size: var(--fs-cap); }.key-provider input { min-width:0; }
 .agent-workbench { display:grid !important; grid-template-columns:190px minmax(560px,1fr); overflow:auto; background:var(--cream); }
 .awb-sidebar { display:flex; flex-direction:column; gap:10px; padding:14px; border-right:1px solid var(--line); background:var(--panel); }
-.awb-brand { display:flex; align-items:center; gap:9px; }.awb-brand img { width:32px;height:32px; }.awb-brand div { display:flex;flex-direction:column; }.awb-brand small,.awb-main>header small,.awb-presets>small { color:var(--gold-deep); font:700 9px var(--mono); letter-spacing:.12em; }.awb-brand b { font:600 18px var(--display); }
+.awb-brand { display:flex; align-items:center; gap:9px; }.awb-brand .cl-mark { width:32px;height:32px; }.awb-brand div { display:flex;flex-direction:column; }.awb-brand small,.awb-main>header small,.awb-presets>small { color:var(--gold-deep); font:700 9px var(--mono); letter-spacing:.12em; }.awb-brand b { font:600 18px var(--display); }
 .awb-presets,.awb-history { display:flex; flex-direction:column; gap:5px; padding-top:8px; border-top:1px solid var(--line); }.awb-history { min-height:0; overflow:auto; }.awb-presets button,.awb-history button { display:flex;flex-direction:column;gap:2px;text-align:left;padding:8px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink); }.awb-presets button span,.awb-history button span { color:var(--muted);font:9px var(--mono); }.awb-history>small { color:var(--gold-deep);font:700 9px var(--mono);letter-spacing:.12em; }
 .awb-main { min-width:0; padding:20px; overflow:auto; }.awb-main>header { display:flex;justify-content:space-between;align-items:center; }.awb-main h2 { margin:2px 0 12px;font:600 28px var(--display); }.awb-run-state { padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--gold-deep);font:10px var(--mono); }
 .awb-controls { display:grid;grid-template-columns:1fr 1fr 2fr;gap:9px;margin-bottom:10px; }.awb-controls label { display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size: var(--fs-cap); }.awb-controls select,.awb-controls input,.awb-prompt { border:1px solid var(--line);border-radius:8px;background:var(--raised);color:var(--ink);padding:9px; }
@@ -1786,7 +1726,7 @@ body.sidebar-collapsed #sidebar > * { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { .agent-logotype.pinged { animation: none; } }
 
 /* 2026 operator workspace refinement */
-.dock-icon.agent-launch img { width:16px; height:16px; object-fit:contain; }
+.dock-icon.agent-launch .cl-mark { width:16px; height:16px; }
 .workspace-panel[data-id^="system-"] { border-color:var(--gold); }
 .workspace-panel[data-id^="system-"] .panel-title { color:var(--gold-text); }
 .workspace-panel[data-id^="agent-"] { border-color:var(--line-strong); }

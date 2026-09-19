@@ -18,10 +18,11 @@
 // below about 24px. This mark is two flat colours with no gradients, so the
 // 18px tray icon and the 1024px installer icon are the same drawing.
 //
-// Emits assets/mark.svg, mark-simple.svg, mark-tray.svg, icon.svg and
-// renderer/mark-geometry.js. That geometry module is what renderer/mark.js
-// animates, so the static identity and the live thinking state are one shape:
-// the icon spins up into the running state without a cut.
+// Emits assets/mark.svg, mark-simple.svg, mark-tray.svg (the whorl family, which
+// lives on inside the wordmark), assets/gate-glyph*.svg and icon.svg (the Gate
+// Glyph: the app mark and the live mark since the 2026-09-19 brand directive),
+// and renderer/mark-geometry.js. That geometry module is what renderer/mark.js
+// animates, so the app icon and the running agent are one shape.
 //
 //   node scripts/gen-mark.js             regenerate
 //   node scripts/gen-mark.js --check     fail if the committed vectors are stale
@@ -258,6 +259,43 @@ function markSvg(opts) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${INK_VIEWBOX}">\n  ${defs}${rows}\n</svg>\n`;
 }
 
+// ── The Gate Glyph ──────────────────────────────────────────────────────────
+// Approved as the direction by Michael Crowe, 2026-09-19 (crowe-evidence
+// 2026-09-19/gate-glyph, v1; refine, do not restart). Two jaws frame an
+// aperture: a C jaw (arc of radius 20 on a 64 grid, stroke 8, butt caps) and an
+// L jaw (stem 8 wide, foot 15 to the right). The brass hexagon, the whorl's
+// core inherited from the wordmark, sits in the aperture while the gate is
+// open; closed, the jaws travel 3 units each and touch, and there is no core.
+// The Gate is the directive's motif for authority and controlled transition,
+// and it is the app mark: the tile, the Android layers, the live mark in the
+// renderer and the standalone gate-glyph*.svg all come off these four strings.
+//
+// The ink box (stroke included) is 55 x 48 on the grid, centred at (35.5, 32):
+// the glyph is not centred on its own canvas, so every placement below centres
+// the ink, not the grid. It reads at 16, 24 and 32 px (proof sheet in the
+// evidence folder), which is why no small cut exists: one drawing, every size.
+const CL = { ink: "#121212", carbon: "#191919", bone: "#F4F0E7", brass: "#B99A5B", brassHi: "#D0B471", ruleDark: "#2B2A28" };
+const GATE = {
+  view: 64,
+  jawC: "M41.31,47.76 A20,20 0 1 1 41.31,16.24",
+  jawL: "M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z",
+  core: "37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75",
+  shift: 3,
+  ink: { x: 8, y: 8, w: 55, h: 48 },
+};
+const GATE_DIAG = Math.hypot(GATE.ink.w, GATE.ink.h);
+// The glyph with its ink box centred on (cx, cy), one grid unit = `unit` px.
+function gateArt(cx, cy, unit, ink, brass) {
+  const tx = cx - (GATE.ink.x + GATE.ink.w / 2) * unit, ty = cy - (GATE.ink.y + GATE.ink.h / 2) * unit;
+  return `<g transform="translate(${tx.toFixed(2)} ${ty.toFixed(2)}) scale(${unit.toFixed(4)})">` +
+    `<path d="${GATE.jawC}" fill="none" stroke="${ink}" stroke-width="8" stroke-linecap="butt"/>` +
+    `<path d="${GATE.jawL}" fill="${ink}"/>` +
+    `<polygon points="${GATE.core}" fill="${brass}"/></g>`;
+}
+// Standalone cuts on the 64 canvas, ink centred, transparent ground.
+const gateGlyphSvg = (ink, brass) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${GATE.view} ${GATE.view}">\n  ${gateArt(GATE.view / 2, GATE.view / 2, 1, ink, brass)}\n</svg>\n`;
+
 // ── Emit ────────────────────────────────────────────────────────────────────
 const ROOT = path.join(__dirname, "..");
 const CHECK = process.argv.includes("--check");
@@ -307,20 +345,25 @@ emit("mark-tray-light.svg", markSvg({
   taper: 0.2, fork: false, pal: { blue: "#f5f2ea", gold: "#f5f2ea" },
 }));
 
-// App icon tile: warm graphite rounded square (Big Sur grid), mark centred.
-// It was graphite-navy, which put a cool blue tile under a warm gold mark and
-// made the gold look dirty; the tile is now the same warm charcoal the app's
-// dark theme uses, so icon and window agree.
+// The Gate Glyph, standalone: one cut per ground, for the brand kit and any
+// <img> slot. The live mark (renderer/mark.js) draws the same geometry in
+// currentColor so it follows the theme without a second file.
+emit("gate-glyph.svg", gateGlyphSvg(CL.ink, CL.brass));
+emit("gate-glyph-dark.svg", gateGlyphSvg(CL.bone, CL.brassHi));
+
+// App icon tile: a Carbon plate on the Big Sur grid (an 824 tile centred in
+// 1024 so the corners stay transparent, corner radius on Apple's proportion)
+// with a Dark Rule rim and the Gate Glyph centred on it. The directive's own
+// app-icon cut draws the plate at rx 120; the Dock wants every icon on one
+// corner radius, so the tile keeps the grid and takes the plate colour from
+// the cut. GRID, RAD and INSET are shared with the phone below.
 const TILE = 1024, GRID = 824, RAD = 186, INSET = (TILE - GRID) / 2;
 
-// What sits on the tile is the logotype's "C", not the bare whorl — the same
-// letter the phone wears, so the two apps are one icon at two sizes. The
-// outline is committed by scripts/gen-wordmark-icon.py rather than cut here,
-// because that needs fontTools and this file runs under plain node.
-//
-// The whorl does not leave: it becomes the spore in the letter's aperture,
-// drawn by the same markSvg() as everything else on this page. Gold still
-// appears exactly once.
+// The phone still wears the logotype's "C" with the whorl as its spore
+// (icon-ios.svg below): App Store 1.0 is in review and that icon is frozen
+// until the review resolves. The letter outline is committed by
+// scripts/gen-wordmark-icon.py rather than cut here, because that needs
+// fontTools and this file runs under plain node. letterArt() stays for it.
 const LETTER = require("./letter-data.js");
 // Local space where the cap height is 100, matching the generator, so the two
 // compositions cannot drift apart by arithmetic.
@@ -368,24 +411,17 @@ function letterArt(off, side, id, opts) {
   </svg>`;
 }
 
-// The letter and spore span this much of the canvas on their long axis. The
-// old whorl sat near 47%; scripts/test-icons.js wants the bright artwork over
-// 40% at 256px and over 35% once it is rasterised down to 32. A nested <svg>
-// does the fitting, so this is the only number to turn.
-const ART = 0.58, ASIDE = TILE * ART, AOFF = (TILE - ASIDE) / 2;
-const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  <defs>
-    ${BG}
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="rgba(255,255,255,0.14)"/><stop offset="0.2" stop-color="rgba(255,255,255,0.03)"/><stop offset="1" stop-color="rgba(255,255,255,0)"/>
-    </linearGradient>
-  </defs>
-  <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="url(#bg)"/>
-  <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="url(#rim)" stroke-width="4"/>
-  ${letterArt(AOFF, ASIDE, "ic")}
+// The glyph on the tile. One grid unit is 10 px, so the ink is 550 wide: 67%
+// of the 824 tile, which is where the directive's own app-icon cut puts it,
+// and comfortably over the 40% (at 256) and 35% (at 32) that
+// scripts/test-icons.js asks of the bright artwork.
+const GATE_UNIT_TILE = 10;
+emit("icon.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="${CL.carbon}"/>
+  <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="${CL.ruleDark}" stroke-width="4"/>
+  ${gateArt(TILE / 2, TILE / 2, GATE_UNIT_TILE, CL.bone, CL.brassHi)}
 </svg>
-`;
-emit("icon.svg", iconSvg);
+`);
 
 // The phone's icon, which is the same drawing under different rules. iOS masks
 // the corners itself and rejects any alpha channel, so the Big Sur tile above is
@@ -415,12 +451,12 @@ emit("icon-ios.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TIL
 // A third composition, and it is genuinely a third one: neither tile above can
 // be reused, because on Android the mask is chosen by the launcher and not by
 // us. An adaptive icon is two 108dp layers; the launcher shows the middle 72dp
-// of them through a shape it picks — circle, squircle, teardrop, rounded
-// square — and parallaxes the layers against each other. So:
+// of them through a shape it picks (circle, squircle, teardrop, rounded
+// square) and parallaxes the layers against each other. So:
 //
-//   - No rim, for iOS's reason twice over. The highlight traces an edge that is
-//     about to be cropped by a shape we cannot predict, and a cropped highlight
-//     is a bright arc lying across the corner of the icon.
+//   - No rim. A highlight traces an edge that is about to be cropped by a
+//     shape we cannot predict, and a cropped highlight is a bright arc lying
+//     across the corner of the icon.
 //   - The background layer must be opaque edge to edge. It slides under the
 //     mask during the parallax, and any hole in it shows the user's wallpaper
 //     through the middle of the icon. make-icons.js runs it through
@@ -429,80 +465,54 @@ emit("icon-ios.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TIL
 //   - The safe zone is a 66dp-diameter CIRCLE inside the 72dp mask extent, so
 //     the constraint is on the artwork's DIAGONAL, not its width.
 //
-// That last point is where the icon Android has been shipping went wrong.
-// gen-wordmark-icon.py reasoned its way to the 66-of-108 number correctly and
-// then compared a box SIDE against a circle DIAMETER, which would have clipped;
-// @capacitor/assets then wrote the layers at the 48dp ladder and the anydpi XML
-// inset them 16.7% to compensate, shrinking everything by another third. Two
-// errors partly cancelling, landing on a mark at 48% of the visible tile where
-// iOS and macOS both read at 72%.
-//
-// Done properly: the art box is 105.32 x 100, so placed by a square nested
-// <svg> it renders S wide by 0.9495*S tall and its diagonal is 1.3790*S.
-// Solving 1.3790*S <= 66 gives S <= 47.86dp, hence 0.44 of the 108dp layer —
-// a 47.5dp box with a 65.5dp diagonal. The mark then reads at 66% of the
-// visible tile: an 8% concession to a mask we are not allowed to know about,
-// against 48% today. 0.4835 is the ceiling before a real circle mask starts
-// cutting the box corners, and it would hit exact iOS parity, but it spends the
-// entire safe-zone margin. Do not go past it; scripts/test-icons.js asserts the
-// rendered diagonal so that a fatter mark cannot quietly creep out to it.
-const COVER_ANDROID = 0.66;                        // of the visible 72dp tile
-const ART_ANDROID = COVER_ANDROID * 72 / 108;      // = 0.44 of the 108dp layer
-const AND_FG = TILE * ART_ANDROID, AND_FG_OFF = (TILE - AND_FG) / 2;
+// The glyph's ink box is 55 x 48, a 73.0 diagonal on the grid. GATE_DIAG_DP is
+// the diagonal this layer draws, 62dp: a 6% margin under the 66dp ceiling, and
+// over the 85% floor scripts/test-icons.js holds the rendered diagonal to, so
+// a shrunken mark cannot creep in either. The 108dp layer maps onto the 1024
+// canvas, so one grid unit is (62 / 73.0) * (1024 / 108) px.
+const GATE_DIAG_DP = 62;
+const AND_UNIT = (GATE_DIAG_DP / GATE_DIAG) * (TILE / 108);
 
 emit("icon-android-background.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  <defs>
-    ${BG}
-  </defs>
-  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="url(#bg)"/>
+  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="${CL.carbon}"/>
 </svg>
 `);
 
 emit("icon-android-foreground.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  ${letterArt(AND_FG_OFF, AND_FG, "an")}
+  ${gateArt(TILE / 2, TILE / 2, AND_UNIT, CL.bone, CL.brassHi)}
 </svg>
 `);
 
 // The themed cut. targetSdk is 36, and a themed-icon user on a Pixel whose app
-// ships no <monochrome> gets the whole icon auto-desaturated — which is the
-// worst available fate for a mark whose entire colour story is that gold
-// appears exactly once. One flat colour, and the launcher tints it.
-//
-// The mark survives being flattened for a specific reason: the spore rides in
-// the C's aperture rather than on its stroke, so a single-colour silhouette
-// stays a letter with a hexagon beside it instead of fusing into a blob. Same
-// placement as the foreground, so the two layers register.
+// ships no <monochrome> gets the whole icon auto-desaturated. One flat colour,
+// and the launcher tints it. The glyph survives flattening because the core
+// sits in the aperture rather than on a stroke: a single-colour silhouette is
+// still two jaws and a hexagon, not a blob. Same placement as the foreground,
+// so the two layers register.
 emit("icon-android-mono.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  ${letterArt(AND_FG_OFF, AND_FG, "am", {
-    ink: "#000000",
-    mark: { taper: 0.45, fork: false, pal: { blue: "#000000", gold: "#000000" } },
-  })}
+  ${gateArt(TILE / 2, TILE / 2, AND_UNIT, "#000000", "#000000")}
 </svg>
 `);
 
-// The pre-Oreo pair. minSdk is 24, so only Android 7.0 and 7.1 ever draw these
-// — but wrong art is wrong art, and the resources have to resolve for every
+// The pre-Oreo pair. minSdk is 24, so only Android 7.0 and 7.1 ever draw these,
+// but wrong art is wrong art, and the resources have to resolve for every
 // configuration whatever the floor is. No mask here, so the composition owns
-// its own shape: a rounded square on the Big Sur corner proportion for the
-// square icon, a full circle for the round one, and the mark at the same 66% of
-// the visible extent both times so all three placements share one number.
+// its own shape: a Carbon rounded square on the Big Sur corner proportion for
+// the square icon, a full Carbon circle for the round one, and the glyph's ink
+// at GATE_COVER of the visible extent both times. 0.62 rather than the 0.66 the
+// letter used: the glyph's box is wider than it is tall, and in the circle its
+// corners sit at 82% of the radius at this cover, which is as far out as they
+// can go without crowding the edge.
+const GATE_COVER = 0.62;
 const AND_GRID = 942, AND_RAD = Math.round(AND_GRID * (RAD / GRID));
-const AND_SQ = AND_GRID * COVER_ANDROID, AND_SQ_OFF = (TILE - AND_SQ) / 2;
-const AND_RD = TILE * COVER_ANDROID, AND_RD_OFF = (TILE - AND_RD) / 2;
 emit("icon-android-legacy.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  <defs>
-    ${BG}
-  </defs>
-  <rect x="${(TILE - AND_GRID) / 2}" y="${(TILE - AND_GRID) / 2}" width="${AND_GRID}" height="${AND_GRID}" rx="${AND_RAD}" fill="url(#bg)"/>
-  ${letterArt(AND_SQ_OFF, AND_SQ, "al")}
+  <rect x="${(TILE - AND_GRID) / 2}" y="${(TILE - AND_GRID) / 2}" width="${AND_GRID}" height="${AND_GRID}" rx="${AND_RAD}" fill="${CL.carbon}"/>
+  ${gateArt(TILE / 2, TILE / 2, (AND_GRID * GATE_COVER) / GATE.ink.w, CL.bone, CL.brassHi)}
 </svg>
 `);
 emit("icon-android-round.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  <defs>
-    ${BG}
-  </defs>
-  <circle cx="${TILE / 2}" cy="${TILE / 2}" r="${TILE / 2}" fill="url(#bg)"/>
-  ${letterArt(AND_RD_OFF, AND_RD, "ar")}
+  <circle cx="${TILE / 2}" cy="${TILE / 2}" r="${TILE / 2}" fill="${CL.carbon}"/>
+  ${gateArt(TILE / 2, TILE / 2, (TILE * GATE_COVER) / GATE.ink.w, CL.bone, CL.brassHi)}
 </svg>
 `);
 
@@ -747,6 +757,13 @@ const geometry = {
   ramp: {
     hy: { cx: CX, cy: CY, r: BLUE.r1 },
     co: { cx: +(CX - HEART * 0.34).toFixed(2), cy: +(CY - HEART * 0.38).toFixed(2), r: +(HEART * 1.55).toFixed(2) },
+  },
+  // The Gate Glyph, for the live mark. The viewBox is the 64 grid shifted so
+  // the ink box, not the grid, is centred in a square host.
+  gate: {
+    view: GATE.view,
+    viewBox: `${(GATE.ink.x + GATE.ink.w / 2 - GATE.view / 2).toFixed(1)} 0 ${GATE.view} ${GATE.view}`,
+    jawC: GATE.jawC, jawL: GATE.jawL, core: GATE.core, shift: GATE.shift, ink: GATE.ink,
   },
   palette: { blue: C.blue, gold: C.gold, blueHot: "#4D9FE8", goldHot: "#F7C75A" },
 };
