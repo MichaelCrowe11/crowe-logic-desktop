@@ -2892,6 +2892,8 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-approvals").value = c.approvals || "high-risk";
   if ($("cfg-pace")) $("cfg-pace").value = c.textPace || TEXT_PACE;
   $("cfg-verifier").checked = c.verifier !== false;
+  $("cfg-privacy").classList.toggle("hidden", typeof c.telemetry !== "boolean");
+  $("cfg-telemetry").checked = Boolean(c.telemetry);
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-mcp").value = c.mcpServers && Object.keys(c.mcpServers).length ? JSON.stringify(c.mcpServers, null, 2) : "";
   const live = (c.mcp || []).map((s) => `${s.name} (${s.tools} tools)`).join(", ");
@@ -2961,6 +2963,7 @@ $("cfg-save").addEventListener("click", async () => {
   const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked,
     approvals: $("cfg-approvals").value, verifier: $("cfg-verifier").checked,
     turnBudgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 2 };
+  if (!$("cfg-privacy").classList.contains("hidden")) patch.telemetry = $("cfg-telemetry").checked;
   if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   if ($("cfg-repos-root") && $("cfg-repos-root").value.trim()) patch.reposRoot = $("cfg-repos-root").value.trim();
   const tok = $("cfg-token").value.trim(); if (tok) patch.token = tok;
@@ -5200,6 +5203,8 @@ async function maybeShowOnboarding(cfg) {
     "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
+    '<p class="said"><a href="https://crowelogic.com/privacy">Privacy policy</a> · <a href="https://crowelogic.com/terms">Terms</a> · <a href="https://crowelogic.com/support/">Support</a></p>',
+    typeof cfg?.telemetry === "boolean" ? '<p class="said">Desktop usage events and crash uploads are ' + (cfg.telemetry ? 'on' : 'off') + '. You can change this in Settings under Privacy; crash reports can contain process memory.</p>' : "",
   ].join("");
   const row = document.createElement("div");
   row.className = "onboarding-actions";

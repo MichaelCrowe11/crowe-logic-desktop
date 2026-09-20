@@ -1,6 +1,6 @@
 # Crowe Logic Desktop privacy policy
 
-> **Draft.** This document describes what the app actually does as of 0.24.0,
+> **Draft.** This document describes what the app actually does in the local launch-readiness changes based on 0.24.15,
 > verified against the source (`main.js`). It has not been reviewed by counsel
 > and the contact addresses below must be confirmed before it is published or
 > linked from the download page.
@@ -10,10 +10,12 @@ Effective date: not yet in effect. Applies to the Crowe Logic desktop app
 
 ## The short version
 
-Your conversations, files, and keys stay on your machine. The app talks to
-Crowe Logic servers for three things: signing in, routing model requests you
-initiate, and (unless you turn it off) minimal usage and crash telemetry that
-contains no message content, file paths, or tokens.
+The app stores conversations, files and keys locally. Relevant conversation
+content and tool results leave the machine when sent for model inference.
+The app also contacts services for sign-in, update checks and, unless turned
+off, usage events and native crash uploads. Usage-event fields do not include
+conversation text; native crash reports can contain process memory, including
+sensitive data.
 
 ## What stays on your device
 
@@ -37,10 +39,13 @@ contains no message content, file paths, or tokens.
   Requests are processed to produce the response and for abuse prevention.
 - **Telemetry (opt-out).** With telemetry on, the app sends minimal usage
   events (app launch, agent turn counts, unhandled main-process exceptions)
-  and crash reports. Each carries only app version, platform, architecture,
-  release channel, and selected model name. No message content, no file paths,
-  no tokens. Turn it off in Settings and nothing is submitted; crash dumps
-  then exist only locally.
+  and crash reports. Usage events include app version, platform, architecture,
+  release channel, selected model, launch status, turn counts and agent id.
+  Exception events record the occurrence, not the exception text. Native crash
+  dumps may contain process memory, including prompts, paths or credentials.
+  In Settings under Privacy, clear Send usage events and crash reports and save
+  to stop new diagnostic uploads immediately; local crash dumps remain.
+  This does not disable model requests, billing records or update checks.
 - **Update checks.** Installed builds check the Crowe Logic release channel
   for new versions. Downloads happen only with your consent.
 
