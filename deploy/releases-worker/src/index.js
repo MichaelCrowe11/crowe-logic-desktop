@@ -212,6 +212,7 @@ footer .wrap { display:flex; justify-content:space-between; gap:16px; flex-wrap:
       ${card(channel, "Linux", "x86_64 AppImage and deb", "Mark the AppImage executable and run it, or install the deb with apt.", rel, rel.appimage, rel.deb, "Download deb")}
     </div>
     <section class="checks">
+      <p><a href="https://crowelogic.com/privacy">Privacy policy</a> · <a href="https://crowelogic.com/terms">Terms</a> · <a href="https://crowelogic.com/support/">Support</a></p>
       <h3>Verify your download</h3>
       <p>With <a style="color:var(--gold)" href="${href(channel, rel.version, "SHA256SUMS")}">SHA256SUMS</a> in your download folder:</p>
       <pre>sha256sum -c SHA256SUMS --ignore-missing</pre>

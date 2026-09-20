@@ -107,7 +107,7 @@ function initCrashReporting() {
     crashReporter.start({
       productName: "Crowe Logic",
       companyName: "Crowe Logic, Inc.",
-      submitURL: enabled ? `${(loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "")}/api/telemetry/crash` : "",
+      submitURL: `${(loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "")}/api/telemetry/crash`,
       uploadToServer: enabled,
       ignoreSystemCrashHandler: false,
       extra: telemetryExtra(),
@@ -514,16 +514,26 @@ function signIn() {
       // so and keep listening: a page in the browser panel can reach 127.0.0.1
       // too, and one stray request must not cancel the user's real callback.
       if (!code || st !== state) { res.writeHead(400, { "Content-Type": "text/plain" }); res.end("not this sign-in"); return; }
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      // Do not tell the browser sign-in succeeded until tokens are stored.
       try { server.close(); } catch {}
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
-        const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+        const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(15000) });
         const d = await r.json();
-        if (d.access_token) { persistTokens(d); return finish({ ok: true, user: currentUser() }); }
-        return finish({ error: d.error_description || d.error || "token exchange failed" });
-      } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
+        if (r.ok && d.access_token) {
+          persistTokens(d);
+          res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
+          res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+          return finish({ ok: true, user: currentUser() });
+        }
+        res.writeHead(502, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        res.end("Sign-in did not complete. Return to Crowe Logic and try again.");
+        return finish({ error: "Sign-in did not complete. Please try again." });
+      } catch {
+        res.writeHead(502, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        res.end("Sign-in did not complete. Return to Crowe Logic and try again.");
+        return finish({ error: "Sign-in could not complete. Check your connection and try again." });
+      }
     });
     // Must match the crowe-cli client's registered loopback redirect URIs.
     const PORTS = [8765, 9275];
@@ -1797,6 +1807,7 @@ ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   // key store, and sanitizeConfigPatch has already dropped one sent here.
   if (patch && patch.croweBrowser) patch.croweBrowser = normalizeBrowserConfig({ ...before, ...patch.croweBrowser });
   const c = saveConfig(patch);
+  if (Object.hasOwn(patch, "telemetry")) crashReporter.setUploadToServer(Boolean(c.telemetry));
   // Typing a folder into Settings is opening it, the same as picking one from
   // the sidebar, so it lands in the same list.
   if (patch && patch.cwd) { CWD = patch.cwd; rememberWorkspace(CWD); }
@@ -2585,7 +2596,7 @@ app.whenReady().then(async () => {
   createTray();
   setupAutoUpdate();
   postTelemetry("app_launch", { firstRun: !loadConfig().onboarded });
-  process.on("uncaughtException", (e) => { postTelemetry("main_exception", { error: String(e && e.message || e).slice(0, 200) }); });
+  process.on("uncaughtException", () => { postTelemetry("main_exception"); });
   try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
   mcpConnectAll();
   pluginsConnectAll();

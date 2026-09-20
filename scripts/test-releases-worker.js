@@ -24,6 +24,10 @@ const src = fs.readFileSync(
   'utf8'
 );
 
+for (const route of ['privacy', 'terms', 'support/']) {
+  assert(src.includes(`href="https://crowelogic.com/${route}"`), `download page exposes ${route}`);
+}
+
 // The worker is a module, so load it by evaluating the source with the default
 // export turned into a local binding and handing back what the tests need.
 const load = new Function(`
