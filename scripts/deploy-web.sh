@@ -25,7 +25,9 @@ sed -E "s/\?v=[0-9]+/?v=$STAMP/g" renderer/app.html > "$TMPD/app.html"
 if [ "${1:-}" = "--stamped-app-html" ]; then cat "$TMPD/app.html"; exit 0; fi
 
 # [local path]=[served name]; app.html ships from $TMPD in its stamped form.
-FILES=("$TMPD/app.html" renderer/council.css renderer/council.js renderer/council-ui.js renderer/rooms-local.js renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
+FILES=("$TMPD/app.html" assets/icon.svg assets/gate-glyph.svg assets/gate-glyph-dark.svg renderer/council.css renderer/council.js renderer/council-ui.js renderer/rooms-local.js renderer/adopted-styles.js renderer/web-bridge.js renderer/web-ui.js renderer/mobile-gate.js renderer/theme-bootstrap.js renderer/mark-geometry.js renderer/mark.js renderer/rooms-web.js renderer/activity.js renderer/first-run.js renderer/messages.js renderer/marks.js renderer/renderer.js renderer/styles.css mobile/src/mobile.css mobile/src/mobile-ui.js)
+
+remote_path() { case "$1" in assets/*) printf '%s/%s\n' "${D%/renderer}" "$1" ;; *) printf '%s/%s\n' "$D" "$(basename "$1")" ;; esac; }
 
 local_hash() { shasum -a 256 "$1" | cut -c1-16; }
 verify() {
@@ -33,12 +35,12 @@ verify() {
   for f in "${FILES[@]}"; do names+=("$(basename "$f")"); done
   # The served directory is root-owned and not world-searchable, so every path
   # is absolute and read through sudo; a `cd` there fails for the login user.
-  local paths=(); for n in "${names[@]}"; do paths+=("$D/$n"); done
+  local paths=(); for f in "${FILES[@]}"; do paths+=("$(remote_path "$f")"); done
   local live; live="$(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "sudo sha256sum ${paths[*]} 2>/dev/null" || true)"
   for f in "${FILES[@]}"; do
     local n; n="$(basename "$f")"
     local want; want="$(local_hash "$f")"
-    local got; got="$(printf '%s\n' "$live" | awk -v n="$D/$n" '$2==n {print substr($1,1,16)}')"
+    local got; got="$(printf '%s\n' "$live" | awk -v n="$(remote_path "$f")" '$2==n {print substr($1,1,16)}')"
     if [ "$want" = "$got" ]; then echo "  live  $n  $got"; else echo "  DIFF  $n  live=${got:-missing} tree=$want"; ok=0; fi
   done
   [ "$ok" = 1 ]
@@ -53,6 +55,6 @@ fi
 node scripts/build-rooms-web.js --check
 echo "shipping $(git log -1 --format='%h %s') (asset stamp $STAMP)"
 scp -i "$KEY" "${FILES[@]}" "$HOST:/tmp/"
-ssh -i "$KEY" -o BatchMode=yes "$HOST" "D=$D; B=\$D/.bak-\$(date +%Y%m%d-%H%M%S); sudo mkdir -p \$B && sudo cp -a \$D/*.js \$D/*.html \$D/*.css \$B/ 2>/dev/null; for f in $(for f in "${FILES[@]}"; do basename "$f"; done | tr '\n' ' '); do sudo install -m 0644 -o root -g root /tmp/\$f \$D/\$f && rm -f /tmp/\$f; done && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile && echo \"installed; backup \$B\""
+ssh -i "$KEY" -o BatchMode=yes "$HOST" "D=$D; B=\$D/.bak-\$(date +%Y%m%d-%H%M%S); sudo mkdir -p \$B && sudo cp -a \$D/*.js \$D/*.html \$D/*.css \$B/ 2>/dev/null; $(for f in "${FILES[@]}"; do target="$(remote_path "$f")"; printf 'sudo mkdir -p %q && sudo install -m 0644 -o root -g root %q %q && rm -f %q; ' "$(dirname "$target")" "/tmp/$(basename "$f")" "$target" "/tmp/$(basename "$f")"; done) && sudo docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile && echo \"installed; backup \$B\""
 echo "verifying what the VM serves:"
 verify

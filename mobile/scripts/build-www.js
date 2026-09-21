@@ -41,6 +41,9 @@ const COPY = [
   ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
+  ["assets/gate-glyph.svg", "assets/gate-glyph.svg"],
+  ["assets/gate-glyph-dark.svg", "assets/gate-glyph-dark.svg"],
+  ["assets/icon.svg", "assets/icon.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
   ["assets/wordmark-motion.svg", "assets/wordmark-motion.svg"],
   ["assets/wordmark-motion-sm.svg", "assets/wordmark-motion-sm.svg"],
@@ -75,8 +78,8 @@ const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/icon.png" />`;
 
