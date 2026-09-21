@@ -109,6 +109,16 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "the data notice opens first and Not now restores the shell without consent",
+    body: `const notice = document.getElementById("m-notice");
+      const opened = notice.classList.contains("open");
+      document.getElementById("m-notice-later").click();
+      await __settle();
+      const config = await window.crowe.getConfig();
+      return { opened, closed: !notice.classList.contains("open"), consent: !!config.dataConsent };`,
+    expect: { opened: true, closed: true, consent: false },
+  },
+  {
     name: "the bridge is installed and the phone chrome is applied",
     body: `return { bridge: typeof window.crowe, mobile: document.body.classList.contains("mobile"),
                     pane: document.body.dataset.pane, tabBar: __shown("#m-tabs") };`,

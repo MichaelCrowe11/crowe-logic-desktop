@@ -2227,3 +2227,15 @@ body.dark button.primary, body.dark .rc-open, body.dark .room-send {
 .plan-more-label { display: block; font-size: var(--fs-cap); color: var(--muted); margin-bottom: 6px; }
 .plan-more-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .plan-tier { white-space: nowrap; }
+
+/* Standalone Gate Glyphs beside the preserved custom wordmark. */
+.brand-gate { display: block; width: 28px; height: 28px; flex: 0 0 auto; color: var(--ink); }
+.header-identity { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.welcome > .brand-gate { width: 88px; height: 88px; margin: 0 auto 18px; }
+.launch-identity { display: flex; flex-direction: column; align-items: center; gap: 24px; }
+.launch-identity > .brand-gate { width: 88px; height: 88px; }
+@media (max-width: 820px) {
+  .header-identity > .brand-gate { width: 24px; height: 24px; }
+  .header-identity > .lockup { width: 64px; }
+  .welcome > .brand-gate { width: 72px; height: 72px; margin-bottom: 14px; }
+}
