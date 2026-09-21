@@ -338,12 +338,8 @@ emit("mark-mono-inverse.svg", markSvg({ pal: { blue: "#f5f2ea", gold: "#f5f2ea" 
 // Tray: near-parallel arms, no fork, solid black — a macOS template image
 // (main.js flags it) so the menu bar recolours it for light/dark itself.
 // tray-light.png is the white fallback for non-mac dark taskbars.
-emit("mark-tray.svg", markSvg({
-  taper: 0.2, fork: false, pal: { blue: "#000000", gold: "#000000" },
-}));
-emit("mark-tray-light.svg", markSvg({
-  taper: 0.2, fork: false, pal: { blue: "#f5f2ea", gold: "#f5f2ea" },
-}));
+emit("mark-tray.svg", gateGlyphSvg("#000000", "#000000"));
+emit("mark-tray-light.svg", gateGlyphSvg(CL.bone, CL.bone));
 
 // The Gate Glyph, standalone: one cut per ground, for the brand kit and any
 // <img> slot. The live mark (renderer/mark.js) draws the same geometry in
@@ -359,11 +355,7 @@ emit("gate-glyph-dark.svg", gateGlyphSvg(CL.bone, CL.brassHi));
 // the cut. GRID, RAD and INSET are shared with the phone below.
 const TILE = 1024, GRID = 824, RAD = 186, INSET = (TILE - GRID) / 2;
 
-// The phone still wears the logotype's "C" with the whorl as its spore
-// (icon-ios.svg below): App Store 1.0 is in review and that icon is frozen
-// until the review resolves. The letter outline is committed by
-// scripts/gen-wordmark-icon.py rather than cut here, because that needs
-// fontTools and this file runs under plain node. letterArt() stays for it.
+// The legacy letter artwork remains available to the custom wordmark.
 const LETTER = require("./letter-data.js");
 // Local space where the cap height is 100, matching the generator, so the two
 // compositions cannot drift apart by arithmetic.
@@ -437,13 +429,10 @@ emit("icon.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} $
 // fills 72% of the visible square. Matching that number here rather than reusing
 // 0.58 is what makes the claim above - one icon at two sizes - actually true;
 // reusing 0.58 would draw the phone's mark noticeably smaller than the Mac's.
-const ART_IOS = 0.72, ASIDE_IOS = TILE * ART_IOS, AOFF_IOS = (TILE - ASIDE_IOS) / 2;
+// Full-bleed opaque iOS plate; the OS supplies the corner mask.
 emit("icon-ios.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
-  <defs>
-    ${BG}
-  </defs>
-  <rect x="0" y="0" width="${TILE}" height="${TILE}" fill="url(#bg)"/>
-  ${letterArt(AOFF_IOS, ASIDE_IOS, "ios")}
+  <rect width="${TILE}" height="${TILE}" fill="${CL.carbon}"/>
+  ${gateArt(TILE / 2, TILE / 2, 12, CL.bone, CL.brassHi)}
 </svg>
 `);
 
