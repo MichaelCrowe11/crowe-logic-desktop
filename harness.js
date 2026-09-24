@@ -772,7 +772,8 @@ function browserOffered(ctx) {
     && (typeof b.configured !== "function" || b.configured()));
 }
 function allTools(ctx, route, deps) {
-  const grow = route && route.expert === "cultivation" ? [GROW_TOOL] : [];
+  const grow = route && route.expert === "cultivation" && typeof ctx.growWrite === "function" &&
+    (typeof ctx.growAllowed !== "function" || ctx.growAllowed()) ? [GROW_TOOL] : [];
   const author = ctx.authorWorkflow ? [WORKFLOW_TOOL] : [];
   const ask = deps && typeof deps.onPropose === "function" ? [PROPOSE_TOOL] : [];
   const post = mailOffered(ctx) ? [MAIL_TOOL] : [];
@@ -1536,7 +1537,8 @@ async function execTool(ctx, name, args, route, state) {
         return "blocked: the grow store is only writable on a cultivation turn, and this turn routed elsewhere. Ask the user to put the request to the grower on its own.";
       if (tier === "plan" || tier === "readonly")
         return `blocked: logging a record is a write, and "${tier}" autonomy is read-only. Tell the user what you would log and ask them to switch to Edit.`;
-      if (!ctx.growWrite) return "blocked: this build has no grow store attached.";
+      if (!ctx.growWrite || (typeof ctx.growAllowed === "function" && !ctx.growAllowed()))
+        return "blocked: this edition has no operational grow store attached.";
       const v = growValidate(String(args.type || ""), args.record);
       if (!v.ok) return `rejected: ${v.error}`;
       const res = ctx.growWrite(String(args.type), v.record);

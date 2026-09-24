@@ -20,12 +20,17 @@
 // because the layout switches on width: at 1280 this file would test the
 // desktop shell and pass.
 
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, session } = require("electron");
+const os = require("os");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
 
 const ROOT = path.join(__dirname, "..");
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-mobile-shell-"));
+app.setPath("userData", profile);
+app.setPath("sessionData", profile);
+app.on("will-quit", () => fs.rmSync(profile, { recursive: true, force: true }));
 const PHONE = { width: 390, height: 844 };   // iPhone 13 CSS viewport
 
 let server = null;
@@ -103,7 +108,10 @@ const PRELUDE = `
   window.__drawerOpen = () => !document.body.classList.contains("sidebar-collapsed");
   // 1.1: the workspace pane is reached through the Machine tab, which exists only
   // once a machine is paired. Tests pair by class and rebuild the bar.
-  window.__pair = (on) => { document.body.classList.toggle("m-paired", on); window.dispatchEvent(new Event("crowe:remote")); };
+  let pairedFixture = false;
+  const actualConfig = window.crowe.getConfig;
+  window.crowe.getConfig = async () => { const c = await actualConfig(); return { ...c, remote: { ...c.remote, configured: pairedFixture } }; };
+  window.__pair = (on) => { pairedFixture = on; document.body.classList.toggle("m-paired", on); window.dispatchEvent(new Event("crowe:remote")); };
   true;   // executeJavaScript clones what the script evaluates to, and a function cannot be cloned
 `;
 
@@ -115,13 +123,13 @@ const tests = [
     expect: { bridge: "object", mobile: true, pane: "agent", tabBar: true },
   },
   {
-    name: "the phone's tabs are Home, Chat, Camera and Log; Machine appears only once paired",
+    name: "the phone lands on Chat; Machine appears only once paired",
     body: `const before = __tabs().join(",");
       __pair(true); await __settle(50);
       const paired = __tabs().join(",");
       __pair(false); await __settle(50);
       return { tabs: before, current: __current().join(","), paired };`,
-    expect: { tabs: "Home,Chat,Camera,Log", current: "Chat", paired: "Home,Chat,Camera,Log,Machine" },
+    expect: { tabs: "Chat", current: "Chat", paired: "Chat,Machine" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
@@ -171,7 +179,7 @@ const tests = [
       await __settle();
       const onPanels = { pane: document.body.dataset.pane, agentHidden: !__shown("#agent"),
                          workspaceShown: __shown("#workspace"), current: __current().join(",") };
-      __tap("Log");
+      __tap("Chat");
       await __settle();
       const back = { pane: document.body.dataset.pane, current: __current().join(",") };
       __tap("Chat");
@@ -179,7 +187,7 @@ const tests = [
       __pair(false); await __settle(50);
       return { ...onPanels, backPane: back.pane, backCurrent: back.current };`,
     expect: { pane: "workspace", agentHidden: true, workspaceShown: true, current: "Machine",
-              backPane: "agent", backCurrent: "Log" },
+              backPane: "agent", backCurrent: "Chat" },
   },
   {
     name: "the workspace opens on Operator Control, not a terminal that cannot start",
@@ -200,13 +208,13 @@ const tests = [
     name: "a tap in the drawer closes it on the way to where it goes",
     body: `document.getElementById("sidebar-toggle").click();
       await __settle();
-      document.querySelector('#spaces .seg-btn[data-space="cultivation"]').click();
+      document.querySelector('#spaces .seg-btn[data-space="chat"]').click();
       await __settle();
       const state = { space: document.body.dataset.space, closed: !__drawerOpen() };
       __tap("Chat");
       await __settle();
       return state;`,
-    expect: { space: "cultivation", closed: true },
+    expect: { space: "chat", closed: true },
   },
   {
     name: "what this device cannot do is not offered",
@@ -443,29 +451,21 @@ const tests = [
     expect: { hadCard: true, removed: true, emptyBubbles: 0 },
   },
   {
-    name: "an existing block's lot code is read-only while editing; a new block's is not",
-    // Flushes, readings and journal lines point at a block by its lot code, so
-    // retyping it on an existing record would orphan them. A new block's code
-    // is only a default the farm's traceability SOP may overwrite.
-    body: `__tap("Log");
-      await __settle();
-      // The space opens on its Overview; the Blocks lane is a section of it.
-      document.querySelector('#cult-nav .sn-item[data-cult="blocks"]').click();
-      await __settle(500);
-      let form = document.querySelector("#lane-body form.grow-add");
-      if (!form) return { form: false };
-      const newEditable = !form.elements.code.readOnly;
-      form.elements.species.value = "Oyster"; form.elements.count.value = "4"; form.elements.stage.value = "spawned";
-      form.requestSubmit();
-      await __settle(400);
-      const open = document.querySelector(".growrow .gr-open");
-      if (!open) return { form: true, newEditable, saved: false };
-      open.click();
-      await __settle(400);
-      form = document.querySelector("#lane-body form.grow-add");
-      return { form: true, newEditable, saved: true, editing: Boolean(form && form.classList.contains("editing")),
-               lockedWhileEditing: Boolean(form && form.elements.code.readOnly) };`,
-    expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
+    name: "retired growing routes and native intents cannot reopen a pane or fill a form",
+    body: `const before = document.getElementById("input").value;
+      for (const pane of ["home", "camera", "log", "cultivation"]) {
+        document.body.dataset.pane = pane; await __settle(20);
+        if (document.body.dataset.pane !== "agent") return { normalized: false };
+      }
+      document.querySelector('#spaces .seg-btn[data-space="cultivation"]').click();
+      await __settle(50);
+      window.dispatchEvent(new CustomEvent("crowe:intent", {detail:{kind:"log-block",text:"DO NOT SEND synthetic legacy note"}}));
+      await __settle(50);
+      return { normalized: document.body.dataset.pane === "agent", space: document.body.dataset.space,
+        noGrowingPanes: !document.querySelector("#m-home-pane, #m-camera-pane"),
+        unchangedInput: document.getElementById("input").value === before,
+        hiddenGrowing: !__shown("#surface-cultivation") && !__shown("#surface-farm") };`,
+    expect: { normalized: true, space: "chat", noGrowingPanes: true, unchangedInput: true, hiddenGrowing: true },
   },
   {
     name: "Reply pace is a setting and the phone starts on reading pace",
@@ -480,32 +480,36 @@ const tests = [
     expect: { present: true, shown: true, value: "reading", configured: "reading" },
   },
   {
-    name: "Home lists the lots by stage from the log on this phone, with Remind me and Photograph",
-    // The lot test above added a block; Home must show it without a desktop.
-    body: `__tap("Home");
-      await __settle(500);
-      const lots = [...document.querySelectorAll("#m-home-pane .m-lot")];
-      const out = { paneShown: __shown("#m-home-pane"), chatHidden: !__shown("#agent"), lots: lots.length,
-                    stage: lots.length ? lots[0].querySelector(".m-stage").textContent.trim() : "",
-                    remind: Boolean(document.querySelector("#m-home-pane .m-remind")), photo: Boolean(document.querySelector("#m-home-pane .m-check")),
-                    reminders: __shown("#m-home-reminders"),
-                    // The Siri words show only where Siri is; this harness has no Capacitor, so the gate must hide them.
-                    siriHidden: !document.querySelector("#m-home-siri") };
-      __tap("Chat");
-      await __settle();
-      return { ...out, backToChat: __shown("#agent") };`,
-    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, siriHidden: true, backToChat: true },
+    name: "generic camera and photo/file attachments remain available in Chat",
+    body: `__tap("Chat"); await __settle(50);
+      const camera=document.getElementById("m-camera");
+      return { camera: __shown("#m-camera"), cameraLabel: camera.getAttribute("aria-label"),
+        files: __shown("#m-attach"), picker: Boolean(document.querySelector('input[type="file"][accept="image/*"][capture="environment"]')),
+        noJournal: !document.querySelector(".m-log-row, .m-ledger") };`,
+    expect: { camera: true, cameraLabel: "Take a photo", files: true, picker: true, noJournal: true },
   },
   {
-    name: "Camera offers Photograph and Choose a photo, and names the engine",
-    body: `__tap("Camera");
-      await __settle(300);
-      const out = { paneShown: __shown("#m-camera-pane"), shoot: __shown("#m-camera-pane .m-cam-shoot"), pick: __shown("#m-camera-pane .m-cam-pick"),
-                    engine: /CroweLM Vision/.test(document.querySelector("#m-camera-pane").textContent), input: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
-      __tap("Chat");
-      await __settle();
-      return out;`,
-    expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
+    name: "pairing loss closes the Machine pane",
+    body: `__pair(true); await __settle(50); __tap("Machine"); await __settle(50);
+      __pair(false); await __settle(50);
+      return { pane: document.body.dataset.pane, current: __current().join(","), shown: __shown("#agent") };`,
+    expect: { pane: "agent", current: "Chat", shown: true },
+  },
+  {
+    name: "Settings offers only explicit private archive recovery, with honest handoff status",
+    body: `document.getElementById("settings-btn").click(); await __settle(100);
+      const original = window.croweLegacyArchive;
+      let calls = 0;
+      window.croweLegacyArchive = { export: async () => { calls++; return {status:"cancelled",message:"Archive export cancelled. Records unchanged."}; } };
+      const out = { archive: __shown("#m-legacy-export"), desktopRecovery: Boolean(document.getElementById("legacy-recovery-settings")),
+        privateNote: /private archive.*sensitive/s.test(document.querySelector(".m-legacy-archive").textContent),
+        noImportPromise: /import.*not supported/.test(document.querySelector(".m-legacy-archive").textContent), before: calls };
+      document.getElementById("m-legacy-export").click(); await __settle(30);
+      out.calls=calls; out.cancelled=/cancelled/.test(document.getElementById("m-legacy-export-status").textContent);
+      out.retry=!document.getElementById("m-legacy-export").disabled;
+      window.croweLegacyArchive=original;
+      document.getElementById("cfg-cancel").click(); await __settle(50); return out;`,
+    expect: { archive: true, desktopRecovery: false, privateNote: true, noImportPromise: true, before: 0, calls: 1, cancelled: true, retry: true },
   },
   {
     name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
@@ -552,7 +556,9 @@ app.whenReady().then(async () => {
        exits. The run hung with no output at all. */
     require(path.join(ROOT, "mobile", "scripts", "build-www.js"));
 
-    const url = process.env.MOBILE_URL || (await startServer());
+    const url = await startServer();
+    const origin = new URL(url).origin;
+    session.defaultSession.webRequest.onBeforeRequest({ urls: ["http://*/*", "https://*/*"] }, (details, cb) => cb({ cancel: new URL(details.url).origin !== origin }));
     // useContentSize, so the numbers above are the viewport and not the
     // viewport plus whatever frame this platform draws around it.
     const win = new BrowserWindow({ ...PHONE, useContentSize: true, show: false });
@@ -571,6 +577,8 @@ app.whenReady().then(async () => {
     await win.loadURL(url + "?t=" + Date.now());
     await new Promise((r) => setTimeout(r, 2500));
     await win.webContents.executeJavaScript(PRELUDE);
+    // The separate privacy suites exercise granting. Layout runs with sends off.
+    await win.webContents.executeJavaScript(`document.getElementById("m-notice-later")?.click();`);
 
     for (const t of tests) {
       let bad;
@@ -589,10 +597,8 @@ app.whenReady().then(async () => {
       }
     }
 
-    /* The page has to be the www this checkout just built. MOBILE_URL can point
-       anywhere, and www/ is a copy of renderer.js rather than the file itself,
-       so ask the page for both: that it is serving what was built, and that
-       what was built is what renderer/ currently says. */
+    /* The page must be this checkout's generated www, served only from the
+       isolated local server. Verify both the served bytes and source bytes. */
     const served = await win.webContents.executeJavaScript(
       `fetch(new URL("renderer.js", location.href)).then((r) => r.ok ? r.text() : null)`);
     const built = fs.readFileSync(path.join(ROOT, "mobile", "www", "renderer.js"), "utf8");
@@ -640,7 +646,7 @@ app.whenReady().then(async () => {
       console.log("ok      the shell logged no console errors");
     }
 
-    const total = tests.length + 2;
+    const total = tests.length + 3;
     console.log(`\n${total - failures}/${total} passed`);
   } catch (error) {
     failures++;

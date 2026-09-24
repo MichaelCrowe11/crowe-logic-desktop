@@ -20,6 +20,16 @@ const { app, BrowserWindow } = require("electron");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
+
+// A shim still writes Chromium storage. Never share the installed app profile.
+const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-panels-"));
+for (const name of ["home", "userData", "sessionData", "cache"]) {
+  fs.mkdirSync(path.join(isolated, name), { recursive: true });
+  app.setPath(name, path.join(isolated, name));
+}
+process.env.HOME = process.env.USERPROFILE = path.join(isolated, "home");
+app.setAppLogsPath(path.join(isolated, "logs"));
 
 const ROOT = path.join(__dirname, "..");
 
@@ -42,6 +52,24 @@ const MIME = {
 function startServer() {
   server = http.createServer((req, res) => {
     const rel = decodeURIComponent(req.url.split("?")[0]).replace(/^\/+/, "");
+    if (rel === "renderer/farm-startup.html") {
+      const html = fs.readFileSync(path.join(ROOT, "renderer/preview.html"), "utf8")
+        .replace(/src="preview-shim\.js(?:\?v=\d+)?"/, 'src="farm-startup-shim.js"');
+      return res.writeHead(200, { "content-type": "text/html" }).end(html);
+    }
+    if (rel === "renderer/farm-startup-shim.js") {
+      const shim = fs.readFileSync(path.join(ROOT, "renderer/preview-shim.js"), "utf8");
+      return res.writeHead(200, { "content-type": "text/javascript" }).end(shim + `
+        window.crowe.edition = { id: "mycology", productName: "Crowe Logic Mycology",
+          allowedSpaces: ["farm", "cultivation", "chat"], defaultSpaces: ["farm", "cultivation"],
+          landingSpace: "farm", legacyAccess: false, capabilities: { farm: true, grow: true, sense: true } };
+        window.crowe.editionAccess = { openWorkbench: async () => ({ ok: true }) };
+        localStorage.removeItem("crowe-spaces");
+        localStorage.setItem("crowe-space", "farm");
+        window.crowe.getConfig = () => new Promise((resolve, reject) => { window.__rejectConfig = reject; });
+        window.crowe.auth.status = () => new Promise((resolve, reject) => { window.__rejectAccount = reject; });
+      `);
+    }
     const file = path.join(ROOT, rel);
     // Climbing out of ROOT is the same defect the fixed port was: it would serve
     // bytes this checkout does not control.
@@ -154,19 +182,111 @@ const PRELUDE = `
   // installSpaces is the same hazard one level up: a test that stands up a
   // narrowed build and does not put it back leaves every later test running
   // against an install missing two spaces, and they fail somewhere unrelated.
-  window.__resetSpaces = () => {
+  // Contract fixtures only: the real main/preload wire is tested separately by
+  // test-install-spaces. Never grant all spaces to make the old tests pass.
+  window.__bridgeEdition = window.crowe.edition;
+  window.__bridgeAccess = window.crowe.editionAccess;
+  window.__editionFixture = (id = "desktop", chat = false) => ({
+    id, productName: id === "mycology" ? "Crowe Logic Mycology" : id === "developers" ? "Crowe Logic for Developers" : "Crowe Logic",
+    allowedSpaces: id === "mycology" ? ["farm", "cultivation", "chat"] : ["chat", "projects"],
+    defaultSpaces: id === "mycology" ? ["farm", "cultivation", ...(chat ? ["chat"] : [])] : ["chat", "projects"],
+    landingSpace: id === "mycology" ? "farm" : "chat", legacyAccess: false,
+    capabilities: { farm: id === "mycology", grow: id === "mycology", sense: id === "mycology", legacyAccess: false }
+  });
+  window.__resetSpaces = (id = "desktop", chat = false) => {
     localStorage.removeItem("crowe-spaces");
     localStorage.removeItem("crowe-space");
+    editionReply = null;
+    window.crowe.edition = __editionFixture(id, chat);
+    window.crowe.editionAccess = window.__bridgeAccess;
     window.crowe.installSpaces = null;
-    applySpaceProfile();
     projLane = "home";
     cultLane = "home";
-    setSpace("chat");
+    applySpaceProfile();
+    setSpace(id === "mycology" ? "farm" : "chat");
+  };
+  window.__legacySpaces = async () => {
+    __resetSpaces();
+    const base = __editionFixture();
+    window.crowe.editionAccess = {
+      enterLegacy: async () => ({ ok: true, data: { ...base, legacyAccess: true,
+        allowedSpaces: [...base.allowedSpaces, "farm", "cultivation"],
+        capabilities: { ...base.capabilities, farm: true, grow: true, sense: false } } }),
+      leaveLegacy: async () => ({ ok: true, data: base })
+    };
+    await changeLegacyAccess(true);
+    if (!editionPolicy().legacyAccess) throw new Error("Synthetic host recovery reply was not applied");
   };
   true;
 `;
 
 const tests = [
+  {
+    name: "Farm mounts once, keeps drafts and safely deactivates outside its surface",
+    body: `__resetSpaces("mycology");
+      setSpace("farm"); await __settle();
+      const host = $("surface-farm"), root = host.querySelector(".farm-compliance");
+      const field = root.querySelector("input"); field.value = "unsaved farm draft";
+      root.classList.add("fc-printing");
+      const internalNav = root.querySelector("nav");
+      setSpace("cultivation");
+      const deactivated = root.hidden && !root.classList.contains("fc-printing") && host.classList.contains("hidden");
+      setSpace("farm");
+      const same = root === host.querySelector(".farm-compliance") && host.children.length === 1;
+      const retained = field.value === "unsaved farm draft";
+      const visible = !root.hidden && !host.classList.contains("hidden");
+      const isolated = $("workbench").classList.contains("hidden") && $("space-nav").classList.contains("hidden") && $("cult-nav").classList.contains("hidden");
+      const unavailable = root.textContent.includes("UNAVAILABLE") && !root.querySelector('[data-fc="unavailable"]').hidden;
+      const before = document.querySelectorAll(".onboarding-actions").length;
+      await maybeShowOnboarding({ onboarded: false });
+      const noOnboarding = before === document.querySelectorAll(".onboarding-actions").length;
+      const rail = document.querySelectorAll('#spaces [data-space="farm"]').length;
+      __resetSpaces();
+      return {same, retained, visible, isolated, unavailable, deactivated, noOnboarding, rail, internalNav: !!internalNav};`,
+    expect: {same: true, retained: true, visible: true, isolated: true, unavailable: true, deactivated: true, noOnboarding: true, rail: 1, internalNav: true},
+  },
+  {
+    name: "saved grower preferences cannot grant Desktop or Developers ordinary Farm access",
+    body: `const out = {};
+      for (const id of ["desktop", "developers"]) {
+        __resetSpaces(id);
+        localStorage.setItem("crowe-spaces", JSON.stringify(["chat", "projects", "cultivation", "farm"]));
+        localStorage.setItem("crowe-space", "farm");
+        applySpaceProfile(); setSpace("farm"); renderSpacePicker();
+        out[id] = document.body.dataset.space === "chat" && !PROFILE.has("farm") && !PROFILE.has("cultivation")
+          && !$("cfg-spaces").querySelector('[data-space="farm"]')
+          && !$("cfg-spaces").querySelector('[data-space="cultivation"]')
+          && localStorage.getItem("crowe-spaces") === '["chat","projects"]'
+          && !hasEditionCapability("sense");
+      }
+      __resetSpaces(); return out;`,
+    expect: {desktop: true, developers: true},
+  },
+  {
+    name: "legacy recovery needs acknowledgment, stays off the ordinary rail and revokes current access",
+    body: `__resetSpaces();
+      let reply;
+      window.crowe.editionAccess = { enterLegacy: () => new Promise(r => { reply = r; }) };
+      const pending = changeLegacyAccess(true);
+      const before = !canOpenSpace("farm") && !editionPolicy().legacyAccess;
+      reply({ ok: false, error: { message: "fixture denied" } }); await pending;
+      const denied = !canOpenSpace("farm") && !editionPolicy().legacyAccess;
+      window.crowe.editionAccess.enterLegacy = async () => ({ ok: true, data: { ...__editionFixture("mycology"), legacyAccess: true } });
+      await changeLegacyAccess(true);
+      const malformedDenied = !canOpenSpace("farm") && !editionPolicy().legacyAccess;
+      window.crowe.editionAccess.enterLegacy = async () => { throw new Error("fixture IPC unavailable"); };
+      await changeLegacyAccess(true);
+      const rejectionDenied = !canOpenSpace("farm") && !editionPolicy().legacyAccess;
+      await __legacySpaces();
+      const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter(b => !b.classList.contains("hidden")).map(b => b.dataset.space).join(",");
+      const granted = canOpenSpace("farm") && canOpenSpace("cultivation") && editionPolicy().id === "desktop";
+      const noSense = !hasEditionCapability("sense");
+      setSpace("cultivation"); await changeLegacyAccess(false);
+      const revoked = !canOpenSpace("farm") && !canOpenSpace("cultivation") && document.body.dataset.space === "chat";
+      setSpace("farm"); const staleDenied = document.body.dataset.space === "chat";
+      __resetSpaces(); return {before, denied, malformedDenied, rejectionDenied, rail, granted, noSense, revoked, staleDenied};`,
+    expect: {before: true, denied: true, malformedDenied: true, rejectionDenied: true, rail: "chat,projects", granted: true, noSense: true, revoked: true, staleDenied: true},
+  },
   {
     name: "the operator composer exposes state, guidance, and accessible controls",
     body: `const frame = document.querySelector(".composer-frame");
@@ -1241,7 +1361,7 @@ const tests = [
   },
   {
     name: "each space shows its own nav rail and no other",
-    body: `__resetSpaces();
+    body: `await __legacySpaces();
       const rails = {};
       for (const id of Object.keys(SPACES)) {
         setSpace(id);
@@ -1250,13 +1370,14 @@ const tests = [
       setSpace("projects");
       const own = !$("space-nav").classList.contains("hidden") && $("cult-nav").classList.contains("hidden");
       setSpace("chat");
+      __resetSpaces();
       return { chat: rails.chat, projects: rails.projects,
         cultivation: rails.cultivation, own };`,
     expect: { chat: 0, projects: 1, cultivation: 1, own: true },
   },
   {
     name: "a space shows either the workbench or a surface, never both",
-    body: `__resetSpaces();
+    body: `await __legacySpaces();
       const both = [], neither = [];
       for (const id of Object.keys(SPACES)) {
         setSpace(id);
@@ -1266,6 +1387,7 @@ const tests = [
         if (!wb && !surf) neither.push(id);
       }
       setSpace("chat");
+      __resetSpaces();
       return { both: both.join(","), neither: neither.join(",") };`,
     expect: { both: "", neither: "" },
   },
@@ -1314,7 +1436,7 @@ const tests = [
     // under each space. A test that only checked Cultivation would still pass if
     // the rule leaked onto Projects and watermarked the whole app.
     name: "the cultivation watermark follows the space, not the surface",
-    body: `__resetSpaces();
+    body: `await __legacySpaces();
       const read = () => {
         const s = [...document.querySelectorAll(".surface")].find((x) => !x.classList.contains("hidden"));
         const cs = s && getComputedStyle(s, "::before");
@@ -1336,7 +1458,7 @@ const tests = [
     // behind. The test above passes either way: it only asks whether a mask is
     // present, which is exactly the blind spot that let this ship.
     name: "the cultivation watermark does not reflow the text it sits behind",
-    body: `__resetSpaces(); setSpace("cultivation"); await __settle();
+    body: `__resetSpaces("mycology"); setSpace("cultivation"); await __settle();
       const p = [...document.querySelectorAll(".sh-sub")].find((e) => e.offsetParent);
       const kill = document.createElement("style");
       document.head.appendChild(kill);
@@ -1685,7 +1807,7 @@ const tests = [
   },
   {
     name: "lane navigation exposes the current page and follows programmatic changes",
-    body: `__resetSpaces();
+    body: `await __legacySpaces();
       projLane = "deployments"; setSpace("projects");
       const current = () => [...document.querySelectorAll('#space-nav [aria-current="page"]')].map(b => b.dataset.lane).join(",");
       const direct = current();
@@ -1695,6 +1817,7 @@ const tests = [
       cultLane = "blocks"; setSpace("cultivation");
       const cult = document.querySelector('#cult-nav [aria-current="page"]').dataset.cult;
       cultLane = "home"; setSpace("chat");
+      __resetSpaces();
       return {direct, clicked, active, cult};`,
     expect: {direct: "deployments", clicked: "home", active: "home", cult: "blocks"},
   },
@@ -1715,14 +1838,14 @@ const tests = [
       setSpace("chat");
       return { ...hidden, entries, landed, restored: PROFILE.size };`,
     expect: { chat: false, projects: false, cultivation: true,
-      entries: "Space: Chat|Space: Projects", landed: "chat", restored: 3 },
+      entries: "Space: Chat|Space: Projects", landed: "chat", restored: 2 },
   },
   {
     // The profile above was only ever reachable by hand-editing localStorage.
     // These drive the settings control instead, because a picker that renders
     // correctly and writes nothing looks identical to one that works.
-    name: "unchecking a space in the picker narrows the shell",
-    body: `__resetSpaces();
+    name: "unchecking a space in the picker narrows the Mycology shell",
+    body: `__resetSpaces("mycology");
       renderSpacePicker();
       const box = $("cfg-spaces");
       const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
@@ -1737,23 +1860,23 @@ const tests = [
       const back = !document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden");
       __resetSpaces();
       return { stored, size, hidden, back };`,
-    expect: { stored: '["chat","projects"]', size: 2, hidden: true, back: true },
+    expect: { stored: '["farm"]', size: 1, hidden: true, back: true },
   },
   {
     // Storing nothing when everything is on is what keeps a space added in a
     // later version from being invisible on every install that ever saved.
     name: "an all-on selection stores no profile at all",
     body: `__resetSpaces();
-      localStorage.setItem("crowe-spaces", JSON.stringify(["chat","projects"]));
+      localStorage.setItem("crowe-spaces", JSON.stringify(["chat"]));
       applySpaceProfile();
       renderSpacePicker();
       const box = $("cfg-spaces");
       const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
-      for (const id of ["cultivation"]) cb(id).click();
+      cb("projects").click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
       __resetSpaces();
       return { stored, size };`,
-    expect: { stored: null, size: 3 },
+    expect: { stored: null, size: 2 },
   },
   {
     // The picker narrows an install someone already has. This is the other half:
@@ -1770,36 +1893,26 @@ const tests = [
       const stored = localStorage.getItem("crowe-spaces");
       __resetSpaces();
       return { ...hidden, stored, restored: PROFILE.size };`,
-    expect: { chat: false, projects: false, cultivation: true, stored: null, restored: 3 },
+    expect: { chat: false, projects: false, cultivation: true, stored: null, restored: 2 },
   },
   {
-    // The regression the install default introduces, and the reason
-    // setSpaceProfile compares against defaultSpaceIds() instead of the registry.
-    //
-    // On a build shipping Chat and Projects, ticking every box is a real
-    // choice - but measured against "is this everything?" it reads as a reset,
-    // so the old rule stored nothing, and the next launch fell back to the
-    // build's two and threw the choice away. Silently: the tabs appear, and
-    // vanish again on restart.
-    name: "a build's default does not swallow turning a space back on",
-    body: `__resetSpaces();
-      window.crowe.installSpaces = ["projects"];
-      applySpaceProfile();
+    // Optional Mycology chat is an explicit preference, not an edition grant.
+    name: "Mycology optional chat survives rereading its farm-first defaults",
+    body: `__resetSpaces("mycology");
       renderSpacePicker();
-      const box = $("cfg-spaces");
-      for (const id of ["cultivation"]) box.querySelector('input[data-space="' + id + '"]').click();
+      $("cfg-spaces").querySelector('input[data-space="chat"]').click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
-      // What the next launch does: re-read storage against the same build.
-      applySpaceProfile();
-      const afterRelaunch = PROFILE.size;
-      __resetSpaces();
-      return { stored, size, afterRelaunch };`,
-    expect: { stored: '["chat","projects","cultivation"]', size: 3, afterRelaunch: 3 },
+      applySpaceProfile(); const afterRelaunch = PROFILE.size;
+      const noProjects = !PROFILE.has("projects");
+      const farm = $("cfg-spaces").querySelector('input[data-space="farm"]');
+      const mandatory = farm.disabled && farm.checked;
+      setSpaceProfile([]); const landing = PROFILE.has("farm") && PROFILE.size === 1;
+      __resetSpaces(); return { stored, size, afterRelaunch, noProjects, mandatory, landing };`,
+    expect: { stored: '["chat","cultivation","farm"]', size: 3, afterRelaunch: 3, noProjects: true, mandatory: true, landing: true },
   },
   {
-    // main.js ships the configured names through without checking them, so that
-    // it needs no copy of the space list to drift from renderer.js. That makes
-    // this the place a typo or a space dropped in a later version has to land.
+    // Defence in depth: even a malformed synthetic install list cannot add
+    // unknown spaces beyond the main process edition allowlist.
     name: "a build naming a space that does not exist is ignored",
     body: `__resetSpaces();
       window.crowe.installSpaces = ["projects", "warehouse"];
@@ -1824,7 +1937,9 @@ const tests = [
         const ids = [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent);
         return { growing: asks.includes("growing"), grower: ids.includes("crowelm-grower"), models: ids.length };
       };
+      __resetSpaces("mycology");
       const full = await rows();
+      __resetSpaces();
       window.crowe.installSpaces = ["chat", "projects"];
       applySpaceProfile();
       const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.space).join(",");
@@ -1880,17 +1995,19 @@ const tests = [
       const names = async () => { await renderPlugins(); return [...$("cfg-plugins").querySelectorAll(".plug-name")].map((n) => n.firstChild.textContent.trim()).join(","); };
       const senseHidden = () => $("cfg-sense").classList.contains("hidden");
       try {
+        __resetSpaces("mycology", true);
         const full = await names(), fullSense = senseHidden();
+        __resetSpaces();
         window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
         const narrowed = await names(), narrowedSense = senseHidden();
-        // The picker wins over the build: tick Cultivation and both come back.
+        // A saved preference cannot restore a capability this edition lacks.
         setSpaceProfile(["chat", "projects", "cultivation"]);
         const restored = await names(), restoredSense = senseHidden();
         return { full, fullSense, narrowed, narrowedSense, restored, restoredSense };
       } finally { window.crowe.plugins.list = real; __resetSpaces(); }`,
     expect: { full: "Crowe Skills,Crowe Sense,GitHub,Everywhere", fullSense: false,
       narrowed: "Crowe Skills,GitHub,Everywhere", narrowedSense: true,
-      restored: "Crowe Skills,Crowe Sense,GitHub,Everywhere", restoredSense: false },
+      restored: "Crowe Skills,GitHub,Everywhere", restoredSense: true },
   },
   {
     name: "the picker cannot turn chat off",
@@ -2246,13 +2363,20 @@ app.whenReady().then(async () => {
   try {
     const url = process.env.PREVIEW_URL || (await startServer());
     const win = new BrowserWindow({ width: 1280, height: 860, show: false, webPreferences: { webviewTag: true } });
+    const origin = new URL(url).origin;
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname)) throw new Error("PREVIEW_URL must be loopback for isolated panel tests");
+    win.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+      callback({ cancel: !details.url.startsWith(origin + "/") && !/^(about:|data:|blob:|devtools:)/.test(details.url) });
+    });
     const pageErrors = [];
     win.webContents.on("console-message", (_e, level, message) => {
       if (level >= 2 && !/Security Warning/.test(message)) pageErrors.push(message);
     });
     await win.loadURL(url + "?t=" + Date.now());
     await new Promise((r) => setTimeout(r, 3000));
+    const originalBridgeNames = await win.webContents.executeJavaScript("Object.keys(window.crowe)");
     await win.webContents.executeJavaScript(PRELUDE);
+    await win.webContents.executeJavaScript("__resetSpaces()");
 
     for (const t of tests) {
       let bad;
@@ -2271,6 +2395,48 @@ app.whenReady().then(async () => {
       }
     }
 
+    // A never-settling account/config request used to prevent applying the
+    // local profile. Boot a fresh page with both held, then reject them after
+    // navigating: neither the stall nor the late failure may steal the surface.
+    const startup = new BrowserWindow({ width: 1280, height: 860, show: false, webPreferences: { webviewTag: true } });
+    try {
+      await startup.loadURL(new URL("farm-startup.html", url).href);
+      await new Promise(r => setTimeout(r, 300));
+      const result = await startup.webContents.executeJavaScript(`(async () => {
+        const restored = document.body.dataset.space === "farm" && !!$("surface-farm").querySelector(".farm-compliance");
+        const deferred = !assistantStarted && typeof window.__rejectConfig === "undefined" && typeof window.__rejectAccount === "undefined";
+        setSpaceProfile(["farm", "cultivation", "chat"]);
+        let acknowledge;
+        window.crowe.editionAccess.openWorkbench = () => new Promise(resolve => { acknowledge = resolve; });
+        const attempted = addPanel("operator");
+        await new Promise(r => setTimeout(r, 20));
+        const held = !assistantStarted && panels.length === 0 && !panelDeck.querySelector(".workspace-panel")
+          && typeof window.__rejectConfig === "undefined" && typeof window.__rejectAccount === "undefined";
+        acknowledge({ ok: false, error: { message: "fixture host refused" } });
+        const failedPanel = await attempted;
+        const refused = failedPanel.id === null && panels.length === 0 && !assistantStarted;
+        window.crowe.editionAccess.openWorkbench = async () => { throw new Error("fixture host unreachable"); };
+        const rejectedPanel = await addPanel("operator");
+        const rejected = rejectedPanel.id === null && panels.length === 0 && !assistantStarted;
+        window.crowe.editionAccess.openWorkbench = async () => ({ ok: true });
+        const retriedPanel = addPanel("operator");
+        // Mycology's assistant handshake is asynchronous. Wait for the two
+        // recorded calls, not for a fixed timer or for the held promises.
+        const deadline = Date.now() + 2000;
+        while ((typeof window.__rejectConfig !== "function" || typeof window.__rejectAccount !== "function") && Date.now() < deadline) await new Promise(r => setTimeout(r, 10));
+        setSpace("farm");
+        window.__rejectConfig(new Error("offline config"));
+        window.__rejectAccount(new Error("offline account"));
+        const retry = await retriedPanel;
+        const recovered = assistantStarted && retry.id !== null && panels.some(p => p.id === retry.id);
+        await new Promise(r => setTimeout(r, 100));
+        return {restored, deferred, held, refused, rejected, recovered, kept: document.body.dataset.space === "farm", noOnboarding: !document.querySelector(".onboarding-actions")};
+      })()`);
+      const bad = compare(result, {restored: true, deferred: true, held: true, refused: true, rejected: true, recovered: true, kept: true, noOnboarding: true});
+      if (bad.length) { failures++; console.log("not ok  local Farm navigation survives stalled and failed remote startup"); bad.forEach(b => console.log("        " + b)); }
+      else console.log("ok      local Farm navigation survives stalled and failed remote startup");
+    } finally { startup.destroy(); }
+
     /* Every check above reads the page and compares it to a file on disk, and all
        of them are worthless if the page came from a different checkout. The
        in-process server makes that impossible for the default path, but
@@ -2288,8 +2454,42 @@ app.whenReady().then(async () => {
       console.log("ok      the page under test was served from this checkout");
     }
 
+    // Exercise the exact non-desktop descriptors and refusal methods without
+    // networking/storage globals. Namespace parity alone cannot detect a shim
+    // that grants synthetic local capabilities or pretends a transfer succeeded.
+    const vm = require("vm"), assert = require("assert/strict");
+    const bridgeErrors = [];
+    for (const file of ["renderer/preview-shim.js", "renderer/web-bridge.js", "mobile/src/mobile-bridge.js"]) {
+      try {
+        const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+        const descriptor = source.match(/^    edition: (Object\.freeze\(\{[\s\S]*?^    \}\)),/m);
+        assert.ok(descriptor, "missing static edition descriptor");
+        const edition = vm.runInNewContext(descriptor[1], {});
+        assert.equal(edition.id, "desktop"); assert.equal(edition.productName, "Crowe Logic");
+        assert.equal(JSON.stringify(edition.allowedSpaces), '["chat","projects"]');
+        assert.equal(JSON.stringify(edition.defaultSpaces), '["chat","projects"]');
+        assert.equal(edition.landingSpace, "chat"); assert.equal(edition.legacyAccess, false);
+        for (const key of ["grow", "farm", "sense", "legacyAccess"]) assert.equal(edition.capabilities[key], false);
+        for (const value of [edition, edition.allowedSpaces, edition.defaultSpaces, edition.capabilities]) assert.ok(Object.isFrozen(value));
+        for (const namespace of ["editionAccess", "transfer"]) {
+          const match = source.match(new RegExp('^    ' + namespace + ': (\\{[\\s\\S]*?^    \\}),', 'm'));
+          assert.ok(match, "missing " + namespace);
+          const api = vm.runInNewContext('(' + match[1] + ')', {});
+          const methods = namespace === "editionAccess" ? ["enterLegacy", "leaveLegacy", "openWorkbench"] : ["request"];
+          assert.deepEqual(Object.keys(api).sort(), [...methods].sort());
+          for (const method of methods) for (const action of namespace === "transfer" ? ["status", "notebook.inspect", "notebook.import", "notebook.export", "backup.restore"] : [null]) {
+            const reply = await api[method](action, {});
+            assert.equal(reply.ok, false); assert.equal(reply.error.code, "UNAVAILABLE");
+            assert.equal(typeof reply.error.message, "string"); assert.equal(reply.data, undefined);
+          }
+        }
+      } catch (error) { bridgeErrors.push(`${file}: ${error.message}`); }
+    }
+    if (bridgeErrors.length) { failures++; console.log("not ok  non-desktop edition and transfer bridges fail closed"); bridgeErrors.forEach(e => console.log("        " + e)); }
+    else console.log("ok      non-desktop edition and transfer bridges fail closed");
+
     const want = preloadNamespaces();
-    const have = await win.webContents.executeJavaScript("Object.keys(window.crowe)");
+    const have = originalBridgeNames;
     const missing = want.filter((k) => !have.includes(k));
     if (missing.length) {
       failures++;
@@ -2342,7 +2542,7 @@ app.whenReady().then(async () => {
       console.log("ok      renderer logged no console errors");
     }
 
-    const total = tests.length + 4;
+    const total = tests.length + 6;
     console.log(`\n${total - failures}/${total} passed`);
   } catch (error) {
     failures++;

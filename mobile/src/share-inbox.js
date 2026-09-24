@@ -46,7 +46,8 @@
       input.focus();
     }
     if (note.image && window.crowePhone && typeof window.crowePhone.addImage === "function") {
-      window.crowePhone.addImage(note.image);
+      const added = window.crowePhone.addImage("shared-photo.jpg", note.image);
+      if (!added || added.error) throw new Error(added && added.error || "The shared photo could not be attached");
       if (input && !parts.length) { input.placeholder = "What should I look at in this photo?"; }
     }
     if (typeof setComposerStatus === "function") {

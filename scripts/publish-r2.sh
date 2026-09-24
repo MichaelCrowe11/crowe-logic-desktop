@@ -2,31 +2,19 @@
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# Which channel, and with it which directory, bucket prefix and feed names.
-# Defaults are the full edition's: release/ onto desktop/, feeds under
-# desktop/channel/<os>/latest*.yml. The developer edition publishes beside it
-# under desktop/developers/ (scripts/release-channel.js has the layout):
-#
-#   scripts/publish-r2.sh                                          # release/, latest
-#   scripts/publish-r2.sh --config electron-builder.developer.js   # release-developers/, developers
-#   scripts/publish-r2.sh release-developers --channel developers
-resolved=$(node "$here/release-channel.js" --shell "$@") || exit 1
+# Publication always requires the accepted platform/architecture inventory.
+# Explicit root/config paths are resolved against the caller before cd.
+#   scripts/publish-r2.sh --matrix mac:arm64:dmg+zip,mac:x64:dmg+zip
+#   scripts/publish-r2.sh --config electron-builder.mycology.js --matrix mac:arm64:dmg+zip
+#   DRY_RUN=1 scripts/publish-r2.sh ...   # local strict preflight only
+resolved=$(node "$here/publish-args.js" "$@") || exit 1
 eval "$resolved"
-root="${root:-$dir}"
-
-# Locally there is no ref, so fall back to the version being built. CI passes
-# the tag it was triggered by.
-version="${GITHUB_REF_NAME:-}"
-version="${version#v}"
-if [ -z "$version" ] && [ -f package.json ]; then
-  version=$(node -p "require('./package.json').version")
+cd "$here/.."
+node "$here/preflight-release.js" "$root" "$version" "${validation_args[@]}"
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  echo "publish-r2: strict dry run passed for the $channel channel; nothing uploaded"
+  exit 0
 fi
-
-if [ -z "$version" ]; then
-  echo "publish-r2: set GITHUB_REF_NAME to a tag such as v0.14.0" >&2
-  exit 1
-fi
-node "$here/preflight-release.js" "$root" "$version" --channel "$channel"
 echo "publish-r2: publishing $version from $root to the $channel channel ($prefix/)"
 
 # Uploads to the R2 API fail intermittently regardless of file size, so a single
@@ -85,7 +73,7 @@ put() {
 feeds=()
 for os in win mac linux; do
   var="feed_$os"; name="${!var}"
-  file=$(find "$root" -type f -name "$name" -print -quit)
+  file=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$name" -print -quit)
   [ -z "$file" ] || feeds+=("$file")
 done
 if [ ${#feeds[@]} -eq 0 ]; then
@@ -103,8 +91,8 @@ sort -u -o "$wanted" "$wanted"
 # dotted form GitHub hands back.
 resolve() {
   local want="$1" hit
-  hit=$(find "$root" -type f -name "$want" -print -quit)
-  [ -n "$hit" ] || hit=$(find "$root" -type f -name "${want// /.}" -print -quit)
+  hit=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$want" -print -quit)
+  [ -n "$hit" ] || hit=$(find "$root" -type d -name '*.app' -prune -o -type f -name "${want// /.}" -print -quit)
   printf '%s' "$hit"
 }
 
@@ -157,7 +145,7 @@ fi
 # before a feed advertises it.
 for os in win mac linux; do
   var="feed_$os"; name="${!var}"
-  file=$(find "$root" -type f -name "$name" -print -quit)
+  file=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$name" -print -quit)
   [ -z "$file" ] || put "$prefix/channel/$os/$name" "$file"
 done
 
@@ -166,4 +154,4 @@ done
 # never move off the old version. So prove the release over the network before
 # calling it done, from here, where there is still someone watching.
 echo "publish-r2: verifying the published release"
-node "$here/verify-release.js" "$version" --channel "$channel"
+node "$here/verify-release.js" "$version" "${validation_args[@]}" --full

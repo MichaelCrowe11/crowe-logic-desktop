@@ -1,0 +1,19 @@
+.farm-imports { padding: 1rem; max-width: 100%; color: inherit; }
+.farm-imports h2, .farm-imports h3 { margin: .5rem 0; }
+.farm-imports p { line-height: 1.5; }
+.farm-imports-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin: .8rem 0; }
+.farm-imports button { padding: .55rem .8rem; border: 1px solid currentColor; border-radius: .35rem; color: inherit; background: transparent; cursor: pointer; margin: .3rem; }
+.farm-imports button:disabled { opacity: .55; cursor: wait; }
+.farm-imports button:focus-visible, .farm-imports input:focus-visible, .farm-imports select:focus-visible, .farm-imports textarea:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.farm-imports-status { padding: .7rem; border-left: 3px solid currentColor; }
+.farm-imports-warning { border: 1px dashed currentColor; padding: .6rem; }
+.farm-imports-digest, .farm-imports pre { overflow-wrap: anywhere; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .8rem; }
+.farm-imports-table { overflow: auto; max-height: 32rem; border: 1px solid currentColor; margin-block: 1rem; }
+.farm-imports table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.farm-imports th, .farm-imports td { border: 1px solid currentColor; padding: .5rem; text-align: left; vertical-align: top; max-width: 22rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.farm-imports label { display: block; margin-block: .8rem; }
+.farm-imports input:not([type=checkbox]), .farm-imports select, .farm-imports textarea { display: block; box-sizing: border-box; width: 100%; max-width: 38rem; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .25rem; padding: .5rem; margin-top: .3rem; }
+.farm-imports textarea { min-height: 5rem; }
+.farm-imports-check { display: flex !important; align-items: flex-start; gap: .6rem; }
+.farm-imports-check input { flex-shrink: 0; }
+@media (max-width: 600px) { .farm-imports { padding: .6rem; } .farm-imports-actions { flex-direction: column; } }

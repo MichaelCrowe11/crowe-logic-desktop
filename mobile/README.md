@@ -1,9 +1,9 @@
 # Crowe Logic for iOS and Android
 
-The same app, on a phone. `renderer/` is copied here unchanged and a mobile
-bridge is put underneath it, so the conversation, the router, the spaces and the
-grower's records look and behave the way they do on the desktop — and the three
-things a phone genuinely cannot do say so instead of failing quietly.
+The general Crowe Logic app for phones. The shared `renderer/` runs over a
+mobile bridge with Chat, software tools and general-purpose computer vision.
+Mycology is a separate app: this shell does not expose cultivation workspaces,
+grow tools, farm records or specialist growing workflows.
 
 ```
 mobile/
@@ -61,16 +61,19 @@ that belongs in the lockfile of an app that ships to a store.
 ## What the phone does, and what it does not
 
 **Real.** Chat and the agent loop against the CroweLM gateway, with streaming,
-the same role routing as the desktop (cultivation, coding, reasoning,
-long-context), the model catalog, Crowe ID sign-in, workspace licensing, the
+general role routing (coding, reasoning, long-context), the filtered model
+catalog, Crowe ID sign-in, workspace licensing, the
 cost and token HUD, the Workflows / Agent Fleet / Operator Control panels, and
 provider keys.
 
-**Local.** Sessions and the grower's records live in Capacitor Preferences
-instead of `userData` — the phone keeps its own history and its own grow log,
-validated against the same `grow-schema.js` the desktop store uses. A lot trace
-exports to the share sheet rather than to a file dialog. The agent's tools here
-are `read_grow`, `log_grow` (gated on the Edit tier) and `open_url`.
+**Local.** Sessions live in Capacitor Preferences. Historical grow collections
+and camera-journal records remain in place but are unavailable to ordinary UI,
+agent tools and background workflows. Settings offers an explicit private raw
+archive of seven known grow collections plus camera history, without adding it
+to chat. The archive preserves stored strings, including malformed values, and
+is not an import format for the separate Mycology app or a compliance backup.
+Exports over 32 MiB fail without truncation. Native sharing uses a temporary
+cache file with best-effort cleanup; a share handoff does not prove it was saved.
 
 **Handed over, per file.** iOS and Android do not give an app the filesystem;
 they give it a document picker. The paperclip in the composer is that picker,
@@ -85,8 +88,9 @@ held in memory for the session only.
 camera button beside it opens the camera. The picture is downsized on the
 phone (1280 px on the long edge, JPEG) and rides inside the next message as an
 image part; that turn goes to CroweLM Vision whatever the words would have
-routed to, with a brief that asks for what is visible before any verdict on
-contamination. A free Crowe ID is told Vision needs a plan instead of being
+routed to, with a task-neutral brief for screenshots, documents, diagrams,
+equipment and other visual questions. It does not create a grow-journal entry.
+A free Crowe ID is told Vision needs a plan instead of being
 handed to a text model. Photos are never written into the saved session.
 
 **Refused, with a reason.** The shell, the file tree, git, and MCP plugins.

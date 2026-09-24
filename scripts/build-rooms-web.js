@@ -5,7 +5,7 @@
 //   node scripts/build-rooms-web.js --check  fail if renderer/rooms-web.js is stale
 //
 // rooms/engine.js and rooms/registry.js are CommonJS and the registry reads
-// agents.vendored.json off disk, so neither can load in a plain browser tab.
+// agents.customer.json off disk, so neither can load in a plain browser tab.
 // The web build needs them, because a room on the web is the same engine
 // driven by a runner that calls the edge instead of the harness.
 //
@@ -29,14 +29,17 @@ const root = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(root, p), "utf8");
 const sha = (s) => crypto.createHash("sha256").update(s).digest("hex").slice(0, 12);
 
+const { readCustomerRoster } = require("./sync-agent-registry");
+const outPath = path.join(root, "renderer", "rooms-web.js");
+
+function createRoomsBundle() {
 const engineSrc = read("rooms/engine.js");
 const registrySrc = read("rooms/registry.js");
-const vendoredSrc = read("rooms/agents.vendored.json");
-const outPath = path.join(root, "renderer", "rooms-web.js");
+const customerRoster = readCustomerRoster();
 
 // Parsed and re-serialised so a formatting change to the JSON does not churn
 // the bundle, and so a malformed roster fails the build instead of the browser.
-const vendored = JSON.stringify(JSON.parse(vendoredSrc));
+const vendored = JSON.stringify(customerRoster);
 
 const stamp = { engine: sha(engineSrc), registry: sha(registrySrc), vendored: sha(vendored) };
 
@@ -45,7 +48,7 @@ const stamp = { engine: sha(engineSrc), registry: sha(registrySrc), vendored: sh
 // the same object the registry wrapper returned.
 const bundle = `// GENERATED FILE. Do not edit.
 // Produced by scripts/build-rooms-web.js from rooms/engine.js, rooms/registry.js
-// and rooms/agents.vendored.json. Run \`npm run rooms:web\` after changing any
+// and rooms/agents.customer.json. Run \`npm run rooms:web\` after changing any
 // of them; \`npm test\` fails while this file is stale.
 //
 // The engine and registry sources below are verbatim. Only \`require\` is
@@ -59,7 +62,7 @@ const bundle = `// GENERATED FILE. Do not edit.
   var registry;
   function shimRequire(name) {
     if (name === "fs") return { readFileSync: function () { return JSON.stringify(VENDORED); } };
-    if (name === "path") return { join: function () { return "agents.vendored.json"; } };
+    if (name === "path") return { join: function () { return "agents.customer.json"; } };
     if (name === "./registry") return registry;
     throw new Error("rooms-web: unbundled require(" + JSON.stringify(name) + ")");
   }
@@ -83,11 +86,24 @@ ${indent(engineSrc)}
   });
 })();
 `;
+return { bundle, stamp };
+}
 
 function indent(src) {
   return src.split("\n").map((l) => (l.length ? "    " + l : l)).join("\n");
 }
 
+function assertFreshRoomsBundle() {
+  const { bundle } = createRoomsBundle();
+  let current = "";
+  try { current = fs.readFileSync(outPath, "utf8"); } catch {}
+  if (current !== bundle) throw new Error("Customer rooms bundle is stale; run npm run rooms:web");
+}
+
+module.exports = { assertFreshRoomsBundle, createRoomsBundle };
+
+if (require.main === module) {
+const { bundle, stamp } = createRoomsBundle();
 if (process.argv.includes("--check")) {
   let current = "";
   try { current = fs.readFileSync(outPath, "utf8"); } catch {}
@@ -105,4 +121,5 @@ const councilPath = path.join(root, "renderer", "council.js");
 const council = read("rooms/council.js");
 if (process.argv.includes("--check")) {
   if (!fs.existsSync(councilPath) || fs.readFileSync(councilPath, "utf8") !== council) { console.error("Council browser module is stale."); process.exit(1); }
-} else fs.writeFileSync(councilPath, council);
+} else if (!process.argv.includes("--rooms-only")) fs.writeFileSync(councilPath, council);
+}

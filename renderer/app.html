@@ -38,6 +38,8 @@
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css?v=1788786753000" />
+  <link rel="stylesheet" href="farm-compliance.css?v=1788786753000" />
+  <link rel="stylesheet" href="mycology-transfer.css?v=1788786753000" />
   <!-- The phone layer, after the desktop sheet and never editing it. Its
        one-column rules gate on width, so a narrow window on any device gets
        one pane; its shell rules gate on body.mobile, which only the phone
@@ -128,6 +130,10 @@
                units buys 2.3px and the rectangle stays open. -->
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16h14v5H5z"/><path d="M12 16v-4M6 12a6 6 0 0 1 12 0z"/></svg>
           Cultivation
+        </button>
+        <button class="seg-btn" data-space="farm">
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h5"/></svg>
+          Farm &amp; Compliance
         </button>
       </div>
 
@@ -242,6 +248,8 @@
         <div id="cult-state" class="cards cult-state"></div>
       </div>
     </section>
+
+    <section id="surface-farm" class="surface hidden" aria-label="Farm &amp; Compliance"></section>
 
     <main id="workbench">
       <section id="agent">
@@ -491,7 +499,10 @@
   <script src="marks.js?v=1788786753000"></script>
   <script src="first-run.js?v=1788786753000"></script>
   <script src="activity.js?v=1788786753000"></script>
-<script src="renderer.js?v=1788786753000"></script>
+  <script src="farm-recovery.js?v=1788786753000"></script>
+  <script src="farm-compliance.js?v=1788786753000"></script>
+  <script src="mycology-transfer.js?v=1788786753000"></script>
+  <script src="renderer.js?v=1788786753000"></script>
   <!-- The web chrome: what the shell says it can do, in a browser. Rewrites the
        desktop's first-run copy to turns the web can take and hides the two
        autonomy tiers the bridge refuses. After renderer.js, before the phone

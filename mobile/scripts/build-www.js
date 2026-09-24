@@ -46,7 +46,6 @@ const COPY = [
   ["assets/wordmark-motion-sm.svg", "assets/wordmark-motion-sm.svg"],
   ["assets/wordmark-ink.svg", "assets/wordmark-ink.svg"],
   ["assets/wordmark-ink-sm.svg", "assets/wordmark-ink-sm.svg"],
-  ["assets/cultivation-backdrop.png", "assets/cultivation-backdrop.png"],
   ["assets/icon.png", "assets/icon.png"],
   ["assets/fonts/fraunces-var.woff2", "assets/fonts/fraunces-var.woff2"],
   ["assets/fonts/inter-var.woff2", "assets/fonts/inter-var.woff2"],
@@ -54,7 +53,9 @@ const COPY = [
   ["mobile/src/mobile.css", "mobile.css"],
   ["mobile/src/vault.js", "vault.js"],
   ["mobile/src/mobile-bridge.js", "mobile-bridge.js"],
+  ["mobile/src/legacy-archive.js", "legacy-archive.js"],
   ["mobile/src/mobile-ui.js", "mobile-ui.js"],
+  ["mobile/src/data-notice.js", "data-notice.js"],
   ["mobile/src/speak.js", "speak.js"],
   ["mobile/src/share-inbox.js", "share-inbox.js"],
   ["mobile/src/connectors.js", "connectors.js"],
@@ -64,8 +65,9 @@ const COPY = [
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
+  "legacy-archive.js",
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "data-notice.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -144,7 +146,7 @@ function buildIndex() {
   // after renderer.js rather than before it.
   must(html, '<script src="renderer.js"></script>', "the renderer script tag");
   html = html.replace('<script src="renderer.js"></script>',
-    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
+    '<script src="renderer.js"></script>\n  <script src="legacy-archive.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="data-notice.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
 
   // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
   // sells a subscription through Stripe, which is the app store's business on
@@ -153,6 +155,19 @@ function buildIndex() {
   // in the webview, because plan.js is not in COPY and must not be.
   must(html, '<script src="plan.js"></script>', "the plan script tag");
   html = html.replace('  <script src="plan.js"></script>\n', "");
+
+  // These standalone workspaces belong to the desktop Mycology edition. Keep
+  // shared DOM scaffolding for renderer initialization, but ship no drivers.
+  for (const asset of ["farm-compliance.css", "farm-messenger.css", "farm-team.css", "farm-imports.css", "farm-workforce.css", "farm-awareness.css", "mycology-transfer.css", "mycology-vision.css"]) {
+    const tag = `  <link rel="stylesheet" href="${asset}" />\n`;
+    must(html, tag, asset);
+    html = html.replace(tag, "");
+  }
+  for (const asset of ["farm-recovery.js", "farm-compliance.js", "farm-messenger.js", "farm-team.js", "farm-imports.js", "farm-workforce.js", "farm-awareness.js", "mycology-transfer.js", "mycology-vision.js"]) {
+    const tag = `  <script src="${asset}"></script>\n`;
+    must(html, tag, asset);
+    html = html.replace(tag, "");
+  }
 
   html = html.split("../assets/").join("assets/");
   for (const asset of BUSTED) html = html.split(`"${asset}"`).join(`"${asset}?v=${stamp}"`);
@@ -163,7 +178,7 @@ function buildIndex() {
 const MANIFEST = {
   name: "Crowe Logic",
   short_name: "Crowe Logic",
-  description: "Agentic reasoning and cultivation console over the CroweLM gateway.",
+  description: "Reasoning, software tools and general-purpose visual analysis over the CroweLM gateway.",
   start_url: "index.html",
   display: "standalone",
   orientation: "portrait",
@@ -179,6 +194,7 @@ function copy(from, to) {
 }
 
 function main() {
+  require("../../scripts/build-rooms-web").assertFreshRoomsBundle();
   fs.rmSync(www, { recursive: true, force: true });
   fs.mkdirSync(www, { recursive: true });
 

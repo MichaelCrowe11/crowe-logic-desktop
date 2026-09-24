@@ -94,4 +94,24 @@ const refused = spawnSync(process.execPath, [path.join(__dirname, 'release-chann
 eq(refused.status, 1);
 eq(refused.stdout, '');
 
+const mycology = path.join(root, 'electron-builder.mycology.js');
+eq(layout.fromArgs(['--config', mycology, '--channel', 'mycology']),
+  { channel: 'mycology', dir: 'release-mycology', rest: [] });
+eq(layout.fromArgs(['--channel=mycology', '--config', mycology]),
+  { channel: 'mycology', dir: 'release-mycology', rest: [] });
+for (const args of [
+  ['--config', mycology, '--channel', 'latest'],
+  ['--channel=latest', '--config', mycology],
+  ['--config', cfg, '--config', mycology],
+  ['--channel', 'mycology', '--channel=developers'],
+]) {
+  assert.throws(() => layout.fromArgs(args), /conflicting release channels/);
+  checks++;
+}
+const conflicting = spawnSync(process.execPath,
+  [path.join(__dirname, 'release-channel.js'), '--shell', '--config', mycology, '--channel=latest'],
+  { encoding: 'utf8' });
+eq(conflicting.status, 1);
+eq(conflicting.stdout, '');
+
 console.log(`release-channel: ${checks} checks passed`);

@@ -6,6 +6,43 @@ const $ = (id) => document.getElementById(id);
 const transcript = $("transcript");
 const input = $("input");
 const messages = [];
+// Only the preload descriptor (or an acknowledged recovery reply) grants access.
+// Older web/mobile/preview bridges remain ordinary Desktop, never a local farm.
+let editionReply = null;
+// Mobile shares the ordinary Desktop edition, but not its recovery workspace.
+// Capture the bridge's runtime marker before UI mounting; DOM classes are not authority.
+const MOBILE_RUNTIME = Boolean(window.crowe?.mobile);
+const FALLBACK_EDITION = Object.freeze({ id: "desktop", productName: "Crowe Logic", allowedSpaces: ["chat", "projects"], defaultSpaces: ["chat", "projects"], landingSpace: "chat", capabilities: { grow: false, farm: false, sense: false }, legacyAccess: false });
+function editionPolicy() { return editionReply || window.crowe?.edition || FALLBACK_EDITION; }
+function isMycology() { return editionPolicy().id === "mycology"; }
+function hasEditionCapability(name) { return editionPolicy().capabilities?.[name] === true; }
+function ordinarySpaceIds() { return (editionPolicy().allowedSpaces || []).filter(id => !editionPolicy().legacyAccess || !["farm", "cultivation"].includes(id)); }
+function landingSpace() { return isMycology() ? "farm" : "chat"; }
+let assistantStarted = false, assistantReady = null, panelRestoreReady = null;
+function ensurePanels() { return panelRestoreReady || (panelRestoreReady = restorePanels().catch(() => setComposerStatus("Panel restoration unavailable", "note"))); }
+function startAssistant() {
+  if (assistantReady) return assistantReady;
+  assistantReady = (async () => {
+    if (isMycology()) {
+      if (!window.crowe?.editionAccess?.openWorkbench) throw new Error("The assistant workbench is unavailable in this installation.");
+      const reply = await window.crowe.editionAccess.openWorkbench();
+      if (!reply || reply.ok !== true) throw new Error(reply?.error?.message || "The assistant workbench could not be opened.");
+    }
+    // Only an acknowledged host opening may release panel creation. Restore
+    // itself calls addPanel, so mark ready before starting that recursion.
+    assistantStarted = true;
+    const panelsReady = ensurePanels();
+    const accountReady = refreshAuth().catch(() => setComposerStatus("Account status unavailable", "note"));
+    refreshRoomList();
+    let c;
+    try { c = await refreshStatus(); setAutonomyBadge((c && c.autonomy) || "edit"); loadTree().catch(() => setComposerStatus("Workspace files unavailable", "note")); }
+    catch (_) { setComposerStatus("Workspace status unavailable", "note"); }
+    await accountReady;
+    if (c) await maybeShowOnboarding(c);
+    statusTick(); await panelsReady;
+  })().catch(error => { assistantReady = null; setComposerStatus(error.message || "Assistant unavailable", "note"); });
+  return assistantReady;
+}
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 // Markdown for the operator's replies. Escape-first, then structure: the input
@@ -804,7 +841,12 @@ function addRouteNode(body, ev) {
 // depending on the operator happening to use the right vocabulary.
 let sendGate = false;
 async function send(text, opts = {}) {
-  if (!text.trim() || running || sendGate) return;
+  if (!canOpenSpace("chat")) return;
+  const hasPhonePhoto = MOBILE_RUNTIME && Boolean(window.crowePhone?.images?.().length);
+  if ((!text.trim() && !hasPhonePhoto) || running || sendGate) return;
+  // A photo-only phone turn is a real visual request. Keep desktop empty-submit
+  // behavior unchanged and leave consent, plan checks and image transport to the bridge.
+  if (!text.trim() && hasPhonePhoto) text = "Describe this image and help me understand what is relevant.";
   // The gate holds across the sign-in check: `running` is not set until after
   // it, and two submits in that gap (a double keypress, a click and an Enter)
   // would both pass the guard above and start two turns from one prompt.
@@ -1114,6 +1156,11 @@ function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySe
    already signed into. /foundry/ is the public page of our own that renders. */
 const BROWSER_HOME = "https://crowelogic.com/foundry/";
 async function addPanel(type, seed={}) {
+  if (isMycology() && !assistantStarted) {
+    if (!canOpenSpace("chat")) return { id: null, type };
+    setSpace("chat"); await startAssistant();
+    if (!assistantStarted || !canOpenSpace("chat")) return { id: null, type };
+  }
   hideLegacy();
   const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Missions",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
   const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "" };
@@ -2137,7 +2184,7 @@ async function mountRoom(p, body, seed = {}) {
     learnWorkers(agents);
     const seated = new Set((state?.agents || []).map((a) => a.agentId));
     const M = window.CroweMessages;
-    const spaces = (window.crowe && window.crowe.installSpaces) || null;
+    const spaces = editionPolicy();
     const choices = (M ? M.visibleWorkers(agents, spaces) : agents).filter((a) => !seated.has(a.id));
     pop = document.createElement("div"); pop.className = "room-add-pop";
     pop.innerHTML = `<div class="rap-head">Add to conversation</div><input class="rap-search" placeholder="Search workers" aria-label="Search workers"><div class="rap-list" role="listbox"></div>`;
@@ -2488,7 +2535,7 @@ async function mountRoom(p, body, seed = {}) {
   learnWorkers(agents);
   const picked = new Set();
   const M = window.CroweMessages;
-  const spaces = (window.crowe && window.crowe.installSpaces) || null;
+  const spaces = editionPolicy();
   const workers = M ? M.visibleWorkers(agents, spaces) : agents;
   const groups = M ? M.visibleTemplates(templates, workers) : templates;
 
@@ -2598,6 +2645,8 @@ function mountOperator(p, body) {
 function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
+  if (!canOpenSpace("chat")) return;
+  if (isMycology() && !assistantStarted) setSpace("chat");
   if(["files","git","output","activity"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
   const type = name === "term" ? "terminal" : name;
   hideLegacy();
@@ -2863,8 +2912,11 @@ async function renderKeyManager(){
 function renderSpacePicker() {
   const box = $("cfg-spaces"); if (!box) return;
   box.innerHTML = "";
+  const description = box.parentElement?.querySelector(".settings-section-head span");
+  if (description) description.textContent = isMycology() ? "Farm opens every launch. Enable Chat for the optional assistant." : MOBILE_RUNTIME ? "Choose your workspaces. Chat opens every launch." : "Choose ordinary workspaces. Legacy farm recovery is separate below.";
   for (const [id, sp] of Object.entries(SPACES)) {
-    const fixed = id === "chat"; // the thread every other space funnels into
+    if (!ordinarySpaceIds().includes(id)) continue;
+    const fixed = id === landingSpace();
     const row = document.createElement("label");
     row.className = "chk";
     const cb = document.createElement("input");
@@ -2947,6 +2999,7 @@ if ($("cfg-browser-key-save")) {
 /* Crowe Sense in Settings. The fields are the node's address for a direct
    read or its id for the relay; the badge is what the last poll found. */
 async function renderSense() {
+  if (!hasEditionCapability("sense")) return;
   const src = $("cfg-sense-source"), url = $("cfg-sense-url"), node = $("cfg-sense-node"), badge = $("sense-state");
   if (!src || !url || !node) return;
   let st = { config: { source: "off" } };
@@ -2973,7 +3026,7 @@ $("cfg-save").addEventListener("click", async () => {
   const mcpRaw = $("cfg-mcp").value.trim();
   if (mcpRaw) { try { patch.mcpServers = JSON.parse(mcpRaw); } catch { $("cfg-status").textContent = "MCP JSON is invalid."; return; } }
   await window.crowe.setConfig(patch);
-  if (window.crowe.sense && $("cfg-sense-source")) {
+  if (hasEditionCapability("sense") && window.crowe.sense && $("cfg-sense-source")) {
     await window.crowe.sense.configure({ source: $("cfg-sense-source").value, url: $("cfg-sense-url").value.trim(), node: $("cfg-sense-node").value.trim() });
     refreshCultivation();
   }
@@ -3104,11 +3157,11 @@ try { applyTheme(localStorage.getItem("crowe-theme") !== "light"); } catch { app
 // ── Sidebar collapse ──
 // Terminals are sized to their container, so the deck has to be refitted once
 // the width transition finishes or xterm keeps the old column count.
-function applySidebarCollapsed(collapsed) {
+function applySidebarCollapsed(collapsed, persist = true) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
   const toggle = $("sidebar-toggle");
   if (toggle) toggle.setAttribute("aria-expanded", String(!collapsed));
-  try { localStorage.setItem("crowe-sidebar", collapsed ? "collapsed" : "open"); } catch {}
+  if (persist) { try { localStorage.setItem("crowe-sidebar", collapsed ? "collapsed" : "open"); } catch {} }
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   setTimeout(fitTerminals, reduced ? 0 : 220);
 }
@@ -3188,6 +3241,8 @@ function drawSessionMeta(host) {
   host.appendChild(box);
 }
 async function newChat() {
+  if (!canOpenSpace("chat")) return;
+  setSpace("chat");
   const made = await window.crowe.sessions.new();
   sessionId = made && made.id ? made.id : null;
   sessionMeta = { name: "", brief: "" };
@@ -3646,11 +3701,57 @@ document.querySelectorAll("#autonomy .seg-btn").forEach((b) => b.addEventListene
   await window.crowe.setConfig({ autonomy: b.dataset.tier }); setAutonomyBadge(b.dataset.tier);
 }));
 
-// ── Spaces: Chat · Projects · Cultivation ──
+// ── Spaces: Chat · Projects · Cultivation · Farm & Compliance ──
 // One operator thread underneath; a space is how much surface you see. Chat is
 // today's workbench. Projects adds the grouped nav + Home control surface.
 // Cultivation is a launch surface that funnels into the same thread.
-const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), cultivation: $("surface-cultivation") };
+const SURFACES = { home: $("surface-home"), lane: $("surface-lane"), cultivation: $("surface-cultivation"), farm: $("surface-farm"), messenger: $("surface-messenger") };
+let farmMessenger = null;
+function resetFarmMessenger() {
+  farmMessenger?.destroy(); farmMessenger = null;
+  SURFACES.messenger?.replaceChildren();
+}
+function openFarmMessenger() {
+  if (!isMycology() || !SURFACES.messenger) return;
+  SURFACES.messenger.classList.remove("hidden");
+  if (!window.FarmMessenger || !window.crowe?.team) {
+    SURFACES.messenger.textContent = "Shared farm Messenger is unavailable in this runtime. Your local records have not changed.";
+    return;
+  }
+  if (!farmMessenger) farmMessenger = window.FarmTeam
+    ? window.FarmTeam.mount(SURFACES.messenger, window.crowe.team, window.crowe.imports)
+    : window.FarmMessenger.mount(SURFACES.messenger, window.crowe.team);
+  else farmMessenger.open?.();
+}
+
+// Keep the mount alive across space changes so drafts and filters survive.
+let farmWorkspace = null, transferWorkspace = null;
+const narrowFarmWindow = window.matchMedia("(max-width: 760px)");
+function fitFarmSidebar() {
+  // Keep the workspace usable without changing the owner's saved sidebar preference.
+  // The existing toolbar toggle can reopen navigation at any width.
+  if (narrowFarmWindow.matches && document.body.dataset.space === "farm") applySidebarCollapsed(true, false);
+}
+narrowFarmWindow.addEventListener("change", fitFarmSidebar);
+function openFarmWorkspace() {
+  if (!hasEditionCapability("farm")) return;
+  fitFarmSidebar();
+  const host = SURFACES.farm;
+  host.classList.remove("hidden");
+  transferWorkspace?.refresh?.();
+  if (farmWorkspace) { farmWorkspace.open?.(); return; }
+  if (!window.FarmCompliance || !window.crowe?.farm) {
+    host.textContent = "UNAVAILABLE: Farm & Compliance requires the local desktop workspace. No farm records are stored here.";
+    return;
+  }
+  farmWorkspace = window.FarmCompliance.mount(host, window.crowe.farm);
+  if (window.MycologyTransfer && window.crowe?.transfer) {
+    const farmRoot = host.querySelector(".farm-compliance");
+    transferWorkspace = window.MycologyTransfer.mount(farmRoot || host, { edition: editionPolicy, openFarmRestore() { farmWorkspace?.open?.("audit"); }, onNotebookImported() { refreshCultivation(); } });
+    const panel = farmRoot?.querySelector('[data-transfer="panel"]');
+    if (panel) farmRoot.querySelector(".fc-header")?.after(panel);
+  }
+}
 let projLane = "home";
 const LANES = {
   sessions: { title: "Sessions", sub: "Every conversation with the operator, resumable." },
@@ -3706,94 +3807,134 @@ const SPACES = {
       else { SURFACES.lane.classList.remove("hidden"); renderGrowLane(cultLane); }
     },
   },
+  farm: {
+    label: "Farm & Compliance",
+    open: openFarmWorkspace,
+  },
+  messenger: {
+    label: "Messenger",
+    open: openFarmMessenger,
+  },
 };
 
-// Which spaces this install shows. Cultivation is a mushroom farm's surface and
-// does not earn its tab on a machine installed to drive a terminal. Chat is
-// never optional — it is the thread every other space funnels into — so it is
-// added back regardless of what is stored.
-//
-// The Studio space (film and music) was removed in 0.24.3: three cards, two of
-// which only handed the work to the terminal, for a surface nobody opened.
-let PROFILE = new Set(Object.keys(SPACES));
-
-// What this install shows before anyone has touched the picker. Normally every
-// space; on a build packaged for a narrower job, whatever that build declared -
-// see installSpaces() in main.js.
-//
-// Read on every call rather than snapshotted into a const, so the default is a
-// question the code asks rather than a fact it captured at load. That is what
-// lets a test stand up a narrowed install without relaunching Electron.
-//
-// Filtered against SPACES here, at the one place that knows what a space is.
-// Main deliberately ships the configured names through unchecked, so a typo or
-// a space deleted in a later version lands here and is dropped, rather than
-// putting a dead id into PROFILE and hiding a rail button that has no owner.
+// Saved preferences may narrow the edition, never expand its capabilities.
+let PROFILE = new Set();
 function defaultSpaceIds() {
-  const all = Object.keys(SPACES);
-  const declared = window.crowe && window.crowe.installSpaces;
-  if (!Array.isArray(declared) || !declared.length) return all;
-  const wanted = new Set(declared);
-  return all.filter((id) => id === "chat" || wanted.has(id));
+  const allowed = new Set(ordinarySpaceIds());
+  let declared = editionPolicy().defaultSpaces || FALLBACK_EDITION.defaultSpaces;
+  const configured = window.crowe?.installSpaces;
+  if (Array.isArray(configured) && configured.length) declared = declared.filter(id => configured.includes(id));
+  return Object.keys(SPACES).filter(id => allowed.has(id) && (id === landingSpace() || declared.includes(id)));
 }
-
 function applySpaceProfile() {
   let ids = null;
-  try {
-    const raw = localStorage.getItem("crowe-spaces");
-    if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed) && parsed.length) ids = parsed; }
-  } catch {}
-  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(defaultSpaceIds());
+  try { const parsed = JSON.parse(localStorage.getItem("crowe-spaces") || "null"); if (Array.isArray(parsed)) ids = parsed; } catch (_) {}
+  const allowed = new Set(ordinarySpaceIds());
+  PROFILE = new Set((ids || defaultSpaceIds()).filter(id => allowed.has(id) && SPACES[id]));
+  PROFILE.add(landingSpace());
+  // Existing Mycology profiles predate staff messaging; keep its entry reachable.
+  if (isMycology() && allowed.has("messenger")) PROFILE.add("messenger");
+  // Clamp poisoned/obsolete saved lists rather than preserving a latent grant.
+  if (ids) { try { localStorage.setItem("crowe-spaces", JSON.stringify([...PROFILE])); } catch (_) {} }
   for (const [id, sp] of Object.entries(SPACES)) {
     const on = PROFILE.has(id);
     const btn = document.querySelector(`#spaces .seg-btn[data-space="${id}"]`);
-    if (btn) btn.classList.toggle("hidden", !on);
+    if (btn) { btn.classList.toggle("hidden", !on); btn.hidden = !on; }
     if (sp.nav && !on) $(sp.nav).classList.add("hidden");
   }
-  // The Crowe Sense section in Settings pairs a node whose readings land in
-  // Cultivation. Without that space there is nowhere for them to land, so the
-  // section goes with it. Hidden, not removed: the fields keep their values and
-  // a saved source keeps polling, so turning Cultivation back on loses nothing.
   const sense = $("cfg-sense");
-  if (sense) sense.classList.toggle("hidden", !PROFILE.has("cultivation"));
+  if (sense) sense.classList.toggle("hidden", !hasEditionCapability("sense") || !PROFILE.has("cultivation"));
   const cur = document.body.dataset.space;
-  if (cur && !PROFILE.has(cur)) setSpace("chat");
+  if (cur && !canOpenSpace(cur)) setSpace(landingSpace());
+  updateEditionChrome();
 }
-
-// Stored as the whole enabled list, chat included, so the value reads the same
-// as what the picker shows rather than as a diff you have to reconstruct.
-//
-// A picker choice that matches the install default stores nothing at all. That
-// matters for the next version: a saved list is a closed set, so a space added
-// later would be absent from every existing install's list and silently never
-// appear. Storing only a deliberate divergence means an ordinary install's
-// default stays "everything", and only someone who actually changed it keeps a
-// list that can go stale.
-//
-// Compared against defaultSpaceIds() rather than the whole registry, which is
-// the part that breaks if you get it wrong. On a build shipping Chat and
-// Projects only, someone who ticks all four boxes has made a real choice - but
-// against "is this everything?" it looks like a reset, so nothing gets written,
-// and the next launch falls back to the build's two and silently discards what
-// they asked for. Measuring against the default makes both directions storable.
 function setSpaceProfile(ids) {
-  const all = Object.keys(SPACES);
-  const keep = all.filter((id) => id === "chat" || ids.includes(id));
-  // Both are built by filtering `all`, so they are in registry order and can be
-  // compared as strings rather than as sets.
-  const isDefault = keep.join() === defaultSpaceIds().join();
+  const allowed = new Set(ordinarySpaceIds());
+  const keep = Object.keys(SPACES).filter(id => allowed.has(id) && (id === landingSpace() || ids.includes(id)));
   try {
-    if (isDefault) localStorage.removeItem("crowe-spaces");
+    if (keep.join() === defaultSpaceIds().join()) localStorage.removeItem("crowe-spaces");
     else localStorage.setItem("crowe-spaces", JSON.stringify(keep));
-  } catch {}
+  } catch (_) {}
   applySpaceProfile();
+}
+function canOpenSpace(id) {
+  const policy = editionPolicy();
+  if (!(policy.allowedSpaces || []).includes(id)) return false;
+  if (id === "messenger" && !isMycology()) return false;
+  if (id === "farm" && !hasEditionCapability("farm")) return false;
+  if (id === "cultivation" && !hasEditionCapability("grow")) return false;
+  return PROFILE.has(id) || (policy.legacyAccess === true && ["farm", "cultivation"].includes(id));
+}
+function updateEditionChrome() {
+  const policy = editionPolicy();
+  document.title = policy.productName || "Crowe Logic";
+  document.body.dataset.edition = policy.id;
+  document.body.classList.toggle("legacy-recovery", policy.legacyAccess === true);
+  document.querySelectorAll("#bar .lockup").forEach(el => el.setAttribute("aria-label", policy.productName || "Crowe Logic"));
+  let label = $("edition-label");
+  if (!label && $("bar")) { label = document.createElement("span"); label.id = "edition-label"; label.className = "badge"; $("bar").append(label); }
+  if (label) { label.textContent = policy.legacyAccess ? "Legacy records recovery" : isMycology() ? "Mycology" : policy.id === "developers" ? "Developers" : ""; label.hidden = !label.textContent; }
+  // The grower's optional assistant is entered explicitly, not a startup workbench.
+  if ($("rail-new")) $("rail-new").classList.toggle("hidden", isMycology() && !assistantStarted);
+  renderLegacyRecovery();
+}
+let legacyAccessBusy = false;
+async function changeLegacyAccess(enter) {
+  // Mobile has a separate Settings-only archive, never a desktop recovery grant.
+  if (MOBILE_RUNTIME || legacyAccessBusy) return;
+  const api = window.crowe?.editionAccess;
+  const message = $("legacy-recovery-status");
+  if (!api) { if (message) message.textContent = "Local legacy recovery is unavailable in this runtime."; return; }
+  legacyAccessBusy = true;
+  if (message) message.textContent = enter ? "Requesting local recovery access..." : "Finishing local requests and leaving recovery...";
+  try {
+    const reply = await (enter ? api.enterLegacy() : api.leaveLegacy());
+    if (!reply || reply.ok !== true) throw reply?.error || { message: "Recovery access was not acknowledged." };
+    const descriptor = reply.data;
+    if (!descriptor || descriptor.id !== editionPolicy().id || descriptor.legacyAccess !== enter || !Array.isArray(descriptor.allowedSpaces)) throw { message: "The host returned an invalid edition descriptor. Access was not changed in this window." };
+    editionReply = descriptor;
+    applySpaceProfile(); renderSpacePicker();
+    if (enter) { modal.classList.add("hidden"); setSpace("farm"); }
+    else { setSpace(landingSpace()); farmWorkspace?.deactivate?.(); }
+  } catch (error) { if (message) message.textContent = error.message || "Recovery access did not change."; }
+  finally { legacyAccessBusy = false; }
+}
+function renderLegacyRecovery() {
+  if (MOBILE_RUNTIME) return;
+  const host = $("cfg-spaces")?.parentElement;
+  if (!host) return;
+  let section = $("legacy-recovery-settings");
+  if (!section) {
+    section = document.createElement("section"); section.id = "legacy-recovery-settings"; section.className = "mycology-transfer";
+    const title = document.createElement("h3"); title.textContent = "Legacy farm records";
+    const note = document.createElement("p"); note.textContent = "Open this installation's existing notebook and Farm records for inspection, shipment recovery and export. Nothing is moved or deleted. Sense and agent writes are not resumed.";
+    const enter = document.createElement("button"); enter.type = "button"; enter.dataset.legacy = "enter"; enter.textContent = "Open legacy records"; enter.onclick = () => changeLegacyAccess(true);
+    const exit = document.createElement("button"); exit.type = "button"; exit.dataset.legacy = "leave"; exit.textContent = "Leave recovery"; exit.onclick = () => changeLegacyAccess(false);
+    const status = document.createElement("p"); status.id = "legacy-recovery-status"; status.setAttribute("role", "status");
+    section.append(title, note, enter, exit, status); host.after(section);
+  }
+  section.hidden = isMycology() || !window.crowe?.editionAccess;
+  section.querySelector('[data-legacy="enter"]').hidden = editionPolicy().legacyAccess === true;
+  section.querySelector('[data-legacy="leave"]').hidden = editionPolicy().legacyAccess !== true;
+  let banner = $("legacy-recovery-banner");
+  if (!banner) {
+    banner = document.createElement("section"); banner.id = "legacy-recovery-banner"; banner.className = "mycology-recovery-banner";
+    const copy = document.createElement("p"); copy.textContent = "Legacy records recovery. This is the source profile, not Mycology. Preserve it until both independent copies are verified. Choose one operational copy afterward.";
+    for (const [id, label] of [["farm", "Farm & Compliance"], ["cultivation", "Cultivation notebook"]]) { const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = () => setSpace(id); banner.append(b); }
+    const leave = document.createElement("button"); leave.type = "button"; leave.textContent = "Leave recovery"; leave.onclick = () => changeLegacyAccess(false);
+    banner.prepend(copy); banner.append(leave); $("shell")?.before(banner);
+  }
+  banner.hidden = editionPolicy().legacyAccess !== true;
 }
 
 function setSpace(name) {
+  window.MycologyVision?.close();
   // A space that was dropped from the profile can still be reached from restored
   // state or the palette, so fall back rather than render a half-hidden shell.
-  if (!SPACES[name] || !PROFILE.has(name)) name = "chat";
+  if (!SPACES[name] || !canOpenSpace(name)) name = landingSpace();
   const space = SPACES[name];
+  if (name !== "farm") farmWorkspace?.deactivate?.();
+  if (name !== "messenger") farmMessenger?.deactivate?.();
   document.body.dataset.space = name;
   document.querySelectorAll("#spaces .seg-btn").forEach((b) => {
     const on = b.dataset.space === name;
@@ -3817,10 +3958,10 @@ function setSpace(name) {
   // of work, and in Chat the sidebar is already the session list.
   const reposDrawer = $("repos-drawer");
   if (reposDrawer) { reposDrawer.classList.toggle("hidden", name !== "projects"); if (name === "projects") refreshRepoDrawer(); }
-  Object.values(SURFACES).forEach((s) => s.classList.add("hidden"));
+  Object.values(SURFACES).forEach((s) => s?.classList.add("hidden"));
   if (!showWb && space.open) space.open();
-  if (showWb) setTimeout(() => { clampWorkbenchSplit(); fitTerminals(); }, 30);
-  try { localStorage.setItem("crowe-space", name); } catch {}
+  if (showWb) { startAssistant(); updateEditionChrome(); setTimeout(() => { clampWorkbenchSplit(); fitTerminals(); }, 30); }
+  if (!editionPolicy().legacyAccess) { try { localStorage.setItem("crowe-space", name); } catch {} }
 }
 document.querySelectorAll("#spaces .seg-btn").forEach((b) => b.addEventListener("click", () => setSpace(b.dataset.space)));
 for (const [id, space] of Object.entries(SPACES)) {
@@ -4168,6 +4309,8 @@ function growForm(lane, def, rows, refs, editing) {
   return f;
 }
 async function renderGrowLane(lane) {
+  window.MycologyVision?.close();
+  if (!hasEditionCapability("grow")) return;
   const gen = ++laneGen; // shared with renderLane: both own #lane-body
   const def = GROW[lane]; if (!def) return;
   $("lane-title").textContent = def.title; $("lane-sub").textContent = def.sub;
@@ -4182,7 +4325,15 @@ async function renderGrowLane(lane) {
   // the lane last re-rendered.
   const editing = cultEdit ? rows.find((r) => r && r.id === cultEdit) || null : null;
   if (cultEdit && !editing) cultEdit = null; // it was deleted out from under us
-  body.appendChild(growForm(lane, def, rows, refs, editing));
+  if (editing?.vision) {
+    const protectedNote = document.createElement("div"); protectedNote.className = "vision-protected";
+    protectedNote.textContent = "Original Vision evidence is protected from ordinary edits and deletion. Add a separate dated reviewer note instead. " + (editing.entry || "");
+    body.appendChild(protectedNote);
+  } else body.appendChild(growForm(lane, def, rows, refs, editing));
+  if (editing && ["blocks", "flushes"].includes(lane) && editionPolicy().id === "mycology" && !editionPolicy().legacyAccess && window.MycologyVision) {
+    const inspect = document.createElement("button"); inspect.type = "button"; inspect.className = "ghost sm vision-entry"; inspect.textContent = "Inspect photo"; inspect.dataset.vision = "inspect";
+    inspect.addEventListener("click", () => window.MycologyVision.inspect({ type: lane, id: editing.id })); body.appendChild(inspect);
+  }
   const q = laneQuery(lane);
   const matched = rows.filter((r) => growMatch(def, r, q));
   const sort = laneSort(lane);
@@ -4438,6 +4589,7 @@ function growBoard(lane, def, rows, editing) {
    case it exists for and leave a stale lane waiting behind the tab. Redrawing a
    hidden surface costs one store read and nothing else. */
 function refreshCultivation() {
+  if (!hasEditionCapability("grow")) return;
   if (cultLane === "home") refreshCult();
   else if (cultLane === "trace") renderTrace();
   else renderGrowLane(cultLane);
@@ -4615,6 +4767,7 @@ function traceText(tr) {
    something aspirational about next release. Each card opens the lane behind it,
    which is also the only cross-lane navigation the space has. */
 async function refreshCult() {
+  if (!hasEditionCapability("grow")) return;
   const host = $("cult-state"); if (!host) return;
   const t = ["blocks", "flushes", "contam", "env"];
   let d;
@@ -4755,6 +4908,7 @@ async function refreshCult() {
    system prompt - so it never accumulates in the saved session, and a big
    season's records cannot crowd out the conversation. */
 async function growContext() {
+  if (!hasEditionCapability("grow") || editionPolicy().legacyAccess) return "";
   let d;
   try {
     const t = ["blocks", "flushes", "contam", "env", "strains", "recipes", "log"];
@@ -5068,6 +5222,7 @@ if (MOD_LABEL !== "Cmd") {
 
 // Status bar: branch + dirty count + plugin count, refreshed lazily.
 async function statusTick() {
+  if (isMycology() && !assistantStarted) return;
   try {
     const s = await window.crowe.git.status();
     const b = $("hud-branch");
@@ -5084,30 +5239,30 @@ setInterval(statusTick, 30000);
 
 // ── Command palette (Cmd+K) ──
 const PAL_ACTIONS = [
-  { label: "New chat", run: () => { setSpace("chat"); newChat(); } },
+  { label: "New chat", space: "chat", run: () => { setSpace("chat"); newChat(); } },
   // Generated from the space registry so a space dropped from the profile does
   // not survive here as a back door into a shell whose nav is hidden.
   ...Object.entries(SPACES).map(([id, s]) => ({ label: `Space: ${s.label}`, space: id, run: () => setSpace(id) })),
-  { label: "Sessions", run: () => { setSpace("chat"); renderSessions(); } },
+  { label: "Sessions", space: "chat", run: () => { setSpace("chat"); renderSessions(); } },
   { label: "Repositories", space: "projects", run: () => { projLane = "repos"; setSpace("projects"); } },
   { label: "Pull requests", space: "projects", run: () => { projLane = "pulls"; setSpace("projects"); } },
   { label: "Issues", space: "projects", run: () => { projLane = "issues"; setSpace("projects"); } },
-  { label: "Open folder", run: pickRepoFolder },
-  { label: "Terminal", run: () => { setSpace("chat"); switchPane("term"); } },
-  { label: "Browser", run: () => { setSpace("chat"); switchPane("browser"); } },
-  { label: "Files", run: () => { setSpace("chat"); switchPane("files"); } },
-  { label: "Version control (git)", run: () => { setSpace("chat"); switchPane("git"); } },
-  { label: "Toggle chat panel", run: () => { setSpace("chat"); toggleChatPanel(); } },
+  { label: "Open folder", space: "chat", run: pickRepoFolder },
+  { label: "Terminal", space: "chat", run: () => { setSpace("chat"); switchPane("term"); } },
+  { label: "Browser", space: "chat", run: () => { setSpace("chat"); switchPane("browser"); } },
+  { label: "Files", space: "chat", run: () => { setSpace("chat"); switchPane("files"); } },
+  { label: "Version control (git)", space: "chat", run: () => { setSpace("chat"); switchPane("git"); } },
+  { label: "Toggle chat panel", space: "chat", run: () => { setSpace("chat"); toggleChatPanel(); } },
   { label: "Toggle dark mode", run: () => applyTheme(!document.body.classList.contains("dark")) },
-  { label: "Operating mode: Plan", run: () => selAutonomy("plan") },
-  { label: "Operating mode: Read-only", run: () => selAutonomy("readonly") },
-  { label: "Operating mode: Edit", run: () => selAutonomy("edit") },
-  { label: "Operating mode: Execute", run: () => selAutonomy("execute") },
-  { label: "New terminal panel", run: () => addPanel("terminal") },
-  { label: "Quick open file", run: openQuickOpen },
-  { label: "Output (agent events)", run: () => { setSpace("chat"); switchPane("output"); } },
-  { label: "Git: pull", run: async () => { const r = await window.crowe.git.pull(); appendOutput("git pull: " + ((r && (r.out || r.error)) || "").slice(0, 200)); loadGit(); statusTick(); } },
-  { label: "Git: push", run: async () => { const r = await window.crowe.git.push(); appendOutput("git push: " + ((r && (r.out || r.error)) || "").slice(0, 200)); statusTick(); } },
+  { label: "Operating mode: Plan", space: "chat", run: () => selAutonomy("plan") },
+  { label: "Operating mode: Read-only", space: "chat", run: () => selAutonomy("readonly") },
+  { label: "Operating mode: Edit", space: "chat", run: () => selAutonomy("edit") },
+  { label: "Operating mode: Execute", space: "chat", run: () => selAutonomy("execute") },
+  { label: "New terminal panel", space: "chat", run: () => { setSpace("chat"); addPanel("terminal"); } },
+  { label: "Quick open file", space: "chat", run: openQuickOpen },
+  { label: "Output (agent events)", space: "chat", run: () => { setSpace("chat"); switchPane("output"); } },
+  { label: "Git: pull", space: "chat", run: async () => { const r = await window.crowe.git.pull(); appendOutput("git pull: " + ((r && (r.out || r.error)) || "").slice(0, 200)); loadGit(); statusTick(); } },
+  { label: "Git: push", space: "chat", run: async () => { const r = await window.crowe.git.push(); appendOutput("git push: " + ((r && (r.out || r.error)) || "").slice(0, 200)); statusTick(); } },
   { label: "Check for updates", run: async () => { const s = await window.crowe.update.check(); if (s && (s.status === "current" || s.status === "dev")) appendOutput("update: " + (s.status === "dev" ? "dev build: updates only in packaged app" : "you're on the latest version")); } },
   { label: "Plugins", run: () => $("settings-btn").click() },
   { label: "Settings", run: () => $("settings-btn").click() },
@@ -5118,7 +5273,7 @@ function openPalette() { palette.classList.remove("hidden"); palInput.value = ""
 function closePalette() { palette.classList.add("hidden"); }
 function renderPal(q) {
   palList.innerHTML = "";
-  PAL_ACTIONS.filter((a) => (!a.space || PROFILE.has(a.space)) && a.label.toLowerCase().includes(q.toLowerCase())).forEach((a, i) => {
+  PAL_ACTIONS.filter((a) => (!a.space || (PROFILE.has(a.space) && ordinarySpaceIds().includes(a.space))) && a.label.toLowerCase().includes(q.toLowerCase())).forEach((a, i) => {
     const d = document.createElement("div"); d.className = "pal-row" + (i === 0 ? " sel" : ""); d.textContent = a.label;
     d.addEventListener("click", () => { closePalette(); a.run(); });
     palList.appendChild(d);
@@ -5135,7 +5290,10 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 
 // ── Menu / tray / global-summon bus (previously fired into the void) ──
 window.crowe.onMenuAction((a) => {
-  if (a === "new-chat") { setSpace("chat"); newChat(); }
+  if (a === "home") setSpace(landingSpace());
+  else if (a === "cultivation") setSpace("cultivation");
+  else if (a === "legacy-records") changeLegacyAccess(true);
+  else if (a === "new-chat") { setSpace("chat"); newChat(); }
   else if (a === "focus-composer") { setSpace("chat"); input.focus(); }
   else if (a === "palette") openPalette();
   else if (a === "toggle-theme") applyTheme(!document.body.classList.contains("dark"));
@@ -5166,6 +5324,7 @@ window.addEventListener("crowe:auth-recheck", () => { refreshAuth(); });
 async function doSignIn() {
   const btn = $("signin"); const prev = btn.textContent;
   btn.textContent = "Opening browser..."; btn.disabled = true;
+  resetFarmMessenger();
   const r = await window.crowe.auth.login();
   btn.disabled = false; btn.textContent = prev;
   if (r && r.ok) { await refreshAuth(); return true; }
@@ -5182,12 +5341,17 @@ function showSignInPrompt() {
   b.appendChild(btn); scrollBottom();
 }
 $("signin").addEventListener("click", doSignIn);
-$("userbadge").addEventListener("click", async () => { await window.crowe.auth.logout(); await refreshAuth(); });
+$("userbadge").addEventListener("click", async () => { resetFarmMessenger(); await window.crowe.auth.logout(); await refreshAuth(); });
+window.addEventListener("crowe:auth-changed", () => {
+  resetFarmMessenger();
+  if (document.body.dataset.space === "messenger") openFarmMessenger();
+});
 
 // ── First-run onboarding ──
 // Shown once, on a machine with no Crowe ID session and no onboarded flag.
 // Walks sign-in → pick workspace → first task, then marks itself done in config.
 async function maybeShowOnboarding(cfg) {
+  if (isMycology() || editionPolicy().legacyAccess || document.body.dataset.space === "farm") return;
   if (authed) return;
   if (cfg && cfg.onboarded) return;
   clearWelcome();
@@ -5309,6 +5473,11 @@ function dismissLaunch() {
 // ── Init ──
 (async () => {
   $("model-badge").textContent = "CroweLM";
+  // Restore the local surface before starting any account or remote work.
+  // This runs once; late responses must never steal the owner's navigation.
+  applySpaceProfile();
+  clampWorkbenchSplit();
+  try { setSpace(isMycology() ? "farm" : localStorage.getItem("crowe-space") || landingSpace()); } catch { setSpace(landingSpace()); }
   // The logotype is now the whole visual language: header, welcome screen,
   // agent panel head, and the thinking indicator in the transcript. One mark,
   // four places, and what changes between them is only how it moves.
@@ -5330,22 +5499,15 @@ function dismissLaunch() {
   liveLockups();
   dismissLaunch();
   const roomNew = $("room-new");
-  if (roomNew) roomNew.addEventListener("click", () => addPanel("room"));
-  refreshRoomList();
+  if (roomNew) roomNew.addEventListener("click", () => isMycology() ? setSpace("messenger") : addPanel("room"));
+  if (assistantStarted || !isMycology()) refreshRoomList();
   // Main owns rooms: a routine that posts with no panel open still moves the
   // rail, and a notification click opens the room it came from.
-  window.crowe.rooms.onChanged(() => refreshRoomListSoon());
-  window.crowe.rooms.onOpen(({ id } = {}) => { if (id) openRoomPanel(id); });
+  window.crowe.rooms.onChanged(() => { if (assistantStarted || !isMycology()) refreshRoomListSoon(); });
+  window.crowe.rooms.onOpen(({ id } = {}) => { if (id) { setSpace("chat"); if (document.body.dataset.space === "chat") openRoomPanel(id); } });
   // The dock's agent launcher wears the live mark rather than an <img>, so it takes the theme's ink.
   document.querySelectorAll("#glass-launcher .cl-mark").forEach((el) => { if (window.CroweMark) CroweMark.mount(el, { state: "rest" }); });
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
-  const c = await refreshStatus(); loadTree();
-  setAutonomyBadge((c && c.autonomy) || "edit");
-  await refreshAuth();
-  await maybeShowOnboarding(c);
-  applySpaceProfile();
-  clampWorkbenchSplit();
-  try { const sp = localStorage.getItem("crowe-space"); if (sp && sp !== "chat") setSpace(sp); } catch {}
-  statusTick();
-  await restorePanels();
+  // Local Mycology never restores hidden panels or forces account onboarding.
+  if (!isMycology() || document.body.dataset.space === "chat") await startAssistant();
 })();

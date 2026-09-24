@@ -1,8 +1,8 @@
 // Crowe Logic for Developers: the same app, packaged for the Azure Marketplace
 // listing. That listing is pitched as a coding agent and its screenshots show
-// no cultivation, so this edition ships the Chat and Projects spaces and leaves
-// Cultivation out of the default. A default, not a lock: the picker in Settings
-// can still turn it on, exactly as installSpaces() in main.js describes.
+// no cultivation, so this edition allows only Chat and Projects in ordinary
+// navigation. app-edition.js enforces the same policy in the host; legacy farm
+// recovery is a separate, explicitly authorized window-scoped operation.
 //
 //   npm run dist:developers          # any platform, flags pass through
 //   npm run dist:developers:mac      # also staples the DMG, reading this config
@@ -36,9 +36,10 @@ module.exports = {
   // Both are needed. The config-level name is what electron-builder names the
   // bundle and installer after; extraMetadata lands in the packaged app's own
   // package.json, which is where Electron reads app.name and where
-  // installSpaces() reads croweSpaces.
+  // app-edition.js resolves the immutable edition policy. croweSpaces remains
+  // for older development tooling, not as authority to expand capabilities.
   productName,
-  extraMetadata: { productName, croweSpaces: ["chat", "projects"] },
+  extraMetadata: { ...base.extraMetadata, productName, croweEdition: channel, croweSpaces: ["chat", "projects"] },
   artifactName,
   mac: { ...base.mac, artifactName },
   // app-builder-lib names the deb after deb.packageName and falls back to

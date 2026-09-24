@@ -60,6 +60,16 @@ check('every file on the ship list exists in the tree', () => {
   assert.strictEqual(listed[0], '"$TMPD/app.html"', 'app.html ships in its stamped form');
 });
 
+check('farm recovery and transfer assets are shipped, stamped and ordered', () => {
+  const list = /^FILES=\((.*)\)$/m.exec(source)[1].split(/\s+/);
+  for (const asset of ['farm-recovery.js', 'mycology-transfer.js', 'mycology-transfer.css']) {
+    assert.ok(list.includes(`renderer/${asset}`), `${asset} missing from ship list`);
+    assert.ok(shipped.includes(`${asset}?v=${head}`), `${asset} not stamped`);
+  }
+  assert.ok(shipped.indexOf('src="farm-recovery.js') < shipped.indexOf('src="farm-compliance.js'));
+  assert.ok(shipped.indexOf('src="mycology-transfer.js') < shipped.indexOf('src="renderer.js'));
+});
+
 check('the script parses and passes shellcheck when shellcheck is installed', () => {
   execFileSync('bash', ['-n', SCRIPT]);
   try { execFileSync('shellcheck', ['-S', 'warning', SCRIPT], { encoding: 'utf8' }); }

@@ -33,11 +33,12 @@ const agents = [
   { id: "retired", name: "Retired", domain: "orchestration", roomJoinable: false },
   { id: "compliance-audit", name: "Compliance & Audit", domain: "compliance" },
 ];
-const dev = M.visibleWorkers(agents, ["chat", "projects"]);
+const dev = M.visibleWorkers(agents, { id: "developers" });
 assert.deepStrictEqual(dev.map((a) => a.id), ["compliance-audit", "operator", "crowe-logic"], "the Developers edition hides estate specialists and retired seats, sorted by name");
-const full = M.visibleWorkers(agents, ["chat", "projects", "cultivation"]);
+const full = M.visibleWorkers(agents, { id: "desktop" });
 assert.deepStrictEqual(full.map((a) => a.id).sort(), ["compliance-audit", "crowe-logic", "cultivation-intelligence", "operator"], "the full app shows every joinable worker");
-assert.strictEqual(M.visibleWorkers(agents, []).length, 4, "no space list means the full roster");
+assert.strictEqual(M.visibleWorkers(agents, ["chat", "projects"]).length, 4, "an older space-list adapter stays Desktop, not Developers");
+assert.deepStrictEqual(M.visibleWorkers(agents, "developers").map((a) => a.id), ["compliance-audit", "operator", "crowe-logic"]);
 const templates = [
   { id: "ship-it", name: "Ship It", agents: [{ id: "operator" }, { id: "compliance-audit" }, { id: "crowe-logic" }] },
   { id: "grow", name: "Grow Diagnosis", agents: [{ id: "cultivation-intelligence" }, { id: "operator" }] },

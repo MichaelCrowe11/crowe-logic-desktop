@@ -15,7 +15,15 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1789830024349" />
+  <link rel="stylesheet" href="styles.css?v=1790271647533" />
+  <link rel="stylesheet" href="farm-compliance.css?v=1790271647533" />
+  <link rel="stylesheet" href="farm-messenger.css" />
+  <link rel="stylesheet" href="farm-team.css" />
+  <link rel="stylesheet" href="farm-imports.css" />
+  <link rel="stylesheet" href="farm-workforce.css" />
+  <link rel="stylesheet" href="farm-awareness.css" />
+  <link rel="stylesheet" href="mycology-transfer.css?v=1790271647533" />
+  <link rel="stylesheet" href="mycology-vision.css?v=1790271647533" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -101,6 +109,14 @@
                units buys 2.3px and the rectangle stays open. -->
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16h14v5H5z"/><path d="M12 16v-4M6 12a6 6 0 0 1 12 0z"/></svg>
           Cultivation
+        </button>
+        <button class="seg-btn hidden" data-space="messenger" hidden>
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4z"/></svg>
+          Messenger
+        </button>
+        <button class="seg-btn" data-space="farm">
+          <svg class="ic" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h5"/></svg>
+          Farm &amp; Compliance
         </button>
       </div>
 
@@ -230,6 +246,9 @@
         <div id="cult-state" class="cards cult-state"></div>
       </div>
     </section>
+
+    <section id="surface-farm" class="surface hidden" aria-label="Farm &amp; Compliance"></section>
+    <section id="surface-messenger" class="surface hidden" aria-label="Farm Messenger"></section>
 
     <main id="workbench">
       <section id="agent">
@@ -491,14 +510,23 @@
   <script src="council.js"></script>
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
-  <script src="preview-shim.js?v=1789830024349"></script>
-  <script src="mark-geometry.js?v=1789830024349"></script>
-  <script src="mark.js?v=1789830024349"></script>
-  <script src="messages.js?v=1789830024349"></script>
-  <script src="marks.js?v=1789830024349"></script>
-  <script src="first-run.js?v=1789830024349"></script>
-  <script src="activity.js?v=1789830024349"></script>
-<script src="renderer.js?v=1789830024349"></script>
+  <script src="preview-shim.js?v=1790271647533"></script>
+  <script src="mark-geometry.js?v=1790271647533"></script>
+  <script src="mark.js?v=1790271647533"></script>
+  <script src="messages.js?v=1790271647533"></script>
+  <script src="marks.js?v=1790271647533"></script>
+  <script src="first-run.js?v=1790271647533"></script>
+  <script src="activity.js?v=1790271647533"></script>
+  <script src="farm-recovery.js?v=1790271647533"></script>
+  <script src="farm-compliance.js?v=1790271647533"></script>
+  <script src="farm-messenger.js"></script>
+  <script src="farm-imports.js"></script>
+  <script src="farm-workforce.js"></script>
+  <script src="farm-awareness.js"></script>
+  <script src="farm-team.js"></script>
+  <script src="mycology-transfer.js?v=1790271647533"></script>
+  <script src="mycology-vision.js?v=1790271647533"></script>
+  <script src="renderer.js?v=1790271647533"></script>
   <script src="plan.js"></script>
 </body>
 </html>

@@ -42,6 +42,15 @@ const ROOT = path.join(__dirname, "..");
 const ASSETS = path.join(ROOT, "assets");
 const SRC = path.join(ASSETS, "icon.svg");
 const CHECK = process.argv.includes("--check");
+const MYCOLOGY_ONLY = process.argv.includes("--mycology");
+
+// Rendering never opens an application profile or uses a remote resource.
+const renderProfile = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-icon-render-"));
+app.setPath("userData", renderProfile);
+app.setPath("sessionData", renderProfile);
+app.commandLine.appendSwitch("proxy-server", "http://127.0.0.1:9");
+app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
+app.once("will-quit", () => fs.rmSync(renderProfile, { recursive: true, force: true }));
 
 // macOS wants the full Big Sur ladder; .ico covers the Windows shell sizes.
 const ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024];
@@ -450,12 +459,43 @@ function buildIco(entries) {
   return Buffer.concat([dir, ...table, ...entries.map((e) => e.png)]);
 }
 
+async function renderMycology(win, unverifiable) {
+  const stem = "icon-mycology";
+  const sizes = [...new Set([...ICNS_SIZES, ...ICO_SIZES])];
+  const png = new Map();
+  for (const size of sizes) png.set(size, await render(win, path.join(ASSETS, `${stem}.svg`), size));
+  put(path.join(ASSETS, `${stem}.png`), png.get(1024), "1024");
+  const ico = path.join(ASSETS, `${stem}.ico`);
+  if (CHECK) checkContainer(ico, icoPngs, png, ICO_SIZES);
+  else put(ico, buildIco(ICO_SIZES.map((size) => ({ size, png: png.get(size) }))), ICO_SIZES.join(", "));
+  const icns = path.join(ASSETS, `${stem}.icns`);
+  if (CHECK) {
+    if (process.platform === "darwin") checkContainer(icns, icnsPngs, png, ICNS_PNG_SIZES);
+    else unverifiable.push(`${rel(icns)} (PNG rungs checked on macOS only)`);
+  } else if (process.platform === "darwin") {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-mycology-icon-"));
+    const iconset = path.join(temp, "icon.iconset");
+    try {
+      fs.mkdirSync(iconset);
+      for (const size of ICNS_SIZES) {
+        for (const name of ICNS_NAMES[size]) fs.writeFileSync(path.join(iconset, name), png.get(size));
+      }
+      const output = path.join(temp, `${stem}.icns`);
+      execFileSync("iconutil", ["-c", "icns", iconset, "-o", output]);
+      put(icns, fs.readFileSync(output), ICNS_SIZES.join(", "));
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  } else console.log(`skipped ${rel(icns)} (iconutil needs macOS)`);
+}
+
 async function main() {
   if (!fs.existsSync(SRC)) throw new Error(`missing ${SRC}, run scripts/gen-mark.js first`);
 
   const win = new BrowserWindow({ show: false, width: 64, height: 64 });
   await win.loadURL("data:text/html,<!doctype html><meta charset=utf-8><title>icons</title>");
 
+  const skipped = [], unverifiable = [];
+  await renderMycology(win, unverifiable);
+  if (!MYCOLOGY_ONLY) {
   const sizes = [...new Set([...ICNS_SIZES, ...ICO_SIZES])].sort((a, b) => a - b);
   const png = new Map();
   for (const size of sizes) png.set(size, await render(win, SRC, size));
@@ -512,13 +552,6 @@ async function main() {
   // coverage drop is a number that moved, not a silence.
   const iosProject = path.join(ROOT, "mobile", "ios", "App");
   const androidRes = path.join(ROOT, "mobile", "android", "app", "src", "main", "res");
-  const skipped = [];
-  /* Deliberately not the same list as `skipped`. That one means coverage was
-     lost without anyone noticing, and in --check mode it fails. This one means
-     the art is checked in full, just not from here — a distinction worth
-     keeping, because collapsing the two either fails every Linux run or teaches
-     the suite to shrug at missing coverage. */
-  const unverifiable = [];
 
   // The phone. Until now this file was placed by hand and never regenerated, so
   // it froze at the mark as it stood in #34 while the desktop rasters moved
@@ -602,6 +635,7 @@ async function main() {
     console.log("skipped assets/icon.icns (iconutil needs macOS)");
   }
 
+  }
   win.destroy();
 
   if (!CHECK) return 0;
@@ -645,8 +679,9 @@ async function main() {
 // and then tells CI it passed. Caught by actually watching it go red.
 app.whenReady()
   .then(main)
-  .then((code) => app.exit(code))
+  .then((code) => { fs.rmSync(renderProfile, { recursive: true, force: true }); app.exit(code); })
   .catch((err) => {
     console.error(err);
+    fs.rmSync(renderProfile, { recursive: true, force: true });
     app.exit(1);
   });

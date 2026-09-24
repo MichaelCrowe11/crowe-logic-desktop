@@ -24,6 +24,9 @@ function installCouncilHost(d) {
   });
   const get = id => { const room = d.loadRoom(id); if (!room) throw new Error("No such room."); return room; };
   const save = room => d.save(room);
+  const assertActivation = room => {
+    if (d.canActivate && !d.canActivate(room)) throw new Error("Grower specialists are available in Crowe Logic Mycology.");
+  };
   command("state", ({ id }) => ({ council: get(id).council || null, history: get(id).councilHistory || [], capabilities: { files: true, advisory: true } }));
   command("stop", async ({ id, revoke = false }) => {
     const room = get(id); C.stop(room.council, revoke);
@@ -32,6 +35,7 @@ function installCouncilHost(d) {
   });
   command("start", async ({ id, spec }) => {
     const room = get(id);
+    assertActivation(room);
     if (runs.has(id) || d.busy(id)) throw new Error("This room is busy. Pause or finish its current turn first.");
     const cfg = d.config();
     if (spec?.mode === "files" && !registry.writeCapable(fileTier(room, cfg))) throw new Error(`Scoped file autopilot requires an edit-capable room; this room's effective tier is ${fileTier(room, cfg)}.`);
@@ -52,6 +56,7 @@ function installCouncilHost(d) {
     save(room);
     const run = { controller: new AbortController() }; runs.set(id, run);
     const authorized = () => {
+      assertActivation(room);
       const current = d.config();
       if (!current.token) throw new Error("Sign-in ended; council authority is suspended.");
       if (room.council !== state || runs.get(id) !== run) throw new Error("Council authority no longer belongs to this run.");
@@ -65,6 +70,7 @@ function installCouncilHost(d) {
         snapshot: async () => files ? files.snapshot() : {},
         classify: async proposal => { if (H.scanForSecrets(proposal.summary).length) throw new Error("Proposal contains credential-like material."); if (files) files.classify(proposal); },
         ask: async (seat, task, data) => {
+          assertActivation(room);
           const timeout = setTimeout(() => run.controller.abort(), Math.min(120000, Math.max(1, contract.expiresAt - Date.now())));
           let result;
           try { result = await d.chat([{ role: "system", content: C.PROMPTS[task] }, { role: "user", content: JSON.stringify(data) }], [], false, run.controller.signal, seat.model); }

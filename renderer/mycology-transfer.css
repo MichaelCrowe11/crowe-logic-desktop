@@ -1,0 +1,35 @@
+.mycology-transfer {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--line, #7776);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--panel, transparent);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.mycology-transfer[hidden], .mycology-transfer [hidden], .mycology-recovery-banner[hidden] { display: none !important; }
+.mycology-transfer summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+.mycology-transfer p { margin: 10px 0; max-width: 90ch; }
+.mycology-transfer-components { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.mycology-transfer-components > section { min-width: 0; }
+.mycology-transfer h3 { font-size: 14px; margin: 12px 0 8px; }
+.mycology-transfer button, .mycology-recovery-banner button { margin: 5px 8px 5px 0; padding: 8px 12px; min-height: 36px; }
+.mycology-transfer form { display: grid; gap: 8px; margin-top: 12px; }
+.mycology-transfer input { min-width: 0; width: 100%; box-sizing: border-box; }
+.mycology-transfer form button { justify-self: start; }
+.mycology-transfer-preview { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.mycology-transfer-status { padding-left: 10px; border-left: 3px solid var(--gold, #b79557); }
+.mycology-transfer-status[data-phase="recovery-required"], .mycology-transfer-status[data-phase="failed"] { font-weight: 600; }
+.mycology-recovery-banner { flex: 0 0 auto; padding: 8px 22px; border-block: 1px solid var(--line, #7776); background: var(--panel, transparent); font-size: 12px; }
+.mycology-recovery-banner p { margin: 0 0 4px; }
+#edition-label { white-space: nowrap; }
+body[data-edition="mycology"] #spaces .side-label { order: -3; }
+body[data-edition="mycology"] #spaces [data-space="farm"] { order: -2; }
+body[data-edition="mycology"] #spaces [data-space="cultivation"] { order: -1; }
+@media (max-width: 760px) {
+  .mycology-transfer-components { grid-template-columns: 1fr; gap: 10px; }
+  .mycology-transfer { margin: 12px 0; padding: 12px; }
+  .mycology-recovery-banner { padding: 8px 12px; }
+}
+@media print { .mycology-transfer, .mycology-recovery-banner { display: none !important; } }

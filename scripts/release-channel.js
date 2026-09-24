@@ -11,7 +11,11 @@
 //   desktop/developers/channel/<os>/developers-<os>.yml  the update feeds
 //   /developers                                          the download page
 //
-// Feeds included, so that nothing the developer publish writes can land on a
+// Crowe Logic Mycology follows the same isolated layout on `mycology`:
+// desktop/mycology/<version>/, desktop/mycology/channel/<os>/mycology*.yml,
+// release-mycology/ and /mycology. Its unseeded feed never falls back to latest.
+//
+// Feeds included, so that nothing an edition publish writes can land on a
 // key the full edition serves, and nothing the full edition writes can be read
 // as a developer release. electron-updater names the feed after the channel
 // (developers-mac.yml; developers.yml on Windows, where the suffix is empty) and
@@ -77,19 +81,31 @@ function updateKey(channel, os, name) { return `${prefix(channel)}/channel/${os}
 function fromArgs(argv) {
   const rest = [];
   let channel = DEFAULT_CHANNEL;
+  let selected = null;
   let dir = null;
+  const select = (value) => {
+    const next = assertChannel(value);
+    if (selected !== null && selected !== next) throw new Error('conflicting release channels');
+    selected = channel = next;
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--channel' || arg === '--config') {
       const value = argv[++i];
       if (!value) throw new Error(`${arg} needs a value`);
-      if (arg === '--channel') { channel = assertChannel(value); continue; }
-      const cfg = require(path.resolve(value));
-      const pub = [].concat(cfg.publish || []).find((p) => p && p.channel);
-      channel = assertChannel(pub ? pub.channel : DEFAULT_CHANNEL);
-      if (cfg.directories && cfg.directories.output) dir = cfg.directories.output;
+      if (arg === '--channel') { select(value); continue; }
+      const loaded = require(path.resolve(value));
+      const cfg = loaded.build || loaded;
+      const publishers = [].concat(cfg.publish || []).filter(Boolean);
+      if (!publishers.length) select(DEFAULT_CHANNEL);
+      for (const pub of publishers) select(pub.channel || DEFAULT_CHANNEL);
+      const output = cfg.directories && cfg.directories.output;
+      if (output) {
+        if (dir !== null && path.resolve(dir) !== path.resolve(output)) throw new Error('conflicting release output directories');
+        dir = output;
+      }
     } else if (arg.startsWith('--channel=')) {
-      channel = assertChannel(arg.slice('--channel='.length));
+      select(arg.slice('--channel='.length));
     } else {
       rest.push(arg);
     }

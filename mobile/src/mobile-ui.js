@@ -22,7 +22,8 @@
   const body = document.body;
 
   body.classList.add("mobile");
-  if (!body.dataset.pane) body.dataset.pane = "agent";
+  // A restored Home/Camera pane must never reactivate the retired grow UI.
+  body.dataset.pane = "agent";
 
   // ─── Drawer ────────────────────────────────────────────────────────────────
   const sidebarToggle = $("sidebar-toggle");
@@ -64,30 +65,18 @@
   const showsWorkbench = () => { const wb = $("workbench"); return wb && !wb.classList.contains("hidden"); };
 
   function setPane(pane) {
-    body.dataset.pane = pane;
+    body.dataset.pane = pane === "workspace" && body.classList.contains("m-paired") && showsWorkbench() ? "workspace" : "agent";
     syncTabs();
-    if (pane === "home" && typeof renderHome === "function") renderHome();
-    if (pane === "camera" && typeof renderCamera === "function") renderCamera();
     // The transcript and the panel deck each remember their own scroll, and a
     // deck that was laid out while display:none has no size. Nudging resize
     // lets the panels measure themselves the moment they become visible.
     window.dispatchEvent(new Event("resize"));
   }
 
-  /* 1.1: the phone's own tab set. Home and Camera are panes this file owns;
-     Chat and Log are the rail's chat and cultivation spaces. Projects and
-     Panels describe a workspace on a machine, so they appear only once a
-     machine is paired, as one "Machine" tab onto the workspace pane. */
-  const HOME_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>';
-  const CAMERA_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
   const railIcon = (space) => { const b = spaceButtons().find((x) => x.dataset.space === space); return b && b.querySelector("svg") ? b.querySelector("svg").outerHTML : ""; };
-  const spaceOn = (space) => Boolean(spaceButtons().find((b) => b.dataset.space === space && !b.classList.contains("hidden")));
 
   function buildTabs() {
-    const items = [{ kind: "pane", id: "home", label: "Home", icon: HOME_ICON }];
-    items.push({ kind: "space", id: "chat", label: "Chat", icon: railIcon("chat") });
-    items.push({ kind: "pane", id: "camera", label: "Camera", icon: CAMERA_ICON });
-    if (spaceOn("cultivation")) items.push({ kind: "space", id: "cultivation", label: "Log", icon: railIcon("cultivation") });
+    const items = [{ kind: "space", id: "chat", label: "Chat", icon: railIcon("chat") }];
     // Read the class directly: isPaired is declared further down and this runs at boot.
     if (body.classList.contains("m-paired")) items.push({ kind: "pane", id: "workspace", label: "Machine", icon: PANE_ICON });
 
@@ -134,164 +123,28 @@
   buildTabs();
   window.addEventListener("crowe:remote", () => buildTabs());
 
-  /* ── Home and Camera: the phone's own panes ─────────────────────────────────
-     Two sections beside the workbench and the surfaces. Home answers "what
-     does my grow need today" from the log already on this phone; Camera hands a
-     photo to CroweLM Vision through the ordinary chat turn and then offers one
-     tap to log the verdict against a lot. Nothing here needs a desktop. */
-  const workbenchEl = $("workbench");
-  const homePane = document.createElement("section"); homePane.id = "m-home-pane"; homePane.className = "m-pane"; homePane.setAttribute("aria-label", "Home");
-  const cameraPane = document.createElement("section"); cameraPane.id = "m-camera-pane"; cameraPane.className = "m-pane"; cameraPane.setAttribute("aria-label", "Camera");
-  if (workbenchEl && workbenchEl.parentNode) { workbenchEl.parentNode.insertBefore(homePane, workbenchEl); workbenchEl.parentNode.insertBefore(cameraPane, workbenchEl); }
-  const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-  const sinceDays = (iso) => { const t = Date.parse(String(iso || "") + "T00:00:00"); if (!Number.isFinite(t)) return ""; const d = Math.floor((Date.now() - t) / 86400000); return d < 0 ? "" : d === 0 ? "today" : d === 1 ? "1 day" : `${d} days`; };
-  const live = (blocks) => (blocks || []).filter((b) => b && b.code && !["spent", "discarded"].includes(b.stage));
-  const STAGE_ORDER = ["fruiting", "consolidating", "colonizing", "spawned"];
-  /* Yield only with the basis the grower stated. Dry substrate gives biological
-     efficiency; a wet block gives a ratio and is labelled as one. */
-  function yieldLine(b, byLot) {
-    const got = byLot[b.code] || 0, w = Number(b.weight);
-    if (!got || !w) return "";
-    const pct = Math.round((got / w) * 100);
-    return b.basis === "dry" ? `${pct}% biological efficiency: ${got.toFixed(1)} lb from ${w} lb dry substrate`
-      : b.basis === "wet" ? `${pct}% of wet block weight: ${got.toFixed(1)} lb from ${w} lb` : `${got.toFixed(1)} lb harvested (state the weight basis to see the ratio)`;
-  }
-  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict">${esc((c.verdict || "").slice(0, 180))}</div></div></div>`;
-  let pendingLot = "", cameraArmed = false, photoTurn = null;
-
-  const isIOS = () => Boolean(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "ios");
-  async function renderHome() {
-    const crowe = window.crowe; if (!crowe || !crowe.grow) return;
-    const safe = (p) => Promise.resolve(p).catch(() => []);
-    const [blocks, flushes, reminders, roll, sessions] = await Promise.all([
-      safe(crowe.grow.list("blocks")), safe(crowe.grow.list("flushes")),
-      crowe.reminders ? safe(crowe.reminders.list()) : [], crowe.camera ? safe(crowe.camera.list()) : [],
-      crowe.sessions && crowe.sessions.list ? safe(crowe.sessions.list()) : []]);
-    const rows = live(blocks).sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage));
-    const byLot = {}; for (const f of flushes || []) if (f && f.block) byLot[f.block] = (byLot[f.block] || 0) + (Number(f.weight) || 0);
-    const upcoming = (reminders || []).filter((r) => r.at > Date.now() - 3600000).slice(0, 6);
-    homePane.innerHTML = [
-      '<div class="m-home-inner">',
-      `<header class="m-home-head"><div class="m-kicker">Grow log · this phone</div><h1 class="m-title">Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
-      rows.length ? '<section class="m-home-sec" id="m-home-blocks"><h2>Blocks by stage</h2>' + rows.map((b) => `<div class="m-lot" data-lot="${esc(b.code)}"><div class="m-lot-main"><b>${esc(b.code)}</b><span class="m-lot-name">${esc([b.species, b.strain].filter(Boolean).join(" · "))}</span><span class="m-stage m-stage-${esc(b.stage || "")}">${esc(b.stage || "")}</span></div><div class="m-lot-meta">${b.spawned ? esc(sinceDays(b.spawned)) + " since spawn" : ""}${b.count ? ` · ${esc(String(b.count))}×` : ""}${b.room ? ` · ${esc(b.room)}` : ""}</div>${yieldLine(b, byLot) ? `<div class="m-lot-yield">${esc(yieldLine(b, byLot))}</div>` : ""}<div class="m-lot-actions"><button type="button" class="ghost sm m-remind" data-lot="${esc(b.code)}" data-species="${esc(b.species || "")}" data-stage="${esc(b.stage || "")}">Remind me</button><button type="button" class="ghost sm m-check" data-lot="${esc(b.code)}">Photograph</button></div></div>`).join("") + "</section>" : "",
-      '<section class="m-home-sec" id="m-home-reminders"><h2>Reminders</h2>' + (upcoming.length ? upcoming.map((r) => `<div class="m-rem"><div><b>${esc(r.title)}</b><div class="m-lot-meta">${esc(new Date(r.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${r.body ? " · " + esc(r.body) : ""}</div></div><button type="button" class="ghost sm m-rem-x" data-id="${r.id}">Remove</button></div>`).join("") : '<p class="m-home-empty">None set. Tap Remind me on a block.</p>') + "</section>",
-      // Siri only where Siri is. The phrase is the whole sentence: iOS App
-      // Shortcuts carry no free text, so a question spoken in the same breath
-      // gets "hasn't added support for that". That was the first hardware report.
-      isIOS() ? '<section class="m-home-sec" id="m-home-siri"><h2>Siri</h2><p class="m-home-empty">Say “Hey Siri, ask Crowe” and stop there. Siri asks what you want to ask, then opens the answer here. The question cannot ride in the same sentence.</p></section>' : "",
-      roll.length ? '<section class="m-home-sec"><h2>Camera checks</h2>' + roll.slice(0, 4).map(rollCard).join("") + "</section>" : "",
-      sessions.length ? '<section class="m-home-sec"><h2>Recent conversations</h2>' + sessions.slice(0, 3).map((x) => `<div class="m-sess">${esc(x.name || x.title || "Untitled")}</div>`).join("") + "</section>" : "",
-      "</div>",
-    ].join("");
-    homePane.querySelectorAll(".m-remind").forEach((btn) => btn.addEventListener("click", () => remindChooser(btn.dataset.lot, btn.dataset.species, btn.dataset.stage)));
-    homePane.querySelectorAll(".m-check").forEach((btn) => btn.addEventListener("click", () => { pendingLot = btn.dataset.lot; setPane("camera"); }));
-    homePane.querySelectorAll(".m-rem-x").forEach((btn) => btn.addEventListener("click", async () => { await window.crowe.reminders.remove(Number(btn.dataset.id)); renderHome(); }));
-  }
-
-  function remindChooser(lot, species, stage) {
-    const host = homePane.querySelector(`.m-lot[data-lot="${CSS.escape(lot)}"] .m-lot-actions`); if (!host) return;
-    host.innerHTML = [3, 7, 14].map((d) => `<button type="button" class="ghost sm m-rem-pick" data-days="${d}">${d} days</button>`).join("") + '<button type="button" class="ghost sm m-rem-cancel">Cancel</button>';
-    host.querySelector(".m-rem-cancel").addEventListener("click", () => renderHome());
-    host.querySelectorAll(".m-rem-pick").forEach((b) => b.addEventListener("click", async () => {
-      const r = await window.crowe.reminders.add({ lot, title: `Check ${lot}`, body: [species, stage].filter(Boolean).join(" · "), at: Date.now() + Number(b.dataset.days) * 86400000 });
-      if (!r || !r.ok) alert((r && r.error) || "The reminder could not be set.");
-      renderHome();
-    }));
-  }
-
-  const VISION_PROMPT = "Look at this photo of my block. Tell me what stage it is at, whether you see contamination or another problem, and what I should do next.";
-  /* The Camera tab reads as a field inspection: a specimen frame with the last
-     capture on file, a numbered capture protocol, and a ledger of findings
-     against lots. The register is the Log's: mono kickers, a serif title,
-     hairline rows. Nothing here claims more than one photo can carry. */
-  const verdictKind = (v) => /contamin|trichoderma|mold|mould|bacteri|cobweb|discard|isolate/i.test(v) ? "bad" : /harvest|ready|pins|pinning|fruit|cluster/i.test(v) ? "gold" : /healthy|clean|no contamination|colonis|coloniz/i.test(v) ? "myc" : "neutral";
-  const firstSentence = (v) => { const t = String(v || "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
-  const fmtDay = (ts) => new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
-  async function renderCamera() {
-    const roll = window.crowe && window.crowe.camera ? await window.crowe.camera.list().catch(() => []) : [];
-    const last = roll[0];
-    cameraPane.innerHTML = [
-      '<div class="m-home-inner">',
-      '<header class="m-fi-head"><div class="m-kicker">Field inspection · CroweLM Vision</div><h1 class="m-title">Photograph a block</h1>',
-      '<p class="m-home-sub">The block face is read by CroweLM Vision, running Claude Fable 5.1. Each check returns a graded finding, marked on the photo, and is recorded against its lot.</p></header>',
-      `<section class="m-fi-frame${last ? "" : " is-empty"}"><div class="m-fi-view">`,
-      last && last.thumb ? `<img class="m-fi-img" src="${last.thumb}" alt="last capture">` : "",
-      '<div class="m-fi-lattice"></div><i class="m-fi-c c1"></i><i class="m-fi-c c2"></i><i class="m-fi-c c3"></i><i class="m-fi-c c4"></i><i class="m-fi-cross"></i>',
-      last ? `<div class="m-fi-meta"><span>Last check</span><span>${esc(last.lot || "no lot")}</span><span>${esc(fmtDay(last.ts))}</span></div>` : '<div class="m-fi-empty"><span class="m-kicker">Specimen</span>No capture on file.<br>Frame the block face and photograph it.</div>',
-      pendingLot ? `<div class="m-fi-lot">Checking lot <b>${esc(pendingLot)}</b></div>` : "",
-      "</div>",
-      '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div></section>',
-      '<section class="m-fi-sec"><h2 class="m-kicker">Capture protocol</h2><ol class="m-fi-protocol"><li>Fill the frame with the block face.</li><li>Even light. No flash glare on the bag.</li><li>Include the lot tag when there is one.</li><li>One block per photo.</li></ol></section>',
-      '<section class="m-fi-sec"><h2 class="m-kicker">Inspection ledger</h2>',
-      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Lot</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "no lot")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<p>${esc(c.verdict || "")}</p></div>`).join("") + "</div>" : '<p class="m-home-empty">No inspections recorded on this phone.</p>',
-      "</section>",
-      '<p class="m-fi-note">A finding is the model\'s reading of one image. It informs a hands-on inspection; it does not replace one.</p>',
-      "</div>",
-    ].join("");
-    const camInput = () => document.querySelector('input[type="file"][accept="image/*"]');
-    cameraPane.querySelector(".m-cam-shoot").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.setAttribute("capture", "environment"); i.click(); });
-    cameraPane.querySelector(".m-cam-pick").addEventListener("click", () => { const i = camInput(); if (!i) return; cameraArmed = true; i.removeAttribute("capture"); i.click(); setTimeout(() => i.setAttribute("capture", "environment"), 1500); });
-    cameraPane.querySelectorAll(".m-ledger-row").forEach((row) => row.addEventListener("click", () => { const d = row.nextElementSibling; if (d) d.hidden = !d.hidden; row.classList.toggle("is-open", d && !d.hidden); }));
-  }
-
-  /* A photo taken from the Camera tab becomes a chat turn on its own: the photo
-     is already attached by the picker, so the question goes out at once and the
-     answer streams where every answer streams. */
-  if (window.crowePhone && window.crowePhone.onChange) {
-    window.crowePhone.onChange(() => {
-      if (!cameraArmed) return;
-      const photos = window.crowePhone.images ? window.crowePhone.images() : [];
-      if (!photos.length) return;
-      cameraArmed = false;
-      photoTurn = { lot: pendingLot, thumb: "" };
-      // The transcript is the chat space's; from Camera the space may still be
-      // Log, whose lane surface would hide the scan and the answer.
-      const chatBtn = spaceButtons().find((b) => b.dataset.space === "chat");
-      if (chatBtn && body.dataset.space !== "chat") chatBtn.click();
-      setPane("agent");
-      const q = pendingLot ? `${VISION_PROMPT} This is lot ${pendingLot}.` : VISION_PROMPT;
-      if (typeof send === "function") send(q);
-      else { const inp = $("input"); if (inp) { inp.value = q; inp.dispatchEvent(new Event("input")); } }
-    });
-  }
-
-  /* After a vision reply: one row under the answer to log it against a lot. The
-     journal gets the verdict as a dated entry; the camera roll keeps the
-     thumbnail and the first lines so Home can show what was checked. */
-  if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
-    window.crowe.agent.onEvent(async (ev) => {
-      if (!ev) return;
-      if (ev.type === "photos" && Array.isArray(ev.thumbs)) { if (!photoTurn) photoTurn = { lot: pendingLot, thumb: "" }; photoTurn.thumb = ev.thumbs[0] || ""; return; }
-      if (ev.type !== "assistant" || !photoTurn || ev.agentId && ev.agentId !== "main") return;
-      const turn = photoTurn; photoTurn = null; pendingLot = "";
-      const text = String(ev.text || "").trim(); if (!text) return;
-      const bodies = document.querySelectorAll(".msg.assistant .body"); const body = bodies[bodies.length - 1]; if (!body) return;
-      const blocks = live(await window.crowe.grow.list("blocks").catch(() => []));
-      // The lot the check came from; else the only lot; else the fruiting one, which is the one usually photographed.
-      const pick = turn.lot || (blocks.length === 1 ? blocks[0].code : ((blocks.find((b) => b.stage === "fruiting") || {}).code || ""));
-      const row = document.createElement("div"); row.className = "m-log-row";
-      row.innerHTML = `<select aria-label="Lot">${blocks.map((b) => `<option value="${esc(b.code)}"${b.code === pick ? " selected" : ""}>${esc(b.code)}${b.species ? " · " + esc(b.species) : ""}</option>`).join("")}<option value=""${pick ? "" : " selected"}>No lot</option></select><button type="button" class="primary sm m-log-it">Log this check</button><button type="button" class="ghost sm m-log-skip">Not now</button>`;
-      body.appendChild(row);
-      row.querySelector(".m-log-skip").addEventListener("click", () => row.remove());
-      row.querySelector(".m-log-it").addEventListener("click", async () => {
-        const lot = row.querySelector("select").value;
-        const entry = (lot ? `Photo check of ${lot}. ` : "Photo check. ") + text.slice(0, 1200);
-        const saved = await window.crowe.grow.save("log", { date: todayISO(), subject: lot ? `Photo check ${lot}` : "Photo check", entry });
-        if (!saved || saved.ok === false) { alert((saved && saved.error) || "The journal did not take the entry."); return; }
-        await window.crowe.camera.add({ lot, verdict: text.slice(0, 400), thumb: turn.thumb });
-        row.innerHTML = `<span class="m-log-done">Logged${lot ? " to " + esc(lot) : ""} in the grow journal.</span>`;
-      });
-    });
-  }
   // The space picker in Settings hides and shows rail buttons after load, and
   // the rail is the tab bar's only source of truth about which spaces exist.
   new MutationObserver(buildTabs).observe($("spaces"), { attributes: true, subtree: true, attributeFilter: ["class"] });
-  // A space change from anywhere — the palette, a chip, the Home composer —
+  // A space change from anywhere — the palette, a chip, the Projects composer —
   // means the conversation is what the user wants to see, so the pane resets
   // with it. setPane syncs the tabs on its way through; when it is already the
   // conversation, only the highlight needs moving.
-  new MutationObserver(() => { if (body.dataset.pane !== "agent") setPane("agent"); else syncTabs(); })
-    .observe(body, { attributes: true, attributeFilter: ["data-space"] });
+  const openChat = () => {
+    const chat = spaceButtons().find((b) => b.dataset.space === "chat");
+    if (chat) chat.click();
+    setPane("agent");
+  };
+  // The shared renderer enforces the edition's space policy. Route stale DOM
+  // requests through its own Chat control as well, not through a hidden pane.
+  openChat();
+  new MutationObserver(() => {
+    if (!["chat", "projects"].includes(body.dataset.space)) { openChat(); return; }
+    if (body.dataset.pane !== "agent") setPane("agent"); else syncTabs();
+  }).observe(body, { attributes: true, attributeFilter: ["data-space"] });
+  new MutationObserver(() => {
+    if (body.dataset.pane !== "agent" && !(body.dataset.pane === "workspace" && body.classList.contains("m-paired") && showsWorkbench())) setPane("agent");
+  }).observe(body, { attributes: true, attributeFilter: ["data-pane", "class"] });
 
   // ─── First-run copy ────────────────────────────────────────────────────────
   /* The desktop's welcome offers to list the files here, run the test suite and
@@ -299,19 +152,6 @@
      a phone: the first thing the app said to a new user was three things it
      could not do. These are the same shape — one tap, a real turn — against
      what this device actually has. */
-  /* Two things this copy got wrong, and they are the same mistake.
-
-     It said the workspace stays on the desktop, which the companion made false
-     — a paired phone reads, writes and runs there. And all three openers were
-     cultivation, so an app meant for broad use introduced itself as a grow log
-     and nothing else. Cultivation is a package this app can carry, not the
-     shape of the app.
-
-     So both are derived now rather than fixed: what it says it can do comes
-     from whether a machine is paired, and the cultivation opener appears only
-     where the Cultivation space is switched on. */
-  const cultivationOn = () =>
-    Boolean(document.querySelector('#spaces .seg-btn[data-space="cultivation"]:not(.hidden)'));
   const isPaired = () => body.classList.contains("m-paired");
 
   const welcomeText = () => (isPaired()
@@ -327,15 +167,9 @@
     "What is running on my Mac right now?",
     "Show me the last 30 lines of the log and tell me what went wrong",
   ];
-  const CULTIVATION_CHIP = "What did I log about contamination this month, and what should I change?";
-  const CULTIVATION_PHOTO_CHIP = "Photograph this block and tell me if that is contamination";
-
-  // Three, in the order they earn their place: the machine when there is one,
-  // the farm when that space is on, then general reasoning to fill the rest.
   const welcomeChips = () => {
     const chips = [];
     if (isPaired()) chips.push(...MACHINE_CHIPS);
-    if (cultivationOn()) chips.push(CULTIVATION_PHOTO_CHIP, CULTIVATION_CHIP);
     chips.push(...GENERAL_CHIPS);
     return chips.slice(0, 3);
   };
@@ -411,21 +245,15 @@
   /* The composer's placeholder names what the tier lets the agent do, and every
      desktop line names files or commands. The renderer rewrites it on each tier
      change, so this watches the attribute rather than setting it once. */
-  // Unpaired, the only thing the agent can change is the grow log — so saying so
-  // is accurate where that space is on and misleading where it is off, which is
-  // most installs once cultivation is a package rather than the whole app.
   const TIER_HINT = {
     plan: "Describe a task. It plans it out first.",
     readonly: "Ask anything. It reads, changes nothing.",
-    edit: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
-    execute: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
+    edit: "Ask anything. Attach a photo or file for help.",
+    execute: "Ask anything. Attach a photo or file for help.",
   };
-  // What each tier means changes once a machine is paired, because the tier is
-  // then gating a real shell and not only the grow log. Saying "your grow log"
-  // while Execute can delete a directory would be the friendliest lie here.
   const TIER_HINT_PAIRED = {
     plan: "Describe a task. It plans it out first, and touches nothing.",
-    readonly: "Ask anything. It reads your log and files on the paired machine.",
+    readonly: "Ask anything. It reads files on the paired machine.",
     edit: "Ask anything. It can write files on the paired machine.",
     execute: "Ask anything. It can run commands on the paired machine.",
   };
@@ -477,7 +305,7 @@
     composerForm.appendChild(picker);
     /* Photos. The same picker accepts them (the Photos library on iOS), and a
        second input with `capture` opens the camera straight away, which is the
-       gesture at the rack: point at the block, ask what that is. Either way
+       gesture for any visual task: take a photo, then ask about it. Either way
        the file is downsized here before it becomes a data URL, so a 4 MB HEIC
        leaves the phone as a JPEG a few hundred KB wide that the vision tier
        reads just as well. */
@@ -485,8 +313,8 @@
     cam.type = "file"; cam.accept = "image/*"; cam.hidden = true; cam.setAttribute("capture", "environment");
     const camBtn = document.createElement("button");
     camBtn.type = "button"; camBtn.id = "m-camera"; camBtn.className = "bar-icon";
-    camBtn.title = "Photograph a block, bag or plate";
-    camBtn.setAttribute("aria-label", "Photograph a block, bag or plate");
+    camBtn.title = "Take a photo";
+    camBtn.setAttribute("aria-label", "Take a photo");
     camBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
     camBtn.addEventListener("click", () => cam.click());
     clipBtn.insertAdjacentElement("afterend", camBtn);
@@ -553,12 +381,6 @@
        where they are, with their labels, so the reading is watched, not waited
        for. The boxes stay when the answer lands; a tap on the photo hides them. */
     let activeScan = null;
-    const REGION_KIND = [
-      [/trich|mold|mould|contam|bacter|slim|wet spot|blotch|rot|green patch|black|yellow stain|cobweb/i, "bad"],
-      [/pin|primordia|fruit|cap|cluster|harvest|bouquet|stem|gill/i, "gold"],
-      [/mycel|substrate|coloni|white|healthy|block|bag|agar|grain|surface/i, "myc"],
-    ];
-    const regionKind = (label) => (REGION_KIND.find(([re]) => re.test(label)) || [null, "neutral"])[1];
     function beginScan(strip, img) {
       strip.classList.add("m-scan");
       const wrap = document.createElement("div"); wrap.className = "m-scan-wrap m-scan-sending";
@@ -591,7 +413,7 @@
         const sx = Math.max(0, Math.min(W - side, cx - side / 2)), sy = Math.max(0, Math.min(H - side, cy - side / 2));
         const canvas = document.createElement("canvas"); canvas.width = canvas.height = 240;
         try { canvas.getContext("2d").drawImage(sc.img, sx, sy, Math.min(side, W - sx), Math.min(side, H - sy), 0, 0, 240, 240); } catch { /* a tainted or unloaded image: no tile */ return; }
-        const tile = document.createElement("button"); tile.type = "button"; tile.className = `m-scan-tile m-r-${regionKind(r.label)}`; tile.style.animationDelay = `${i * 120}ms`;
+        const tile = document.createElement("button"); tile.type = "button"; tile.className = "m-scan-tile"; tile.style.animationDelay = `${i * 120}ms`;
         tile.appendChild(canvas);
         const lab = document.createElement("span"); lab.className = "m-scan-tile-label"; lab.textContent = r.label; tile.appendChild(lab);
         tile.addEventListener("click", () => {
@@ -609,7 +431,7 @@
       activeScan.boxes.innerHTML = "";
       activeScan.regions = regions;
       regions.forEach((r, i) => {
-        const box = document.createElement("div"); box.className = `m-scan-box m-r-${regionKind(r.label)}`;
+        const box = document.createElement("div"); box.className = "m-scan-box";
         box.style.left = `${(r.x * 100).toFixed(2)}%`; box.style.top = `${(r.y * 100).toFixed(2)}%`;
         box.style.width = `${(r.w * 100).toFixed(2)}%`; box.style.height = `${(r.h * 100).toFixed(2)}%`;
         box.style.animationDelay = `${i * 260}ms`;
@@ -643,12 +465,17 @@
       activeScan = null;
     }
     if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+      let scanRunId;
       window.crowe.agent.onEvent((ev) => {
-        if (!ev) return;
+        if (!ev || ev.agentId && ev.agentId !== "main") return;
+        if (ev.type === "photos") scanRunId = ev.runId;
+        if (scanRunId !== undefined && ev.runId !== scanRunId) return;
         if (ev.type === "vision_regions" && Array.isArray(ev.regions)) { scanRegions(ev.regions); return; }
         if (ev.type === "vision_reasoning" && typeof ev.text === "string") { scanReasoning(ev.text); return; }
         if (ev.type === "assistant_delta") { scanReading(); return; }
-        if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
+        // A preamble is not a terminal; late regions must still reach this scan.
+        if (ev.type === "assistant") { scanReading(); return; }
+        if (ev.type === "final") { endScan(ev.success === true && String(ev.finding || "").trim() ? "done" : "stopped"); return; }
         if (ev.type === "error") { endScan("error", ev.text); return; }
         if (ev.type === "stopped") { endScan("stopped"); return; }
         if (ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
@@ -672,7 +499,7 @@
      input. At 390px, minus the send button, they clip mid-word — Projects
      opened on "routed to the right expert" cut at "routec", which reads as a
      rendering fault rather than as elision. Static text, so set once. */
-  const SURFACE_HINTS = { "home-input": "Start a task. It opens in Chat.", "cult-input": "Ask the grower anything." };
+  const SURFACE_HINTS = { "home-input": "Start a task. It opens in Chat." };
   for (const [id, text] of Object.entries(SURFACE_HINTS)) {
     const field = $(id);
     if (field) field.placeholder = text;
@@ -738,34 +565,17 @@
      when the sheet closes the bridge finds out whether the account is still
      there and signs the phone out if it is not. Phone-only for the same reason
      as the section above: the desktop has its own account surface. */
-  /* Siri and Shortcuts. "Ask Crowe Logic <question>" sends the question as a
-     turn; "Log a block" opens the grow log on the Blocks lane with the note in
-     the form. The note arrives from the bridge as crowe:intent (see
-     takePendingIntent), on launch and on every return to the foreground. */
+  // Generic Ask is the only active shortcut. Stale grow shortcuts never put
+  // their contents into a form, attachment or model request.
   window.addEventListener("crowe:intent", (e) => {
-    if (e && e.detail && e.detail.kind === "home") { setPane("home"); return; }
     const d = (e && e.detail) || {};
-    if (d.kind === "ask" && d.text) {
-      __tapTab("Chat");
-      if (typeof send === "function") { send(d.text); }
-      else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
-    } else if (d.kind === "log-block") {
-      __tapTab("Cultivation");
-      const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');
-      if (blocks) blocks.click();
-      setTimeout(() => {
-        const form = document.querySelector("#lane-body form.grow-add");
-        if (!form) return;
-        if (d.text && form.elements.notes) form.elements.notes.value = d.text;
-        const first = form.elements.species || form.querySelector("input,select");
-        if (first) first.focus();
-      }, 350);
-    }
+    if (d.kind === "home") { openChat(); return; }
+    if (d.kind === "log-block") { openChat(); return; }
+    if (d.kind !== "ask" || !d.text) return;
+    openChat();
+    if (typeof send === "function") send(d.text);
+    else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
   });
-  function __tapTab(label) {
-    const tab = [...document.querySelectorAll("#m-tabs .m-tab")].find((t) => t.textContent.trim() === label);
-    if (tab) tab.click();
-  }
 
   /* Dictation. WKWebView exposes webkitSpeechRecognition but the recogniser
      behind it never starts (WebKit 239816), so the desktop handler would light
@@ -778,31 +588,47 @@
   const say = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
   if (dictBtn && dictInput && Speech && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     dictBtn.classList.remove("unavailable"); dictBtn.removeAttribute("aria-disabled"); dictBtn.title = "Dictate with microphone";
-    let listening = false, base = "";
+    let listening = false, base = "", dictAttempt = null;
+    const dictAllowed = attempt => attempt && dictAttempt === attempt && window.crowePhone && window.crowePhone.consentValid(attempt.epoch, "dictation");
     const stopped = () => {
-      listening = false;
+      listening = false; dictAttempt = null;
       dictBtn.classList.remove("active"); dictBtn.setAttribute("aria-pressed", "false");
       const st = $("composer-status");
       if (st && st.dataset.state === "listening") say("Ready");
     };
     Promise.resolve(Speech.addListener("partialResults", (d) => {
+      if (!listening || !dictAllowed(dictAttempt)) return;
       const heard = d && Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
       dictInput.value = (base + " " + heard).trim();
       dictInput.dispatchEvent(new Event("input"));
     })).catch(() => {});
     Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
+    window.addEventListener("crowe:consent-withdrawn", () => { stopped(); Promise.resolve(Speech.stop()).catch(() => {}); });
     dictBtn.onclick = async () => {
-      if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
+      if (listening) { stopped(); try { await Speech.stop(); } catch { /* already stopped locally */ } return; }
+      // Each click owns an immutable epoch and identity. A later click cannot
+      // lend its allowance to an older native permissions request.
+      const attempt = { epoch: window.crowePhone && window.crowePhone.consentEpoch() };
+      dictAttempt = attempt;
+      const current = () => dictAttempt === attempt && window.crowePhone && attempt.epoch === window.crowePhone.consentEpoch();
+      try {
+        if (!window.croweConsent || !(await window.croweConsent.ask("data")) || !current() || !(await window.croweConsent.ask("dictation"))) {
+          if (current()) say("Dictation is off until you allow it", "note"); return;
+        }
+      } catch { if (current()) say("Dictation permission could not be checked", "error"); return; }
+      if (!dictAllowed(attempt)) return;
       let perm = { speechRecognition: "denied" };
       try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
+      if (!dictAllowed(attempt)) return;
       if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }
       let avail = { available: false };
       try { avail = await Speech.available(); } catch { /* answered below */ }
+      if (!dictAllowed(attempt)) return;
       if (!avail.available) { say("Dictation is not available on this phone right now", "error"); return; }
       base = dictInput.value.trim(); listening = true;
       dictBtn.classList.add("active"); dictBtn.setAttribute("aria-pressed", "true"); say("Listening", "listening");
       try { await Speech.start({ language: "en-US", partialResults: true }); }
-      catch (e) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); }
+      catch (e) { if (current()) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); } }
     };
   } else if (dictBtn && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     // No native recogniser in this build: say so instead of lighting a button that fails.
@@ -819,6 +645,39 @@
     '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
   ].join("");
   if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+
+  // Recovery is an explicit archive handoff, not a re-enabled growing workspace.
+  // Do not load records while mounting Settings or register them as attachments.
+  const archiveSection = document.createElement("section");
+  archiveSection.className = "key-manager m-legacy-archive";
+  archiveSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Legacy growing archive</b>',
+    '<span>Export the growing notebook and camera journal left by earlier versions of this app. Original records stay unchanged. ',
+    'This private archive is unencrypted and may include sensitive notes and embedded thumbnails. It contains stored text values, not separately referenced photo files. ',
+    'Your chosen destination may retain or upload it. The app does not send it to a model or copy it to the clipboard. ',
+    'This is not a Farm &amp; Compliance backup, and import into the separate Mycology/Expo app is not supported by this export.</span></div></div>',
+    '<button id="m-legacy-export" class="ghost sm" type="button">Export legacy archive</button>',
+    '<p id="m-legacy-export-status" role="status" aria-live="polite"></p>',
+  ].join("");
+  if (accountSection.parentNode) accountSection.parentNode.insertBefore(archiveSection, accountSection.nextSibling);
+  $("m-legacy-export").addEventListener("click", async () => {
+    const button = $("m-legacy-export"), status = $("m-legacy-export-status");
+    if (button.disabled) return;
+    const archive = window.croweLegacyArchive;
+    if (!archive || typeof archive.export !== "function") { status.textContent = "Legacy archive export is unavailable in this build. Records have not changed."; return; }
+    button.disabled = true;
+    status.textContent = "Preparing a private archive for share or download...";
+    try {
+      const result = await archive.export();
+      const known = ["handed-off", "download-requested", "cancelled", "failed", "busy"];
+      if (!result || !known.includes(result.status)) throw new Error("Archive handoff could not be confirmed. Records have not changed.");
+      status.textContent = result.message || ({ "handed-off": "Archive handed to the share sheet; saving a backup is not verified.", "download-requested": "Archive download requested; saving a backup is not verified.", cancelled: "Archive export cancelled. Records have not changed.", failed: "Archive export failed. Records have not changed.", busy: "An archive export is already in progress." })[result.status];
+      if (result.cacheNotice) status.textContent += " " + result.cacheNotice;
+      if (result.cleanupWarning) status.textContent += " " + result.cleanupWarning;
+    } catch (error) { status.textContent = error.message || "Archive export failed. Records have not changed."; }
+    finally { button.disabled = false; }
+  });
+
   /* Diagnostics. What the bridge did, newest first, with Copy and Share, so a
      phone that says nothing can be read from a text message. Errors the page
      itself throws are noted here too. */
@@ -890,7 +749,7 @@
     const r = await R.add({ title: "Crowe Logic test", body: "Reminders reach this phone.", at: Date.now() + 60000 });
     if (r && r.ok) say(r.native ? "Test reminder set. Lock the phone; it rings in one minute." : "Set, but this build has no notification service to ring it.", "note");
     else say((r && r.error) || "The reminder could not be set.", "error");
-    renderPending(); if (typeof renderHome === "function") renderHome();
+    renderPending();
   });
   $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); }, 50));
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
@@ -914,16 +773,17 @@
 
   /* One class on <body> is what the rest of the phone UI reads to know a
      machine is paired: the CSS uses it to reveal the Execute tier, the
-     placeholder table uses it to stop describing a grow log when the tier now
-     gates a shell. Set at boot, and again whenever the bridge says the pairing
+     placeholder table uses it to describe the paired shell. Set at boot, and again whenever the bridge says the pairing
      changed — including from the deep link, which can arrive at any moment. */
   async function syncPaired() {
     try {
       const cfg = await window.crowe.getConfig();
       body.classList.toggle("m-paired", Boolean(cfg && cfg.remote && cfg.remote.configured));
       // The placeholder is drawn from the same fact and is not watching this
-      // class, so it would go on naming the grow log until the next tier tap.
+      // class, so update it immediately along with the Machine tab.
       if (typeof window.__croweHint === "function") window.__croweHint();
+      if (!isPaired() && body.dataset.pane === "workspace") setPane("agent");
+      buildTabs();
     } catch { /* the bridge has not read its config yet; the event will retry */ }
   }
   syncPaired();

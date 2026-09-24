@@ -3,8 +3,26 @@
 (function () {
   const C = () => window.CroweCouncil;
   const stops = new Set();
+  // Keep these specialist IDs in parity with main.js GROWER_ROOM_AGENTS.
+  // The bridge owns model availability (including aliases); saved state never
+  // supplies policy. Omission preserves the existing browser/desktop behavior.
+  const GROWER_ROOM_AGENTS = new Set(['cultivation-intelligence', 'mycology-research', 'facility-design']);
+  const POLICY_ERROR = 'Grower specialists are available in Crowe Logic Mycology.';
+  function activationPolicy(policy) {
+    const grow = policy?.grow !== false;
+    const checkModel = policy?.modelAllowed;
+    const modelAllowed = model => !checkModel || checkModel(String(model || '')) === true;
+    const agentAllowed = id => (grow || !GROWER_ROOM_AGENTS.has(String(id))) && modelAllowed(window.CroweRooms.registry.getAgent(id)?.model);
+    const roomAllowed = room => room.agents.every(a => agentAllowed(a.agentId) && modelAllowed(a.model));
+    return { agentAllowed, modelAllowed, roomAllowed };
+  }
   function attachCouncil(api, d) {
     const active = new Map();
+    const authorize = (room, seat) => {
+      if((d.canActivate && !d.canActivate(room)) || (seat && (
+        (d.agentAllowed && !d.agentAllowed(seat.id)) || (d.modelAllowed && !d.modelAllowed(seat.model))
+      )))throw new Error(POLICY_ERROR);
+    };
     api.councilState = async id => { const room=await d.load(id); return { council:room?.council||null, history:room?.councilHistory||[], capabilities:{advisory:true,files:false} }; };
     api.councilStop = async (id,revoke=false) => {
       const room=await d.load(id); if(!room)return {error:'No such room.'};
@@ -14,9 +32,11 @@
     api.councilStart = async (id,spec) => {
       try {
         const room=await d.load(id); if(!room)throw new Error('No such room.');
+        authorize(room);
         if(active.has(id)||d.busy?.(id))throw new Error('This room is busy.');
         if(spec.mode!=='advisory')throw new Error('File execution requires the desktop. This surface grants advisory authority only.');
         const catalog=await d.catalog();
+        authorize(room);
         const seats=room.agents.map(a=>{
           const entry=catalog.find(m=>m.id===a.model && m.available!==false);
           if(!entry)throw new Error('Pin an available model for every council participant.');
@@ -28,11 +48,13 @@
         const controller=new AbortController(); active.set(id,controller);
         const run=async()=>C().run(state,{
           authorized:async()=>{
+            authorize(room);
             if(room.council!==state||room.agents.length!==seats.length||seats.some(s=>!room.agents.some(a=>a.agentId===s.id&&a.model===s.model)))throw new Error('Roster or model pins changed.');
           },
           save:async()=>{await d.save(room);d.changed(room,'council');},
           snapshot:async()=>({}), classify:async p=>{if(p.changes.length)throw new Error('No file authority in this surface.');},
           ask:async(seat,task,data)=>{
+            authorize(room,seat);
             const timer=setTimeout(()=>controller.abort(),Math.min(120000,Math.max(1,state.grant.expiresAt-Date.now())));
             try {
               const result=await d.chat(seat.model,[{role:'system',content:C().PROMPTS[task]},{role:'user',content:JSON.stringify(data)}],controller.signal);
@@ -43,6 +65,7 @@
             } finally{clearTimeout(timer);}
           },
           execute:async(p,b,g,live)=>{
+            authorize(room);
             if(!live())throw new Error('Authority expired or was revoked.');
             window.CroweRooms.engine.pushMessage(room,{author:window.CroweRooms.engine.SYSTEM,kind:'council',content:`Council authorized: ${p.summary}`});
             return {summary:'Advisory result recorded in this Room. No external action or file write.',at:Date.now()};
@@ -63,8 +86,14 @@
     stops.add(()=>{for(const [id,c]of active){d.load(id).then(room=>{C().stop(room?.council);return d.save(room);}).catch(()=>{});c.abort();}});
     return api;
   }
-  function create(d) {
+  // Optional second argument: { grow: false, modelAllowed: modelId => boolean }.
+  // Capture its fields, rather than consulting mutable caller options on dispatch.
+  function create(d, policy) {
     const E=window.CroweRooms.engine,G=window.CroweRooms.registry;
+    const {agentAllowed,modelAllowed,roomAllowed}=activationPolicy(policy);
+    const denied=()=>({error:POLICY_ERROR});
+    const routineAllowed=(room,routine)=>roomAllowed(room) && (!routine || agentAllowed(routine.agentId));
+    const templateAllowed=t=>t.agents.every(a=>agentAllowed(typeof a==='string'?a:a.id));
     const cache=new Map(), queues=new Map(),listeners=new Set();
     const records=async()=>(await d.read())||[];
     let writes=Promise.resolve();
@@ -85,41 +114,69 @@
     };
     function state(room){return {...E.summary(room),brief:room.brief,template:room.template,defaultAgent:room.defaultAgent,tier:'readonly',budgetUsd:room.budgetUsd,spentUsd:room.spentUsd,critiqueRounds:room.critiqueRounds,maxCritiqueRounds:E.MAX_CRITIQUE_ROUNDS,routines:room.routines,council:room.council||null,agents:room.agents.map(a=>({...a,name:G.getAgent(a.agentId)?.name||a.agentId,cost:room.cost[a.agentId]||{},ceiling:G.getAgent(a.agentId)?.autonomyCeiling||'readonly'}))};}
     async function edit(id,fn){return queue(id,async()=>{const room=await load(id);if(!room)return {error:'No such room.'};const out=await fn(room);if(out?.error)return out;await save(room);changed(room,'turn');return {...out,room:state(room)};});}
+    const activate=(id,fn)=>edit(id,room=>roomAllowed(room)?fn(room):denied());
     const runner=room=>({runAgent:async req=>{
+      if(!roomAllowed(room)||!agentAllowed(req.agentId)||!modelAllowed(req.model))return denied();
       const controller=new AbortController();
       const identity={agentId:`room:${room.id}:${req.agentId}`,roomId:room.id,roomAgent:req.agentId};
       d.emit({...identity,type:'route',model:req.model});
       const timer=setTimeout(()=>controller.abort(),120000);
-      try{const out=await d.chat(req.model,[{role:'system',content:req.systemBrief},...req.messages],controller.signal);if(out.error)throw new Error(out.error);d.emit({...identity,type:'final'});return {text:out.content||out.text,usage:{usd:0,promptTokens:out.usage?.prompt_tokens||0,completionTokens:out.usage?.completion_tokens||0}};}
+      try{if(!roomAllowed(room)||!agentAllowed(req.agentId)||!modelAllowed(req.model))return denied();const out=await d.chat(req.model,[{role:'system',content:req.systemBrief},...req.messages],controller.signal);if(out.error)throw new Error(out.error);d.emit({...identity,type:'final'});return {text:out.content||out.text,usage:{usd:0,promptTokens:out.usage?.prompt_tokens||0,completionTokens:out.usage?.completion_tokens||0}};}
       catch(e){d.emit({...identity,type:'error',text:e.message});return {error:e.message};}finally{clearTimeout(timer);}
     }});
     const api={
-      agents:async()=>({agents:[...G.listAgents(),...(await d.catalog()).filter(m=>m.available!==false).map(m=>G.modelAgent(m.id)).filter(Boolean)],templates:G.listTemplates()}),
+      agents:async()=>({agents:[...G.listAgents(),...(await d.catalog()).filter(m=>m.available!==false && modelAllowed(m.id)).map(m=>G.modelAgent(m.id)).filter(Boolean)].filter(a=>agentAllowed(a.id)),templates:G.listTemplates().filter(templateAllowed)}),
       list:async()=>Promise.all((await records()).map(async r=>E.summary(await load(r.id)))),
-      create:async (opts={})=>{const room=opts.template?E.fromTemplate(opts.template,opts):E.createRoom(opts);if(!room?.agents.length)return {error:'Pick at least one model or worker.'};cache.set(room.id,room);await save(room);changed(room,'create');return {room:state(room)};},
+      create:async (opts={})=>{
+        if((opts.agentIds||[]).some(id=>!agentAllowed(id)) || (opts.defaultAgent && !agentAllowed(opts.defaultAgent)))return denied();
+        const template=opts.template && G.getTemplate(opts.template);
+        if(template && !templateAllowed(template))return denied();
+        const room=opts.template?E.fromTemplate(opts.template,opts):E.createRoom(opts);
+        if(!room?.agents.length)return {error:'Pick at least one model or worker.'};
+        if(!roomAllowed(room))return denied();
+        cache.set(room.id,room);await save(room);changed(room,'create');return {room:state(room)};
+      },
       load:async id=>{const room=await load(id);return room?{room:state(room),messages:room.messages}:{error:'No such room.'};},
       delete:async id=>queue(id,async()=>{cache.delete(id);await d.write((await records()).filter(r=>r.id!==id));for(const cb of listeners)cb({id,reason:'delete'});return {ok:true};}),
-      join:(id,agentId)=>edit(id,room=>{const a=G.getAgent(agentId);if(!a||!G.isJoinable(agentId))return {error:'Unavailable participant.'};if(!room.agents.some(s=>s.agentId===agentId))room.agents.push({agentId,model:a.model||'',state:'idle'});}),
+      join:(id,agentId)=>activate(id,room=>{if(!agentAllowed(agentId))return denied();const a=G.getAgent(agentId);if(!a||!G.isJoinable(agentId))return {error:'Unavailable participant.'};if(!room.agents.some(s=>s.agentId===agentId))room.agents.push({agentId,model:a.model||'',state:'idle'});}),
       leave:(id,agentId)=>edit(id,room=>{room.agents=room.agents.filter(a=>a.agentId!==agentId);if(room.defaultAgent===agentId)room.defaultAgent=room.agents[0]?.agentId||'';}),
-      setAgentModel:(id,agentId,model)=>edit(id,room=>{const a=room.agents.find(s=>s.agentId===agentId);if(!a)return {error:'No such seat.'};a.model=String(model).slice(0,120);}),
-      say:(id,text)=>edit(id,room=>E.speak(room,String(text).slice(0,60000),runner(room))),
-      critique:id=>edit(id,room=>E.critique(room,runner(room))),
-      revise:id=>edit(id,room=>E.revise(room,runner(room))),
+      setAgentModel:(id,agentId,model)=>activate(id,room=>{const pin=String(model).slice(0,120);if(!agentAllowed(agentId)||!modelAllowed(pin))return denied();const a=room.agents.find(s=>s.agentId===agentId);if(!a)return {error:'No such seat.'};a.model=pin;}),
+      say:(id,text)=>activate(id,room=>E.speak(room,String(text).slice(0,60000),runner(room))),
+      critique:id=>activate(id,room=>E.critique(room,runner(room))),
+      revise:id=>activate(id,room=>E.revise(room,runner(room))),
       project:async(id,kind)=>{const room=await load(id);return room?E.projectRound(room,kind):{error:'No such room.'};},
-      update:(id,patch)=>edit(id,room=>({changed:E.updateRoom(room,patch)})),
+      update:(id,patch)=>edit(id,room=>patch?.defaultAgent && !agentAllowed(patch.defaultAgent)?denied():({changed:E.updateRoom(room,patch)})),
       markRead:(id)=>edit(id,room=>{E.markRead(room);return {unread:0};}),
-      answer:(id,messageId,optionId)=>edit(id,room=>E.answerAsk(room,messageId,optionId,runner(room))),
+      answer:(id,messageId,optionId)=>activate(id,room=>E.answerAsk(room,messageId,optionId,runner(room))),
       react:(id,messageId,kind)=>edit(id,room=>E.react(room,messageId,kind)),
-      forward:async(fromId,messageId,toId,to)=>{const source=await load(fromId);return source?edit(toId,room=>E.forward(source,room,messageId,runner(room),{to})): {error:'No source room.'};},
-      routineAdd:(id,spec)=>edit(id,room=>E.addRoutine(room,spec)),
-      routineUpdate:(id,routineId,patch)=>edit(id,room=>E.updateRoutine(room,routineId,patch)),
+      forward:async(fromId,messageId,toId,to)=>{const source=await load(fromId);if(source && !roomAllowed(source))return denied();return source?activate(toId,room=>E.forward(source,room,messageId,runner(room),{to})): {error:'No source room.'};},
+      routineAdd:(id,spec)=>activate(id,room=>routineAllowed(room,{agentId:spec?.agentId||room.defaultAgent})?E.addRoutine(room,spec):denied()),
+      routineUpdate:(id,routineId,patch)=>edit(id,room=>{
+        // Pausing remains available even for a legacy grower routine.
+        if(patch?.enabled===false && Object.keys(patch).length===1)return E.updateRoutine(room,routineId,patch);
+        const routine=(room.routines||[]).find(r=>r.id===routineId);
+        return routineAllowed(room,routine) && (!patch?.agentId || agentAllowed(patch.agentId))?E.updateRoutine(room,routineId,patch):denied();
+      }),
       routineRemove:(id,routineId)=>edit(id,room=>E.removeRoutine(room,routineId)),
-      routineRun:(id,routineId)=>edit(id,room=>E.runRoutine(room,routineId,runner(room))),
+      routineRun:(id,routineId)=>activate(id,room=>routineAllowed(room,(room.routines||[]).find(r=>r.id===routineId))?E.runRoutine(room,routineId,runner(room)):denied()),
       onChanged:cb=>{listeners.add(cb);return ()=>listeners.delete(cb);},onOpen:()=>()=>{},
     };
-    attachCouncil(api,{...d,load,save,changed,queue,busy:id=>queues.has(id)});
+    attachCouncil(api,{...d,load,save,changed,queue,busy:id=>queues.has(id),canActivate:roomAllowed,agentAllowed,modelAllowed});
     // Foreground-only: mobile OS suspension is not an always-on worker service.
-    if(typeof setInterval==='function')setInterval(async()=>{try{for(const rec of await records()){const room=await load(rec.id);if(queues.has(room.id))continue;for(const routine of E.dueRoutines(room)){if(E.claimRoutine(room,routine.id).run){await save(room);await api.routineRun(room.id,routine.id);}}}}catch{}},30000);
+    if(typeof setInterval==='function')setInterval(async()=>{
+      try{
+        for(const rec of await records()){
+          const room=await load(rec.id);
+          if(!room || queues.has(room.id) || !roomAllowed(room))continue;
+          for(const routine of E.dueRoutines(room)){
+            // A denial must not claim a run, advance its schedule, or save it.
+            // Check each iteration again after any previous routine's awaits.
+            if(!routineAllowed(room,routine))continue;
+            if(E.claimRoutine(room,routine.id).run){await save(room);await api.routineRun(room.id,routine.id);}
+          }
+        }
+      }catch{}
+    },30000);
     return api;
   }
   window.CroweLocalRooms={attachCouncil,create,stopAll:()=>{for(const stop of stops)stop();}};

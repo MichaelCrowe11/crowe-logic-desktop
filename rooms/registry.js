@@ -1,8 +1,9 @@
 // The room roster: which agents exist, and what each is allowed to be.
 //
-// Reads rooms/agents.vendored.json, the snapshot of the canonical registry in
-// michaelcrowe11/crowe-agents. Plain node, no Electron, no network, so the room
-// engine and its tests can load it anywhere.
+// Reads only rooms/agents.customer.json, the independently authored customer
+// roster. Plain node, no Electron, no network, so the room engine and its tests
+// can load it anywhere. Missing or invalid customer data fails closed; there
+// is no alternate roster, environment override, or private-source fallback.
 //
 // Room templates are named here rather than in the UI because a template is a
 // claim about which specialists belong in a conversation, and that is domain
@@ -14,7 +15,33 @@
 const fs = require("fs");
 const path = require("path");
 
-const VENDORED = path.join(__dirname, "agents.vendored.json");
+const CUSTOMER = path.join(__dirname, "agents.customer.json");
+const CEILING = Object.freeze({ advisory: "plan", read_only: "readonly", read_confirm: "edit" });
+
+// A closed schema keeps accidental imports from silently becoming runtime
+// instructions. Privacy is enforced at authoring/build time too, but runtime
+// must at least reject wrong audiences, duplicate IDs, and elevated authority.
+const ROSTER_FIELDS = new Set(["version", "audience", "note", "agents"]);
+const AGENT_FIELDS = new Set(["id", "name", "domain", "role", "authority", "autonomyCeiling", "roomJoinable", "model", "tools", "systemPrompt"]);
+function validCustomerRoster(d) {
+  if (!d || d.audience !== "customer" || typeof d.version !== "string" || !d.version ||
+      typeof d.note !== "string" || Object.keys(d).some((k) => !ROSTER_FIELDS.has(k)) ||
+      !Array.isArray(d.agents) || !d.agents.length) return false;
+  const ids = new Set();
+  return d.agents.every((a) => {
+    if (!a || typeof a !== "object" || Object.keys(a).some((k) => !AGENT_FIELDS.has(k)) ||
+        typeof a.id !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(a.id) || ids.has(a.id) ||
+        !["name", "domain", "role", "systemPrompt"].every((k) => typeof a[k] === "string" && a[k].trim()) ||
+        !Object.prototype.hasOwnProperty.call(CEILING, a.authority) || a.autonomyCeiling !== CEILING[a.authority] ||
+        typeof a.roomJoinable !== "boolean" || !Array.isArray(a.tools) ||
+        a.tools.some((tool) => tool !== "terminal") || new Set(a.tools).size !== a.tools.length ||
+        (a.authority === "advisory" && a.tools.length) ||
+        (Object.prototype.hasOwnProperty.call(a, "model") &&
+          (typeof a.model !== "string" || !/^[a-zA-Z0-9_./:-]{1,120}$/.test(a.model)))) return false;
+    ids.add(a.id);
+    return true;
+  });
+}
 
 // Ordered weakest to strongest. Rooms take the MINIMUM ceiling across their
 // roster, so this order is load-bearing rather than cosmetic.
@@ -76,8 +103,10 @@ let cache = null;
 function loadAgents() {
   if (cache) return cache;
   try {
-    const d = JSON.parse(fs.readFileSync(VENDORED, "utf8"));
-    cache = (Array.isArray(d.agents) ? d.agents : []).map((a) => (a && a.id ? { ...a, name: displayName(a), ...(markOf(a.id) ? { mark: markOf(a.id) } : {}) } : a));
+    const d = JSON.parse(fs.readFileSync(CUSTOMER, "utf8"));
+    cache = validCustomerRoster(d)
+      ? d.agents.map((a) => ({ ...a, name: displayName(a), ...(markOf(a.id) ? { mark: markOf(a.id) } : {}) }))
+      : [];
   } catch {
     // A missing snapshot means no rooms, not a crash on boot. The caller shows
     // an empty roster and the rest of the app is untouched.
@@ -202,7 +231,7 @@ function listTemplates() {
 function getTemplate(id) { return listTemplates().find((t) => t.id === String(id)) || null; }
 
 module.exports = {
-  displayName, modelAgent,
+  displayName, modelAgent, validCustomerRoster, CEILING,
   listAgents, getAgent, isJoinable, listTemplates, getTemplate,
   roomCeiling, effectiveTier, writeCapable, tierRank, TIERS,
   MARKS, markOf,

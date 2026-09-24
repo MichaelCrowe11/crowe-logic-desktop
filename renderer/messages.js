@@ -42,12 +42,11 @@
     return { id: r.id, title, preview, time: relativeTime(r.updatedAt, now), unread: Number(r.unread) || 0, state, solo, agents: r.agents || [], names };
   }
 
-  // Which workers an edition lists. spaces is the install's space list
-  // (main.js installSpaces): a build without the cultivation space is the
-  // Developers edition.
-  function visibleWorkers(agents, spaces) {
+  // Explicit identity, not an absent cultivation tab: Desktop and Developers
+  // now share ordinary spaces. Older adapters passing a list remain Desktop.
+  function visibleWorkers(agents, edition) {
     const list = (agents || []).filter((a) => a && a.roomJoinable !== false);
-    const developers = Array.isArray(spaces) && spaces.length && !spaces.includes("cultivation");
+    const developers = edition === "developers" || edition?.id === "developers";
     const shown = developers ? list.filter((a) => (a.domain === "models" || DEVELOPER_DOMAINS.has(String(a.domain || "").toLowerCase()))) : list;
     return shown.slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   }

@@ -54,8 +54,16 @@ jobs:
       # a routing rule added to the harness and not to mobile/src is a phone
       # that behaves differently with nothing in this suite noticing. Rebuilds
       # mobile/www on the way through, which also covers the www transforms.
+      - name: Validate customer-only roster and payload guards
+        run: npm run test:customer-payload
+
       - name: Run mobile bridge tests
-        run: node scripts/test-mobile-bridge.js
+        run: |
+          node scripts/test-mobile-bridge.js
+          node scripts/test-mobile-privacy.js
+          node scripts/test-mobile-legacy-archive.js
+          node scripts/test-mobile-rooms-policy.js
+          node scripts/audit-customer-payload.js web mobile/www > /tmp/customer-mobile-payload-audit.json
 
       # Same bargain as mobile, same cost, and this one is already serving real
       # traffic at /app. The renderer ships to the browser verbatim over
@@ -107,8 +115,29 @@ jobs:
       # and a directory added to the source tree and not to that list is a
       # crash at startup that every other suite here passes straight through:
       # they all run from the source tree, where the file is present.
-      - name: Validate release preflight guardrails
-        run: node scripts/test-preflight-release.js
+      - name: Validate strict release inventory and preflight guardrails
+        run: |
+          npm run test:release:strict
+          npm run test:publish
+
+      - name: Validate profile-local auth with synthetic stores
+        run: npm run test:profile-auth
+
+      # Targeted local-only gates. Do not replace these with npm test: some older
+      # live suites still boot main.js against the default user profile.
+      # The staged-worker gate exercises node:sqlite under Node 22 in CI; the
+      # live gate below separately exercises Electron's bundled Node runtime.
+      - name: Run Farm domain, worker and package contracts (Node 22)
+        run: npm run test:farm
+
+      - name: Run edition and independent transfer contracts
+        run: |
+          npm run test:edition
+          npm run test:grow-transfer
+          npm run test:transfer-host
+
+      - name: Run review-only Vision host contracts (offline)
+        run: npm run test:vision
 
       - name: Run packaging tests
         run: node scripts/test-packaging.js
@@ -165,6 +194,21 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/make-icons.js --check
 
+      - name: Run Farm UI contracts (isolated, network blocked)
+        run: xvfb-run -a node scripts/test-farm-ui.js
+
+      - name: Run Farm trusted-host and owner workflow gates (isolated, network blocked)
+        run: xvfb-run -a npm run test:farm:live
+
+      - name: Run separate-profile Mycology transfers (isolated, network blocked)
+        run: xvfb-run -a npm run test:mycology:live
+
+      - name: Run Vision review workflow (synthetic picker and gateway, network blocked)
+        run: xvfb-run -a npm run test:vision:fixture
+
+      - name: Run Vision lost-reply recovery across separate processes
+        run: xvfb-run -a npm run test:vision:recovery
+
       - name: Run panel behaviour tests (headless via xvfb)
         env:
           ELECTRON_ENABLE_LOGGING: "1"
@@ -174,17 +218,22 @@ jobs:
       # driver so the mobile app costs the suite no dependency the desktop one
       # was not already paying for, and because the layout only switches on
       # width: at test-panels' 1280 this would assert the desktop shell and pass.
+      - name: Run mobile consent and camera workflow (isolated, network blocked)
+        run: xvfb-run -a npm run test:mobile:privacy:live
+
       - name: Run mobile shell tests (headless via xvfb)
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-mobile-shell.js
 
-      # Install-time space profiles, both shapes `npm test` covers: a build that
-      # declares nothing, and one narrowed to chat and projects.
+      # Real main/preload/renderer navigation for each edition, plus a narrowed
+      # Desktop profile. Packaged default-profile isolation is a separate gate.
       - name: Run install-spaces suite (headless via xvfb)
         run: |
           xvfb-run -a npx electron scripts/test-install-spaces.js
           CROWE_SPACES=chat,projects xvfb-run -a npx electron scripts/test-install-spaces.js
+          CROWE_EDITION=developers xvfb-run -a npx electron scripts/test-install-spaces.js
+          CROWE_EDITION=mycology xvfb-run -a npx electron scripts/test-install-spaces.js
 
       # The chain in one piece: renderer, preload, ipcMain, engine, harness. The
       # suites above each cut it somewhere - the engine one injects a fake

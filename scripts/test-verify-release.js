@@ -15,6 +15,8 @@ const assert = require('assert');
 const http = require('http');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
+const yaml = require('js-yaml');
 const { execFile } = require('child_process');
 const layout = require('./release-channel');
 
@@ -92,6 +94,30 @@ function renderFeed(feed) {
   return `version: ${feed.version}\nfiles:\n${files}\npath: ${feed.files[0].url}\nreleaseDate: '2026-07-28T00:00:00.000Z'\n`;
 }
 
+// These bytes are deliberately NOT installers. They only qualify matrix and
+// transport/hash rejection behavior, never signing or application acceptance.
+function strictBaseline() {
+  const state = baseline();
+  state.channel = 'mycology';
+  state.strictFixture = true;
+  state.fullRequests = [];
+  state.objects = {};
+  state.feeds = { mac: { version: VERSION, files: [] } };
+  for (const arch of ['arm64', 'x64']) {
+    for (const type of ['zip', 'dmg']) {
+      const url = `CroweLogic-mycology-${VERSION}-${arch}.${type}`;
+      const body = Buffer.from(`synthetic ${arch} ${type}`);
+      state.objects[url] = body;
+      state.objects[`${url}.blockmap`] = zlib.gzipSync(Buffer.from(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, sizes: [body.length], checksums: ['synthetic'] }] })));
+      state.feeds.mac.files.push({ url, size: body.length, sha512: crypto.createHash('sha512').update(body).digest('base64') });
+    }
+  }
+  state.feeds.mac.path = state.feeds.mac.files[0].url;
+  state.sums = state.feeds.mac.files.map(file => file.url);
+  state.hashes = Object.fromEntries(state.sums.map(name => [name, crypto.createHash('sha256').update(state.objects[name]).digest('hex')]));
+  return state;
+}
+
 function serve(state) {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -109,7 +135,7 @@ function serve(state) {
 
     if (p === `/${prefix}/${VERSION}/SHA256SUMS`) {
       res.writeHead(200, { 'content-type': 'text/plain' });
-      return res.end(state.sums.map((n) => `${'0'.repeat(64)}  ${n}`).join('\n') + '\n');
+      return res.end(state.sums.map((n) => `${state.hashes?.[n] || '0'.repeat(64)}  ${n}`).join('\n') + '\n');
     }
 
     const channel = new RegExp(`^/${prefix}/channel/(mac|win|linux)/(.+)$`).exec(p);
@@ -119,7 +145,7 @@ function serve(state) {
         // A platform the release was never built for has no feed object at all.
         if (!state.feeds[os]) { res.writeHead(404); return res.end('Not found'); }
         res.writeHead(200, { 'content-type': 'text/yaml' });
-        return res.end(renderFeed(state.feeds[os]));
+        return res.end(state.strictFixture ? yaml.dump(state.feeds[os]) : renderFeed(state.feeds[os]));
       }
       const object = state.objects[name];
       if (object == null) { res.writeHead(404); return res.end('Not found'); }
@@ -139,6 +165,7 @@ function serve(state) {
         });
         return res.end(slice);
       }
+      if (state.fullRequests) state.fullRequests.push(name);
       res.writeHead(200, { 'content-length': String(body.length) });
       return res.end(body);
     }
@@ -162,7 +189,7 @@ function run(port, opts = {}) {
   // Blank rather than inherited: run this suite inside Actions and the real
   // GITHUB_REF_NAME would otherwise reach through and make the result depend on
   // which branch the checkout happens to be on.
-  const env = { ...process.env, GITHUB_REF_NAME: '', ...(opts.env || {}) };
+  const env = { PATH: process.env.PATH, GITHUB_REF_NAME: '', ...(opts.env || {}) };
   return new Promise((resolve) => {
     execFile(process.execPath, args, { env },
       (err, stdout, stderr) => resolve({ code: err ? err.code : 0, out: stdout + stderr }));
@@ -395,10 +422,87 @@ const scenarios = [
   },
 ];
 
+const strictArgs = ['--channel', 'mycology', '--strict', '--matrix', 'mac:arm64:dmg+zip,mac:x64:dmg+zip'];
+scenarios.push({
+  name: 'strict explicit mac inventory passes with full hashing even without --full',
+  strictFixture: true, run: { args: strictArgs }, break: () => {},
+  expect: (r, s) => {
+    assert.strictEqual(r.code, 0, r.out);
+    assert.doesNotMatch(r.out, /^warn/m);
+    for (const name of s.sums) assert.ok(s.fullRequests.includes(name), `never downloaded ${name}`);
+    assert.ok(s.requests.every(p => p === '/mycology' || p.startsWith('/desktop/mycology/')), 'cross-edition read');
+  },
+});
+for (const [name, change, pattern] of [
+  ['missing required mac feed', s => delete s.feeds.mac, /not ok\s+mac: feed resolves/],
+  ['missing required updater ZIP', s => s.feeds.mac.files.splice(2, 1), /missing required artifact: mac:x64:zip/],
+  ['unlisted Windows feed', s => s.feeds.win = baseline().feeds.win, /unexpected advertised platform/],
+  ['unlisted Linux architecture feed', s => s.objects['mycology-linux-arm64.yml'] = Buffer.from('version: 1.2.3'), /unexpected advertised feed/],
+  ['missing required hash', s => delete s.feeds.mac.files[0].sha512, /missing or invalid sha512/],
+  ['wrong edition artifact', s => s.feeds.mac.files[0].url = 'CroweLogic-developers-1.2.3-arm64.zip', /unexpected artifact edition/],
+  ['unknown architecture artifact', s => s.feeds.mac.files[0].url = 'CroweLogic-mycology-1.2.3-universal.zip', /unexpected artifact edition/],
+  ['missing installer bytes', s => delete s.objects[s.sums[0]], /expected 206.*got 404/],
+  ['same-size changed bytes', s => s.objects[s.sums[0]].fill(1), /sha512 mismatch/],
+  ['missing sidecar blockmap', s => delete s.objects[`${s.sums[0]}.blockmap`], /not ok\s+mac: .*blockmap present/],
+  ['corrupt sidecar blockmap', s => s.objects[`${s.sums[0]}.blockmap`] = Buffer.from('bad'), /blockmap does not inflate/],
+  ['missing sidecar file name', s => {
+    const key = `${s.sums[0]}.blockmap`;
+    const map = JSON.parse(zlib.gunzipSync(s.objects[key]));
+    delete map.files[0].name;
+    s.objects[key] = zlib.gzipSync(Buffer.from(JSON.stringify(map)));
+  }, /invalid blockmap file name/],
+  ['mismatched sidecar file name', s => {
+    const key = `${s.sums[0]}.blockmap`;
+    const map = JSON.parse(zlib.gunzipSync(s.objects[key]));
+    map.files[0].name = 'wrong';
+    s.objects[key] = zlib.gzipSync(Buffer.from(JSON.stringify(map)));
+  }, /invalid blockmap file name/],
+  ['incorrect download checksum', s => s.hashes[s.sums[0]] = '0'.repeat(64), /not ok\s+SHA256SUMS matches downloaded/],
+  ['duplicate checksum entry', s => s.sums.push(s.sums[0]), /invalid or duplicate checksum/],
+]) scenarios.push({ name: `strict rejects ${name}`, strictFixture: true, run: { args: strictArgs }, break: change, expect: r => { assert.strictEqual(r.code, 1, r.out); assert.match(r.out, pattern); } });
+function addLinux(state) {
+  const appImage = makeAppImage(800);
+  const url = `CroweLogic-mycology-${VERSION}-x64.AppImage`;
+  const deb = `CroweLogic-mycology-${VERSION}-amd64.deb`;
+  state.objects[url] = appImage.buf;
+  state.objects[deb] = Buffer.from('synthetic deb');
+  state.feeds.linux = { version: VERSION, files: [url, deb].map(name => ({ url: name, size: state.objects[name].length, sha512: crypto.createHash('sha512').update(state.objects[name]).digest('base64'), ...(name === url ? { blockMapSize: appImage.blockMapSize } : {}) })) };
+  for (const name of [url, deb]) { state.sums.push(name); state.hashes[name] = crypto.createHash('sha256').update(state.objects[name]).digest('hex'); }
+}
+const linuxArgs = [...strictArgs.slice(0, -1), `${strictArgs.at(-1)},linux:x64:AppImage+deb`];
+scenarios.push({ name: 'strict mac and Linux inventory accepts embedded AppImage blockmap', strictFixture: true, run: { args: linuxArgs }, break: addLinux, expect: (r, s) => { assert.strictEqual(r.code, 0, r.out); assert.ok(s.fullRequests.includes(`CroweLogic-mycology-${VERSION}-x64.AppImage`)); } });
+for (const [name, change, pattern] of [
+  ['missing embedded map declaration', s => delete s.feeds.linux.files[0].blockMapSize, /not ok\s+linux: .*carries its blockmap/],
+  ['wrong embedded trailer', s => s.objects[s.feeds.linux.files[0].url].writeUInt32BE(7, s.feeds.linux.files[0].size - 4), /object's trailer says/],
+  ['negative embedded size', s => s.feeds.linux.files[0].blockMapSize = -1, /invalid blockMapSize/],
+  ['missing embedded file name', s => {
+    const item = s.feeds.linux.files[0];
+    const previous = s.objects[item.url];
+    const payload = previous.subarray(0, item.size - item.blockMapSize - 4);
+    const map = JSON.parse(zlib.inflateRawSync(previous.subarray(payload.length, previous.length - 4)));
+    delete map.files[0].name;
+    const compressed = zlib.deflateRawSync(Buffer.from(JSON.stringify(map)));
+    const trailer = Buffer.alloc(4); trailer.writeUInt32BE(compressed.length);
+    const body = Buffer.concat([payload, compressed, trailer]);
+    s.objects[item.url] = body;
+    item.size = body.length;
+    item.blockMapSize = compressed.length;
+    item.sha512 = crypto.createHash('sha512').update(body).digest('base64');
+    s.hashes[item.url] = crypto.createHash('sha256').update(body).digest('hex');
+  }, /invalid blockmap file name/],
+]) scenarios.push({ name: `strict rejects ${name}`, strictFixture: true, run: { args: linuxArgs }, break: s => { addLinux(s); change(s); }, expect: r => { assert.strictEqual(r.code, 1, r.out); assert.match(r.out, pattern); } });
+scenarios.push({ name: 'strict rejects x64 artifacts outside the chosen arm64-only matrix', strictFixture: true, run: { args: [...strictArgs.slice(0, -1), 'mac:arm64:dmg+zip'] }, break: () => {}, expect: r => { assert.strictEqual(r.code, 1, r.out); assert.match(r.out, /unexpected advertised architecture/); } });
+for (const [name, args, pattern] of [
+  ['absent matrix', ['--channel', 'mycology', '--strict'], /requires an explicit --matrix/],
+  ['matrix without strict', ['--matrix', 'mac:arm64:dmg+zip'], /requires --strict/],
+  ['contradictory edition', [...strictArgs, '--channel', 'developers'], /conflicting release channels/],
+  ['unsupported lane', ['--strict', '--matrix', 'linux:arm64:AppImage'], /unsupported release matrix lane/],
+]) scenarios.push({ name: `arguments reject ${name} before network`, strictFixture: true, run: { args }, break: () => {}, expect: (r, s) => { assert.notStrictEqual(r.code, 0, r.out); assert.match(r.out, pattern); assert.deepStrictEqual(s.requests, []); } });
+
 (async () => {
   let failed = 0;
   for (const s of scenarios) {
-    const state = baseline(s.appImage ? s.appImage() : undefined);
+    const state = s.strictFixture ? strictBaseline() : baseline(s.appImage ? s.appImage() : undefined);
     if (s.channel) state.channel = s.channel;
     s.break(state);
     const server = await serve(state);

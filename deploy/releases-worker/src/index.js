@@ -26,10 +26,10 @@ const MARK_SVG = `<svg class="mark" aria-hidden="true" xmlns="http://www.w3.org/
 </svg>`;
 const MARK_ICON = "data:image/svg+xml," + encodeURIComponent(MARK_SVG.replace(' class="mark"', ""));
 
-// Two editions share the bucket and this worker. The full edition is stored
-// under desktop/ and Crowe Logic for Developers under desktop/developers/, its
-// update feeds included, so nothing either publishes can land on a key the
-// other serves. scripts/release-channel.js is the source of this layout; the
+// Three editions share the bucket and this worker. Desktop is stored under
+// desktop/, Developers under desktop/developers/ and Mycology under
+// desktop/mycology/, with each edition's update feeds inside its own prefix.
+// No edition falls back to another edition when a release is not published. scripts/release-channel.js is the source of this layout; the
 // worker ships on its own and cannot import it, so the same layout is spelled
 // out here and scripts/test-releases-worker.js holds the two to each other.
 const CHANNELS = {
@@ -48,6 +48,14 @@ const CHANNELS = {
     title: "Crowe Logic for Developers",
     description: "Download Crowe Logic for Developers for Windows, macOS, and Linux.",
     sub: "The coding agent for your repositories. Chat and Projects, a real terminal, reviewable edits, and an in-app browser, signed in with your Crowe ID.",
+  },
+  mycology: {
+    prefix: "desktop/mycology",
+    name: "Crowe Logic Mycology",
+    tag: "mycology",
+    title: "Crowe Logic Mycology",
+    description: "Download Crowe Logic Mycology for Windows, macOS, and Linux.",
+    sub: "Your farm workspace. Farm & Compliance and your cultivation notebook, with a separate local profile and an optional assistant.",
   },
 };
 
@@ -378,7 +386,7 @@ async function ingest(request, env) {
 // One data point goes to the crowe_releases dataset per installer or update
 // feed request the bucket answered. HEADs and 404s never reach this, so probes
 // and dead links are not installs. The shape is what the funnel report queries:
-//   blobs    channel (stable or developers), platform (mac, win, linux),
+//   blobs    channel (stable, developers or mycology), platform (mac, win, linux),
 //            artifact kind (dmg, zip, exe, appimage, deb, yml), the requested
 //            path, the caller's country, and the response status as text.
 //            electron-updater fetches a differential update as many 206 range
@@ -407,7 +415,10 @@ function artifactOf(path) {
 }
 
 function channelOf(path) {
-  return path.startsWith(`/${CHANNELS.developers.prefix}/`) ? "developers" : "stable";
+  for (const [channel, edition] of Object.entries(CHANNELS)) {
+    if (channel !== "latest" && path.startsWith(`/${edition.prefix}/`)) return channel;
+  }
+  return "stable";
 }
 
 function recordServe(env, request, path, status, bytes) {
@@ -443,24 +454,22 @@ export default {
       });
     }
 
-    // Crowe Logic for Developers has a page of its own and, for the Azure
-    // Marketplace listing to point at, stable links that resolve to the current
-    // installer without the listing having to know the version: /developers/mac
-    // is the Apple Silicon dmg, /developers/mac-intel the Intel one, and
-    // /developers/windows, /developers/appimage and /developers/deb the rest. A
-    // platform the release does not include is a 404, not a link to nothing.
-    const dev = /^\/developers(?:\/(mac|mac-intel|windows|appimage|deb))?$/.exec(path);
-    if (dev) {
-      const rel = await catalog(env, "developers");
-      if (!rel) return new Response("No developer release published yet", { status: 503 });
-      if (!dev[1]) {
-        return new Response(request.method === "HEAD" ? null : renderPage(rel, "developers"), {
+    // Each named edition has its own page and stable platform links. Resolve
+    // only that edition's catalog: an unseeded channel is never a Desktop
+    // download, and a missing platform never redirects to a sibling edition.
+    const named = /^\/(developers|mycology)(?:\/(mac|mac-intel|windows|appimage|deb))?$/.exec(path);
+    if (named) {
+      const [, channel, platform] = named;
+      const rel = await catalog(env, channel);
+      if (!rel) return new Response(`No ${channel === "developers" ? "developer" : channel} release published yet`, { status: 503 });
+      if (!platform) {
+        return new Response(request.method === "HEAD" ? null : renderPage(rel, channel), {
           headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" },
         });
       }
-      const file = rel[{ mac: "macos", "mac-intel": "macosIntel", windows: "windows", appimage: "appimage", deb: "deb" }[dev[1]]];
+      const file = rel[{ mac: "macos", "mac-intel": "macosIntel", windows: "windows", appimage: "appimage", deb: "deb" }[platform]];
       if (!file) return new Response("Not in this release", { status: 404 });
-      return Response.redirect(new URL(href("developers", rel.version, file), url).toString(), 302);
+      return Response.redirect(new URL(href(channel, rel.version, file), url).toString(), 302);
     }
 
     // The previous worker published /crowe-logic/<version>/<file> links with

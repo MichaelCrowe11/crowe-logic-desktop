@@ -8,9 +8,9 @@
 // classes of answer:
 //
 //   real     — the gateway (chat, the agent loop, the catalog), Crowe ID,
-//              sessions, the grower's records, provider keys, settings.
+//              sessions, provider keys, settings.
 //   local    — persisted through Capacitor Preferences instead of userData,
-//              so the phone keeps its own sessions and its own grow log.
+//              so the phone keeps its own sessions and general reminders.
 //   refused  — the workspace capabilities, which return a stated reason
 //              rather than an empty success. A pane that says "no shell on
 //              iOS" is usable; one that spins forever is not.
@@ -26,6 +26,41 @@
   const CAP = window.Capacitor || null;
   const NATIVE = Boolean(CAP && typeof CAP.isNativePlatform === "function" && CAP.isNativePlatform());
   const PLATFORM = (CAP && CAP.getPlatform && CAP.getPlatform()) || "web";
+  // The phone's product boundary is closure-owned. Replacing window.crowe.edition,
+  // saved settings, pairing and model output cannot grant these capabilities.
+  const EDITION = Object.freeze({
+    id: "desktop", productName: "Crowe Logic",
+    allowedSpaces: Object.freeze(["chat", "projects"]),
+    defaultSpaces: Object.freeze(["chat", "projects"]), landingSpace: "chat",
+    capabilities: Object.freeze({ grow: false, farm: false, sense: false, legacyAccess: false }),
+    legacyAccess: false,
+  });
+  const GROW_OFF = "Growing records and specialist workflows are unavailable in this general phone app. Existing records are unchanged.";
+  const unavailableGrow = () => ({ ok: false, error: GROW_OFF, code: "UNAVAILABLE" });
+  const growToolAllowed = name => EDITION.capabilities.grow || !["read_grow", "log_grow"].includes(name);
+  const specialistName = value => /(?:^|[-_:/\s])(grower|cultivation|mycology)(?:$|[-_:/\s])/i.test(String(value || ""));
+  const specialistModels = new Set();
+  // Unknown aliases are not general by default. Keep established general
+  // routes available offline; custom IDs require catalog validation before
+  // Rooms may claim a routine or any gateway path may dispatch them.
+  const GENERAL_MODELS = new Set(["crowelm", "crowelm-flash", "crowelm-vision", "crowelm-mycelium", "gpt-5.6-sol"]);
+  let catalogModels = new Set();
+  function modelAllowed(model) {
+    const id = String(model || "").toLowerCase();
+    return EDITION.capabilities.grow || (!id || (!specialistName(id) && !specialistModels.has(id)
+      && (GENERAL_MODELS.has(id) || catalogModels.has(id))));
+  }
+  function filterCatalog(models) {
+    // Remember specialist IDs as well as filtering the picker, so a restored
+    // room or saved default cannot bypass metadata-only catalog restrictions.
+    for (const m of models) if (m && [m.role, m.model, m.id].some(specialistName)) {
+      for (const id of [m.model, m.id]) if (id) specialistModels.add(String(id).toLowerCase());
+    }
+    catalogModels = new Set(models.filter(m => m && ![m.role, m.model, m.id].some(specialistName))
+      .flatMap(m => [m.model, m.id]).filter(id => typeof id === "string" && id).map(id => id.toLowerCase()));
+    return models.filter(m => m && modelAllowed(m.model) && modelAllowed(m.id) && !specialistName(m.role));
+  }
+  const defaultModel = () => modelAllowed(config.model) ? (config.model || DEFAULTS.model) : DEFAULTS.model;
   const plugin = (name) => (CAP && CAP.Plugins && CAP.Plugins[name]) || null;
 
   const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
@@ -90,10 +125,8 @@
 
   // ─── Config ────────────────────────────────────────────────────────────────
   // Mirrors DEFAULTS in main.js, minus the fields that describe a workspace.
-  // autonomy defaults a tier lower than the desktop's: "edit" there means the
-  // agent may write files in a folder you chose, and there is no such folder
-  // here — on a phone the only thing it can write is the grow log, which is
-  // what the tier now gates.
+  // Autonomy gates attached-file edits and paired-machine operations. The
+  // general phone has no cultivation workspace, regardless of this setting.
   const DEFAULTS = {
     baseUrl: "https://api.crowelogic.com",
     model: "crowelm",
@@ -108,6 +141,17 @@
     turnBudgetUsd: 2,
     telemetry: true,
     onboarded: false,
+    /* The data notice. Nothing leaves this phone for the gateway or a model
+       until the person has read what is sent and to whom and has allowed it
+       (App Store guidelines 5.1.1(i) and 5.1.2(i)). The record carries the
+       version of the notice it answered, so a notice that names a new
+       recipient is shown again instead of riding on an older yes. Read-aloud
+       and dictation keep their own records because they reach different
+       services (Microsoft Azure Speech or ElevenLabs; Apple) and are asked
+       for separately, the first time each is used. */
+    dataConsent: null,
+    readAloudConsent: null,
+    dictationConsent: null,
     // The machine this phone may drive, and the token that proves it may.
     // Empty means the remote tools do not exist at all — they are not offered
     // to the model, so it cannot claim a shell it has no way to reach.
@@ -117,25 +161,88 @@
     keys: {},
   };
   const TIERS = new Set(["plan", "readonly", "edit", "execute"]);
+  // Bump when the notice names a new recipient or a new kind of data; an
+  // older yes then stops counting and the notice is shown again.
+  const DATA_NOTICE_VERSION = 3;
+  const FEATURE_NOTICE_VERSION = 2;
+  const consentKeys = ["dataConsent", "readAloudConsent", "dictationConsent"];
+  // One nonsecret authority, never the config vault's fallback pair. A recovered
+  // Keychain may contain old settings; those must never restore an allowance.
+  const CONSENT_STORE_KEY = "data-consent-v2";
+  let consentEpoch = 0;
+  let consentWithdrawalPending = false;
+  const validConsent = (rec, version) => Boolean(rec && rec.version === version && typeof rec.at === "string" && Number.isFinite(Date.parse(rec.at)));
+  let configSave = Promise.resolve();
+  const CONSENT_ERROR = "Allow Crowe Logic to send your messages before sending. The data notice says what is sent and to whom.";
+  const consented = () => validConsent(config.dataConsent, DATA_NOTICE_VERSION);
+  /* The refusal every gateway path answers with before the notice is allowed,
+     and the event mobile-ui.js listens for to put the notice back on screen.
+     Enforced here, under the UI, so no composer, pane, chip or intent can
+     reach the gateway around it. */
+  function consentNeeded() {
+    try { window.dispatchEvent(new CustomEvent("crowe:consent-needed")); } catch { /* no window in tests */ }
+    return { error: CONSENT_ERROR, code: "consent" };
+  }
   let config = { ...DEFAULTS };
   let BUILD = { version: "0.0.0" };
 
   const ready = (async () => {
     const saved = await store.get("config");
     if (saved && typeof saved === "object") config = { ...DEFAULTS, ...saved };
+    for (const k of consentKeys) config[k] = null;
+    const allowance = await store.get(CONSENT_STORE_KEY);
+    for (const k of consentKeys) {
+      const rec = allowance && allowance[k];
+      if (validConsent(rec, k === "dataConsent" ? DATA_NOTICE_VERSION : FEATURE_NOTICE_VERSION)) config[k] = rec;
+    }
     if (!TIERS.has(config.autonomy)) config.autonomy = DEFAULTS.autonomy;
     if (!/^https?:\/\//i.test(config.baseUrl || "")) config.baseUrl = DEFAULTS.baseUrl;
+    // Enforce cached metadata-only specialist aliases even on the first offline
+    // chat or restored room; this does not rewrite the saved model selection.
+    const cachedCatalog = await store.get("catalog");
+    if (cachedCatalog && Array.isArray(cachedCatalog.models)) catalogCache = { ...cachedCatalog, models: filterCatalog(cachedCatalog.models) };
     try { BUILD = await (await fetch("build.json")).json(); } catch { /* dev serve without a build stamp */ }
   })();
 
-  async function saveConfig(patch) {
-    for (const [k, v] of Object.entries(patch || {})) {
-      if (k === "autonomy" && !TIERS.has(v)) continue;
-      if (k === "token" && v === "") continue;        // blank means "keep current", as Settings promises
-      config[k] = v;
+  function saveConfig(patch, consentChange = false, expectedEpoch = consentEpoch) {
+    patch = { ...(patch || {}) };
+    // A stale Settings snapshot must never restore an allowance. Only the
+    // notice's dedicated, revision-checked path may grant one.
+    if (!consentChange) for (const k of consentKeys) delete patch[k];
+    const revoking = consentChange && consentKeys.some(k => Object.hasOwn(patch, k) && patch[k] === null);
+    if (revoking) {
+      consentWithdrawalPending = true;
+      for (const k of consentKeys) config[k] = null;
+      consentEpoch += 1;
+      try { window.crowe.agent.stopAll(); } catch { /* startup */ }
+      try { window.dispatchEvent(new CustomEvent("crowe:consent-withdrawn")); } catch { /* tests */ }
     }
-    await store.set("config", config);
-    return config;
+    const operation = configSave.then(async () => {
+      if (consentChange && !revoking && expectedEpoch !== consentEpoch) throw new Error("The notice changed. Read it again before allowing.");
+      const next = { ...config };
+      for (const [k, v] of Object.entries(patch)) {
+        if (k === "autonomy" && !TIERS.has(v)) continue;
+        if (k === "token" && v === "") continue;
+        if (consentKeys.includes(k) && v !== null && !validConsent(v, k === "dataConsent" ? DATA_NOTICE_VERSION : FEATURE_NOTICE_VERSION)) throw new Error("Invalid data notice allowance");
+        next[k] = v;
+      }
+      if (revoking) for (const k of consentKeys) next[k] = null;
+      const payload = consentChange
+        ? Object.fromEntries(consentKeys.map(k => [k, next[k]]))
+        : Object.fromEntries(Object.entries(next).filter(([k]) => !consentKeys.includes(k)));
+      if (!await store.set(consentChange ? CONSENT_STORE_KEY : "config", payload)) throw new Error(revoking
+        ? "Sending is stopped here, but withdrawal could not be saved. Retry before restarting the app."
+        : "Settings could not be saved. Permission was not granted.");
+      // Withdrawal while persistence was pending wins over the old grant.
+      if (consentChange && !revoking && expectedEpoch !== consentEpoch) throw new Error("Permission was withdrawn while saving.");
+      const currentConsent = Object.fromEntries(consentKeys.map(k => [k, config[k]]));
+      config = next;
+      if (revoking) consentWithdrawalPending = false;
+      if (!consentChange) Object.assign(config, currentConsent);
+      return config;
+    });
+    configSave = operation.catch(() => {});
+    return operation;
   }
   const base = () => String(config.baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "");
 
@@ -148,6 +255,9 @@
       approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
+      consentWithdrawalPending,
+      dataConsent: config.dataConsent || null, readAloudConsent: config.readAloudConsent || null,
+      dictationConsent: config.dictationConsent || null, dataNoticeVersion: DATA_NOTICE_VERSION, featureNoticeVersion: FEATURE_NOTICE_VERSION,
       version: BUILD.version, platform: PLATFORM, mobile: true,
       // The paired machine, never its token. publicConfig is what the renderer
       // reads and what a panel could print; the credential stays in the bridge.
@@ -234,6 +344,15 @@
     // For phone-only scripts that call the gateway themselves (speak.js): the
     // current bearer, after auth.status() has had its chance to refresh it.
     accessToken: () => config.token || null,
+    // Consent is not an ordinary preference: stale whole-config writes cannot
+    // grant it, and old in-flight work cannot resume after withdraw/reallow.
+    consentEpoch: () => consentEpoch,
+    consentValid: (epoch, feature) => epoch === consentEpoch && consented() && (!feature || validConsent(config[feature + "Consent"], FEATURE_NOTICE_VERSION)),
+    async setConsent(patch, epoch) {
+      await ready;
+      if (!patch || Object.keys(patch).some(k => !consentKeys.includes(k))) throw new Error("Invalid notice update");
+      await saveConfig(patch, true, epoch); return publicConfig();
+    },
     add(name, content) {
       name = String(name || "").replace(/[/\\]/g, "_").trim();
       if (!name) return { error: "a file needs a name" };
@@ -385,6 +504,9 @@
       const note = await store.get("intent");
       if (!note || typeof note !== "object" || !note.kind) return null;
       await store.remove("intent");
+      // Retired grow shortcuts must never reach UI listeners, even when a saved
+      // native shortcut still writes an old handoff. Only generic Ask survives.
+      if (note.kind !== "ask") return null;
       // Notes older than ten minutes are stale: the phone was opened for some
       // other reason since, and running an old question now would surprise.
       if (note.at && Date.now() - Number(note.at) > 10 * 60 * 1000) return null;
@@ -443,6 +565,45 @@
   })();
 
 
+  // Retire only notifications positively identified by structured lot metadata
+  // and a native int32 ID. Never infer from title/body, purge saved reminders,
+  // or cancel all notifications. A failed cancellation is retried on foreground.
+  const growReminder = row => !EDITION.capabilities.grow && Boolean(row && typeof row.lot === "string" && row.lot.trim());
+  const nativeReminderId = id => Number.isInteger(id) && id > 0 && id <= 2147483647;
+  let retiringReminders = null;
+  function retireGrowReminders() {
+    if (retiringReminders) return retiringReminders;
+    retiringReminders = (async () => {
+      const LN = plugin("LocalNotifications");
+      if (!LN || !LN.getPending || !LN.cancel || EDITION.capabilities.grow) return;
+      try {
+        const result = await LN.getPending();
+        const saved = await store.get("reminders");
+        const ids = new Set((Array.isArray(saved) ? saved : []).filter(growReminder).map(r => r.id).filter(nativeReminderId));
+        const notifications = ((result && result.notifications) || [])
+          .filter(n => n && nativeReminderId(n.id) && (growReminder(n.extra) || ids.has(n.id)))
+          .map(n => ({ id: n.id }));
+        if (notifications.length) await LN.cancel({ notifications });
+      } catch { /* Leave records intact and retry next foreground. */ }
+    })().finally(() => { retiringReminders = null; });
+    return retiringReminders;
+  }
+  (() => {
+    const LN = plugin("LocalNotifications");
+    if (LN && LN.addListener) Promise.resolve(LN.addListener("localNotificationActionPerformed", async event => {
+      const notification = event && event.notification;
+      if (!notification || growReminder(notification.extra)) return;
+      const saved = await store.get("reminders");
+      if (Array.isArray(saved) && saved.some(r => r && r.id === notification.id && growReminder(r))) return;
+      try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: "ask", text: "" } })); } catch { /* tests */ }
+    })).catch(() => {});
+    const App = plugin("App");
+    if (App) Promise.resolve(App.addListener("appStateChange", state => {
+      if (state && state.isActive) retireGrowReminders();
+    })).catch(() => {});
+    ready.then(retireGrowReminders).catch(() => {});
+  })();
+
   // Told to the page, not just stored: the tier strip and the placeholders are
   // drawn from whether a machine is paired, and a pairing can land at any
   // moment from a deep link the user scanned seconds ago.
@@ -472,14 +633,6 @@
     try {
       const part = String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
       return JSON.parse(decodeURIComponent(escape(atob(part))));
-    // A reminder that is tapped opens Home on the lot it named.
-    const LN0 = plugin("LocalNotifications");
-    if (LN0) {
-      Promise.resolve(LN0.addListener("localNotificationActionPerformed", (n) => {
-        const lot = (n && n.notification && n.notification.extra && n.notification.extra.lot) || "";
-        try { window.dispatchEvent(new CustomEvent("crowe:intent", { detail: { kind: "home", text: String(lot) } })); } catch { /* no window in tests */ }
-      })).catch(() => {});
-    }
     } catch { return {}; }
   }
   // Every slug the catalog sells. Same list as main.js and web-bridge.js, and
@@ -690,10 +843,15 @@
       result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage }; },
     };
   }
-  async function gatewayChat(messages, tools, signal, model, onDelta, _retried) {
+  async function gatewayChat(messages, tools, signal, model, onDelta, _retried, epoch = consentEpoch) {
     await ready;
+    if (!consented() || epoch !== consentEpoch) return consentNeeded();
+    if (signal && signal.aborted) return { error: "stopped", aborted: true };
     if (!config.token) return { error: 'Not signed in. Tap "Sign in with Crowe ID" to continue.' };
-    const useModel = model || config.model;
+    const useModel = model || defaultModel();
+    if (!modelAllowed(useModel)) return { error: GROW_OFF, code: "UNAVAILABLE" };
+    // Keep the same restriction at this shared boundary (chat, turns, Rooms).
+    tools = tools && tools.filter(t => growToolAllowed(t && t.function && t.function.name));
     const t0 = Date.now();
     const url = `${base()}/api/gateway/chat`;
     const headers = { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` };
@@ -715,10 +873,13 @@
       // the gateway to stream: since control plane 0.2.17 the gateway honours
       // stream:true, and an event stream read as JSON is an empty answer.
       const nativeBody = JSON.parse(body); delete nativeBody.stream;
+      if (!consented() || epoch !== consentEpoch) return consentNeeded();
+      if (signal && signal.aborted) return { error: "stopped", aborted: true };
       const r = await nativePost(url, headers, nativeBody);
+      if (!consented() || epoch !== consentEpoch) return consentNeeded();
       diag("net:native", r ? { status: r.status, bytes: String(r.text || "").length } : "no native transport");
       if (!r) return { error: `gateway unreachable: ${String(e).slice(0, 200)}` };
-      if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
+      if (r.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true, epoch);
       let data;
       try { data = JSON.parse(r.text); }
       catch {
@@ -733,7 +894,7 @@
     }
 
     diag("net:response", { status: resp.status, type: String(resp.headers.get("content-type") || "").slice(0, 40), ms: Date.now() - t0 });
-    if (resp.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true);
+    if (resp.status === 401 && !_retried && await refreshToken()) return gatewayChat(messages, tools, signal, model, onDelta, true, epoch);
 
     // Streaming is decided by the response, not the request — same contract as
     // main.js, so a gateway build that answers JSON to stream:true still works.
@@ -745,6 +906,7 @@
       try {
         for (;;) {
           const { done: eof, value } = await reader.read();
+          if (!consented() || epoch !== consentEpoch) { await reader.cancel(); return consentNeeded(); }
           if (eof) break;
           buf += dec.decode(value, { stream: true });
           let i;
@@ -764,6 +926,7 @@
     }
 
     const text = await resp.text();
+    if (!consented() || epoch !== consentEpoch) return consentNeeded();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${data.detail || text}`.slice(0, 400) };
     return done(data, 0);
@@ -783,27 +946,24 @@
       }
       const data = JSON.parse(text);
       if (data && Array.isArray(data.models)) {
-        catalogCache = { models: data.models, at: Date.now() };
-        store.set("catalog", catalogCache);
+        catalogCache = { models: filterCatalog(data.models), at: Date.now() };
+        // Retain source metadata locally so forbidden aliases remain recognized
+        // after restart, while all public catalog views use the filtered cache.
+        store.set("catalog", { models: data.models, at: catalogCache.at });
       }
     } catch { /* keep the last good catalog; routing falls back to the default model */ }
   }
 
   // ─── Routing ───────────────────────────────────────────────────────────────
-  /* Copied from harness.js rather than imported: the harness is Node — fs, and
-     child_process at the top of the file — so it cannot be loaded in here at
-     all. The copy is the cost of that, and test-mobile-bridge.js pays it down
-     by comparing these regexes against the harness's source, so a role added
-     over there fails the build until it is added over here. Route the same way
-     or the phone quietly asks a different expert than the desktop does. */
+  // General expert routing mirrors desktop roles except cultivation. Ordinary
+  // questions about any topic still go to the general assistant.
   const ROLE_MATCH = [
-    { role: "cultivation", match: /\b(cultivat\w*|mycolog\w*|substrate|myceli\w*|grow(?:er|ing)?|inocula\w*|fruit(?:ing)?|spawn|agar|petri|contaminat\w*|harvest|strain|mushroom|coloniz\w*|sterili[sz]\w*)\b/i },
     { role: "coding", match: /\b(refactor\w*|implement|debug\w*|stack ?trace|compile|pytest|unit test|API endpoint|migration|typescript|rust|golang)\b/i },
     { role: "reasoning", match: /\b(architect\w*|redesign|prove|reason through|algorithm\w*|optimi[sz]e|trade-?off|concurren\w*|race condition|root cause|complexity)\b/i },
     { role: "long-context", match: /\b(summari[sz]e (?:this|the (?:whole|entire))|entire (?:repo|codebase|document|file)|long document|across all files)\b/i },
   ];
-  const ROUTED_ROLES = ["cultivation", "coding", "reasoning", "long-context"];
-  const BRIDGE_ROLE_MODEL = { cultivation: "crowelm-grower", reasoning: "GPT-5.6-Sol" };
+  const ROUTED_ROLES = ["coding", "reasoning", "long-context"];
+  const BRIDGE_ROLE_MODEL = { reasoning: "GPT-5.6-Sol" };
   const classifyRole = (text) => (ROLE_MATCH.find((r) => r.match.test(text)) || { role: "default" }).role;
   function catalogModelForRole(role) {
     const m = catalogCache.models.find((x) => x && x.featured && x.available !== false
@@ -821,15 +981,12 @@
   const FREE_MODEL = "crowelm-flash";
   // Photos go here, whatever the words routed to. Same id the catalog serves.
   const VISION_MODEL = "crowelm-vision";
-  const PHOTO_DEFAULT_ASK = "Look at this photo. Is this contamination, and what should I do?";
+  const PHOTO_DEFAULT_ASK = "Describe this image and help me understand what is visible.";
   const VISION_BRIEF = [
-    "A photo taken on this phone is attached to the user's message. Describe what is actually visible first:",
-    "the substrate or agar, the mycelium's color and texture, any discoloration, wet or slimy patches, pins or",
-    "fruit bodies. Then assess: healthy, or contamination and which kind (green Trichoderma, cobweb mold,",
-    "bacterial blotch or wet spot, black pin mold, yellow metabolite staining), where on the block or plate,",
-    "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
-    "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
-    "Offer to log the finding with log_grow when the tier allows it.",
+    "An image is attached to the user's message. Help with the user's task using what is actually visible.",
+    "Describe relevant details, read visible text when useful, and distinguish observation from inference.",
+    "Do not assume the image belongs to a particular subject or workflow. State uncertainty and image limitations.",
+    "If the task is unclear, give a brief useful description and ask what the user wants to know.",
     "Begin with exactly one line of the form REGIONS: [{\"label\": \"...\", \"x\": 0.1, \"y\": 0.2, \"w\": 0.3, \"h\": 0.2}] naming up to",
     "four areas of the photo you examined, x y w h as fractions of the image width and height from the top left, then a",
     "blank line, then the answer. The line drives the phone's display of what you looked at; never refer to it in the answer.",
@@ -944,9 +1101,11 @@
     return `This Crowe ID has no plan that includes the routed model, so ${free} is answering. The full CroweLM tiers need a ${required || "personal"} plan or higher.`;
   }
   function routeTurn(messages, pin) {
-    const dflt = config.model || "crowelm";
+    const dflt = defaultModel();
     const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
-    const role = pin && pin !== "default" ? pin : classifyRole(String((last && last.content) || ""));
+    const role = pin && pin !== "default"
+      ? (ROUTED_ROLES.includes(pin) ? pin : "default")
+      : classifyRole(String((last && last.content) || ""));
     let route;
     if (role === "default") route = { expert: "operator", model: dflt, reason: "default operator" };
     else {
@@ -964,7 +1123,7 @@
     return route;
   }
   function resolveRoles() {
-    const dflt = config.model || "crowelm";
+    const dflt = defaultModel();
     const out = {};
     for (const role of ROUTED_ROLES) {
       const dynamic = catalogModelForRole(role);
@@ -976,83 +1135,12 @@
     return out;
   }
 
-  // ─── The grower's records ──────────────────────────────────────────────────
-  // Same schema the desktop validates against, wrapped out of grow-schema.js by
-  // the www build. Same store semantics too: ids, createdAt/updatedAt, and a
-  // refused write rather than a silently dropped field.
-  const GROW = window.CROWE_GROW || { GROW_SCHEMA: {}, GROW_TYPES: new Set(), growValidate: () => ({ ok: false, error: "grow schema missing" }) };
-  const growKey = (type) => `grow:${type}`;
-  // Crowe Sense config, same closed set as the desktop's sense.js minus direct.
-  const SENSE_RELAY = "https://sense.crowelogic.com";
-  async function senseConfig() {
-    const r = (await store.get("sense")) || {};
-    const node = String(r.node || "").trim().toLowerCase();
-    const paired = r.source !== "off" && /^cs-[0-9a-f]{6}$/.test(node);
-    return { source: paired ? "cloud" : "off", url: "", node, relay: String(r.relay || SENSE_RELAY).replace(/\/+$/, "") || SENSE_RELAY };
-  }
-  async function growRead(type) {
-    if (!GROW.GROW_TYPES.has(String(type || ""))) return [];
-    return (await store.get(growKey(type))) || [];
-  }
-  async function growWrite(type, record) {
-    const t = String(type || "");
-    if (!GROW.GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
-    const rows = await growRead(t);
-    const rec = { ...(record || {}) };
-    const now = Date.now();
-    if (rec.id) {
-      const i = rows.findIndex((r) => r && r.id === rec.id);
-      if (i < 0) return { ok: false, error: "no such record" };
-      rows[i] = { ...rows[i], ...rec, updatedAt: now };
-    } else {
-      rec.id = "g-" + now.toString(36) + "-" + Math.random().toString(36).slice(2, 7);
-      rec.createdAt = now; rec.updatedAt = now;
-      rows.push(rec);
-    }
-    if (!await store.set(growKey(t), rows)) return { ok: false, error: "the record could not be saved to this device" };
-    return { ok: true, id: rec.id, record: rows.find((r) => r.id === rec.id) };
-  }
-
   // ─── Tools ─────────────────────────────────────────────────────────────────
   /* The desktop offers ten tools, eight of which are a workspace: shell, read,
      edit, write, search, list. Handing those to the model here and answering
      every call with "not available" would burn a round per attempt and teach it
      nothing. So the phone advertises only what it can actually do, and the
      system prompt says so in the first line. */
-  function growToolSpec() {
-    const types = Object.entries(GROW.GROW_SCHEMA).map(([t, def]) =>
-      `${t} (${def.what}): ${def.fields.map((f) => `${f.k}: ${f.d}`).join("; ")}`).join("\n");
-    return {
-      type: "function",
-      function: {
-        name: "log_grow",
-        description: `Write a record into the grower's own log on this device. Types and their fields:\n${types}\nPass id to correct an existing row.`,
-        parameters: {
-          type: "object",
-          properties: {
-            type: { type: "string", enum: Object.keys(GROW.GROW_SCHEMA), description: "which record type" },
-            record: { type: "object", description: "the fields for this record" },
-          },
-          required: ["type", "record"],
-        },
-      },
-    };
-  }
-  const READ_GROW = {
-    type: "function",
-    function: {
-      name: "read_grow",
-      description: "Read back rows the grower has logged on this device, newest first. Use it before answering anything about this farm's own blocks, flushes, contamination, environment, strains, recipes or journal.",
-      parameters: {
-        type: "object",
-        properties: {
-          type: { type: "string", description: "record type: blocks, flushes, contam, env, strains, recipes, log" },
-          limit: { type: "number", description: "how many rows, default 20" },
-        },
-        required: ["type"],
-      },
-    },
-  };
   const OPEN_URL = {
     type: "function",
     function: {
@@ -1114,11 +1202,10 @@
   };
 
   // The tier the user picked in the composer decides whether the model may
-  // write. Plan and Read look at the log; Edit and Execute may add to it.
+  // write attached files or files on the paired machine.
   const mayWrite = () => config.autonomy === "edit" || config.autonomy === "execute";
   function toolsForTurn() {
-    const tools = [READ_GROW, OPEN_URL];
-    if (mayWrite() && Object.keys(GROW.GROW_SCHEMA).length) tools.push(growToolSpec());
+    const tools = [OPEN_URL];
     /* The tier ladder means the same thing here as it does on the desktop, and
        it is the whole safety story for a shell you are carrying in a pocket:
          plan:     nothing on the machine, not even a read
@@ -1150,28 +1237,15 @@
     const tools = toolsForTurn();
     const cx = typeof window !== "undefined" && window.croweConnectors;
     if (!cx) return tools;
-    try { return tools.concat(await cx.tools()); } catch { return tools; }
+    try { return tools.concat(await cx.tools()).filter(t => growToolAllowed(t && t.function && t.function.name)); } catch { return tools; }
   }
 
   async function execTool(name, args) {
+    // Deny before even asking a connector whether it owns the name. An
+    // unsolicited tool call or connector collision cannot restore grow access.
+    if (!growToolAllowed(name)) return { text: GROW_OFF, status: "blocked" };
     const cx = typeof window !== "undefined" && window.croweConnectors;
     if (cx && cx.owns(name)) return { text: await cx.act(name, args), status: "ok" };
-    if (name === "read_grow") {
-      const rows = await growRead(String(args.type || ""));
-      if (!rows.length) return { text: `no ${args.type || "records"} logged on this device yet`, status: "empty" };
-      const limit = Math.max(1, Math.min(100, Number(args.limit) || 20));
-      const recent = rows.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit);
-      return { text: `${rows.length} ${args.type} row(s); showing ${recent.length}:\n${JSON.stringify(recent, null, 1)}`, status: "ok" };
-    }
-    if (name === "log_grow") {
-      if (!mayWrite()) return { text: "blocked: the autonomy tier is read-only. Ask the grower to switch to Edit to log records.", status: "blocked" };
-      const v = GROW.growValidate(String(args.type || ""), args.record || {});
-      if (!v.ok) return { text: `refused: ${v.error}`, status: "error" };
-      const w = await growWrite(args.type, v.record);
-      return w.ok
-        ? { text: `${args.record && args.record.id ? "corrected" : "logged"} ${args.type} ${w.id}`, status: "ok" }
-        : { text: `refused: ${w.error}`, status: "error" };
-    }
     if (name === "open_url") {
       const url = String(args.url || "");
       if (!/^https?:\/\//i.test(url)) return { text: "refused: only http(s) URLs can be opened", status: "error" };
@@ -1321,11 +1395,10 @@
       attached,
       route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
       "",
-      "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
-      "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
-      "journal must come from read_grow, not from memory.",
+      "You have open_url, which asks the user before opening a link. Use only the tools actually offered.",
+      "Do not claim access to local records or workflows that are not provided by those tools.",
       "",
-      "Write for a small screen held in one hand, often in a grow room: short paragraphs, the answer first,",
+      "Write for a small screen held in one hand: short paragraphs, the answer first,",
       "no long tables, no ASCII diagrams. Give the number or the action before the reasoning.",
       route.expert && route.expert !== "operator" ? `You are answering as the ${route.expert} expert.` : "",
       user && user.email ? `The signed-in user is ${user.email}.` : "",
@@ -1370,15 +1443,19 @@
     } catch { /* diagnostics never get in the way */ }
   }
   const runs = new Map();
+  let runSequence = 0;
 
-  async function runAgent(messages, id, opts) {
+  async function runAgent(messages, id, opts, epoch) {
     await ready;
-    const run = { aborted: false, controller: null };
+    if (!consented() || epoch !== consentEpoch) { const c = consentNeeded(); return { done: false, error: c.error, text: c.error }; }
+    const previous = runs.get(id);
+    if (previous) { previous.aborted = true; previous.controller?.abort(); }
+    const run = { aborted: false, controller: null, epoch: consentEpoch, runId: ++runSequence };
     runs.set(id, run);
     const send = (ev) => {
       if (ev && (ev.type === "route" || ev.type === "error" || ev.type === "final" || ev.type === "plan" || ev.type === "photos" || ev.type === "vision_regions"))
         diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
-      emit({ ...ev, agentId: id });
+      emit({ ...ev, agentId: id, runId: run.runId });
     };
     diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
@@ -1428,7 +1505,7 @@
       convo.push(...compact(msgs));
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
+        if (run.aborted || run.epoch !== consentEpoch || !consented()) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
         if (budget && meter.cost >= budget) {
           send({ type: "budget", spent: meter.cost, ceiling: budget, stage: "answer", stopped: true });
           send({ type: "final", note: "turn budget reached" });
@@ -1439,7 +1516,7 @@
         const emitDelta = (chunk) => send({ type: "assistant_delta", text: chunk });
         const filt = route.vision ? regionsFilter((regions) => send({ type: "vision_regions", regions }), emitDelta,
           (reasoning) => { if (isOwner()) send({ type: "vision_reasoning", text: reasoning }); }) : null;
-        const r = await gatewayChat(convo, await turnTools(), run.controller.signal, route.model, filt ? filt.delta : emitDelta);
+        const r = await gatewayChat(convo, await turnTools(), run.controller.signal, route.model, filt ? filt.delta : emitDelta, false, run.epoch);
         if (filt) {
           filt.flush();
           if (typeof r.content === "string") {
@@ -1494,7 +1571,7 @@
             send({ type: "error", text: msg }); send({ type: "final", note: "empty completion" });
             return { done: false, error: msg, text };
           }
-          send({ type: "final", note: "answered" }); return { done: true, text };
+          send({ type: "final", note: "answered", success: Boolean((r.content || "").trim()), finding: (r.content || "").trim() }); return { done: true, text };
         }
 
         convo.push({ role: "assistant", content: r.content || "", tool_calls: calls });
@@ -1512,7 +1589,7 @@
       send({ type: "final", note: `stopped after ${MAX_ROUNDS} rounds` });
       return { done: true, text };
     } finally {
-      runs.delete(id);
+      if (runs.get(id) === run) runs.delete(id);
     }
   }
 
@@ -1765,8 +1842,29 @@
 
   const noop = () => () => {};
   window.crowe = promisify({
-    // Every space ships on mobile; the phone chrome decides how they are reached.
+    // Phone navigation follows Desktop policy; no local farm capability is granted.
     installSpaces: null,
+    edition: EDITION,
+    editionAccess: {
+      async enterLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery requires the source desktop installation. No local records are accessed here." } }; },
+      async leaveLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery is unavailable in this runtime." } }; },
+      async openWorkbench() { return { ok: false, error: { code: "UNAVAILABLE", message: "Opening the local desktop workbench is unavailable in this runtime." } }; },
+    },
+    vision: { async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook photo inspection requires the Mycology desktop app. No image is read or sent here." } }; } },
+    transfer: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook and compliance transfers require the local desktop app. No records are imported or exported here." } }; },
+    },
+    // Phone records and paired-machine routes are not the desktop farm database.
+    farm: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm & Compliance is available in the local desktop app, not this phone. No farm records are stored here." } }; },
+      async legacyHarvests() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy harvest adoption is available only in the local desktop Farm & Compliance workspace." } }; },
+    },
+    team: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm team tools are available in the Mycology desktop app, not this phone." } }; },
+    },
+    imports: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Document intake is available in the Mycology desktop app, not this phone. No documents are stored here." } }; },
+    },
     /* Also the flag renderer.js branches on: it is the one part of the bridge
        that exists before any class is put on the body, so a panel deck mounting
        during init can still tell which shell it is in. */
@@ -1790,6 +1888,9 @@
 
     agent: {
       run: async (messages, id = "main", options = {}) => {
+        await ready;
+        if (!consented()) { const c = consentNeeded(); return { done: false, error: c.error, text: c.error }; }
+        const epoch = consentEpoch;
         if (options && options.licensed) {
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };
@@ -1797,7 +1898,8 @@
         // A call with no messages answers, it does not reject: an unhandled
         // rejection is a console error in the WebView and a crash in Node.
         if (!Array.isArray(messages)) return { done: false, error: "nothing to send", text: "" };
-        const result = await runAgent(messages.slice(), String(id || "main"), options || {});
+        if (!consented() || epoch !== consentEpoch) { const c = consentNeeded(); return { done: false, error: c.error, text: c.error }; }
+        const result = await runAgent(messages.slice(), String(id || "main"), options || {}, epoch);
         if (id === "main") { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
         return { done: Boolean(result.done), text: result.text || "", error: result.error };
       },
@@ -1986,32 +2088,11 @@
        a shell to lend, and a phone has no stable address to be found at. So
        these refuse rather than pretend, and point at the half that does exist:
        remote.pair, above, is how this device joins someone else's companion. */
-    /* Crowe Sense from the phone: the relay, read with this device's own Crowe
-       ID. No direct source, since a phone leaves the tailnet the moment it
-       leaves the building; and no writes into the phone's grow log, which
-       stays what the grower typed on it. */
+    // Compatibility responses only. Never read saved Sense settings or poll a relay.
     sense: {
-      status: async () => {
-        const cfg = await senseConfig();
-        if (cfg.source === "off") return { config: cfg, health: null, lastPoll: 0, lastError: "", stale: false, running: false };
-        try {
-          const headers = { accept: "application/json" };
-          if (config.token) headers.Authorization = `Bearer ${config.token}`;
-          const r = await fetch(`${cfg.relay}/v1/nodes/${encodeURIComponent(cfg.node)}/health`, { headers });
-          if (!r.ok) return { config: cfg, health: null, lastPoll: Date.now(), lastError: `The Crowe Sense relay answered ${r.status}.`, stale: true, running: false };
-          const health = await r.json();
-          const age = Number(health && health.age_s);
-          return { config: cfg, health, lastPoll: Date.now(), lastError: "", stale: !Number.isFinite(age) || age > 180, running: false };
-        } catch (e) {
-          return { config: cfg, health: null, lastPoll: Date.now(), lastError: String((e && e.message) || e), stale: true, running: false };
-        }
-      },
-      configure: async (patch) => {
-        const cur = await senseConfig();
-        const next = { ...cur, ...(patch || {}) };
-        await store.set("sense", { source: next.source === "off" ? "off" : "cloud", node: String(next.node || "").trim().toLowerCase(), relay: String(next.relay || SENSE_RELAY).replace(/\/+$/, "") || SENSE_RELAY });
-        return { config: await senseConfig(), health: null, lastPoll: 0, lastError: "", stale: false, running: false };
-      },
+      status: async () => ({ config: { source: "off", url: "", node: "", relay: "" }, health: null,
+        lastPoll: 0, lastError: "", stale: false, running: false, available: EDITION.capabilities.sense }),
+      configure: async () => unavailableGrow(),
       onChange: () => () => {},
     },
     companion: {
@@ -2104,40 +2185,20 @@
       },
     },
 
+    // Ordinary growing APIs are unavailable, including the old clipboard
+    // export. Settings' explicit legacy archive is a separate, raw-data path.
     grow: {
-      list: (type) => growRead(String(type || "")),
-      save: (type, record) => {
-        const v = GROW.growValidate(String(type || ""), record || {});
-        return v.ok ? growWrite(type, v.record) : Promise.resolve({ ok: false, error: v.error });
-      },
-      delete: async (type, id) => {
-        const t = String(type || "");
-        if (!GROW.GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
-        await store.set(growKey(t), (await growRead(t)).filter((r) => r && r.id !== id));
-        return { ok: true };
-      },
-      // The desktop writes a trace to a file the user picks. A phone has no such
-      // dialog, so the trace goes to the share sheet — mail it, message it, drop
-      // it in Files — and falls back to the clipboard when sharing is refused.
-      export: async (name, text) => {
-        const Share = plugin("Share");
-        if (Share) {
-          try { await Share.share({ title: name, text, dialogTitle: "Export lot trace" }); return { ok: true, shared: true }; }
-          catch { /* the user dismissed the sheet, or the plugin is not installed */ }
-        }
-        try { await navigator.clipboard.writeText(text); return { ok: true, copied: true }; }
-        catch { return { ok: false, error: "This device would not share or copy the trace." }; }
-      },
+      list: async () => [],
+      save: async () => unavailableGrow(),
+      delete: async () => unavailableGrow(),
+      export: async () => unavailableGrow(),
     },
 
-    /* 1.1: what the phone does when nobody is chatting. Reminders ride the
-       system's local notifications (the plugin owns permission and delivery);
-       the camera roll keeps each photo check's verdict so Home and the Camera
-       tab can show what was looked at, when, and against which lot. Both live
-       in Preferences beside the grow log and never leave the phone. */
+    // General reminders remain. Grow-specific history stays stored untouched.
     reminders: {
-      list: async () => ((await store.get("reminders")) || []).filter((r) => r && r.at > Date.now() - 7 * 86400000).sort((a, b) => a.at - b.at),
+      list: async () => ((await store.get("reminders")) || []).filter((r) => r && !growReminder(r) && r.at > Date.now() - 7 * 86400000).sort((a, b) => a.at - b.at),
       add: async ({ lot, title, body, at } = {}) => {
+        if (!EDITION.capabilities.grow && lot != null && String(lot).trim()) return unavailableGrow();
         const when = Number(at);
         if (!Number.isFinite(when) || when < Date.now()) return { ok: false, error: "the reminder time is in the past" };
         // int32, as the notification plugin requires; seconds plus a nonce keeps two taps apart.
@@ -2152,9 +2213,10 @@
           try { await LN.schedule({ notifications: [{ id, title: rec.title, body: rec.body, schedule: { at: new Date(when), allowWhileIdle: true }, extra: { lot: rec.lot } }] }); }
           catch (e) { return { ok: false, error: "schedule: " + String(e && e.message || e).slice(0, 80) }; }
         }
-        const all = ((await store.get("reminders")) || []).filter((r) => r && r.id !== id);
+        const all = (await store.get("reminders")) || [];
         all.push(rec);
-        await store.set("reminders", all.slice(-200));
+        // Do not trim this collection: it includes preserved legacy history.
+        await store.set("reminders", all);
         return { ok: true, reminder: rec, native: Boolean(LN) };
       },
       // What the system still holds for this app, so Diagnostics can show that
@@ -2171,22 +2233,18 @@
         } catch (e) { return { native: true, notifications: [], error: String(e && e.message || e).slice(0, 80) }; }
       },
       remove: async (id) => {
+        const all = (await store.get("reminders")) || [];
+        if (all.some(r => r && r.id === Number(id) && growReminder(r))) return unavailableGrow();
         const LN = plugin("LocalNotifications");
         if (LN) { try { await LN.cancel({ notifications: [{ id: Number(id) }] }); } catch { /* fired already, or never scheduled */ } }
-        await store.set("reminders", ((await store.get("reminders")) || []).filter((r) => r && r.id !== Number(id)));
+        await store.set("reminders", all.filter((r) => r && r.id !== Number(id)));
         return { ok: true };
       },
     },
+    // This is the retired journal, not crowePhone's general photo attachment.
     camera: {
-      list: async () => ((await store.get("camera-roll")) || []).slice().reverse(),
-      add: async ({ lot, verdict, thumb } = {}) => {
-        const ok = typeof thumb === "string" && thumb.startsWith("data:image/") && thumb.length < 120000;
-        const rec = { id: "c-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6), ts: Date.now(), lot: String(lot || "").slice(0, 40), verdict: String(verdict || "").slice(0, 400), thumb: ok ? thumb : "" };
-        const roll = (await store.get("camera-roll")) || [];
-        roll.push(rec);
-        await store.set("camera-roll", roll.slice(-60));
-        return { ok: true, entry: rec };
-      },
+      list: async () => [],
+      add: async () => unavailableGrow(),
     },
 
     diag: {
@@ -2203,10 +2261,10 @@
         await ready;
         if (!catalogCache.models.length) {
           const cached = await store.get("catalog");
-          if (cached && Array.isArray(cached.models)) catalogCache = cached;
+          if (cached && Array.isArray(cached.models)) catalogCache = { ...cached, models: filterCatalog(cached.models) };
           fetchCatalog();
         } else if (Date.now() - catalogCache.at > 3600000) fetchCatalog();
-        return { models: catalogCache.models, at: catalogCache.at, resolved: resolveRoles(), defaultModel: config.model || "crowelm" };
+        return { models: catalogCache.models, at: catalogCache.at, resolved: resolveRoles(), defaultModel: defaultModel() };
       },
     },
 
@@ -2246,12 +2304,12 @@
        expects - a list is an empty list, an action is a stated reason - which
        is the same contract the plugin and git refusals above keep. */
     rooms: window.CroweLocalRooms && window.CroweRooms ? window.CroweLocalRooms.create({
-      read: async () => (await store.get("rooms")) || [],
+      read: async () => { await ready; return (await store.get("rooms")) || []; },
       write: async records => { if (!await store.set("rooms", records)) throw new Error("Room storage could not be saved. Autopilot stopped."); },
       catalog: async () => { await ready; if (config.token && !catalogCache.models.length) await fetchCatalog(); return catalogCache.models; },
       chat: async (model, messages, signal) => gatewayChat(messages, [], signal, model),
       emit,
-    }) : {
+    }, Object.freeze({ grow: EDITION.capabilities.grow, modelAllowed })) : {
       agents: async () => ({ agents: [], templates: [] }), list: async () => [],
       create: async () => ({ error: "Room engine is missing; rebuild the mobile payload." }),
       onChanged: () => () => {}, onOpen: () => () => {},
@@ -2341,7 +2399,7 @@
     if (!localStorage.getItem("crowe-sidebar")) localStorage.setItem("crowe-sidebar", "collapsed");
   } catch { /* a webview with storage disabled still boots, just without the defaults */ }
 
-  // Warm the catalog so the first Home render has models in it, and so routing
+  // Warm the catalog so the first model picker has models in it, and so routing
   // is not stuck on the default model for the first turn of the session.
   ready.then(() => { if (config.token) fetchCatalog(); });
 })();
