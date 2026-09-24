@@ -160,7 +160,9 @@ try { pty = require("node-pty"); } catch { pty = null; }
 // Auto-update (electron-updater over the generic R2 channel). Only in packaged
 // builds; downloads are user-consented, never silent. See setupAutoUpdate().
 let autoUpdater = null;
-if (!LOCAL_PRERELEASE) {
+// A Mac App Store build never loads the updater: the store delivers updates and
+// review rejects an app that replaces its own code.
+if (!LOCAL_PRERELEASE && !process.mas) {
   try { ({ autoUpdater } = require("electron-updater")); } catch { autoUpdater = null; }
 }
 

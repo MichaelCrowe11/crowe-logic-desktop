@@ -1091,6 +1091,12 @@
       async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm & Compliance is available in the local desktop app, not this browser. No farm records are stored here." } }; },
       async legacyHarvests() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy harvest adoption is available only in the local desktop Farm & Compliance workspace." } }; },
     },
+    team: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm team tools are available in the Mycology desktop app, not the web console." } }; },
+    },
+    imports: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Document intake is available in the Mycology desktop app, not the web console. No documents are stored here." } }; },
+    },
 
     agent: {
       run: agentRun,

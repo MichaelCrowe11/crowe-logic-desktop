@@ -17,7 +17,9 @@ exports.default = async function afterPack(context) {
   // let 0.24.6 and 0.24.7 ship mac-only: the hook looked for "Crowe Logic" in
   // linux-unpacked, found nothing, and the Linux build died at afterPack.
   const linuxExe = (electronPlatformName === "linux" && packager.executableName) || name;
-  const binary = electronPlatformName === "darwin"
+  // A Mac App Store build reports "mas", not "darwin", but lays out the same bundle.
+  const mac = electronPlatformName === "darwin" || electronPlatformName === "mas";
+  const binary = mac
     ? path.join(appOutDir, `${name}.app`, "Contents", "MacOS", name)
     : electronPlatformName === "win32" ? path.join(appOutDir, `${name}.exe`) : path.join(appOutDir, linuxExe);
   await flipFuses(binary, {
@@ -25,7 +27,7 @@ exports.default = async function afterPack(context) {
     // arm64 Mach-O binaries have to carry a valid signature to launch at all;
     // the flip invalidates the ad-hoc one, so put a fresh ad-hoc one back for
     // electron-builder's real signing to replace.
-    resetAdHocDarwinSignature: electronPlatformName === "darwin" && arch === 3,
+    resetAdHocDarwinSignature: mac && arch === 3,
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableCookieEncryption]: true,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
