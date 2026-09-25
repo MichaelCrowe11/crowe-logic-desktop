@@ -1,0 +1,9 @@
+.farm-team { display:flex; flex-direction:column; min-height:100%; gap:12px; padding:12px; box-sizing:border-box; }
+.farm-team-tabs { display:flex; flex-wrap:wrap; gap:8px; }
+.farm-team-tabs button { font:inherit; color:inherit; background:transparent; border:1px solid currentColor; border-radius:18px; padding:8px 14px; cursor:pointer; }
+.farm-team-tabs button[aria-pressed="true"] { background:#7a663c; color:#fff; border-color:#7a663c; }
+.farm-team-tabs button:focus-visible { outline:3px solid #a98c50; outline-offset:3px; }
+.farm-team-scope { font-size:12px; margin:0; line-height:1.5; }
+.farm-team [data-team-panel] { flex:1; min-height:0; }
+.farm-team [data-team-panel][hidden] { display:none; }
+#surface-messenger { overflow:auto; }

@@ -59,7 +59,6 @@ const PANELS = [
   { file: "01-chat.png", head: "Your operator,\nin your pocket.", sub: "Ask it to reason, look things up, and keep track of what you are working on." },
   { file: "02-projects.png", head: "Every thread,\nand who answered it.", sub: "Coding, development and research, run by the operator." },
   { file: "03-studio.png", head: "Film, music,\nand the studio.", sub: "The creative house, under one roof." },
-  { file: "04-cultivation.png", head: "The grower's\nspace.", sub: "Questions go straight to the mycology expert, with no need to phrase them for a router." },
   { file: "05-panels.png", head: "Operator control,\nfrom the phone.", sub: "See what is running, and stop it from here." },
 ];
 

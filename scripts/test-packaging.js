@@ -39,11 +39,12 @@ function covered(rel) {
   // electron-builder copies package.json into every build whether it is listed
   // or not — it is how the packaged app knows its own main and version.
   if (rel === "package.json") return true;
-  return allow.some((pattern) => {
+  const matches = (pattern) => {
     if (pattern === rel) return true;
     const star = pattern.indexOf("/**");
     return star > 0 && rel.startsWith(pattern.slice(0, star + 1));
-  });
+  };
+  return allow.some(matches) && !pkg.build.files.some((pattern) => pattern.startsWith("!") && matches(pattern.slice(1)));
 }
 
 /* Follows relative requires transitively: a file that is packaged but whose own
@@ -70,6 +71,47 @@ check("every module reachable from main.js is in the files allowlist", () => {
     `these would be left out of the build and crash it at startup:\n         ${missing.join("\n         ")}\n` +
     `       Add them to build.files in package.json.`);
   return `${reachable.length} modules`;
+});
+
+check("the farm worker entrypoint and its dependencies are explicitly packaged", () => {
+  // new Worker(path.join(__dirname, "worker.js")) is not a require edge.
+  // Walking main.js alone silently misses the entire SQLite store.
+  const entry = "farm/worker.js";
+  assert(pkg.build.files.includes("farm/**"), "build.files must explicitly include farm/**");
+  assert(fs.existsSync(path.join(root, entry)), "farm/worker.js does not exist");
+  const reachable = [...requiresFrom(entry)];
+  assert(reachable.includes("farm/store.js"), "the worker must reach the authoritative store");
+  const missing = reachable.filter((f) => !covered(f) || pkg.build.files.includes(`!${f}`));
+  assert(!missing.length, `farm worker dependencies missing from the package: ${missing.join(", ")}`);
+  for (const asset of ["renderer/farm-compliance.js", "renderer/farm-compliance.css"]) {
+    assert(covered(asset) && !pkg.build.files.includes(`!${asset}`) && fs.existsSync(path.join(root, asset)), `missing asset ${asset}`);
+  }
+  return `${reachable.length} worker modules; startup from a staged package: test-farm-packaging.js`;
+});
+
+check("edition policy and transfer host modules are packaged with their dependencies", () => {
+  for (const entry of ["app-edition.js", "grow-transfer.js", "farm/transfer-host.js"]) {
+    assert(fs.existsSync(path.join(root, entry)), `${entry} does not exist`);
+    const missing = [...requiresFrom(entry)].filter((file) => !covered(file) || pkg.build.files.includes(`!${file}`));
+    assert(!missing.length, `transfer dependencies missing from package: ${missing.join(", ")}`);
+  }
+  for (const asset of ["renderer/farm-recovery.js", "renderer/mycology-transfer.js", "renderer/mycology-transfer.css"]) {
+    assert(covered(asset) && !pkg.build.files.includes(`!${asset}`), `${asset} is not packaged`);
+    assert(fs.existsSync(path.join(root, asset)), `${asset} is missing`);
+  }
+});
+
+check("Vision host and review assets ship without the synthetic farm fixture", () => {
+  assert(pkg.build.files.includes("vision/**"), "build.files must explicitly include vision/**");
+  for (const entry of ["vision/host.js", "vision/image.js", "vision/notebook.js"]) {
+    assert(fs.existsSync(path.join(root, entry)), `${entry} is missing`);
+    const missing = [...requiresFrom(entry)].filter((file) => !covered(file));
+    assert(!missing.length, `Vision dependencies missing from package: ${missing.join(", ")}`);
+  }
+  for (const asset of ["renderer/mycology-vision.js", "renderer/mycology-vision.css"]) {
+    assert(covered(asset) && fs.existsSync(path.join(root, asset)), `${asset} is missing or excluded`);
+  }
+  assert(!covered("farm/fixtures.js"), "synthetic farm fixture must not ship");
 });
 
 check("the preload is packaged too", () => {
@@ -148,6 +190,20 @@ check("the developer edition installs beside the full app on Linux", () => {
   return `${devPackage} beside ${fullPackage}, ${devExe} beside ${fullExe}`;
 });
 
+check("Mycology has a separate installer, Linux and update identity without packaging drift", () => {
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  const mycology = require(path.join(root, "electron-builder.mycology.js"));
+  assert(mycology.extraMetadata.croweEdition === "mycology", "packaged Mycology edition metadata missing");
+  assert(pkg.build.extraMetadata.croweEdition === "desktop" && dev.extraMetadata.croweEdition === "developers", "existing edition metadata missing");
+  assert(mycology.productName === "Crowe Logic Mycology" && mycology.extraMetadata.productName === mycology.productName, "Mycology product identity missing");
+  assert(mycology.appId === `${pkg.build.appId}.mycology` && mycology.appId !== dev.appId, "Mycology appId is not isolated");
+  assert(mycology.linux.executableName === "crowe-logic-mycology" && mycology.deb.packageName === "crowe-logic-mycology", "Mycology Linux package identity missing");
+  assert(mycology.directories.output === "release-mycology", "Mycology output directory is not isolated");
+  assert(mycology.artifactName.includes("-mycology-") && mycology.mac.artifactName === mycology.artifactName, "Mycology artifact names are not isolated");
+  assert(mycology.publish.every((entry) => entry.channel === "mycology" && entry.url.endsWith('/desktop/mycology/channel/${os}')), "Mycology updater is not isolated");
+  for (const field of ["files", "asarUnpack", "afterPack", "afterSign"]) assert(JSON.stringify(mycology[field]) === JSON.stringify(pkg.build[field]), `Mycology ${field} drifted`);
+});
+
 check("the DMG stapler finds each edition's artifacts and feed from its config", () => {
   // staple-dmg.js patches the update feed by name after stapling. The developer
   // edition writes developers-mac.yml into release-developers/, so a stapler
@@ -164,7 +220,9 @@ check("the DMG stapler finds each edition's artifacts and feed from its config",
   const edition = target(["node", "staple-dmg.js", "--config", path.join(root, "electron-builder.developer.js")]);
   assert(edition.dir === path.resolve(root, dev.directories.output), `edition resolves to ${edition.dir}`);
   assert(edition.feed === `${dev.publish[0].channel}-mac.yml`, `edition feed is ${edition.feed}`);
-  return `${path.basename(plain.dir)}/${plain.feed}, ${path.basename(edition.dir)}/${edition.feed}`;
+  const mycology = target(["node", "staple-dmg.js", "--config", path.join(root, "electron-builder.mycology.js")]);
+  assert(mycology.dir === path.resolve(root, "release-mycology") && mycology.feed === "mycology-mac.yml", "Mycology stapler resolves outside its channel");
+  return `${path.basename(plain.dir)}/${plain.feed}, ${path.basename(edition.dir)}/${edition.feed}, ${path.basename(mycology.dir)}/${mycology.feed}`;
 });
 
 check("the phone bundle carries every script and stylesheet the shell loads", () => {

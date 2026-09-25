@@ -7,8 +7,8 @@
 // while every update download 404'd because the manifest lives under the channel
 // prefix and the installers do not.
 //
-// Two editions now share it. Crowe Logic for Developers lives under
-// desktop/developers/, feeds included, and the worker has to keep the two apart
+// Three editions now share it. Developers and Mycology live under their own
+// desktop/<edition>/ prefixes, feeds included; the worker must keep them apart
 // in both directions: a developer download must never resolve out of the full
 // edition's tree, and the full edition's page must never offer a developer
 // build. The layout itself is written down once, in scripts/release-channel.js;
@@ -96,6 +96,11 @@ path: CroweLogic-developers-0.14.0-arm64.zip
 `,
 };
 
+const MYC_DMG = 'CroweLogic-mycology-0.14.0-arm64.dmg';
+const MYC_MANIFESTS = Object.fromEntries(Object.entries(DEV_MANIFESTS).map(([key, text]) => [
+  key.replaceAll('developers', 'mycology'), text.replaceAll('developers', 'mycology'),
+]));
+
 function envWith(manifests) {
   return {
     RELEASES: {
@@ -156,7 +161,7 @@ async function main() {
   });
 
   await check('the worker and the publishers agree on every feed key', () => {
-    for (const channel of ['latest', 'developers']) {
+    for (const channel of ['latest', 'developers', 'mycology']) {
       for (const os of layout.OSES) {
         assert.strictEqual(feedKey(channel, os), layout.feedKey(channel, os));
       }
@@ -167,9 +172,21 @@ async function main() {
   });
 
   await check('both publishers key every write off the channel layout', () => {
+    const helper = fs.readFileSync(path.join(__dirname, 'publish-args.js'), 'utf8');
+    assert.ok(helper.includes("require('./release-channel')"));
+    assert.ok(helper.includes('channels.fromArgs(selection)'));
+    const { resolvePublishArgs, shellArgs } = require('./publish-args');
+    for (const channel of ['latest', 'developers', 'mycology']) {
+      const target = resolvePublishArgs(['--channel', channel, '--matrix', 'mac:arm64:dmg+zip'], { env: {} });
+      assert.strictEqual(target.channel, channel);
+      const shell = shellArgs(target);
+      assert.ok(shell.includes(`prefix='${layout.prefix(channel)}'`));
+      for (const os of layout.OSES) assert.ok(shell.includes(`feed_${os}='${layout.feedName(channel, os)}'`));
+    }
     for (const name of ['publish-r2.sh', 'publish-rclone.sh']) {
       const sh = fs.readFileSync(path.join(__dirname, name), 'utf8');
-      assert.ok(sh.includes('release-channel.js" --shell'), `${name} does not resolve its layout through release-channel.js`);
+      assert.ok(sh.includes('publish-args.js" "$@"'), `${name} does not resolve its layout through publish-args.js`);
+      assert.ok(sh.includes('eval "$resolved"'), `${name} does not consume its resolved layout`);
       assert.ok(sh.includes('put "$prefix/$version/$url"'), `${name} does not write installers under the channel prefix`);
       assert.ok(sh.includes('put "$prefix/$version/SHA256SUMS"'), `${name} does not write SHA256SUMS under the channel prefix`);
       assert.ok(sh.includes('put "$prefix/channel/$os/$name"'), `${name} does not write feeds under the channel prefix`);
@@ -403,7 +420,95 @@ path: CroweLogic-0.14.0-x64.dmg
     assert.strictEqual((await handler.fetch(new Request('https://x/developers/mac'), env)).status, 503);
   });
 
-  await check('ingest accepts both editions\' key shapes and nothing else', () => {
+  await check('Mycology catalog and page use only their own feeds and artifact prefix', async () => {
+    const all = { ...MANIFESTS, ...DEV_MANIFESTS, ...MYC_MANIFESTS };
+    assert.deepStrictEqual(await catalog(envWith(all), 'mycology'), {
+      version: '0.14.0', windows: null, macos: MYC_DMG, macosIntel: null, appimage: null, deb: null,
+    });
+    assert.strictEqual(await catalog(envWith({ ...MANIFESTS, ...DEV_MANIFESTS }), 'mycology'), null);
+    assert.strictEqual(await catalog(envWith(MYC_MANIFESTS)), null);
+    assert.strictEqual(await catalog(envWith(MYC_MANIFESTS), 'developers'), null);
+    assert.deepStrictEqual(await catalog(envWith(all)), await catalog(envWith(MANIFESTS)));
+    const env = envWith(all);
+    const response = await handler.fetch(new Request('https://x/mycology'), env);
+    assert.strictEqual(response.status, 200);
+    const html = await response.text();
+    assert.ok(html.includes('<h1>Crowe Logic Mycology</h1>'));
+    assert.ok(html.includes(`href="/desktop/mycology/0.14.0/${MYC_DMG}"`));
+    assert.ok(html.includes('href="/desktop/mycology/0.14.0/SHA256SUMS"'));
+    assert.ok(!html.includes('/desktop/0.14.0/') && !html.includes('/desktop/developers/'));
+    for (const page of ['/', '/developers']) {
+      const other = await (await handler.fetch(new Request(`https://x${page}`), env)).text();
+      assert.ok(!other.includes('/desktop/mycology/'));
+    }
+    const head = await handler.fetch(new Request('https://x/mycology', { method: 'HEAD' }), env);
+    assert.strictEqual(head.status, 200);
+    assert.strictEqual(await head.text(), '');
+    const mac = await handler.fetch(new Request('https://x/mycology/mac'), env);
+    assert.strictEqual(mac.status, 302);
+    assert.strictEqual(mac.headers.get('location'), `https://x/desktop/mycology/0.14.0/${MYC_DMG}`);
+    for (const missing of ['mac-intel', 'windows', 'appimage', 'deb', 'amiga']) {
+      assert.strictEqual((await handler.fetch(new Request(`https://x/mycology/${missing}`), env)).status, 404);
+    }
+  });
+
+  await check('unseeded Mycology never uses Desktop or Developers pages, feeds or artifacts', async () => {
+    const asked = [];
+    const env = envWith({ ...MANIFESTS, ...DEV_MANIFESTS });
+    const get = env.RELEASES.get;
+    env.RELEASES.get = async (key) => { asked.push(key); return get(key); };
+    for (const page of ['mycology', 'mycology/mac', 'mycology/windows']) {
+      const res = await handler.fetch(new Request(`https://x/${page}`), env);
+      assert.strictEqual(res.status, 503);
+      assert.strictEqual(res.headers.get('location'), null);
+    }
+    for (const os of layout.OSES) {
+      const res = await handler.fetch(new Request(`https://x/${layout.feedKey('mycology', os)}`), env);
+      assert.strictEqual(res.status, 404);
+    }
+    assert.strictEqual((await handler.fetch(new Request(`https://x/desktop/mycology/channel/mac/${DEV_DMG}`), env)).status, 404);
+    assert.ok(asked.every((key) => key.startsWith('desktop/mycology/')), asked.join(', '));
+  });
+
+  await check('Mycology updater stays in its tree for installers, blockmaps and missing feeds', async () => {
+    const asked = [];
+    const body = 'mycology bytes';
+    const env = {
+      RELEASES: { async get(key) {
+        asked.push(key);
+        if (![`${layout.prefix('mycology')}/0.14.0/${MYC_DMG}`, `${layout.prefix('mycology')}/0.14.0/${MYC_DMG}.blockmap`].includes(key)) return null;
+        return { body, size: body.length, httpEtag: '"m"', writeHttpMetadata() {} };
+      } },
+    };
+    for (const name of [MYC_DMG, `${MYC_DMG}.blockmap`]) {
+      const res = await handler.fetch(new Request(`https://x/${layout.updateKey('mycology', 'mac', name)}`), env);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(await res.text(), body);
+    }
+    assert.ok(asked.every((key) => key.startsWith('desktop/mycology/')));
+    for (const channel of ['latest', 'developers']) {
+      assert.strictEqual((await handler.fetch(new Request(`https://x/${layout.updateKey(channel, 'mac', MYC_DMG)}`), env)).status, 404);
+    }
+    for (const os of layout.OSES) assert.deepStrictEqual(versionedKeysFor(layout.feedKey('mycology', os)), []);
+  });
+
+  await check('identically named artifacts never cross edition boundaries in either direction', async () => {
+    const name = 'shared-1.2.3-arm64.dmg';
+    const channels = ['latest', 'developers', 'mycology'];
+    for (const populated of channels) {
+      const env = { RELEASES: { async get(key) {
+        if (key !== layout.artifactKey(populated, '1.2.3', name)) return null;
+        return { body: populated, size: populated.length, httpEtag: '"same-name"', writeHttpMetadata() {} };
+      } } };
+      for (const requested of channels) {
+        const response = await handler.fetch(new Request(`https://x/${layout.updateKey(requested, 'mac', name)}`), env);
+        assert.strictEqual(response.status, requested === populated ? 200 : 404, `${requested} read ${populated}'s artifact`);
+        if (response.status === 200) assert.strictEqual(await response.text(), populated);
+      }
+    }
+  });
+
+  await check('ingest accepts all three editions\' key shapes and nothing else', () => {
     for (const ok of [
       'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg',
       'desktop/0.14.0/CroweLogic-0.14.0-arm64.dmg.blockmap',
@@ -414,6 +519,9 @@ path: CroweLogic-0.14.0-x64.dmg
       `desktop/developers/0.14.0/${DEV_DMG}`,
       'desktop/developers/0.14.0/SHA256SUMS',
       'desktop/developers/channel/mac/developers-mac.yml',
+      `desktop/mycology/0.14.0/${MYC_DMG}`,
+      'desktop/mycology/0.14.0/SHA256SUMS',
+      ...layout.OSES.map((os) => layout.feedKey('mycology', os)),
     ]) {
       assert.ok(validIngestKey(ok), `refused ${ok}`);
     }
@@ -430,6 +538,10 @@ path: CroweLogic-0.14.0-x64.dmg
       'desktop/nightly/0.14.0/x.dmg',
       'desktop/latest/0.14.0/x.dmg',
       'desktop/developers/developers/0.14.0/x.dmg',
+      'desktop/mycology/../0.14.0/x.dmg',
+      'desktop/mycology/channel/mac/a/b',
+      'desktop/mycology/channel/windows/mycology.yml',
+      'desktop/mycology/mycology/0.14.0/x.dmg',
       // A version segment has to look like one, and a channel directory has to
       // be one the updater can be pointed at.
       'desktop/nonsense/x.dmg',
@@ -453,6 +565,8 @@ path: CroweLogic-0.14.0-x64.dmg
     'desktop/channel/win/latest.yml': MANIFESTS['desktop/channel/win/latest.yml'],
     'desktop/developers/channel/linux/developers-linux.yml': 'version: 0.14.0\nfiles: []\n',
     [`desktop/developers/0.14.0/${DEV_DMG}`]: 'developer bytes',
+    [`desktop/mycology/0.14.0/${MYC_DMG}`]: 'mycology bytes',
+    'desktop/mycology/channel/mac/mycology-mac.yml': MYC_MANIFESTS['desktop/mycology/channel/mac/mycology-mac.yml'],
     'brand/mark.svg': '<svg/>',
   };
   function countingEnv() {
@@ -532,6 +646,16 @@ path: CroweLogic-0.14.0-x64.dmg
     await handler.fetch(new Request(`https://x/desktop/developers/channel/mac/${DEV_DMG}`), env);
     assert.strictEqual(env.points.length, 1);
     assert.deepStrictEqual(env.points[0].blobs.slice(0, 3), ['developers', 'mac', 'dmg']);
+  });
+
+  await check('Mycology installers and feeds are counted on their own channel', async () => {
+    const env = countingEnv();
+    for (const key of [layout.updateKey('mycology', 'mac', MYC_DMG), layout.feedKey('mycology', 'mac')]) {
+      assert.strictEqual((await handler.fetch(new Request(`https://x/${key}`), env)).status, 200);
+    }
+    assert.deepStrictEqual(env.points.map((point) => point.blobs.slice(0, 3)), [
+      ['mycology', 'mac', 'dmg'], ['mycology', 'mac', 'yml'],
+    ]);
   });
 
   await check('a range request is recorded as a 206 with the bytes it served', async () => {

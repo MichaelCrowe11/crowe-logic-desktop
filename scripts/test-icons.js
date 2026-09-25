@@ -23,7 +23,13 @@
 
 const fs = require("fs");
 const path = require("path");
-const { app, nativeImage } = require("electron");
+const { app, nativeImage, BrowserWindow } = require("electron");
+const os = require("os");
+const evidence = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-mycology-icon-proof-"));
+app.setPath("userData", path.join(evidence, "profile"));
+app.setPath("sessionData", path.join(evidence, "profile"));
+app.commandLine.appendSwitch("proxy-server", "http://127.0.0.1:9");
+app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>");
 
 const ASSETS = path.join(__dirname, "..", "assets");
 let pass = 0;
@@ -132,10 +138,11 @@ function readIcns(file) {
   return { types, pngs };
 }
 
-function main() {
-  const svg = fs.readFileSync(path.join(ASSETS, "icon.svg"), "utf8");
+async function main() {
+  for (const stem of ["icon", "icon-mycology"]) {
+  const svg = fs.readFileSync(path.join(ASSETS, `${stem}.svg`), "utf8");
 
-  check("the vector source is drawn on the Big Sur grid", () => {
+  check(`${stem}.svg is drawn on the Big Sur grid`, () => {
     // An 824px tile centered in 1024 is what leaves the corners transparent.
     const tile = svg.match(/<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)" rx="(\d+)"/);
     if (!tile) throw new Error("no tile rect in icon.svg");
@@ -146,9 +153,9 @@ function main() {
     if (rx < w * 0.2 || rx > w * 0.25) throw new Error(`corner radius ${rx} is off the Big Sur proportion`);
   });
 
-  const icns = readIcns(path.join(ASSETS, "icon.icns"));
+  const icns = readIcns(path.join(ASSETS, `${stem}.icns`));
 
-  check("icon.icns carries the full macOS size ladder", () => {
+  check(`${stem}.icns carries the full macOS size ladder`, () => {
     const missing = Object.entries(ICNS_LADDER)
       .filter(([type]) => !icns.types.has(type))
       .map(([type, px]) => `${type} (${px}px)`);
@@ -156,7 +163,7 @@ function main() {
   });
 
   const subjects = [
-    ["icon.png", nativeImage.createFromPath(path.join(ASSETS, "icon.png"))],
+    [`${stem}.png`, nativeImage.createFromPath(path.join(ASSETS, `${stem}.png`))],
   ];
   if (icns.pngs.size === 0) {
     check("icon.icns contains a probeable PNG", () => {
@@ -165,7 +172,7 @@ function main() {
     });
   } else {
     // nativeImage cannot open .icns, so probe the largest image inside it.
-    subjects.push(["icon.icns", nativeImage.createFromBuffer(icns.pngs.get(Math.max(...icns.pngs.keys())))]);
+    subjects.push([`${stem}.icns`, nativeImage.createFromBuffer(icns.pngs.get(Math.max(...icns.pngs.keys())))]);
   }
 
   for (const [file, image] of subjects) {
@@ -202,8 +209,8 @@ function main() {
     });
   }
 
-  check("icon.ico is a valid multi-size PNG icon directory", () => {
-    const d = fs.readFileSync(path.join(ASSETS, "icon.ico"));
+  check(`${stem}.ico is a valid multi-size PNG icon directory`, () => {
+    const d = fs.readFileSync(path.join(ASSETS, `${stem}.ico`));
     if (d.readUInt16LE(0) !== 0 || d.readUInt16LE(2) !== 1) throw new Error("not an ICO header");
     const count = d.readUInt16LE(4);
     const sizes = [];
@@ -222,6 +229,8 @@ function main() {
       if (!sizes.includes(want)) throw new Error(`missing the ${want}px entry Windows asks for`);
     }
   });
+
+  }
 
   // Android's adaptive icon, which `npm run icons:check` cannot speak to at all.
   // A hash check pins the bytes to the vectors; it says nothing about whether
@@ -287,11 +296,33 @@ function main() {
   check("the window icon is a format Windows and Linux can decode", () => {
     // .icns is macOS-only; Electron silently falls back to its default icon.
     const main = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
-    const m = main.match(/icon:\s*path\.join\(__dirname,\s*"assets",\s*"([^"]+)"\)/);
-    if (!m) throw new Error("no BrowserWindow icon found in main.js");
-    if (!/\.(png|ico)$/.test(m[1])) throw new Error(`BrowserWindow icon is ${m[1]}`);
+    if (!main.includes('icon: editionIcon') || !main.includes('editionIconName(EDITION)}.png')) throw new Error("window icon must use trusted edition PNG");
+    const { resolveEdition, editionIconName } = require('../app-edition');
+    for (const id of ['desktop', 'developers', 'mycology']) {
+      const stem = editionIconName(resolveEdition({ metadata: { croweEdition: id } }));
+      if (stem !== (id === 'mycology' ? 'icon-mycology' : 'icon')) throw new Error(`wrong ${id} icon`);
+      if (!fs.existsSync(path.join(ASSETS, `${stem}.png`))) throw new Error(`missing ${stem}.png`);
+    }
+    const config = require('../electron-builder.mycology');
+    for (const [platform, extension] of [['mac', 'icns'], ['win', 'ico'], ['linux', 'png']]) {
+      if (config[platform].icon !== `assets/icon-mycology.${extension}`) throw new Error(`wrong ${platform} package icon`);
+    }
   });
 
+  const source = fs.readFileSync(path.join(ASSETS, 'icon-mycology.svg')).toString('base64');
+  const sheet = new BrowserWindow({ show: false, width: 1440, height: 640,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const cells = [16, 32, 64, 128, 512].map(size => `<div><img width="${size}" height="${size}" src="data:image/svg+xml;base64,${source}"><p>${size}px</p></div>`).join('');
+  for (const theme of ['light', 'dark']) {
+    await sheet.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`<style>body{margin:0;font:14px sans-serif}.row{display:flex;align-items:center;justify-content:space-around;height:580px;padding:10px}.row div{text-align:center}.light{background:#F4F0E7;color:#121212}.dark{background:#121212;color:#F4F0E7}</style><body class="${theme}"><div class="row">${cells}</div></body>`));
+    await sheet.webContents.executeJavaScript('Promise.all([...document.images].map(image => image.decode()))');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const background = await sheet.webContents.executeJavaScript('getComputedStyle(document.body).backgroundColor');
+    if (background !== (theme === 'light' ? 'rgb(244, 240, 231)' : 'rgb(18, 18, 18)')) throw new Error('proof theme mismatch');
+    fs.writeFileSync(path.join(evidence, `sizes-${theme}.png`), (await sheet.webContents.capturePage()).toPNG());
+  }
+  sheet.destroy();
+  console.log(`proof sheets: ${evidence}`);
   console.log(`\n${pass}/${pass + fail} passed`);
   app.exit(fail ? 1 : 0);
 }

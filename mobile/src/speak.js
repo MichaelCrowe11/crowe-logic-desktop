@@ -35,16 +35,23 @@
     return r.json();
   }
 
+  window.addEventListener("crowe:consent-withdrawn", stop);
+
   async function speakLast() {
     if (player) { stop(); say("Ready"); return; }
     const said = [...document.querySelectorAll(".msg.assistant .said")].pop();
     if (!said) { say("Nothing to read yet", "note"); return; }
     const preferred = replyVoice();
     if (preferred === "phone") return fallback(said);
+    const consent = window.croweConsent, phone = window.crowePhone;
+    if (!consent || !phone || !(await consent.ask("data")) || !(await consent.ask("readAloud"))) return fallback(said);
+    const epoch = phone.consentEpoch();
     const t = await token();
+    if (!phone.consentValid(epoch, "readAloud")) return;
     if (!t || !t.bearer) { say("Sign in to hear replies", "note"); return; }
     let list;
     try { list = await voices(t.base, t.bearer); } catch { return fallback(said); }
+    if (!phone.consentValid(epoch, "readAloud")) return;
     const allowed = list.voices.filter((v) => v.allowed && v.configured).map((v) => v.voice);
     if (!allowed.length) return fallback(said);
     const voice = allowed.includes(preferred) ? preferred : allowed[0];
@@ -54,12 +61,14 @@
       method: "POST", headers: { Authorization: `Bearer ${t.bearer}`, "Content-Type": "application/json" },
       body: JSON.stringify({ text, voice }),
     });
+    if (!phone.consentValid(epoch, "readAloud")) return;
     if (!r.ok) { stop(); const d = await r.json().catch(() => ({})); say((d.detail && (d.detail.message || d.detail)) || `Could not read aloud (${r.status})`, "error"); return; }
     // What actually spoke, and what it cost: the gateway says so in headers.
     const spoke = r.headers.get("x-crowe-voice") || voice, fell = r.headers.get("x-crowe-fallback") || "", chars = r.headers.get("x-crowe-chars") || String(text.length);
     if (window.crowe.diag && window.crowe.diag.note) window.crowe.diag.note("speech", `${spoke}${fell ? " (asked " + voice + ", fell back: " + fell + ")" : ""} · ${chars} chars`);
     if (fell) say(spoke === "michael" ? "Michael is reading" : "Reading with the Crowe Logic voice", "running");
     const blob = await r.blob();
+    if (!phone.consentValid(epoch, "readAloud")) return;
     player = new Audio(URL.createObjectURL(blob));
     player.onended = () => { stop(); say("Ready"); };
     player.onerror = () => { stop(); say("Playback failed", "error"); };

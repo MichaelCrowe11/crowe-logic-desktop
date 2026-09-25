@@ -93,7 +93,7 @@ const roomOf = (ids, extra = {}) =>
     return "refused 4 ways, toggled on and off, read by the seat";
   });
 
-  await check("the vendored roster is the canonical one, not an invented parallel", () => {
+  await check("the customer roster preserves historical agent IDs", () => {
     const ids = registry.listAgents().map((a) => a.id);
     assert(ids.length >= 20, `only ${ids.length} agents vendored`);
     for (const must of ["crowe-logic", "operator", "cultivation-intelligence", "mycology-research",
@@ -104,16 +104,14 @@ const roomOf = (ids, extra = {}) =>
     return `${ids.length} agents`;
   });
 
-  await check("the vendored snapshot matches upstream when upstream is present", () => {
-    const up = path.join("/workspace/crowe-agents", "registry", "agents.json");
-    if (!fs.existsSync(up)) return "skipped: no crowe-agents checkout here";
-    const { vendor } = require("./sync-agent-registry.js");
-    const fresh = vendor(up);
-    const have = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "rooms", "agents.vendored.json"), "utf8"));
-    assert(fresh.agents.length === have.agents.length, `upstream has ${fresh.agents.length}, vendored has ${have.agents.length}`);
-    const diff = fresh.agents.filter((a, i) => JSON.stringify(a) !== JSON.stringify(have.agents[i])).map((a) => a.id);
-    assert(!diff.length, `drifted from upstream: ${diff.join(", ")} — run scripts/sync-agent-registry.js`);
-    return "in step with upstream";
+  await check("the customer roster preserves the independent compatibility contract", () => {
+    const { readCustomerRoster, CONTRACT } = require("./sync-agent-registry.js");
+    const roster = readCustomerRoster();
+    assert(roster.audience === "customer", "only customer instructions may ship");
+    assert(roster.agents.length === Object.keys(CONTRACT).length, "stable roster size");
+    assert(roster.agents.every((a) => registry.getAgent(a.id).systemPrompt === a.systemPrompt),
+      "runtime loads exactly the customer instructions");
+    return "customer-only source, stable IDs and authority";
   });
 
   await check("a room's ceiling is the minimum of its agents, never the max", () => {

@@ -1,6 +1,7 @@
 'use strict';
 
-// Proves a published release is actually installable and updatable.
+// Verifies published feed inventory, byte integrity and updater transport.
+// Does not prove signatures, installer execution or application acceptance.
 //
 //   npm run verify:release                 # the version in package.json
 //   npm run verify:release -- 0.16.0
@@ -8,6 +9,9 @@
 //   npm run verify:release -- 0.16.0 --base=https://staging.example
 //   npm run verify:release:developers      # Crowe Logic for Developers, under desktop/developers/
 //   npm run verify:release -- 0.24.7 --channel developers
+//   node scripts/verify-release.js --config electron-builder.mycology.js --strict --matrix mac:arm64:dmg+zip,mac:x64:dmg+zip
+// --strict requires an explicit inventory, implies --full, and makes updater
+// blockmap warnings fatal. No missing platform is silently excused.
 //
 // Everything about a release fails silently. An update feed that names a file
 // the bucket does not have reports nothing to anyone: the updater 404s in the
@@ -25,8 +29,8 @@
 // are buried.
 //
 // A range request rather than a HEAD, because electron-updater applies blockmap
-// diffs with ranges. A 206 proves the object resolves and that differential
-// updates will work; a HEAD would prove only the former.
+// diffs with ranges. A valid 206 checks range transport, not that a real
+// installed application's differential update succeeds; that has its own gate.
 //
 // --full additionally downloads every artifact and verifies its sha512 against
 // the feed. That is around half a gigabyte, so it is opt-in; without it the
@@ -35,6 +39,7 @@
 
 const crypto = require('crypto');
 const pkg = require('../package.json');
+const matrixRules = require('./release-matrix');
 const { DEFAULT_CHANNEL, feedName, prefix: prefixFor, pagePath, fromArgs } = require('./release-channel');
 
 // One source of truth for where releases live. If the publish url stops looking
@@ -50,9 +55,13 @@ if (LIVE === PUBLISH) {
 // otherwise. Every key below hangs off the channel's prefix, so the developer
 // edition is checked under desktop/developers/ and a check of it never reads,
 // let alone passes on the strength of, a key of the full edition's.
-let target;
+let target, options, matrix;
 try {
   target = fromArgs(process.argv.slice(2));
+  options = matrixRules.fromArgs(target.rest);
+  target.rest = options.rest;
+  matrix = options.strict ? matrixRules.parseMatrix(options.matrix) : null;
+  if (target.rest.filter(arg => !arg.startsWith('--')).length > 1 || target.rest.some(arg => arg.startsWith('--') && arg !== '--full' && !arg.startsWith('--base='))) throw new Error('unexpected verifier arguments');
 } catch (err) {
   console.error(`verify-release: ${err.message}`);
   process.exit(2);
@@ -81,7 +90,8 @@ const SIDECAR_BLOCKMAP = /\.(exe|dmg|zip)$/;
 const EMBEDDED_BLOCKMAP = /\.AppImage$/;
 
 const args = target.rest;
-const full = args.includes('--full');
+const strict = options.strict;
+const full = strict || args.includes('--full'); // production verification cannot opt out of hashing
 // --base points the same checks at a staging worker, and at the stub server in
 // scripts/test-verify-release.js that proves these checks can actually fail.
 const baseArg = args.find((a) => a.startsWith('--base='));
@@ -105,6 +115,7 @@ function fail(name, detail) {
   if (detail) String(detail).split('\n').forEach((l) => console.log(`        ${l}`));
 }
 function warn(name, detail) {
+  if (strict) { fail(name, detail); return; }
   warnings++;
   console.log(`warn    ${name}`);
   if (detail) console.log(`        ${detail}`);
@@ -113,6 +124,9 @@ function warn(name, detail) {
 // latest*.yml is small and its shape is fixed by electron-builder, so parse it
 // directly rather than take a yaml dependency the app itself does not declare.
 function parseFeed(text) {
+  // Strict gates use actual YAML (duplicate keys and malformed values must not
+  // disappear in a permissive regex parser). Keep legacy probes unchanged.
+  if (strict) return require('js-yaml').load(text);
   const version = (/^version:\s*(\S+)/m.exec(text) || [])[1] || null;
   const files = [];
   let cur = null;
@@ -153,8 +167,9 @@ async function probe(channelUrl, file) {
     await res.arrayBuffer().catch(() => {});
     return { okay: false, why: `expected 206 for a range request, got ${res.status}` };
   }
-  await res.arrayBuffer();
+  const body = await res.arrayBuffer();
   const range = res.headers.get('content-range') || '';
+  if (strict && (!/^bytes 0-0\/[1-9]\d*$/.test(range) || body.byteLength !== 1)) return { okay: false, why: 'invalid single-byte range response' };
   const total = Number(range.split('/')[1]);
   if (!Number.isFinite(total)) return { okay: false, why: `no usable content-range: ${range || '(absent)'}` };
   if (file.size != null && total !== file.size) {
@@ -170,6 +185,7 @@ async function probe(channelUrl, file) {
 async function verifyEmbeddedBlockmap(channelUrl, file) {
   if (file.blockMapSize == null) return 'feed declares no blockMapSize';
   if (file.size == null) return 'feed declares no size';
+  if (strict && (!Number.isSafeInteger(file.blockMapSize) || file.blockMapSize <= 0)) return 'invalid blockMapSize';
   const start = file.size - (file.blockMapSize + 4);
   if (start < 0) return `blockMapSize ${file.blockMapSize} exceeds the ${file.size} byte object`;
 
@@ -188,6 +204,10 @@ async function verifyEmbeddedBlockmap(channelUrl, file) {
   if (declared !== file.blockMapSize) {
     return `object's trailer says ${declared} bytes, feed says ${file.blockMapSize}`;
   }
+  if (strict) {
+    if (res.headers.get('content-range') !== `bytes ${start}-${file.size - 1}/${file.size}`) return 'invalid blockmap tail content-range';
+    return matrixRules.blockmapError(buf.subarray(0, buf.length - 4), start, true);
+  }
   let map;
   try {
     map = JSON.parse(require('zlib').inflateRawSync(buf.subarray(0, buf.length - 4)).toString());
@@ -203,18 +223,38 @@ async function verifyEmbeddedBlockmap(channelUrl, file) {
   return null;
 }
 
+const downloadedSha256 = new Map();
 async function verifySha512(channelUrl, file) {
   const res = await get(channelUrl);
-  if (!res.ok) return `download failed with ${res.status}`;
+  if (!res.ok || strict && res.status !== 200) return `download failed with ${res.status}`;
   const hash = crypto.createHash('sha512');
-  for await (const chunk of res.body) hash.update(chunk);
+  const sha256 = crypto.createHash('sha256');
+  let size = 0;
+  for await (const chunk of res.body) { hash.update(chunk); sha256.update(chunk); size += chunk.length; }
+  if (strict && size !== file.size) return `full download size mismatch: ${size} bytes, feed ${file.size}`;
   const got = hash.digest('base64');
-  return got === file.sha512 ? null : `sha512 mismatch\n  feed: ${file.sha512}\n  live: ${got}`;
+  if (got !== file.sha512) return `sha512 mismatch\n  feed: ${file.sha512}\n  live: ${got}`;
+  downloadedSha256.set(file.url, sha256.digest('hex'));
+  return null;
 }
 
 (async () => {
   console.log(`verify-release: ${version}${CHANNEL === DEFAULT_CHANNEL ? '' : ` on the ${CHANNEL} channel`} at ${BASE}\n`);
   const published = [];   // every artifact name any feed names, for the SHA256SUMS check
+
+  if (strict) {
+    // electron-builder only suffixes Linux feed names by arch. These lanes are
+    // not routed by the current publishers; a stale/surprise feed cannot be
+    // ignored just because the base linux feed is absent.
+    for (const arch of ['arm64', 'arm', 'ia32', 'universal']) {
+      const name = `${CHANNEL}-linux-${arch}.yml`;
+      try {
+        const res = await get(at(`${PREFIX}/channel/linux/${name}`));
+        await res.arrayBuffer().catch(() => {});
+        if (res.status !== 404) fail(`unexpected advertised feed: ${name}`, `expected 404, got ${res.status}`);
+      } catch (err) { fail(`unsupported feed absence: ${name}`, err.message); }
+    }
+  }
 
   for (const { os, feed } of CHANNELS) {
     const feedUrl = at(`${PREFIX}/channel/${os}/${feed}`);
@@ -226,13 +266,20 @@ async function verifySha512(channelUrl, file) {
       // platform silently missing, and it fails. An edition may ship for macOS
       // alone, so there it is said and not failed on; any status other than a
       // clean 404 is still a broken feed on either channel.
-      if (res.status === 404 && CHANNEL !== DEFAULT_CHANNEL) {
+      if (strict && !matrix.some(row => row.os === os)) {
+        await res.arrayBuffer().catch(() => {});
+        if (res.status === 404) ok(`${os}: not advertised (outside required matrix)`);
+        else fail(`${os}: unexpected advertised platform`, `expected absent feed (404), got ${res.status}`);
+        continue;
+      }
+      if (res.status === 404 && CHANNEL !== DEFAULT_CHANNEL && !strict) {
         await res.arrayBuffer().catch(() => {});
         warn(`${os}: feed resolves`, `404 - no ${os} release on the ${CHANNEL} channel`);
         continue;
       }
       if (!res.ok) { fail(`${os}: feed resolves`, `${res.status} for ${feedUrl}`); continue; }
       parsed = parseFeed(await res.text());
+      if (strict) matrixRules.validateFeed(parsed, os, version, CHANNEL, matrix);
     } catch (err) {
       fail(`${os}: feed resolves`, err.message);
       continue;
@@ -259,7 +306,12 @@ async function verifySha512(channelUrl, file) {
           const res = await get(at(`${PREFIX}/channel/${os}/${file.url}.blockmap`), { headers: { Range: 'bytes=0-0' } });
           await res.arrayBuffer().catch(() => {});
           if (res.status !== 206) warn(`${os}: ${file.url}.blockmap present`, `${res.status} - updates will download in full`);
-          else ok(`${os}: ${file.url}.blockmap present`);
+          else if (strict) {
+            const mapRes = await get(at(`${PREFIX}/channel/${os}/${file.url}.blockmap`));
+            const why = mapRes.status !== 200 ? `download failed with ${mapRes.status}` : matrixRules.blockmapError(Buffer.from(await mapRes.arrayBuffer()), file.size);
+            if (why) fail(`${os}: ${file.url}.blockmap valid`, why);
+            else ok(`${os}: ${file.url}.blockmap valid`);
+          } else ok(`${os}: ${file.url}.blockmap present`);
         } catch (err) {
           warn(`${os}: ${file.url}.blockmap present`, err.message);
         }
@@ -268,13 +320,15 @@ async function verifySha512(channelUrl, file) {
         // reads it. Checking that the feed merely mentions blockMapSize would
         // pass on a truncated or re-compressed object, which is the case where
         // the update actually breaks.
-        const why = await verifyEmbeddedBlockmap(url, file);
+        let why;
+        try { why = await verifyEmbeddedBlockmap(url, file); } catch (err) { why = err.message; }
         if (why) warn(`${os}: ${file.url} carries its blockmap`, `${why} - updates will download in full`);
         else ok(`${os}: ${file.url} carries its blockmap`);
       }
 
       if (full && file.sha512 && result.okay) {
-        const why = await verifySha512(url, file);
+        let why;
+        try { why = await verifySha512(url, file); } catch (err) { why = err.message; }
         if (why) fail(`${os}: ${file.url} matches its feed sha512`, why);
         else ok(`${os}: ${file.url} matches its feed sha512`);
       }
@@ -288,7 +342,17 @@ async function verifySha512(channelUrl, file) {
     if (!res.ok) {
       fail('SHA256SUMS is published', `${res.status}`);
     } else {
-      const named = (await res.text()).split(/\r?\n/)
+      const text = await res.text();
+      if (strict) {
+        const entries = new Map();
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          const match = /^([a-f0-9]{64})  (.+)$/.exec(line);
+          if (!match || entries.has(match[2])) { fail('SHA256SUMS syntax and unique names', 'invalid or duplicate checksum entry'); continue; }
+          entries.set(match[2], match[1]);
+          if (downloadedSha256.get(match[2]) !== match[1]) fail(`SHA256SUMS matches downloaded ${match[2]}`);
+        }
+      }
+      const named = text.split(/\r?\n/)
         .map((l) => l.replace(/^\S+\s+\*?/, '').trim())
         .filter(Boolean);
       const missing = published.filter((n) => !named.includes(n));

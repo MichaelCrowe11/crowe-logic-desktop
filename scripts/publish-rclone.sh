@@ -2,19 +2,19 @@
 # Mirrors scripts/publish-r2.sh key-for-key, but uploads with rclone (swmr2:)
 # because wrangler's sized PUT dies with "fetch failed" on the >100MB artifacts.
 #
-#   scripts/publish-rclone.sh                                          # release/, latest
-#   scripts/publish-rclone.sh --config electron-builder.developer.js   # release-developers/, developers
-#   DRY_RUN=1 scripts/publish-rclone.sh ...                            # preflight only
+#   scripts/publish-rclone.sh --matrix mac:arm64:dmg+zip,mac:x64:dmg+zip
+#   scripts/publish-rclone.sh --config electron-builder.mycology.js --matrix mac:arm64:dmg+zip
+#   DRY_RUN=1 scripts/publish-rclone.sh ...   # local strict preflight only
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-resolved=$(node "$repo/scripts/release-channel.js" --shell "$@") || exit 1
+# Resolve explicit paths against the caller before changing directory. The same
+# absolute root and selection are used for validation and every uploaded byte.
+resolved=$(node "$repo/scripts/publish-args.js" "$@") || exit 1
 eval "$resolved"
-root=$(cd "${root:-$repo/$dir}" && pwd)
 cd "$repo"
-version=$(node -p "require('./package.json').version")
-node scripts/preflight-release.js "$root" "$version" --channel "$channel"
+node scripts/preflight-release.js "$root" "$version" "${validation_args[@]}"
 if [ "${DRY_RUN:-0}" = 1 ]; then
-  echo "publish-rclone: dry run passed for the $channel channel; nothing uploaded"
+  echo "publish-rclone: strict dry run passed for the $channel channel; nothing uploaded"
   exit 0
 fi
 BUCKET=swmr2:crowe-releases
@@ -32,7 +32,7 @@ put() {  # key file
 feeds=()
 for os in win mac linux; do
   var="feed_$os"; name="${!var}"
-  file=$(find "$root" -type f -name "$name" -print -quit)
+  file=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$name" -print -quit)
   [ -z "$file" ] || feeds+=("$file")
 done
 [ ${#feeds[@]} -eq 0 ] && { echo "no $channel feeds under $root" >&2; exit 1; }
@@ -45,8 +45,8 @@ sort -u -o "$wanted" "$wanted"
 
 resolve() {
   local want="$1" hit
-  hit=$(find "$root" -type f -name "$want" -print -quit)
-  [ -n "$hit" ] || hit=$(find "$root" -type f -name "${want// /.}" -print -quit)
+  hit=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$want" -print -quit)
+  [ -n "$hit" ] || hit=$(find "$root" -type d -name '*.app' -prune -o -type f -name "${want// /.}" -print -quit)
   printf '%s' "$hit"
 }
 
@@ -78,8 +78,8 @@ rm -f "$sums"
 # Feeds LAST: an artifact must exist before a feed advertises it.
 for os in win mac linux; do
   var="feed_$os"; name="${!var}"
-  file=$(find "$root" -type f -name "$name" -print -quit)
+  file=$(find "$root" -type d -name '*.app' -prune -o -type f -name "$name" -print -quit)
   [ -z "$file" ] || put "$prefix/channel/$os/$name" "$file"
 done
 echo "PUBLISH_UPLOADS_DONE"
-node scripts/verify-release.js "$version" --channel "$channel"
+node scripts/verify-release.js "$version" "${validation_args[@]}" --full

@@ -9,6 +9,7 @@ release-linux-*/
 *.tar.gz
 release/
 release-developers/
+release-mas/
 release-archive/
 
 # Python bytecode from the asset/mark generation scripts.

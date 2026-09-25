@@ -14,8 +14,77 @@ const INSTALL_SPACES = (() => {
   return ids.length ? ids : null;
 })();
 
+const EDITION = (() => {
+  const arg = (process.argv || []).find(a => a.startsWith("--crowe-edition="));
+  try { return Object.freeze(JSON.parse(arg.slice("--crowe-edition=".length))); }
+  catch { return Object.freeze({ id: "desktop", productName: "Crowe Logic", allowedSpaces: ["chat", "projects"], defaultSpaces: ["chat", "projects"], landingSpace: "chat", capabilities: { grow: false, farm: false, sense: false }, legacyAccess: false }); }
+})();
+
+// Keep the farm contract even when Electron rejects before a handler runs.
+async function farmInvoke(channel, ...args) {
+  try {
+    const result = await ipcRenderer.invoke(channel, ...args);
+    if (result && ((result.ok === true && Object.hasOwn(result, "data")) || (result.ok === false &&
+        typeof result.error?.code === "string" && typeof result.error?.message === "string"))) return result;
+    throw new Error("Invalid farm response");
+  } catch {
+    if (channel === "crowe:transfer:request" && args[0] === "notebook.import") {
+      return { ok: false, error: { code: "WRITE_OUTCOME_UNKNOWN", state: "recovery-required", message: "The notebook import result is unknown. Preserve both profiles. Restart Mycology to reconcile the transfer receipt before retrying; never empty the destination." } };
+    }
+    const mayHaveWritten = (channel === "crowe:farm:request" &&
+      !["snapshot", "recall", "audit", "backup.export"].includes(args[0]));
+    return { ok: false, error: mayHaveWritten
+      ? { code: "WRITE_OUTCOME_UNKNOWN", message: "The farm write result is unknown. Restart the app and inspect records before retrying. Reuse the same shipment request ID." }
+      : { code: "UNAVAILABLE", message: "Farm storage is unavailable. Restart the desktop app." } };
+  }
+}
+
 contextBridge.exposeInMainWorld("crowe", {
   installSpaces: INSTALL_SPACES,
+  edition: EDITION,
+  editionAccess: {
+    enterLegacy: () => farmInvoke("crowe:edition:legacy-enter"),
+    leaveLegacy: () => farmInvoke("crowe:edition:legacy-leave"),
+    openWorkbench: () => farmInvoke("crowe:edition:workbench"),
+  },
+  imports: {
+    request: async (action, payload = {}) => {
+      try {
+        const result = await ipcRenderer.invoke("crowe:imports:request", action, payload);
+        if (result?.ok === true && Object.hasOwn(result, "data")) return result;
+        if (result?.ok === false && typeof result.error?.code === "string" && typeof result.error?.message === "string") return result;
+        throw new Error("Invalid import response");
+      } catch {
+        return { ok: false, error: { code: "WRITE_OUTCOME_UNKNOWN", message: "The staging outcome is unknown. Reload retained imports before retrying; shared staging must retain the original destination and request ID." } };
+      }
+    },
+  },
+  team: {
+    request: async (action, payload = {}) => {
+      try {
+        const result = await ipcRenderer.invoke("crowe:team:request", action, payload);
+        if (result?.ok === true && Object.hasOwn(result, "data")) return result;
+        if (result?.ok === false && typeof result.error?.code === "string" && typeof result.error?.message === "string") return result;
+        throw new Error("Invalid team response");
+      } catch {
+        return { ok: false, error: { code: "WRITE_OUTCOME_UNKNOWN", message: "The command outcome is unknown. Preserve the same request ID and content when retrying." } };
+      }
+    },
+  },
+  transfer: { request: (action, payload = {}) => farmInvoke("crowe:transfer:request", action, payload) },
+  vision: {
+    request: async (action, payload = {}) => {
+      try {
+        const result = await ipcRenderer.invoke("crowe:vision:request", action, payload);
+        if (result?.ok === true && Object.hasOwn(result, "data")) return result;
+        if (result?.ok === false && typeof result.error?.code === "string" && typeof result.error?.message === "string") return result;
+        throw new Error("Invalid Vision response");
+      } catch {
+        return { ok: false, error: { code: action === "save" ? "WRITE_OUTCOME_UNKNOWN" : "UNAVAILABLE",
+          message: action === "save" ? "Observation save outcome is unknown. Reconcile the same save key and digest; do not rerun Vision or save another note." : "Desktop Vision is unavailable. No automatic retry was made." } };
+      }
+    },
+  },
   // Agentic loop: streams {assistant|tool_call|tool_result|edit_proposal|
   // approval_request|approval_expired|verdict|budget|retry|route|final|error}.
   agent: {
@@ -144,6 +213,11 @@ contextBridge.exposeInMainWorld("crowe", {
     // panel open still moves the rail, and a notification click opens the room.
     onChanged: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:changed", h); return () => ipcRenderer.removeListener("crowe:rooms:changed", h); },
     onOpen: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:open", h); return () => ipcRenderer.removeListener("crowe:rooms:open", h); },
+  },
+  // Desktop-local harvested lots, shipments, logs, and owner-reviewed documents.
+  farm: {
+    request: (action, payload = {}) => farmInvoke("crowe:farm:request", action, payload),
+    legacyHarvests: () => farmInvoke("crowe:farm:legacy-harvests"),
   },
   // Cultivation records — blocks, flushes, contamination, environment, strains,
   // recipes, grow log. Persisted on disk in the main process, like sessions.

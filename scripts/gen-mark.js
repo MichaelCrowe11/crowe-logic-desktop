@@ -299,6 +299,7 @@ const gateGlyphSvg = (ink, brass) =>
 // ── Emit ────────────────────────────────────────────────────────────────────
 const ROOT = path.join(__dirname, "..");
 const CHECK = process.argv.includes("--check");
+const MYCOLOGY_ONLY = process.argv.includes("--mycology");
 
 // The single write funnel. Everything this file produces goes through put(),
 // which is what makes coverage automatic instead of an inventory somebody has
@@ -308,6 +309,7 @@ const CHECK = process.argv.includes("--check");
 const wrote = [];
 const stale = [];
 function put(rel, body) {
+  if (MYCOLOGY_ONLY && !rel.startsWith("assets/icon-mycology")) return;
   wrote.push(rel);
   const abs = path.join(ROOT, rel);
   if (!CHECK) { fs.writeFileSync(abs, body); return; }
@@ -420,6 +422,17 @@ emit("icon.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} $
   <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="${CL.carbon}"/>
   <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="${CL.ruleDark}" stroke-width="4"/>
   ${gateArt(TILE / 2, TILE / 2, GATE_UNIT_TILE, CL.bone, CL.brassHi)}
+</svg>
+`);
+
+// Edition cut: keep the Crowe jaws, replace only the core with a cap and three
+// rooted filaments. Broad filled shapes survive the smallest Dock/ICO rungs.
+const MYCOLOGY_CORE = `<path d="M21,29 Q24,17 32,17 Q40,17 43,29 Q32,33 21,29Z" fill="${CL.brassHi}"/>` +
+  `<path d="M32,32 V38 M32,35 L24,41 M32,35 L40,41" fill="none" stroke="${CL.brassHi}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+emit("icon-mycology.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TILE} ${TILE}">
+  <rect x="${INSET}" y="${INSET}" width="${GRID}" height="${GRID}" rx="${RAD}" fill="${CL.carbon}"/>
+  <rect x="${INSET + 2}" y="${INSET + 2}" width="${GRID - 4}" height="${GRID - 4}" rx="${RAD - 2}" fill="none" stroke="${CL.ruleDark}" stroke-width="4"/>
+  ${gateArt(TILE / 2, TILE / 2, GATE_UNIT_TILE, CL.bone, CL.brassHi).replace(`<polygon points="${GATE.core}" fill="${CL.brassHi}"/>`, MYCOLOGY_CORE)}
 </svg>
 `);
 

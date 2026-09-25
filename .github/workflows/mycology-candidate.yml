@@ -1,0 +1,145 @@
+name: Mycology Linux candidate (private artifacts only)
+
+# Manual, unsigned Linux x64 candidate, NOT a release or permission to distribute.
+# Keep this repository private for the entire run and artifact/log lifetime.
+# The dispatch-time visibility guard runs before checkout and dependency scripts.
+# It is not continuous enforcement: later visibility changes, authorized downloads,
+# and dependency egress are outside this workflow's control. Repository access and
+# retention must be reviewed by the operator before dispatch. Do not run on a
+# public repository; artifact retention is not a confidentiality boundary.
+#
+# The ASAR gate covers the customer roster, known markers and unpacked inventory;
+# it is NOT complete privacy/secret review or installer acceptance. A failing gate
+# must be fixed/reviewed, not skipped. No feeds, audit logs, source tree or unpacked
+# application are uploaded. The installed app still has its configured updater
+# URL; --publish never prevents build publication, not later updater requests.
+# Signing, native startup/installation, runtime privacy and promotion remain gates
+# for a separately authorized release. This workflow never calls a publisher.
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Require private manual dispatch before dependency execution
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REPOSITORY_PRIVATE" != "true" || "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            printf '%s\n' 'Refusing candidate: a private repository and manual dispatch are required.' >&2
+            exit 1
+          fi
+
+      # Match the release-developers action major pins, not its signing path.
+      # No alternate checkout ref, reusable workflow, cache or Windows signing path.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install fresh lockfile dependencies
+        run: npm ci
+
+      # Explicit Node-only tests with synthetic stores/archives. Do not use npm
+      # test or legacy live suites that may open an installed/default profile.
+      - name: Run candidate and synthetic safety contracts
+        run: |
+          set -euo pipefail
+          node scripts/test-mycology-candidate.js
+          node scripts/test-customer-roster.js
+          node scripts/test-audit-customer-payload.js
+          node scripts/test-profile-auth.js
+          node scripts/test-app-edition.js
+          node scripts/test-edition-bootstrap.js
+          node scripts/test-edition-activation.js
+          node scripts/test-grow-transfer.js
+          node scripts/test-transfer-host.js
+          node scripts/test-farm.js
+          node scripts/test-farm-service.js
+          node scripts/test-farm-host.js
+          node scripts/test-farm-retry.js
+          node scripts/test-farm-packaging.js
+          node scripts/test-vision.js
+          node scripts/test-release-matrix.js
+          node scripts/test-preflight-release.js
+
+      - name: Build unsigned Mycology Linux x64 without publication
+        run: |
+          set -euo pipefail
+          test ! -e release-mycology
+          ./node_modules/.bin/electron-builder --config electron-builder.mycology.js --linux AppImage deb --x64 --publish never
+
+      - name: Audit actual packaged customer payload
+        run: |
+          set -euo pipefail
+          node scripts/audit-customer-payload.js desktop release-mycology/linux-unpacked/resources/app.asar mycology > "$RUNNER_TEMP/mycology-payload-audit.json"
+
+      - name: Strictly preflight the Linux x64 candidate inventory
+        run: node scripts/preflight-release.js --config electron-builder.mycology.js --strict --matrix linux:x64:AppImage+deb
+
+      # Stage only the two preflighted installers, never a whole release directory.
+      # Recheck hashes while copying to prevent an unchecked/stale extra file from
+      # being picked up by a glob. Feed metadata stays on the disposable runner.
+      - name: Stage only verified installers
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          'use strict';
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const crypto = require('node:crypto');
+          const yaml = require('js-yaml');
+          const { parseMatrix, validateFeed } = require('./scripts/release-matrix');
+          const version = require('./package.json').version;
+          const root = 'release-mycology';
+          const destination = 'mycology-candidate-artifacts';
+          const feed = yaml.load(fs.readFileSync(path.join(root, 'mycology-linux.yml'), 'utf8'));
+          validateFeed(feed, 'linux', version, 'mycology', parseMatrix('linux:x64:AppImage+deb'));
+          assert.equal(feed.files.length, 2);
+          assert.equal(fs.existsSync(destination), false, 'Candidate staging must be fresh');
+          fs.mkdirSync(destination);
+          for (const item of feed.files) {
+            const source = path.join(root, item.url);
+            const stat = fs.lstatSync(source);
+            assert.ok(stat.isFile() && !stat.isSymbolicLink(), 'Installer must be a regular file');
+            const copy = path.join(destination, item.url);
+            fs.copyFileSync(source, copy, fs.constants.COPYFILE_EXCL);
+            const bytes = fs.readFileSync(copy);
+            assert.equal(bytes.length, item.size);
+            assert.equal(crypto.createHash('sha512').update(bytes).digest('base64'), item.sha512);
+          }
+          NODE
+
+      - name: Upload private short-lived candidate installers
+        if: ${{ success() && github.event.repository.private == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mycology-linux-x64-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: mycology-candidate-artifacts/
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 3

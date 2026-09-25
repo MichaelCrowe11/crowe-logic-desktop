@@ -5,6 +5,9 @@
 //   node scripts/preflight-release.js [root] [version]                       # release/, the latest channel
 //   node scripts/preflight-release.js --config electron-builder.developer.js  # release-developers/, developers
 //   node scripts/preflight-release.js release-developers 0.24.7 --channel developers
+//   node scripts/preflight-release.js --config electron-builder.mycology.js --strict --matrix mac:arm64:dmg+zip,mac:x64:dmg+zip
+// Strict requires an explicit accepted inventory; it never infers completeness
+// from whichever subset of feeds happened to be built.
 //
 // The feeds looked for are the channel's own (latest*.yml, developers*.yml), so
 // a directory holding the other edition's build has no feeds as far as this
@@ -16,7 +19,11 @@ const yaml = require('js-yaml');
 const pkg = require('../package.json');
 const { DEFAULT_CHANNEL, OSES, feedName, fromArgs } = require('./release-channel');
 
-async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL) {
+const matrixRules = require('./release-matrix');
+
+async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL, options = {}) {
+  const matrix = options.strict ? matrixRules.parseMatrix(options.matrix) : null;
+  if (options.matrix !== undefined && !options.strict) throw new Error('--matrix requires --strict');
   if (version !== pkg.version) throw new Error(`release version ${version} differs from package ${pkg.version}`);
   const files = [];
   function walk(dir) {
@@ -28,6 +35,7 @@ async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL)
     }
   }
   walk(path.resolve(root));
+  if (matrix) matrixRules.validateFeedNames(files.map(file => path.basename(file)), channel, matrix);
   function resolve(name, optional = false) {
     const matches = files.filter(f => [name, name.replace(/ /g, '.')].includes(path.basename(f)));
     if (matches.length > 1) throw new Error(`ambiguous release file: ${name}`);
@@ -36,10 +44,12 @@ async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL)
   }
   const feeds = [];
   let artifacts = 0;
-  for (const name of OSES.map(os => feedName(channel, os))) {
+  for (const os of OSES) {
+    const name = feedName(channel, os);
     const file = resolve(name, true);
     if (!file) continue;
     const feed = yaml.load(fs.readFileSync(file, 'utf8'));
+    if (matrix) matrixRules.validateFeed(feed, os, version, channel, matrix);
     if (!feed || feed.version !== version) throw new Error(`${name}: expected version ${version}`);
     if (!Array.isArray(feed.files) || !feed.files.length) throw new Error(`${name}: empty files list`);
     const urls = new Set();
@@ -61,6 +71,20 @@ async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL)
       if (/\.(dmg|zip|exe)$/.test(url)) {
         const blockmap = resolve(`${url}.blockmap`);
         if (!fs.statSync(blockmap).size) throw new Error(`${url}: empty blockmap`);
+        if (matrix) {
+          const why = matrixRules.blockmapError(fs.readFileSync(blockmap), item.size);
+          if (why) throw new Error(`${url}: ${why}`);
+        }
+      } else if (matrix && url.endsWith('.AppImage')) {
+        if (!Number.isSafeInteger(item.blockMapSize) || item.blockMapSize <= 0 || item.blockMapSize + 4 >= item.size) throw new Error(`${url}: invalid blockMapSize`);
+        const fd = fs.openSync(artifact, 'r');
+        try {
+          const tail = Buffer.alloc(item.blockMapSize + 4);
+          if (fs.readSync(fd, tail, 0, tail.length, item.size - tail.length) !== tail.length) throw new Error(`${url}: truncated blockmap`);
+          if (tail.readUInt32BE(item.blockMapSize) !== item.blockMapSize) throw new Error(`${url}: blockmap trailer mismatch`);
+          const why = matrixRules.blockmapError(tail.subarray(0, item.blockMapSize), item.size - tail.length, true);
+          if (why) throw new Error(`${url}: ${why}`);
+        } finally { fs.closeSync(fd); }
       }
       artifacts++;
     }
@@ -75,14 +99,17 @@ async function preflight(root, version = pkg.version, channel = DEFAULT_CHANNEL)
 }
 
 if (require.main === module) {
-  let target;
+  let target, options;
   try {
     target = fromArgs(process.argv.slice(2));
+    options = matrixRules.fromArgs(target.rest);
+    target.rest = options.rest;
+    if (target.rest.length > 2 || target.rest.some(arg => arg.startsWith('--'))) throw new Error('unexpected preflight arguments');
   } catch (error) {
     console.error(`preflight: ${error.message}`);
     process.exit(1);
   }
-  preflight(target.rest[0] || target.dir, target.rest[1] || pkg.version, target.channel)
+  preflight(target.rest[0] || target.dir, target.rest[1] || pkg.version, target.channel, options)
     .then(result => console.log(`preflight: ${result.channel} channel, ${result.feeds.length} feeds, ${result.artifacts} artifacts verified`))
     .catch(error => { console.error(`preflight: ${error.message}`); process.exitCode = 1; });
 }

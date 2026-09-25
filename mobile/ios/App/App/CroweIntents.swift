@@ -40,39 +40,13 @@ struct AskCroweLogicIntent: AppIntent {
 }
 
 @available(iOS 16.0, *)
-struct LogBlockIntent: AppIntent {
-    static var title: LocalizedStringResource = "Log a block"
-    static var description = IntentDescription("Open the grow log on a new block, with your note ready.")
-    static var openAppWhenRun: Bool = true
-
-    @Parameter(title: "Note", default: "")
-    var note: String
-
-    static var parameterSummary: some ParameterSummary {
-        Summary("Log a block \(\.$note)")
-    }
-
-    @MainActor
-    func perform() async throws -> some IntentResult {
-        PendingIntent.write(kind: "log-block", text: note)
-        return .result()
-    }
-}
-
-@available(iOS 16.0, *)
 struct CroweShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: AskCroweLogicIntent(),
-            phrases: ["Ask \(.applicationName)", "Ask \(.applicationName) a question", "Ask \(.applicationName) about my grow"],
+            phrases: ["Ask \(.applicationName)", "Ask \(.applicationName) a question"],
             shortTitle: "Ask",
             systemImageName: "bubble.left.and.text.bubble.right"
-        )
-        AppShortcut(
-            intent: LogBlockIntent(),
-            phrases: ["Log a block in \(.applicationName)", "New block in \(.applicationName)"],
-            shortTitle: "Log a block",
-            systemImageName: "square.stack.3d.up"
         )
     }
 }

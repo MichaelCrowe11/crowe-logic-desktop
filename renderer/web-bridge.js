@@ -1070,6 +1070,33 @@
 
   window.crowe = {
     installSpaces: null,
+    edition: Object.freeze({
+      id: "desktop", productName: "Crowe Logic",
+      allowedSpaces: Object.freeze(["chat", "projects"]),
+      defaultSpaces: Object.freeze(["chat", "projects"]), landingSpace: "chat",
+      capabilities: Object.freeze({ grow: false, farm: false, sense: false, legacyAccess: false }),
+      legacyAccess: false,
+    }),
+    editionAccess: {
+      async enterLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery requires the source desktop installation. No local records are accessed here." } }; },
+      async leaveLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery is unavailable in this runtime." } }; },
+      async openWorkbench() { return { ok: false, error: { code: "UNAVAILABLE", message: "Opening the local desktop workbench is unavailable in this runtime." } }; },
+    },
+    vision: { async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook photo inspection requires the Mycology desktop app. No image is read or sent here." } }; } },
+    transfer: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook and compliance transfers require the local desktop app. No records are imported or exported here." } }; },
+    },
+    // Browser storage and companion routes are not the desktop farm database.
+    farm: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm & Compliance is available in the local desktop app, not this browser. No farm records are stored here." } }; },
+      async legacyHarvests() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy harvest adoption is available only in the local desktop Farm & Compliance workspace." } }; },
+    },
+    team: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm team tools are available in the Mycology desktop app, not the web console." } }; },
+    },
+    imports: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Document intake is available in the Mycology desktop app, not the web console. No documents are stored here." } }; },
+    },
 
     agent: {
       run: agentRun,

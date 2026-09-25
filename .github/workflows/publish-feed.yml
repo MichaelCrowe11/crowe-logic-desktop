@@ -1,32 +1,28 @@
 name: Publish update feed
 
-# Publishes a tagged release's artifacts from the GitHub release to the R2
-# update feed - the job release.yml deliberately does not do, because macOS
-# artifacts must be signed and notarized on a release machine first.
-#
-# The flow this exists for: the release machine builds and notarizes macOS,
-# attaches those artifacts to the GitHub release next to CI's Windows and
-# Linux ones, and then dispatches this workflow instead of uploading ~500 MB
-# to R2 over whatever network it happens to be on. Publishing v0.21.0 from a
-# residential uplink found Cloudflare's API refusing bodies over ~125 MB that
-# GitHub accepted without complaint - the release got out by routing the big
-# objects through here.
-#
-# Requires CLOUDFLARE_API_TOKEN to carry R2 write for the crowe-releases
-# bucket. If this job fails with 403 Authentication error, that scope is
-# missing - grant it in the Cloudflare dashboard; nothing here can.
-#
-# publish-r2.sh decides what to upload by reading the latest*.yml feeds, so a
-# release whose macOS artifacts were never attached simply publishes without a
-# mac channel rather than half-publishing one, and it ends by running
-# scripts/verify-release.js against the live feed - the failure surfaces here,
-# not in silence on a user's machine.
-
+# Fail-closed publication preparation. Gates come from the protected default
+# dispatch ref, NEVER from an older candidate tag. That ref still requires code
+# review under the repository's branch rules; dispatch alone is not approval.
+# Candidate source is metadata only and candidate artifacts use a separate path.
+# No download/upload authentication is approved here yet: the old secret-env
+# wiring is deliberately removed, not retained as an alternative to asm-exec.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Tag to publish, e.g. v0.21.0"
+        description: "Exact candidate tag, e.g. v0.24.17 (must match reviewed gate package version)"
+        required: true
+        type: string
+      edition:
+        description: "Explicit edition to publish"
+        required: true
+        type: choice
+        options:
+          - desktop
+          - developers
+          - mycology
+      matrix:
+        description: "Required platform:arch:artifact inventory, e.g. mac:arm64:dmg+zip,mac:x64:dmg+zip"
         required: true
         type: string
 
@@ -35,32 +31,90 @@ permissions:
 
 concurrency:
   group: publish-feed
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # Check out the tag being published, not whichever branch dispatched the
-      # run: preflight-release.js refuses a feed whose version differs from the
-      # checked-out package.json, so publishing an older tag from a bumped main
-      # would otherwise fail for the wrong reason.
-      - uses: actions/checkout@v7
+      - name: Require protected default dispatch ref and exact tag syntax
+        id: trust
+        shell: bash
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          CANDIDATE_TAG: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$DISPATCH_REF" != "$DEFAULT_REF" || "$REF_PROTECTED" != "true" ]]; then
+            printf '%s\n' '::error::Dispatch must use the protected default branch with reviewed gate code.'
+            exit 1
+          fi
+          if [[ ! "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            printf '%s\n' '::error::An exact v-prefixed release tag is required.'
+            exit 1
+          fi
+      - name: Check out reviewed dispatch gate code
+        uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.version }}
+          ref: ${{ github.sha }}
+          path: gates
+          persist-credentials: false
+      - name: Check out candidate metadata separately
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          path: candidate-source
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: npm ci --ignore-scripts
-      - name: Download the release's artifacts
+      - name: Install reviewed gate dependencies without lifecycle scripts
+        working-directory: gates
+        run: npm ci --ignore-scripts
+      - name: Validate explicit selection and candidate source version
+        id: selection
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release download "${{ inputs.version }}" -D release -p '*'
-      - name: Publish to R2 and verify the live feed
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        # Set in the shell, not in `env:` - GITHUB_REF_NAME is a runner default
-        # the job env cannot override, and the first dispatch proved it by
-        # publishing under desktop/main/.
-        run: GITHUB_REF_NAME="${{ inputs.version }}" bash scripts/publish-r2.sh release
+          CANDIDATE_TAG: ${{ inputs.version }}
+          RELEASE_EDITION: ${{ inputs.edition }}
+          RELEASE_MATRIX: ${{ inputs.matrix }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const workspace = process.env.GITHUB_WORKSPACE;
+          const gates = path.join(workspace, 'gates');
+          const source = path.join(workspace, 'candidate-source');
+          const artifacts = path.join(workspace, 'candidate-artifacts');
+          const tag = process.env.CANDIDATE_TAG;
+          if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(tag || '')) throw new Error('invalid candidate tag');
+          const version = tag.slice(1);
+          // Candidate code is never imported or executed, including its config.
+          const candidateFile = path.join(source, 'package.json');
+          if (!fs.lstatSync(candidateFile).isFile()) throw new Error('candidate package.json must be a regular file');
+          const candidate = JSON.parse(fs.readFileSync(candidateFile, 'utf8'));
+          const reviewed = JSON.parse(fs.readFileSync(path.join(gates, 'package.json'), 'utf8'));
+          if (candidate.version !== version) throw new Error('candidate source version differs from tag');
+          if (reviewed.version !== version) throw new Error('candidate version differs from reviewed gate package; do not rewrite package.json to bypass strict preflight');
+          const channels = { desktop: 'latest', developers: 'developers', mycology: 'mycology' };
+          if (!Object.hasOwn(channels, process.env.RELEASE_EDITION)) throw new Error('explicit supported edition required');
+          const { resolvePublishArgs } = require(path.join(gates, 'scripts/publish-args.js'));
+          const selection = resolvePublishArgs([
+            artifacts, '--channel', channels[process.env.RELEASE_EDITION], '--matrix', process.env.RELEASE_MATRIX,
+          ], { cwd: workspace, repo: gates, env: { GITHUB_REF_NAME: tag } });
+          if (selection.root !== artifacts || selection.version !== version) throw new Error('release selection drift');
+          if (fs.existsSync(artifacts)) throw new Error('candidate artifact staging must start empty and separate from source');
+          fs.mkdirSync(artifacts);
+          console.log('Candidate metadata and explicit selection validated; artifacts NOT downloaded, preflight NOT passed, nothing published.');
+          NODE
+      - name: Block publication pending approved runtime-secret-reference mapping
+        id: publication-blocked
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          printf '%s\n' '::error::Publication disabled: approved asm-exec runtime-secret-reference wiring for artifact download and R2 upload is unavailable. No credential fallback is permitted.'
+          exit 1

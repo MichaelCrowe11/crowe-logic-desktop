@@ -1,0 +1,66 @@
+{
+  "schema": "crowe-film-editorial-fixture-v1",
+  "status": "fictional-inputs-only-not-captured",
+  "importable": false,
+  "warning": "Fictional example records. Not an importer payload, operating procedure or safety recommendation.",
+  "facility": "Example Farm Cedar",
+  "operatorDisplayName": "Example Operator Cedar",
+  "harvest": {
+    "sourceAlias": "notebook-harvest-a",
+    "lotAlias": "lot-a",
+    "date": "2026-09-18",
+    "species": "Oyster mushrooms",
+    "room": "Room A",
+    "quantityLbs": "24.000",
+    "generatedLotCode": null,
+    "trustedReviewTime": null,
+    "sourceId": null
+  },
+  "dailyLog": {
+    "date": "2026-09-19",
+    "room": "Room A",
+    "temperatureF": 64,
+    "humidityPercent": 88,
+    "cleaningCompleted": false,
+    "deviationNotes": "Fictional example: the second room check-sheet entry is missing.",
+    "plannedCorrectiveAction": "Fictional example: review the missing entry and record what can be established. Do not invent a historical measurement.",
+    "completedCorrectiveAction": "Fictional example: the operator reviewed the check sheet, recorded that the missing reading could not be reconstructed, and assigned a check of the next scheduled entry.",
+    "resolutionReason": "Fictional demonstration of local review and follow-up. No assertion of safe growing conditions or cleaning efficacy.",
+    "sequence": ["OPEN", "corrective-text-while-OPEN", "explicit-RESOLVED"]
+  },
+  "document": {
+    "title": "Example lot-label check",
+    "type": "LOT_CODING_SOP",
+    "revisionOne": "Demonstration only. Not a complete operating procedure. Compare the label's lot code with the selected example lot record. Record a mismatch before proceeding with this exercise.",
+    "revisionTwo": "Demonstration only. Not a complete operating procedure. Compare the label's lot code and recorded harvest date with the selected example lot record. Record a mismatch before proceeding with this exercise.",
+    "firstRevisionStates": ["DRAFT", "NEEDS_REVIEW", "APPROVED", "SUPERSEDED"],
+    "secondRevisionStates": ["DRAFT", "NEEDS_REVIEW", "APPROVED"]
+  },
+  "recipients": [
+    {"alias": "recipient-one", "name": "Example Kitchen One", "contactDetails": null},
+    {"alias": "recipient-two", "name": "Example Market Two", "contactDetails": null}
+  ],
+  "shipments": [
+    {"alias": "shipment-one", "recipientAlias": "recipient-one", "lotAlias": "lot-a", "quantityLbs": "12.000", "localDateTime": "2026-09-19T09:00", "capturedTimeZone": null, "requestId": null},
+    {"alias": "shipment-two", "recipientAlias": "recipient-two", "lotAlias": "lot-a", "quantityLbs": "8.000", "localDateTime": "2026-09-19T10:00", "capturedTimeZone": null, "requestId": null}
+  ],
+  "negativeAllocation": {"quantityLbs": "4.001", "expectedOutcome": "confirmed-rejection-with-no-new-shipment", "performed": false},
+  "correction": {
+    "quantityLbs": "23.500",
+    "reason": "Fictional example: duplicate 0.500 lb entry removed from the recorded harvest total.",
+    "actorId": null,
+    "trustedCorrectionTime": null
+  },
+  "expectedArithmetic": {
+    "shippedLbs": "20.000",
+    "remainingBeforeCorrectionLbs": "4.000",
+    "remainingAfterCorrectionLbs": "3.500",
+    "shipmentTimeHarvestLbs": "24.000"
+  },
+  "recovery": {
+    "method": "independent-notebook-import-and-ledger-restore-into-empty-targets",
+    "sourceDeleted": false,
+    "crossStoreAtomic": false,
+    "performed": false
+  }
+}

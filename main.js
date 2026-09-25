@@ -3,12 +3,31 @@
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
 const { app, BrowserWindow, session, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
+// STARTUP: profile and native singleton precede every app-service import. Some
+// imports and even top-level variable initializers below read/migrate config.
+const startup = require("./edition-bootstrap").bootstrapEdition({ app, metadata: require("./package.json"), env: process.env });
+if (!startup.primary) {
+  app.exit(0);
+  return; // app.exit/quit alone does not stop this JavaScript module executing.
+}
+const EDITION = startup.edition;
+// Immutable build metadata, not a profile preference or environment override.
+// Ad-hoc local candidates must never enter a production updater/telemetry path.
+const LOCAL_PRERELEASE = app.isPackaged && require("./package.json").croweLocalPrerelease === true;
+const { publicEditionDescriptor } = require("./app-edition");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
 const { pathToFileURL } = require("url");
+const { createProfileAuth, createAuthSession } = require("./cloud/profile-auth");
+const profileAuth = createProfileAuth({
+  edition: EDITION.id, explicitProfile: app.commandLine.hasSwitch("user-data-dir"),
+  getProfile: () => app.getPath("userData"), getHome: () => os.homedir(), safeStorage,
+  isPackaged: app.isPackaged, allowPlaintext: process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1",
+});
+const authSession = createAuthSession();
 const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
@@ -19,6 +38,22 @@ const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSende
 
 const APP_ENTRY = path.join(__dirname, "renderer", "index.html");
 let mainWindow = null;
+let legacyWindow = null;
+let transferHost = null;
+function legacyActive() { return !!mainWindow && legacyWindow === mainWindow.webContents && !mainWindow.isDestroyed(); }
+function farmAccess() { return EDITION.capabilities.farm || legacyActive(); }
+function growAccess() { return EDITION.capabilities.grow || legacyActive(); }
+function editionDescriptor() {
+  const base = publicEditionDescriptor(EDITION);
+  return legacyActive() ? { ...base, legacyAccess: true,
+    allowedSpaces: [...new Set([...base.allowedSpaces, "farm", "cultivation"])],
+    capabilities: { ...base.capabilities, farm: true, grow: true, sense: false } } : base;
+}
+function assertGrowAccess() {
+  if (!growAccess()) throw Object.assign(new Error("Open Legacy farm records to access this profile's notebook."), { code: "UNAVAILABLE" });
+  if (transferHost?.busy) throw Object.assign(new Error("Record transfer is in progress."), { code: "TRANSFER_BUSY" });
+  require("./grow-transfer").assertReady(app.getPath("userData"));
+}
 
 /* Every renderer bridge call terminates here. Keep the registration surface
    familiar to the rest of this file, but refuse calls from a guest webview,
@@ -34,13 +69,102 @@ ipcMain.on = (channel, listener) => registerIpcListener(channel, (event, ...args
   return listener(event, ...args);
 });
 
+// Registration is eager, storage is lazy. No config, identity, network, engine,
+// legacy mutation, or migration is required to open the local farm workspace.
+const farmHost = require("./farm/ipc").registerFarmIpc({
+  // Farm's wrapper uses the identical sender policy and returns an envelope
+  // even for denied callers; other handlers retain their throwing wrapper.
+  ipcMain: { handle: registerIpcHandler },
+  isTrustedSender: (event) => isTrustedIpcSender(event, mainWindow, APP_ENTRY),
+  canAccess: farmAccess,
+  runOperation: (event, action, work) => {
+    if (action === "backup.restore") {
+      if (importHost.pendingCount) throw Object.assign(new Error("Finish document staging before restoring farm records."), { code: "IMPORT_BUSY" });
+      visionHost.invalidate(); importHost.invalidate();
+    }
+    return transferHost.runFarm(event, action, work);
+  },
+  getFilename: () => path.join(app.getPath("userData"), "farm-compliance", "farm.db"),
+  getLegacyFilename: () => {
+    require("./grow-transfer").assertReady(app.getPath("userData"));
+    return path.join(app.getPath("userData"), "grow", "flushes.json");
+  },
+});
+
+transferHost = require("./farm/transfer-host").createTransferHost({
+  dialog, getWindow: () => mainWindow, getUserData: () => app.getPath("userData"),
+  isTrustedSender: (event) => isTrustedIpcSender(event, mainWindow, APP_ENTRY),
+  canAccess: farmAccess, canImport: () => EDITION.id === "mycology",
+  source: () => ({ edition: EDITION.id, version: app.getVersion() }),
+  farmRequest: (action, payload) => farmHost.request(action, payload),
+  farmExists: async () => {
+    try { return (await fs.promises.lstat(path.join(app.getPath("userData"), "farm-compliance", "farm.db"))).isFile(); }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  },
+});
+const teamHost = require("./farm/team-host").createTeamHost({
+  isTrustedSender: (event) => isTrustedIpcSender(event, mainWindow, APP_ENTRY),
+  canAccess: () => EDITION.id === "mycology" && !legacyActive(),
+  getSession: () => ({ token: loadConfig().token, baseUrl: loadConfig().baseUrl, generation: authSession.generation() }),
+  allowLocal: !app.isPackaged,
+});
+registerIpcHandler("crowe:team:request", (event, action, payload) => teamHost.request(event, action, payload));
+// Dedicated advisory path. No production gateway adapter is enabled until its
+// actual recipient/engine provenance and bounded tool-free routing are verified.
+// In particular, gatewayChat's requested-model fallback is not verification.
+const visionHost = require("./vision/host").createVisionHost({
+  isTrustedSender: (event) => isTrustedIpcSender(event, mainWindow, APP_ENTRY),
+  canAccess: () => EDITION.id === "mycology" && !legacyActive(),
+  assertAdmission: assertGrowAccess, getUserData: () => app.getPath("userData"),
+  dialog, getWindow: () => mainWindow,
+  decode: require("./vision/image").createDecoder({ BrowserWindow, session }),
+});
+registerIpcHandler("crowe:vision:request", (event, action, payload) => visionHost.request(event, action, payload));
+const importHost = require("./imports/host").createImportHost({
+  isTrustedSender: (event) => isTrustedIpcSender(event, mainWindow, APP_ENTRY),
+  canAccess: () => EDITION.id === "mycology" && !legacyActive(),
+  assertAdmission: assertGrowAccess, getUserData: () => app.getPath("userData"),
+  dialog, getWindow: () => mainWindow, shared: teamHost.imports,
+});
+registerIpcHandler("crowe:imports:request", (event, action, payload) => importHost.request(event, action, payload));
+registerIpcHandler("crowe:transfer:request", (event, action, payload) => {
+  if (isTrustedIpcSender(event, mainWindow, APP_ENTRY)) {
+    if (importHost.pendingCount) return { ok: false, error: { code: "IMPORT_BUSY", message: "Finish document staging before transferring local records." } };
+    visionHost.invalidate(); importHost.invalidate();
+  }
+  return transferHost.request(event, action, payload);
+});
+ipcMain.handle("crowe:edition:legacy-enter", (event) => {
+  if (transferHost.busy) return { ok: false, error: { code: "TRANSFER_BUSY", message: "Finish the current transfer first." } };
+  if (EDITION.id !== "mycology") legacyWindow = event.sender;
+  // Access alone never modifies source files or resumes an interrupted import.
+  return { ok: true, data: editionDescriptor() };
+});
+ipcMain.handle("crowe:edition:legacy-leave", async (event) => {
+  try {
+    return await transferHost.drain(event, () => {
+      legacyWindow = null;
+      return { ok: true, data: editionDescriptor() };
+    });
+  } catch (error) { return require("./farm/ipc").errorEnvelope(error); }
+});
+let workbenchStarted = false;
+ipcMain.handle("crowe:edition:workbench", () => {
+  if (!workbenchStarted) { workbenchStarted = true; mcpConnectAll(); pluginsConnectAll(); startRoutineScheduler(); fetchCatalog(); }
+  return { ok: true, data: {} };
+});
+
 let pty = null;
 try { pty = require("node-pty"); } catch { pty = null; }
 
 // Auto-update (electron-updater over the generic R2 channel). Only in packaged
 // builds; downloads are user-consented, never silent. See setupAutoUpdate().
 let autoUpdater = null;
-try { ({ autoUpdater } = require("electron-updater")); } catch { autoUpdater = null; }
+// A Mac App Store build never loads the updater: the store delivers updates and
+// review rejects an app that replaces its own code.
+if (!LOCAL_PRERELEASE && !process.mas) {
+  try { ({ autoUpdater } = require("electron-updater")); } catch { autoUpdater = null; }
+}
 
 const DEFAULTS = {
   baseUrl: "https://api.crowelogic.com",
@@ -50,7 +174,7 @@ const DEFAULTS = {
   autoApprove: false,     // when true, file edits apply without review
   autonomy: "edit",       // see TIERS: plan | readonly | edit | execute. Safe default: edit.
   mcpServers: {},         // { name: { command, args, env } }
-  telemetry: true,        // minimal anonymous usage + crash metadata; off = local dumps only
+  telemetry: !LOCAL_PRERELEASE, // local candidates cannot opt into uploads
   onboarded: false,       // set true after the first-run card has been shown
   licenseWorkspaceId: "", // selected Crowe Agents customer workspace
   // Which actions stop for an explicit yes, independently of the autonomy tier:
@@ -102,7 +226,7 @@ function telemetryExtra() {
 function initCrashReporting() {
   const dumps = path.join(app.getPath("userData"), "crashes");
   try { app.setPath("crashDumps", dumps); } catch {}
-  const enabled = Boolean(loadConfig().telemetry);
+  const enabled = !LOCAL_PRERELEASE && Boolean(loadConfig().telemetry);
   try {
     crashReporter.start({
       productName: "Crowe Logic",
@@ -115,7 +239,7 @@ function initCrashReporting() {
   } catch { /* crash reporting must never block startup */ }
 }
 function postTelemetry(event, props) {
-  if (!loadConfig().telemetry) return;
+  if (LOCAL_PRERELEASE || !loadConfig().telemetry) return;
   try {
     const base = (loadConfig().baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "");
     fetch(`${base}/api/telemetry/event`, {
@@ -128,40 +252,8 @@ function postTelemetry(event, props) {
 }
 
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
-function authStorePath() { return path.join(app.getPath("userData"), "auth.bin"); }
-function readAuthStore() {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      /* The mirror of writeAuthStore's fallback, under exactly the same two
-         conditions. Without it the escape hatch below writes a file nothing can
-         read: a headless shell could sign in, and be signed out again on the
-         next loadConfig(), with no error anywhere to say why. That is the case
-         the fallback exists for, so reading it back is not a widening of the
-         exposure - refusing to is just a fallback that does not work. */
-      if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) {
-        return JSON.parse(fs.readFileSync(authStorePath(), "utf8"));
-      }
-      return {};
-    }
-    return JSON.parse(safeStorage.decryptString(fs.readFileSync(authStorePath())));
-  } catch { return {}; }
-}
-function writeAuthStore(store) {
-  if (!safeStorage.isEncryptionAvailable()) {
-    // Headless shells (CI, xdotool smoke runs, SSH sessions) have no keychain,
-    // so they need somewhere to put a token. That fallback is plaintext, and it
-    // holds the refresh token - the long-lived secret that mints new access
-    // tokens - so it has to be opted into explicitly and can never be reachable
-    // from a packaged build. app.isPackaged is the backstop: even if the env var
-    // leaks into a user's shell, a shipped install still refuses.
-    if (process.env.CROWE_ALLOW_PLAINTEXT_AUTH === "1" && !app.isPackaged) {
-      fs.writeFileSync(authStorePath(), JSON.stringify(store), { mode: 0o600 });
-      return;
-    }
-    throw new Error("Native credential encryption is unavailable");
-  }
-  fs.writeFileSync(authStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
-}
+function readAuthStore() { return profileAuth.readAuth(); }
+function writeAuthStore(store) { profileAuth.writeAuth(store); }
 /* The four tiers, and the one place a stored value becomes one of them.
 
    Spreading DEFAULTS does not settle this: a config carrying `"autonomy": null`
@@ -179,6 +271,7 @@ function loadConfig() {
     const stored = JSON.parse(fs.readFileSync(configPath(), "utf8"));
     const auth = readAuthStore();
     const cfg = { ...DEFAULTS, ...stored, token: auth.token || "", refreshToken: auth.refreshToken || "" };
+    if (LOCAL_PRERELEASE) cfg.telemetry = false;
     // Guard: a stale localhost/loopback gateway URL (a dev artifact) must never
     // brick a member install - fall back to the real gateway.
     if (/^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)\b/i.test(cfg.baseUrl || "")) cfg.baseUrl = DEFAULTS.baseUrl;
@@ -236,17 +329,8 @@ const KEY_PROVIDERS = {
 // Key Manager rows, the image tool's providers, the test endpoint.
 const SERVICE_KEYS = { croweBrowser: { label: "Crowe Browser" } };
 const keyStoreAccepts = (id) => Boolean(KEY_PROVIDERS[id] || SERVICE_KEYS[id]);
-function keyStorePath() { return path.join(app.getPath("userData"), "credentials.bin"); }
-function readKeyStore() {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) return {};
-    return JSON.parse(safeStorage.decryptString(fs.readFileSync(keyStorePath())));
-  } catch { return {}; }
-}
-function writeKeyStore(store) {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error("Native credential encryption is unavailable");
-  fs.writeFileSync(keyStorePath(), safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 });
-}
+function readKeyStore() { return profileAuth.readKeys(); }
+function writeKeyStore(store) { profileAuth.writeKeys(store); }
 function keyStatus() {
   const store = readKeyStore();
   return Object.entries(KEY_PROVIDERS).map(([id, spec]) => {
@@ -316,52 +400,29 @@ ipcMain.handle("crowe:files:read-context", (_e, filePaths) => (Array.isArray(fil
 
 let CWD = loadConfig().cwd || os.homedir();
 
-/* Which spaces this install ships with.
-
-   The picker added in #12 lets someone narrow their own shell, but it writes to
-   renderer localStorage, so there was no way to hand anyone a Chat-and-Projects
-   install - every build shipped every space and the buyer had to go turn two
-   off. This is the missing half: a default the build carries.
-
-   It has to reach the renderer synchronously. applySpaceProfile() runs while the
-   rail is being wired, and anything asynchronous means painting four tabs and
-   then dropping two, which reads as a bug rather than as a build. A sandboxed
-   preload can open neither the filesystem nor userData, but it can read
-   process.argv - so the list rides in on additionalArguments.
-
-   Deliberately a default and not a lock: the picker still wins, and someone who
-   turns Cultivation back on keeps it. A hard lock is a different feature and
-   would need the picker to stop offering what it cannot grant.
-
-   No list of valid ids here on purpose. The registry lives in renderer.js and
-   duplicating it is how the two drift; the renderer already filters against its
-   own SPACES, so main passes the configured names through untouched. */
+/* Edition policy reaches the sandboxed preload synchronously. Preferences may
+   narrow its spaces, but only main can grant explicit legacy-record access. */
 function installSpaces() {
-  // The env var is for a one-off run or a CI check. The package.json key is for
-  // a build handed to a customer - electron-builder's extraMetadata sets it at
-  // package time without a patch to the source.
-  let raw = process.env.CROWE_SPACES;
-  if (raw == null) { try { raw = require("./package.json").croweSpaces; } catch {} }
-  if (raw == null) return null;
-  const ids = (Array.isArray(raw) ? raw : String(raw).split(",")).map((s) => String(s).trim()).filter(Boolean);
-  return ids.length ? ids : null;
+  return [...EDITION.defaultSpaces];
 }
 
 function createWindow() {
+  const editionIcon = path.join(__dirname, "assets", `${require("./app-edition").editionIconName(EDITION)}.png`);
+  if (process.platform === "darwin" && !app.isPackaged && EDITION.id === "mycology") app.dock?.setIcon(editionIcon);
   const spaces = installSpaces();
   const appEntry = APP_ENTRY;
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#F4F0E7", title: "Crowe Logic", show: false,
+    backgroundColor: "#F4F0E7", title: EDITION.productName, show: false,
     // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
     // and neither can decode .icns, so pointing at the icns left them on the
     // default Electron icon.
-    icon: path.join(__dirname, "assets", "icon.png"),
+    icon: editionIcon,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false, webviewTag: true,
       sandbox: true,
-      additionalArguments: spaces ? [`--crowe-spaces=${spaces.join(",")}`] : [],
+      additionalArguments: [`--crowe-spaces=${spaces.join(",")}`, `--crowe-edition=${JSON.stringify(publicEditionDescriptor(EDITION))}`],
     },
   });
   /* Held back until the renderer has painted a frame.
@@ -373,10 +434,25 @@ function createWindow() {
      Timed out rather than trusted: if that event never arrives the window must
      still appear, because a process with no window and no dock behaviour is an
      app the user cannot get back. */
+  const createdWindow = mainWindow;
+  startup.windowAwaitingReveal(createdWindow);
   let shown = false;
-  const reveal = () => { if (shown || !mainWindow) return; shown = true; mainWindow.show(); };
-  mainWindow.once("ready-to-show", reveal);
-  setTimeout(reveal, 4000);
+  let revealTimer = null;
+  const reveal = () => {
+    if (shown || createdWindow.isDestroyed() || mainWindow !== createdWindow) return;
+    shown = true;
+    clearTimeout(revealTimer);
+    createdWindow.show();
+    startup.windowReadyToShow(createdWindow);
+  };
+  createdWindow.once("ready-to-show", reveal);
+  revealTimer = setTimeout(reveal, 4000);
+  createdWindow.once("closed", () => clearTimeout(revealTimer));
+  const windowContents = mainWindow.webContents;
+  windowContents.on("did-start-navigation", (_event, _url, inPlace, isMainFrame) => {
+    if (isMainFrame && !inPlace && legacyWindow === windowContents) legacyWindow = null;
+  });
+  windowContents.once("destroyed", () => { if (legacyWindow === windowContents) legacyWindow = null; });
   mainWindow.loadFile(appEntry);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeGuestUrl(url)) mainWindow.webContents.send("crowe:browser:navigate", url);
@@ -456,41 +532,40 @@ app.on("web-contents-created", (_event, contents) => {
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
 const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
 const CROWE_ID_CLIENT = "crowe-cli";
-const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
+// OAuth uses the existing public client and registered loopback ports. State
+// and PKCE are per attempt; no edition claims a shared custom URL protocol.
+// The external browser's SSO cookies are not part of the app profile.
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
-function persistTokens(d) {
-  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+function persistTokens(d, generation, previousRefresh = "") {
+  if (!authSession.isCurrent(generation)) return false;
+  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || previousRefresh });
+  return true;
 }
 function migrateLegacyAuth() {
-  const cfg = loadConfig();
-  if (cfg.token || cfg.refreshToken) return;
-  let legacy = {};
-  try { legacy = JSON.parse(fs.readFileSync(LEGACY_AUTH_JSON, "utf8")); } catch {}
-  let oldConfig = {};
-  try { oldConfig = JSON.parse(fs.readFileSync(configPath(), "utf8")); } catch {}
-  const token = legacy.access_token || oldConfig.token || "";
-  const refreshToken = legacy.refresh_token || oldConfig.refreshToken || "";
-  if (token || refreshToken) saveConfig({ token, refreshToken });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  const tokens = profileAuth.migrationTokens();
+  if (tokens) saveConfig(tokens); // Encrypted write precedes profile plaintext removal.
 }
 function currentUser() {
   const c = loadConfig(); if (!c.token) return null;
   const p = decodeJwt(c.token);
   return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "", tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
 }
-async function refreshToken() {
-  const cfg = loadConfig();
-  const refresh = cfg.refreshToken;
-  if (!refresh) return null;
-  try {
-    const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
-    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
-    const d = await r.json();
-    if (d.access_token) { persistTokens(d); return d.access_token; }
-  } catch { /* noop */ }
-  return null;
+function refreshToken() {
+  if (pendingSignIn) return Promise.resolve(null);
+  return authSession.refresh(async (generation) => {
+    if (!authSession.isCurrent(generation)) return null;
+    const refresh = loadConfig().refreshToken;
+    if (!refresh) return null;
+    try {
+      const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
+      const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(30000) });
+      const d = await r.json();
+      if (d.access_token && authSession.isCurrent(generation) && loadConfig().refreshToken === refresh &&
+          persistTokens(d, generation, refresh)) return d.access_token;
+    } catch { /* a failed/stale refresh never changes the local identity */ }
+    return null;
+  });
 }
 /* One sign-in at a time. The loopback listener holds its port for up to five
    minutes while the browser page waits, so a second click used to open a second
@@ -499,14 +574,28 @@ async function refreshToken() {
 let pendingSignIn = null;
 function signIn() {
   if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
-  const pending = { promise: null, authUrl: "" };
+  teamHost.invalidate(); importHost.invalidate();
+  const pending = { promise: null, authUrl: "", cancel: null, generation: authSession.invalidate() };
+  pendingSignIn = pending;
   pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
-    let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
+    let redirect = "", settled = false, exchanging = false, timeout = null, retry = null;
+    const controller = new AbortController();
+    const finish = (v) => {
+      if (!settled) {
+        settled = true; clearTimeout(timeout); clearTimeout(retry); controller.abort();
+        try { server.close(); } catch {}
+        if (pendingSignIn === pending) pendingSignIn = null;
+        resolve(v);
+      }
+    };
+    pending.cancel = () => finish({ error: "sign-in cancelled" });
     const server = http.createServer(async (req, res) => {
+      if (settled || exchanging || !authSession.isCurrent(pending.generation)) {
+        res.writeHead(409); res.end("sign-in no longer active"); return;
+      }
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const code = u.searchParams.get("code"), st = u.searchParams.get("state");
@@ -514,25 +603,36 @@ function signIn() {
       // so and keep listening: a page in the browser panel can reach 127.0.0.1
       // too, and one stray request must not cancel the user's real callback.
       if (!code || st !== state) { res.writeHead(400, { "Content-Type": "text/plain" }); res.end("not this sign-in"); return; }
+      exchanging = true;
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>Return to the app to check your sign-in result. You can close this window.</p></body>');
       try { server.close(); } catch {}
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
-        const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+        const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: controller.signal });
         const d = await r.json();
-        if (d.access_token) { persistTokens(d); return finish({ ok: true, user: currentUser() }); }
+        if (settled || pendingSignIn !== pending || !authSession.isCurrent(pending.generation)) return;
+        if (d.access_token && persistTokens(d, pending.generation)) return finish({ ok: true, user: currentUser() });
         return finish({ error: d.error_description || d.error || "token exchange failed" });
       } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
     });
     // Must match the crowe-cli client's registered loopback redirect URIs.
     const PORTS = [8765, 9275];
     let pIdx = 0;
+    const listen = () => {
+      if (settled) return;
+      try { server.listen(PORTS[pIdx], "127.0.0.1"); }
+      catch (error) { finish({ error: String(error).slice(0, 200) }); }
+    };
     server.on("error", (e) => {
-      if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
+      if (settled) return;
+      if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) {
+        pIdx += 1; retry = setTimeout(listen, 40); return;
+      }
       finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
+      if (settled) { try { server.close(); } catch {} return; }
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
       const authUrl = `${CROWE_ID}/protocol/openid-connect/auth?` + new URLSearchParams({
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
@@ -541,15 +641,22 @@ function signIn() {
       pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
-    server.listen(PORTS[pIdx], "127.0.0.1");
-    setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
+    timeout = setTimeout(() => finish({ error: "sign-in timed out" }), 300000);
+    listen();
+  }).catch((error) => {
+    // Synchronous setup failure must not strand the attempt or its timers.
+    if (pending.cancel) pending.cancel();
+    if (pendingSignIn === pending) pendingSignIn = null;
+    return { error: String(error).slice(0, 200) };
   });
-  pendingSignIn = pending;
   return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => {
-  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  teamHost.invalidate(); importHost.invalidate();
+  authSession.invalidate();
+  if (pendingSignIn) pendingSignIn.cancel();
+  saveConfig({ token: "", refreshToken: "" });
   // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
   browserSessions.endAll().catch(() => {});
   return { ok: true };
@@ -891,7 +998,7 @@ function pluginList() {
     const connected = PLUGIN_MANAGED.has(p.id) && (builtin ? true : Boolean(MCP[p.id]));
     return {
       id: p.id, name: p.name, description: p.description, category: p.category,
-      spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
+      spaces: p.spaces || [], available: p.available !== false && pluginAllowed(p), envPrompts: p.envPrompts || [],
       glyph: p.glyph || "", chips: p.chips || [],
       enabled: Boolean(st[p.id] && st[p.id].enabled),
       connected,
@@ -915,7 +1022,12 @@ function resolvePluginPath(s) {
   const appDir = __dirname.replace(/app\.asar(?=[\\/]|$)/, "app.asar.unpacked");
   return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
 }
+function pluginAllowed(p) {
+  const spaces = p.spaces || [];
+  return EDITION.capabilities.grow || !spaces.length || !spaces.every(space => ["cultivation", "farm"].includes(space));
+}
 async function pluginConnect(p, env) {
+  if (!pluginAllowed(p)) return { error: "This grower plugin belongs to Crowe Logic Mycology." };
   const builtin = pluginBuiltinTools(p);
   if (builtin) {
     const check = BUILTIN_PLUGIN_CHECKS[p.id];
@@ -944,7 +1056,7 @@ async function pluginConnect(p, env) {
 }
 async function pluginsConnectAll() {
   const st = pluginState();
-  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled) await pluginConnect(p, pluginEnv(p.id)); }
+  for (const p of BUILTIN_PLUGINS) { const s = st[p.id]; if (s && s.enabled && pluginAllowed(p)) await pluginConnect(p, pluginEnv(p.id)); }
 }
 ipcMain.handle("crowe:plugins:list", () => pluginList());
 ipcMain.handle("crowe:plugins:enable", async (_e, { id, env }) => {
@@ -1268,8 +1380,9 @@ const harnessCtx = {
   // just dictated instead of describing the row they should go and type. Same
   // function the form calls - one write path, so an agent-logged flush is
   // indistinguishable from a hand-logged one and both are equally correctable.
-  growWrite: (type, record) => growWrite(type, record),
-  growRead: (type) => growRead(type),
+  growAllowed: () => EDITION.capabilities.grow && !transferHost.busy,
+  growWrite: (type, record) => EDITION.capabilities.grow ? growWrite(type, record) : { ok: false, error: "Grow records are unavailable in this edition." },
+  growRead: (type) => EDITION.capabilities.grow ? growRead(type) : [],
   /* Mail. The account never crosses into the harness: the message comes in,
      the credentials are read from the encrypted store here at send time, and
      only the server's verdict goes back. No IPC handler sends mail; the one
@@ -1792,6 +1905,7 @@ ipcMain.handle("crowe:get-config", () => {
 });
 ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   const patch = sanitizeConfigPatch(rawPatch);
+  if (patch?.sense && (!EDITION.capabilities.sense || transferHost.busy)) throw new Error("Sense configuration is unavailable in this edition or during transfer.");
   const before = loadConfig().croweBrowser;
   // A Crowe Browser patch carries the URL alone; the key goes through the
   // key store, and sanitizeConfigPatch has already dropped one sent here.
@@ -2002,6 +2116,7 @@ function withRoom(id, fn) {
 function roomRunner(room) {
   return {
     runAgent: async ({ agentId, runId, model, systemBrief, messages, tier, onProgress }) => {
+      if (!roomAgentAllowed(agentId)) throw new Error("Grower specialists are available in Crowe Logic Mycology.");
       const seatId = roomSeatId(room.id, agentId);
       const run = { aborted: false, controller: null };
       agentRuns.set(seatId, run);
@@ -2043,13 +2158,16 @@ const councilHost = require("./rooms/council-host").installCouncilHost({
   ipcMain, loadRoom, changed: (room, reason) => roomChanged(room, reason, { save: false }),
   save: room => { const file = roomPath(room.id); fs.writeFileSync(file + ".council-tmp", JSON.stringify(roomsEngine.toSession(room)), { mode: 0o600 }); fs.renameSync(file + ".council-tmp", file); },
   busy: id => roomQueues.has(id), queue: withRoom,
+  canActivate: room => room.agents.every(a => roomAgentAllowed(a.agentId)),
   config: () => ({ ...loadConfig(), cwd: CWD }), catalog: () => catalogCache.models, chat: gatewayChat,
 });
 
-// The renderer needs the roster and the templates to compose a room at all.
+const GROWER_ROOM_AGENTS = new Set(["cultivation-intelligence", "mycology-research", "facility-design"]);
+function roomAgentAllowed(id) { return EDITION.capabilities.grow || !GROWER_ROOM_AGENTS.has(id); }
+// Historical rooms remain readable; new activation observes edition policy.
 ipcMain.handle("crowe:rooms:agents", () => ({
-  agents: [...roomsRegistry.listAgents(), ...catalogCache.models.filter(m => m.available !== false).map(m => roomsRegistry.modelAgent(m.id)).filter(Boolean)],
-  templates: roomsRegistry.listTemplates(),
+  agents: [...roomsRegistry.listAgents(), ...catalogCache.models.filter(m => m.available !== false).map(m => roomsRegistry.modelAgent(m.id)).filter(Boolean)].filter(a => roomAgentAllowed(a.id)),
+  templates: roomsRegistry.listTemplates().filter(t => t.agents.every(roomAgentAllowed)),
 }));
 
 // The rail's view: who is in each room, the last thing said, what is unread,
@@ -2065,6 +2183,7 @@ ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds 
     ? roomsEngine.fromTemplate(template, { title, budgetUsd, brief })
     : roomsEngine.createRoom({ title, agentIds, budgetUsd, brief });
   if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
+  if (room.agents.some(a => !roomAgentAllowed(a.agentId))) return { error: "Grower specialists are available in Crowe Logic Mycology." };
   liveRooms.set(room.id, room);
   roomChanged(room, "create");
   return { room: roomState(room) };
@@ -2088,6 +2207,7 @@ ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
 
 ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (!roomAgentAllowed(agentId)) return { error: "Grower specialists are available in Crowe Logic Mycology." };
   if (!roomsRegistry.getAgent(agentId)) return { error: "no such agent" };
   if (!roomsRegistry.isJoinable(agentId)) return { error: "that agent has been retired from rooms" };
   if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
@@ -2107,6 +2227,7 @@ ipcMain.handle("crowe:rooms:leave", (_e, { id, agentId } = {}) => {
 
 ipcMain.handle("crowe:rooms:set-agent-model", (_e, { id, agentId, model } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (!roomAgentAllowed(agentId)) return { error: "Grower specialists are available in Crowe Logic Mycology." };
   const seat = room.agents.find((a) => a.agentId === agentId);
   if (!seat) return { error: "that agent is not in this room" };
   seat.model = String(model || "").slice(0, 80);
@@ -2257,13 +2378,13 @@ const ROUTINE_TICK_MS = 30 * 1000;
 let routineTimer = null;
 let routineTicking = false;
 async function routineTick() {
-  if (routineTicking) return;
+  if (routineTicking || !workbenchStarted) return;
   routineTicking = true;
   try {
     const now = Date.now();
     for (const id of listRoomIds()) {
       const room = loadRoom(id);
-      if (!room || !(room.routines || []).length) continue;
+      if (!room || !(room.routines || []).length || room.agents.some(a => !roomAgentAllowed(a.agentId))) continue;
       for (const r of roomsEngine.dueRoutines(room, now)) {
         const claim = roomsEngine.claimRoutine(room, r.id, now);
         // The claim is on disk before the model is called, so a crash mid-run
@@ -2318,6 +2439,7 @@ function startRoutineScheduler() {
    which fields exist - one list, so the store, the form and the tool cannot
    drift apart. */
 function growPath(type) {
+  assertGrowAccess();
   if (!GROW_TYPES.has(type)) return null;
   const d = path.join(app.getPath("userData"), "grow");
   try { fs.mkdirSync(d, { recursive: true }); } catch {}
@@ -2330,7 +2452,13 @@ function growRead(type) {
 function growWrite(type, record) {
   const t = String(type || "");
   if (!GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
-  const rows = growRead(t);
+  let rows;
+  try {
+    assertGrowAccess();
+    rows = t === "log" ? require("./vision/notebook").readRows(app.getPath("userData"), t).rows : growRead(t);
+    require("./vision/notebook").guardOrdinary(rows, record);
+  } catch (error) { return { ok: false, error: error.message }; }
+  if (["blocks", "flushes"].includes(t)) visionHost.invalidate();
   const rec = { ...(record || {}) };
   const now = Date.now();
   if (rec.id) {
@@ -2424,7 +2552,8 @@ ipcMain.handle("crowe:grow:save", (_e, { type, record } = {}) => growWrite(type,
    renderer picked. The grower chooses where it lands and sees the filename, so
    an export is always something they did rather than something that happened to
    them - and no page-side string ever becomes a write path. */
-ipcMain.handle("crowe:grow:export", async (_e, { name, text } = {}) => {
+ipcMain.handle("crowe:grow:export", async (event, { name, text } = {}) => {
+  assertGrowAccess();
   const safe = String(name || "trace").replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 60) || "trace";
   const win = BrowserWindow.getFocusedWindow() || mainWindow;
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
@@ -2433,14 +2562,22 @@ ipcMain.handle("crowe:grow:export", async (_e, { name, text } = {}) => {
     filters: [{ name: "Text", extensions: ["txt"] }],
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
-  try { fs.writeFileSync(filePath, String(text || "")); }
+  if (!isTrustedIpcSender(event, mainWindow, APP_ENTRY)) return { ok: false, error: "The exporting document changed." };
+  assertGrowAccess();
+  try { fs.writeFileSync(filePath, String(text || ""), { flag: "wx", mode: 0o600 }); }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
   return { ok: true, path: filePath };
 });
 ipcMain.handle("crowe:grow:delete", (_e, { type, id } = {}) => {
   const t = String(type || "");
   if (!GROW_TYPES.has(t)) return { ok: false, error: "unknown record type" };
-  try { fs.writeFileSync(growPath(t), JSON.stringify(growRead(t).filter((r) => r && r.id !== id), null, 2)); }
+  try {
+    assertGrowAccess();
+    const rows = t === "log" ? require("./vision/notebook").readRows(app.getPath("userData"), t).rows : growRead(t);
+    require("./vision/notebook").guardOrdinary(rows, id);
+    if (["blocks", "flushes"].includes(t)) visionHost.invalidate();
+    fs.writeFileSync(growPath(t), JSON.stringify(rows.filter((r) => r && r.id !== id), null, 2));
+  }
   catch (e) { return { ok: false, error: String(e.message || e) }; }
   return { ok: true };
 });
@@ -2453,6 +2590,7 @@ ipcMain.handle("crowe:grow:delete", (_e, { type, id } = {}) => {
    unpaired: nothing polls anything the grower did not name. */
 let _sensePoller = null;
 function senseUpsert(records) {
+  if (!EDITION.capabilities.sense || transferHost.busy) return 0;
   let wrote = 0;
   for (const rec of records || []) {
     const v = growValidate("env", rec);
@@ -2476,8 +2614,11 @@ function sensePoller() {
   }
   return _sensePoller;
 }
-ipcMain.handle("crowe:sense:status", () => sensePoller().status());
-ipcMain.handle("crowe:sense:configure", (_e, patch) => sensePoller().configure(patch || {}));
+ipcMain.handle("crowe:sense:status", () => EDITION.capabilities.sense ? sensePoller().status() : { available: false, mode: "off" });
+ipcMain.handle("crowe:sense:configure", (_e, patch) => {
+  if (!EDITION.capabilities.sense || transferHost.busy) throw new Error("Sense configuration is unavailable in this edition or during transfer.");
+  return sensePoller().configure(patch || {});
+});
 
 // ─── Window chrome: menu, tray, global summon (Hypheus/Cortex-style) ─────────
 function relayMenu(action) { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("crowe:menu", action); }
@@ -2499,13 +2640,15 @@ function createTray() {
     const img = nativeImage.createFromPath(path.join(__dirname, "assets", trayFile)).resize({ width: 18, height: 18 });
     if (process.platform === "darwin") img.setTemplateImage(true);
     tray = new Tray(img);
-    tray.setToolTip("Crowe Logic");
+    tray.setToolTip(EDITION.productName);
+    const mycology = EDITION.id === "mycology";
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: "Show Crowe Logic", click: showWindow },
-      { label: "New Chat", click: () => { showWindow(); relayMenu("new-chat"); } },
-      { label: "Quick Ask", accelerator: "CmdOrCtrl+Shift+Space", click: () => { showWindow(); relayMenu("focus-composer"); } },
+      { label: `Show ${EDITION.productName}`, click: showWindow },
+      { label: mycology ? "Farm overview" : "New Chat", click: () => { showWindow(); relayMenu(mycology ? "home" : "new-chat"); } },
+      { label: mycology ? "Open farm" : "Quick Ask", accelerator: "CmdOrCtrl+Shift+Space", click: () => { showWindow(); relayMenu(mycology ? "home" : "focus-composer"); } },
+      ...(!mycology ? [{ label: "Legacy farm records", click: () => { showWindow(); relayMenu("legacy-records"); } }] : []),
       { type: "separator" },
-      { label: "Quit Crowe Logic", role: "quit" },
+      { label: `Quit ${EDITION.productName}`, role: "quit" },
     ]));
     tray.on("click", toggleWindow);
   } catch { /* tray optional */ }
@@ -2514,30 +2657,34 @@ function createTray() {
 function buildMenu() {
   const mac = process.platform === "darwin";
   const tier = loadConfig().autonomy || "edit";
+  const mycology = EDITION.id === "mycology";
   const crowe = (label, action, accel) => ({ label, accelerator: accel, click: () => { showWindow(); relayMenu(action); } });
   const template = [
     ...(mac ? [{ role: "appMenu" }] : []),
     { label: "File", submenu: [
-      crowe("New Chat", "new-chat", "CmdOrCtrl+N"),
+      crowe(mycology ? "Farm overview" : "New Chat", mycology ? "home" : "new-chat", "CmdOrCtrl+N"),
+      ...(!mycology ? [crowe("Legacy farm records", "legacy-records")] : []),
       { type: "separator" },
       mac ? { role: "close" } : { role: "quit" },
     ] },
     { role: "editMenu" },
     { label: "View", submenu: [
       crowe("Command Palette", "palette", "CmdOrCtrl+K"),
-      crowe("Focus Composer", "focus-composer", "CmdOrCtrl+L"),
+      crowe(mycology ? "Farm overview" : "Focus Composer", mycology ? "home" : "focus-composer", "CmdOrCtrl+L"),
       crowe("Toggle Dark Mode", "toggle-theme", "CmdOrCtrl+Shift+D"),
       { type: "separator" },
-      crowe("Terminal", "pane:term", "CmdOrCtrl+1"),
-      crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
-      crowe("Files", "pane:files", "CmdOrCtrl+3"),
+      ...(mycology ? [crowe("Cultivation notebook", "cultivation", "CmdOrCtrl+2")] : [
+        crowe("Terminal", "pane:term", "CmdOrCtrl+1"),
+        crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
+        crowe("Files", "pane:files", "CmdOrCtrl+3"),
+      ]),
       { type: "separator" },
-      { label: "Operating envelope", submenu: [
+      ...(!mycology ? [{ label: "Operating envelope", submenu: [
         { label: "Plan (explore read-only, then propose a plan)", type: "radio", checked: tier === "plan", click: () => setAutonomy("plan") },
         { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
         { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },
         { label: "Execute (shell + writes)", type: "radio", checked: tier === "execute", click: () => setAutonomy("execute") },
-      ] },
+      ] }] : []),
       { type: "separator" },
       { role: "reload" }, { role: "toggleDevTools" },
       { type: "separator" },
@@ -2580,30 +2727,35 @@ app.whenReady().then(async () => {
   migrateLegacyAuth();
   migrateLegacyPluginSecrets();
   initCrashReporting();
+  let notebookReady = false;
+  if (EDITION.capabilities.grow) {
+    try { await require("./grow-transfer").recoverImport({ userData: app.getPath("userData") }); notebookReady = true; }
+    catch { /* retain interrupted imports; the recovery UI reports blocked storage */ }
+  }
   createWindow();
+  startup.windowsReady({ getWindow: () => mainWindow, createWindow });
   buildMenu();
   createTray();
   setupAutoUpdate();
   postTelemetry("app_launch", { firstRun: !loadConfig().onboarded });
   process.on("uncaughtException", (e) => { postTelemetry("main_exception", { error: String(e && e.message || e).slice(0, 200) }); });
-  try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu("focus-composer"); }); } catch {}
-  mcpConnectAll();
-  pluginsConnectAll();
+  try { globalShortcut.register("CommandOrControl+Shift+Space", () => { toggleWindow(); relayMenu(EDITION.id === "mycology" ? "home" : "focus-composer"); }); } catch {}
+  if (EDITION.id !== "mycology") { workbenchStarted = true; mcpConnectAll(); pluginsConnectAll(); }
   pruneArtifacts();
   // The workspace this install boots into was opened at some point, so it
   // belongs in the list; the untouched default (the home folder) does not.
   if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
-  fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
-  sensePoller().start();
-  // Rooms with routines speak first; the scheduler is what lets them.
-  startRoutineScheduler();
+  if (EDITION.id !== "mycology") fetchCatalog();
+  setInterval(() => { if (workbenchStarted) fetchCatalog(); }, 10 * 60 * 1000);
+  if (EDITION.capabilities.sense && notebookReady) sensePoller().start();
+  // Local farm launch never resumes assistant routines implicitly.
+  if (workbenchStarted) startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.
   setInterval(() => {
     const u = currentUser();
     if (u && u.exp && u.exp * 1000 < Date.now() + 5 * 60 * 1000) refreshToken();
   }, 4 * 60 * 1000);
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 // Native children outlive the window unless we kill them. node-pty in
 // particular throws from its destructor if a PTY is still open at exit, which
@@ -2623,7 +2775,13 @@ function shutdownNativeResources() {
   // Their teardown is chained onto the preview hold, so the one quit waits on
   // both; with no preview up, the browsers are the hold.
   const browsers = browserSessions.owners().length ? browserSessions.endAll().catch(() => {}) : null;
-  try { return require("./share-preview").stopAllForQuit("the app is quitting")?.then(() => browsers) ?? browsers; } catch { return browsers; }
+  const farm = transferHost.close().then(() => farmHost.close());
+  let previews = null;
+  try { previews = require("./share-preview").stopAllForQuit("the app is quitting"); } catch {}
+  teamHost.invalidate(); visionHost.invalidate();
+  const imports = importHost.close();
+  const pending = [browsers, farm, previews, imports].filter(Boolean);
+  return pending.length ? Promise.allSettled(pending) : null;
 }
 /* Electron does not wait on a promise from before-quit, and the SIGKILL that
    follows the grace period lives in this process, so a cloudflared that sat

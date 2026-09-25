@@ -57,11 +57,33 @@ function loadPreloadSurface() {
   return exposed;
 }
 
+const NOTICE_VERSION = Number((/DATA_NOTICE_VERSION = (\d+);/.exec(read("mobile/src/mobile-bridge.js")) || [])[1]);
+if (!NOTICE_VERSION) throw new Error("mobile-bridge.js no longer declares DATA_NOTICE_VERSION");
+
 // mobile-bridge.js runs in a webview. Give it the smallest globals it touches
 // at load: storage it can write to, a fetch that fails the way an offline
 // device does, and no Capacitor, which is the browser-preview path.
-function loadMobileSurface(fetchImpl, capacitor) {
-  const store = new Map();
+function loadMobileSurface(fetchImpl, capacitor, opts = {}) {
+  const store = new Map(Object.entries(opts.seed || {}));
+  const storageAccess = [];
+  // The data notice gate: mobile-bridge.js refuses every gateway path until
+  // config.dataConsent carries the current DATA_NOTICE_VERSION. Every check
+  // here runs as a phone whose person has already allowed it, except the one
+  // that proves the gate holds, which passes { consent: false }.
+  const CONSENT = { version: NOTICE_VERSION, at: "2026-09-19T00:00:00.000Z" };
+  if (opts.consent !== false) store.set("crowe:data-consent-v2", JSON.stringify({ dataConsent: CONSENT }));
+  // A check that hands the bridge a Preferences plugin keeps its own map, so
+  // the same allowance is merged into what that plugin answers for "config".
+  if (opts.consent !== false && capacitor && capacitor.Plugins && capacitor.Plugins.Preferences) {
+    const P = capacitor.Plugins.Preferences, get = P.get.bind(P);
+    P.get = async (args) => {
+      const r = await get(args);
+      if (!args || args.key !== "data-consent-v2") return r;
+      const cfg = r && r.value ? JSON.parse(r.value) : {};
+      if (!cfg.dataConsent) cfg.dataConsent = CONSENT;
+      return { value: JSON.stringify(cfg) };
+    };
+  }
   const win = {
     Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
@@ -69,12 +91,13 @@ function loadMobileSurface(fetchImpl, capacitor) {
     open: () => {},
   };
   const localStorage = {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => store.set(k, String(v)),
-    removeItem: (k) => store.delete(k),
+    getItem: (k) => { storageAccess.push(["get", k]); return store.has(k) ? store.get(k) : null; },
+    setItem: (k, v) => { storageAccess.push(["set", k]); return store.set(k, String(v)); },
+    removeItem: (k) => { storageAccess.push(["remove", k]); return store.delete(k); },
   };
   const sandbox = {
     window: win, localStorage,
+    CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
     navigator: { clipboard: { writeText: () => Promise.resolve() } },
@@ -84,6 +107,8 @@ function loadMobileSurface(fetchImpl, capacitor) {
   };
   for (const file of ["rooms-web.js", "council.js", "rooms-local.js"])
     new Function("window", "setInterval", read("renderer/" + file))(win, () => 0);
+  if (opts.roomHost) win.CroweLocalRooms.create = opts.roomHost;
+  if (opts.vault) new Function("window", read("mobile/src/vault.js"))(win);
   const src = read("mobile/src/mobile-bridge.js");
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
   assert(win.crowe, "mobile-bridge.js did not install window.crowe");
@@ -91,6 +116,8 @@ function loadMobileSurface(fetchImpl, capacitor) {
   // than on it — the surface parity walk below must see exactly the desktop's
   // shape. Exposed for the phone-file checks without widening the surface.
   loadMobileSurface.lastWindow = win;
+  loadMobileSurface.lastStore = store;
+  loadMobileSurface.lastStorageAccess = storageAccess;
   return win.crowe;
 }
 
@@ -157,6 +184,29 @@ function methodPaths(surface) {
       "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
+  });
+
+  await check("nothing reaches the gateway before the data notice is allowed", async () => {
+    const calls = [];
+    const bridge = loadMobileSurface(async (url) => { calls.push(String(url)); return new Response("{}", { status: 200 }); }, null, { consent: false });
+    const events = [];
+    loadMobileSurface.lastWindow.dispatchEvent = (e) => { events.push(e && e.type); return true; };
+    const run = await bridge.agent.run([{ role: "user", content: "hello" }]);
+    assert(run && run.done === false && /data notice/.test(run.error || ""), `agent.run answered ${JSON.stringify(run)}`);
+    const chat = await bridge.chat([{ role: "user", content: "hello" }]);
+    assert(chat && /data notice/.test(chat.error || "") && chat.code === "consent", `chat answered ${JSON.stringify(chat)}`);
+    assert(!calls.some((u) => u.includes("/api/gateway")), `the gateway was called anyway: ${calls.join(", ")}`);
+    assert(events.includes("crowe:consent-needed"), `the notice was not asked for; events: ${events.join(", ")}`);
+    // Allowed with an OLDER notice version, it must still refuse: a notice that
+    // named a new recipient has to be read again.
+    const stale = loadMobileSurface(async (url) => { calls.push(String(url)); return new Response("{}", { status: 200 }); }, null, { consent: false });
+    let refused = false;
+    try { await loadMobileSurface.lastWindow.crowePhone.setConsent({ dataConsent: { version: NOTICE_VERSION - 1, at: "2026-09-01T00:00:00.000Z" } }, 0); } catch { refused = true; }
+    assert(refused, "stale notice update was accepted");
+    const again = await stale.chat([{ role: "user", content: "hello" }]);
+    assert(again && again.code === "consent", `a stale consent was accepted: ${JSON.stringify(again)}`);
+    assert(!calls.some((u) => u.includes("/api/gateway")), "the gateway was called on a stale consent");
+    return "refused three times, zero gateway calls";
   });
 
   await check("every call answers with a promise, every subscription with a function", () => {
@@ -289,7 +339,7 @@ function methodPaths(surface) {
     off();
     assert(result.done && /Harvest at 9/.test(result.text), `turn returned ${JSON.stringify(result)}`);
     const names = (bodies[0].tools || []).map((t) => t.function.name);
-    assert(names.includes("google_calendar_list_events") && names.includes("read_grow"), `tools sent: ${names.join(",")}`);
+    assert(names.includes("google_calendar_list_events") && names.includes("open_url") && !names.includes("read_grow"), `tools sent: ${names.join(",")}`);
     assert(acted.length === 1 && acted[0][0] === "google_calendar_list_events" && acted[0][1].query === "harvest", `act saw ${JSON.stringify(acted)}`);
     const toolMsg = bodies[1].messages.find((m) => m.role === "tool");
     assert(toolMsg && /Harvest/.test(toolMsg.content), "the connector result did not go back to the model");
@@ -360,19 +410,20 @@ function methodPaths(surface) {
 
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
-      // Round one: a little prose, then a call to write the flush down.
-      [{ delta: { content: "Logging that flush. " } },
-       { delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "log_grow", arguments: '{"type":"flushes","record":{"block":"260722-01","n":1,"date":"2026-07-30","weight":"4.2","grade":"A"}}' } }] } },
+      // Round one: a little prose, then update an explicitly attached file.
+      [{ delta: { content: "Updating the note. " } },
+       { delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "write_file", arguments: '{"path":"phone:notes.txt","content":"The package weighs 4.2 lb."}' } }] } },
        { usage: { prompt_tokens: 120, completion_tokens: 40 } }],
       // Round two: the answer, no more tools.
-      [{ delta: { content: "Logged. That is 4.2 lb off 260722-01." } },
+      [{ delta: { content: "Updated. The package weighs 4.2 lb." } },
        { usage: { prompt_tokens: 260, completion_tokens: 22 } }],
     ]));
     await bridge.setConfig({ token: "header." + Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64") + ".sig" });
 
     const seen = [];
     const off = await bridge.agent.onEvent((ev) => seen.push(ev));
-    const result = await bridge.agent.run([{ role: "user", content: "Log 4.2 lb off 260722-01, flush 1, grade A, today." }]);
+    await loadMobileSurface.lastWindow.crowePhone.add("notes.txt", "Old note");
+    const result = await bridge.agent.run([{ role: "user", content: "Record the package weight, 4.2 lb, in my attached note." }]);
     off();
 
     const types = seen.map((e) => e.type);
@@ -383,9 +434,9 @@ function methodPaths(surface) {
     assert(result.done && /4\.2 lb/.test(result.text), `the turn returned ${JSON.stringify(result)}`);
 
     const call = seen.find((e) => e.type === "tool_call");
-    assert(call.name === "log_grow" && call.args.type === "flushes", `tool_call carried ${JSON.stringify(call)}`);
-    const rows = await bridge.grow.list("flushes");
-    assert(rows.length === 1 && rows[0].weight === "4.2", `the tool did not write the record: ${JSON.stringify(rows)}`);
+    assert(call.name === "write_file" && call.args.path === "phone:notes.txt", `tool_call carried ${JSON.stringify(call)}`);
+    const toolResult = seen.find(e => e.type === "tool_result");
+    assert(toolResult.status === "ok" && /updated phone:notes.txt/.test(toolResult.result), "the generic file update failed");
     const sessions = await bridge.sessions.list();
     assert(sessions.length === 1, "the turn was not persisted to a session");
 
@@ -395,7 +446,7 @@ function methodPaths(surface) {
     return `${types.length} events over 2 rounds`;
   });
 
-  await check("the cultivation pin routes to the grower, not the router's guess", async () => {
+  await check("a restored cultivation pin normalizes to the general operator", async () => {
     const bridge = loadMobileSurface(fakeGateway([[{ delta: { content: "ok" } }]]));
     await bridge.setConfig({ token: "a.b.c" });
     const seen = [];
@@ -403,8 +454,8 @@ function methodPaths(surface) {
     await bridge.agent.run([{ role: "user", content: "how is the weather" }], "main", { role: "cultivation" });
     off();
     const route = seen.find((e) => e.type === "route");
-    assert(route.model === "crowelm-grower", `pinned cultivation routed to ${route.model}`);
-    assert(/pinned/.test(route.reason), `the route did not report the pin: ${route.reason}`);
+    assert(route.model === "crowelm" && route.expert === "operator", `pinned cultivation routed to ${JSON.stringify(route)}`);
+    assert(!/pinned/.test(route.reason), `a retired pin remained active: ${route.reason}`);
   });
 
   await check("a read-only tier is not handed a tool that writes", async () => {
@@ -428,6 +479,145 @@ function methodPaths(surface) {
     const refusal = events.find((e) => e.type === "tool_result");
     assert(refusal && refusal.status === "blocked", `log_grow was not blocked: ${JSON.stringify(refusal)}`);
     assert(!(await bridge2.grow.list("log")).length, "the blocked call wrote the record anyway");
+  });
+
+  await check("all tiers reject unsolicited growing calls before connector ownership or storage access", async () => {
+    for (const autonomy of ["plan", "readonly", "edit", "execute"]) {
+      const bodies = [], owned = [], acted = [];
+      const gw = fakeGateway([
+        [{ delta: { tool_calls: [
+          { index: 0, id: "read", function: { name: "read_grow", arguments: '{"type":"log"}' } },
+          { index: 1, id: "write", function: { name: "log_grow", arguments: '{"type":"log","record":{"entry":"overwrite"}}' } },
+        ] } }],
+        [{ delta: { content: "Those workflows are unavailable." } }],
+      ]);
+      const seed = Object.fromEntries(["grow:blocks", "grow:flushes", "grow:contam", "grow:env", "grow:strains", "grow:recipes", "grow:log", "camera-roll", "sense"]
+        .map(key => ["crowe:" + key, '{ malformed legacy data ' + key]));
+      const bridge = loadMobileSurface(async (url, init) => {
+        if (String(url).includes("/api/gateway/chat")) bodies.push(JSON.parse(init.body));
+        return gw(url, init);
+      }, null, { seed });
+      const win = loadMobileSurface.lastWindow, storage = loadMobileSurface.lastStore, access = loadMobileSurface.lastStorageAccess;
+      win.croweConnectors = {
+        tools: async () => ["read_grow", "log_grow"].map(name => ({ type: "function", function: { name } })),
+        owns: name => { owned.push(name); return true; }, act: async name => { acted.push(name); return "bad"; },
+      };
+      // The public descriptor is not permission authority, even if replaced.
+      win.crowe.edition = { capabilities: { grow: true, farm: true, sense: true } };
+      await bridge.setConfig({ autonomy, token: "a.b.c", grow: true, capabilities: { grow: true } });
+      const events = [], off = bridge.agent.onEvent(e => events.push(e));
+      await bridge.agent.run([{ role: "user", content: "Use the old saved log." }]); off();
+      assert(bodies.length === 2, "tool loop did not complete");
+      assert(bodies.every(b => !b.tools.some(t => ["read_grow", "log_grow"].includes(t.function.name))), `${autonomy} offered a grow connector collision`);
+      assert(events.filter(e => e.type === "tool_result" && e.status === "blocked").length === 2, `${autonomy} did not block both calls`);
+      assert(!owned.length && !acted.length, `${autonomy} consulted a connector before denial`);
+      assert(!(await bridge.grow.list("log")).length, "grow list exposed historical records");
+      for (const response of [await bridge.grow.save("log", {}), await bridge.grow.delete("log", "x"), await bridge.grow.export("x", "private"), await bridge.camera.add({ thumb: "data:image/png;base64,eA==" }), await bridge.sense.configure({ source: "cloud" })]) {
+        assert(response.ok === false && response.code === "UNAVAILABLE", `ordinary API allowed: ${JSON.stringify(response)}`);
+      }
+      assert(!(await bridge.camera.list()).length && !(await bridge.sense.status()).available, "journal or Sense remained active");
+      assert(!access.some(([, key]) => Object.hasOwn(seed, key)), `${autonomy} accessed protected storage: ${JSON.stringify(access)}`);
+      for (const [key, value] of Object.entries(seed)) assert(storage.get(key) === value, `changed ${key}`);
+    }
+    return "four tiers, connector collisions, malformed history, replaceable public descriptor";
+  });
+
+  await check("saved models, catalog aliases, role pins and the shared gateway keep the general boundary", async () => {
+    let host, policy;
+    const asked = [], originalConfig = JSON.stringify({ model: "crowelm-grower", token: "a.b.c" });
+    const models = [
+      { model: "crowelm-grower", role: "cultivation", min_plan: "free" },
+      { model: "special-alias", role: "cultivation", min_plan: "free" },
+      { model: "grow-coding-alias", role: "coding", id: "model-mycology", featured: true },
+      { model: "crowelm", role: "default" },
+      { model: "crowelm-vision", role: "vision" },
+      { model: "crowelm-mycelium", role: "reasoning" },
+    ];
+    const bridge = loadMobileSurface(async (url, init) => {
+      if (String(url).includes("/api/gateway/catalog")) return new Response(JSON.stringify({ models }));
+      if (String(url).includes("/api/gateway/chat")) asked.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ content: "A general answer." }));
+    }, null, { seed: { "crowe:config": originalConfig }, roomHost: (deps, activation) => { host = deps; policy = activation; return {}; } });
+    const storage = loadMobileSurface.lastStore;
+    await bridge.getConfig(); await new Promise(resolve => setTimeout(resolve, 0));
+    const catalog = await bridge.catalog.get();
+    assert(catalog.defaultModel === "crowelm", "saved specialist default was not normalized");
+    assert(!catalog.models.some(m => ["crowelm-grower", "special-alias", "grow-coding-alias"].includes(m.model)), "specialist catalog choices survived");
+    assert(catalog.models.some(m => m.model === "crowelm-vision") && catalog.models.some(m => m.model === "crowelm-mycelium"), "general vision or reasoning model was removed");
+    assert(!catalog.resolved.cultivation, "cultivation role remained in picker");
+    assert(policy.grow === false && policy.modelAllowed("") && !policy.modelAllowed("special-alias"), "Rooms did not receive closure-owned policy");
+    for (const model of ["crowelm-grower", "provider/crowelm-grower", "special-alias", "model-mycology"]) {
+      const result = await host.chat(model, [{ role: "user", content: "hello" }]);
+      assert(result.code === "UNAVAILABLE", `common gateway accepted ${model}`);
+    }
+    assert(!asked.length, "blocked explicit model reached the network");
+    await bridge.chat([{ role: "user", content: "Tell me about mushrooms" }]);
+    const events = [], off = bridge.agent.onEvent(e => events.push(e));
+    await bridge.agent.run([{ role: "user", content: "Tell me about mushrooms" }], "main", { role: "cultivation" }); off();
+    assert(asked.length === 2 && asked.every(body => body.model === "crowelm"), "ordinary topical questions did not reach the general assistant");
+    assert(events.some(e => e.type === "route" && e.expert === "operator"), "restored role remained specialized");
+    assert(storage.get("crowe:config") === originalConfig, "runtime normalization rewrote saved config");
+    const prompt = asked[1].messages[0].content;
+    assert(!/read_grow|log_grow|grow room|mycelium|substrate|contaminat/i.test(prompt), "general system prompt retained cultivation defaults");
+  });
+
+  await check("cached specialist aliases cannot escape through the first offline saved default", async () => {
+    const savedConfig = JSON.stringify({ model: "old-special-alias", token: "a.b.c" });
+    const savedCatalog = JSON.stringify({ at: Date.now(), models: [
+      { model: "old-special-alias", role: "cultivation", min_plan: "free" }, { model: "crowelm" },
+    ] });
+    const bodies = [];
+    const bridge = loadMobileSurface(async (url, init) => {
+      if (String(url).includes("/api/gateway/catalog")) throw new TypeError("offline catalog");
+      if (String(url).includes("/api/gateway/chat")) bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ content: "General answer" }));
+    }, null, { seed: { "crowe:config": savedConfig, "crowe:catalog": savedCatalog } });
+    const storage = loadMobileSurface.lastStore;
+    await bridge.chat([{ role: "user", content: "Hello" }]);
+    assert(bodies.length === 1 && bodies[0].model === "crowelm", "the first chat used a cached specialist alias");
+    assert(storage.get("crowe:config") === savedConfig && storage.get("crowe:catalog") === savedCatalog, "runtime filtering rewrote saved records");
+  });
+
+  await check("retired native intents never emit a grow workflow while generic Ask survives", async () => {
+    for (const kind of ["log-block", "home", "camera", "grow", "ask"]) {
+      const bridge = loadMobileSurface(null, null, { seed: { "crowe:intent": JSON.stringify({ kind, text: "historical handoff", at: Date.now() }) } });
+      const win = loadMobileSurface.lastWindow, events = [];
+      win.dispatchEvent = event => events.push(event);
+      const result = await bridge.intents.take();
+      assert(kind === "ask" ? result.kind === "ask" : result === null, `${kind} was not handled safely`);
+      assert(kind === "ask" ? events.some(e => e.type === "crowe:intent" && e.detail.kind === "ask") : !events.length, `${kind} emitted a live intent`);
+    }
+  });
+
+  await check("only positively identified native grow reminders are cancelled and legacy history is preserved", async () => {
+    const saved = JSON.stringify([
+      { id: 11, lot: "old-lot", title: "Legacy", at: Date.now() + 86400000 },
+      { id: 12, lot: "", title: "Mushroom recipe", at: Date.now() + 86400000 },
+      { id: "13", lot: "not-a-native-id" },
+    ]);
+    const prefs = new Map([["reminders", saved]]), cancelled = [], listeners = {}, notifications = [
+      { id: 11 }, { id: 12, title: "Mushroom recipe", extra: { lot: "" } },
+      { id: 13 }, { id: 14, extra: { lot: "positive-metadata" } },
+      { id: "15", extra: { lot: "bad-id" } }, { id: 16, body: "Water the grow room" },
+    ];
+    const cap = { Plugins: {
+      Preferences: { get: async ({ key }) => ({ value: prefs.get(key) ?? null }), set: async ({ key, value }) => prefs.set(key, value) },
+      LocalNotifications: { getPending: async () => ({ notifications }), cancel: async ({ notifications: ns }) => cancelled.push(...ns.map(n => n.id)),
+        addListener: (name, cb) => { listeners[name] = cb; return { remove() {} }; } },
+    } };
+    const bridge = loadMobileSurface(null, cap), events = [];
+    loadMobileSurface.lastWindow.dispatchEvent = e => events.push(e);
+    await bridge.getConfig(); await new Promise(resolve => setTimeout(resolve, 0));
+    assert(cancelled.join(",") === "11,14", `cancelled unrelated reminders: ${cancelled}`);
+    assert(prefs.get("reminders") === saved, "startup rewrote reminder history");
+    assert(!(await bridge.reminders.add({ lot: "new-lot", at: Date.now() + 86400000 })).ok, "new lot reminder accepted");
+    assert(!(await bridge.reminders.remove(11)).ok && prefs.get("reminders") === saved, "legacy reminder deletion changed history");
+    assert((await bridge.reminders.list()).map(r => r.id).join(",") === "12", "normal list exposed legacy reminders");
+    await listeners.localNotificationActionPerformed({ notification: { id: 11 } });
+    await listeners.localNotificationActionPerformed({ notification: { id: 14, extra: { lot: "old-lot" } } });
+    assert(!events.length, "legacy notification opened a workflow");
+    await listeners.localNotificationActionPerformed({ notification: { id: 12 } });
+    assert(events.length === 1 && events[0].detail.kind === "ask" && events[0].detail.text === "", "general notification did not open generic chat safely");
   });
 
   await check("a file handed to the phone answers at its phone: path, unpaired", async () => {
@@ -477,7 +667,10 @@ function methodPaths(surface) {
     assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
       && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
       `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
-    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    assert(/An image is attached/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    assert(!/substrate|mycelium|Trichoderma|log_grow|contamination/i.test(bodies[0].messages[0].content), "generic vision retained mushroom-specific defaults");
+    const defaultAsk = /PHOTO_DEFAULT_ASK = "([^"]+)"/.exec(read("mobile/src/mobile-bridge.js"));
+    assert(defaultAsk && /image/.test(defaultAsk[1]) && !/contamination|mushroom/.test(defaultAsk[1]), "blank image questions lack a neutral default");
     const route = seen.find((e) => e.type === "route");
     assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
     const photos = seen.find((e) => e.type === "photos");
@@ -485,6 +678,59 @@ function methodPaths(surface) {
     assert(win.crowePhone.images().length === 0, "the photo was not cleared after the turn");
     assert(result.done && /Trichoderma/.test(result.text), `the turn returned ${JSON.stringify(result)}`);
     return "image part sent, vision routed, photo cleared";
+  });
+
+  await check("general Vision preserves cross-domain questions and image order without growing access", async () => {
+    // Synthetic gateway completions exercise transport, prompt neutrality and
+    // display parsing only. These fixtures do NOT measure model inference/OCR.
+    const cases = [
+      { name: "screenshot E104", ask: "Explain error E104 in this screenshot.", images: ["screenshot.png"], reply: "Synthetic: E104 is visible.", label: "error panel" },
+      { name: "invoice OCR", ask: "Read the invoice number and line-item text from this image.", images: ["invoice.png"], reply: "Synthetic: invoice INV-104, item cable.", label: "invoice text" },
+      { name: "architecture arrows", ask: "Explain the arrow direction between the API and database in this architecture diagram.", images: ["architecture.png"], reply: "Synthetic: API points to database.", label: "API arrow" },
+      { name: "equipment label", ask: "Read the voltage and model number printed on this equipment label.", images: ["equipment.png"], reply: "Synthetic: 120 V, model EQ-104.", label: "equipment label" },
+      { name: "mushroom cap count", ask: "Count the visible mushroom caps in this photo; do not assume anything hidden.", images: ["mushrooms.png"], reply: "Synthetic: four visible mushroom caps.", label: "visible caps" },
+      { name: "two-image ordering", ask: "Compare the first screenshot with the second screenshot and preserve that order.", images: ["before.png", "after.png"], reply: "Synthetic: first is before, second is after.", label: "comparison detail" },
+    ];
+    let baselinePrompt;
+    for (const fixture of cases) {
+      const seed = Object.fromEntries(["grow:blocks", "grow:flushes", "grow:contam", "grow:env", "grow:strains", "grow:recipes", "grow:log", "camera-roll", "sense"]
+        .map(key => ["crowe:" + key, "raw private fixture: " + key]));
+      const bodies = [], urls = [], events = [];
+      const bridge = loadMobileSurface(async (url, init = {}) => {
+        urls.push(String(url));
+        if (!String(url).includes("/api/gateway/chat")) return new Response("{}");
+        bodies.push(JSON.parse(init.body));
+        const chunks = ["REGIONS: " + JSON.stringify([{ label: fixture.label, x: 0.1, y: 0.2, w: 0.3, h: 0.4 }]) + "\n\n", fixture.reply];
+        return new Response(chunks.map(content => `data: ${JSON.stringify({ delta: { content } })}\n`).join("") + "data: [DONE]\n",
+          { headers: { "content-type": "text/event-stream" } });
+      }, null, { seed });
+      const win = loadMobileSurface.lastWindow, storage = loadMobileSurface.lastStore, access = loadMobileSurface.lastStorageAccess;
+      // Deliberately distinct synthetic payloads: no decoder or actual model is
+      // used here. Exact equality tests ordered attachment transport.
+      const imageUrls = fixture.images.map((name, i) => "data:image/png;base64," + Buffer.from(fixture.name + ":" + i).toString("base64"));
+      fixture.images.forEach((name, i) => assert(win.crowePhone.addImage(name, imageUrls[i]).ok, `${fixture.name}: attachment refused`));
+      await bridge.setConfig({ token: "h." + Buffer.from('{"email":"vision-fixture@example.com","tier":"pro","exp":9999999999}').toString("base64") + ".s" });
+      const off = bridge.agent.onEvent(e => events.push(e));
+      const result = await bridge.agent.run([{ role: "user", content: fixture.ask }]); off();
+      assert(bodies.length === 1 && bodies[0].model === "crowelm-vision", `${fixture.name}: did not use general Vision exactly once`);
+      const body = bodies[0], prompt = body.messages[0].content;
+      if (baselinePrompt === undefined) baselinePrompt = prompt;
+      assert(prompt === baselinePrompt && /An image is attached/.test(prompt), `${fixture.name}: subject changed the system prompt`);
+      assert(!/substrate|mycelium|Trichoderma|read_grow|log_grow|grow room|contamination/i.test(prompt), `${fixture.name}: specialist instructions present`);
+      const user = body.messages.filter(m => m.role === "user").pop();
+      assert(user.content[0].type === "text" && user.content[0].text === fixture.ask, `${fixture.name}: user wording was changed`);
+      assert(JSON.stringify(user.content.filter(p => p.type === "image_url").map(p => p.image_url.url)) === JSON.stringify(imageUrls), `${fixture.name}: image transport order or bytes changed`);
+      assert(!body.tools.some(t => ["read_grow", "log_grow"].includes(t.function.name)), `${fixture.name}: growing tool offered`);
+      assert(!events.some(e => e.type === "tool_call"), `${fixture.name}: unexpected workflow tool execution`);
+      const photos = events.find(e => e.type === "photos"), regions = events.find(e => e.type === "vision_regions");
+      assert(photos && JSON.stringify(photos.names) === JSON.stringify(fixture.images), `${fixture.name}: photo event order changed`);
+      assert(regions && regions.regions[0].label === fixture.label, `${fixture.name}: arbitrary image region label lost`);
+      assert(result.done && result.text === fixture.reply && !win.crowePhone.images().length, `${fixture.name}: completion or attachment cleanup failed`);
+      assert(!access.some(([, key]) => Object.hasOwn(seed, key)), `${fixture.name}: accessed legacy growing storage`);
+      for (const [key, value] of Object.entries(seed)) assert(storage.get(key) === value, `${fixture.name}: altered ${key}`);
+      assert(!urls.some(url => /sense\.crowelogic|\/grow(?:\/|$)/.test(url)), `${fixture.name}: specialist network access`);
+    }
+    return "six synthetic transport cases; no inference-quality claim";
   });
 
   await check("the REGIONS line a vision reply opens with becomes its own event and never reaches the transcript", async () => {
@@ -645,7 +891,7 @@ function methodPaths(surface) {
     return "stream stripped from the native body; an SSE body is still read";
   });
 
-  await check("reminders schedule through the system and come back in order; the camera roll keeps a verdict per lot", async () => {
+  await check("general reminders schedule in order while the camera journal refuses writes", async () => {
     const scheduled = [], cancelled = []; const prefs = new Map();
     const cap = { Plugins: {
       Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
@@ -655,14 +901,14 @@ function methodPaths(surface) {
         addListener: () => ({ remove() {} }) },
     } };
     const bridge = loadMobileSurface(() => { throw new TypeError("no network in this check"); }, cap);
-    const past = await bridge.reminders.add({ lot: "260910-01", title: "Check 260910-01", at: Date.now() - 1000 });
+    const past = await bridge.reminders.add({ title: "Check package", at: Date.now() - 1000 });
     assert(past.ok === false && /past/.test(past.error), "a reminder in the past was accepted");
-    const later = await bridge.reminders.add({ lot: "260910-01", title: "Check 260910-01", body: "Blue oyster · colonizing", at: Date.now() + 14 * 86400000 });
-    const sooner = await bridge.reminders.add({ lot: "260910-02", title: "Check 260910-02", at: Date.now() + 3 * 86400000 });
+    const later = await bridge.reminders.add({ title: "Check package", body: "Ask for delivery status", at: Date.now() + 14 * 86400000 });
+    const sooner = await bridge.reminders.add({ title: "Call courier", at: Date.now() + 3 * 86400000 });
     assert(later.ok && sooner.ok && later.native === true, `reminders were refused: ${JSON.stringify([later, sooner])}`);
     assert(scheduled.length === 2 && scheduled.every((n) => Number.isInteger(n.id) && n.id < 2 ** 31 && n.schedule && n.schedule.at instanceof Date), "the plugin did not get two int32-id notifications with a date");
     const list = await bridge.reminders.list();
-    assert(list.length === 2 && list[0].lot === "260910-02", `list is not soonest first: ${JSON.stringify(list.map((r) => r.lot))}`);
+    assert(list.length === 2 && list[0].title === "Call courier", `list is not soonest first: ${JSON.stringify(list.map((r) => r.lot))}`);
     // pending reads what the SYSTEM holds, soonest first, with a millisecond
     // time, so Diagnostics can show that iOS accepted the schedule.
     const pend = await bridge.reminders.pending();
@@ -674,12 +920,12 @@ function methodPaths(surface) {
     const none = await noPlugin.reminders.pending();
     assert(none.native === false && none.notifications.length === 0, "without the plugin, pending must say so instead of failing");
     const c = await bridge.camera.add({ lot: "260910-01", verdict: "Healthy colonisation, no contamination. Move to fruiting in about a week.", thumb: "data:image/jpeg;base64,/9j/4AAQ" });
-    assert(c.ok && c.entry.thumb.startsWith("data:image/"), "the roll dropped a small thumbnail");
+    assert(!c.ok && c.code === "UNAVAILABLE", "the retired journal accepted an image");
     const bad = await bridge.camera.add({ lot: "x", verdict: "v", thumb: "javascript:alert(1)" });
-    assert(bad.ok && bad.entry.thumb === "", "a non-image thumb was kept");
+    assert(!bad.ok, "a non-image journal entry was accepted");
     const roll = await bridge.camera.list();
-    assert(roll.length === 2 && roll[0].lot === "x", "the roll is not newest first");
-    return `2 reminders scheduled (int32 ids, soonest first), pending mirrors the system, 1 cancelled; roll keeps ${roll.length}, rejects non-image thumbs`;
+    assert(roll.length === 0 && !prefs.has("camera-roll"), "the disabled camera journal touched storage");
+    return "2 general reminders scheduled, pending mirrors the system, 1 cancelled; journal writes refused";
   });
 
   await check("diagnostics record a run's request, response and ending, and a failed fetch names itself", async () => {
@@ -879,8 +1125,8 @@ function methodPaths(surface) {
   const bridgeSrc = read("mobile/src/mobile-bridge.js");
   const roleLines = (src) => (src.match(/\{ role: "[a-z-]+", match: \/.+\/i \},?/g) || []).map((l) => l.replace(/,$/, ""));
 
-  await check("the role table is identical to the harness's", () => {
-    const fromHarness = roleLines(harnessSrc), fromBridge = roleLines(bridgeSrc);
+  await check("general role classifiers match the harness, with cultivation intentionally excluded", () => {
+    const fromHarness = roleLines(harnessSrc).filter(l => !l.includes('role: "cultivation"')), fromBridge = roleLines(bridgeSrc);
     assert(fromHarness.length, "no role table found in harness.js — this check has gone stale");
     assert(fromBridge.length === fromHarness.length,
       `harness has ${fromHarness.length} roles, mobile has ${fromBridge.length}`);
@@ -890,19 +1136,23 @@ function methodPaths(surface) {
     return `${fromHarness.length} roles`;
   });
 
-  await check("the bridge model map is identical to the harness's", () => {
+  await check("general bridge model mappings match the harness without the grower specialist", () => {
     const grab = (src) => (src.match(/BRIDGE_ROLE_MODEL = (\{[^}]*\})/) || [])[1];
     assert(grab(harnessSrc), "BRIDGE_ROLE_MODEL not found in harness.js");
-    assert(grab(bridgeSrc) === grab(harnessSrc), `harness: ${grab(harnessSrc)}\nmobile:  ${grab(bridgeSrc)}`);
+    const expected = new Function("return (" + grab(harnessSrc) + ")")();
+    delete expected.cultivation;
+    const actual = new Function("return (" + grab(bridgeSrc) + ")")();
+    assert(JSON.stringify(actual) === JSON.stringify(expected), `harness: ${JSON.stringify(expected)} mobile: ${JSON.stringify(actual)}`);
   });
 
-  await check("the routed-role list is identical to main's", () => {
+  await check("the routed-role list matches main except for the removed cultivation product", () => {
     // This one lives in main.js, not the harness: it is the list the desktop
     // resolves for the Home surface's routing card, which the phone renders too.
     const grab = (src) => (src.match(/ROUTED_ROLES = (\[[^\]]*\])/) || [])[1];
     const fromMain = grab(read("main.js"));
     assert(fromMain, "ROUTED_ROLES not found in main.js");
-    assert(grab(bridgeSrc) === fromMain, `main.js: ${fromMain}\nmobile:  ${grab(bridgeSrc)}`);
+    const expected = JSON.parse(fromMain).filter(role => role !== "cultivation");
+    assert(grab(bridgeSrc) === JSON.stringify(expected).replaceAll(',', ', '), `main.js: ${fromMain} mobile: ${grab(bridgeSrc)}`);
   });
 
   // ─── Copy the phone rewrites ─────────────────────────────────────────────────

@@ -681,8 +681,12 @@ test("main.js holds the quit for the teardown: the first quit is cancelled while
   // must hand the hold back, before-quit must cancel only when there is one
   // and quit again when it settles, and will-quit must still sweep.
   const src = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
-  assert.match(src, /function shutdownNativeResources\(\) \{[\s\S]{0,700}?return require\("\.\/share-preview"\)\.stopAllForQuit\("the app is quitting"\)/,
-    "shutdownNativeResources returns the hold from stopAllForQuit");
+  const shutdown = /function shutdownNativeResources\(\) \{([\s\S]*?)\n\}/.exec(src);
+  assert.ok(shutdown, "shutdownNativeResources exists");
+  assert.match(shutdown[1], /previews = require\("\.\/share-preview"\)\.stopAllForQuit\("the app is quitting"\)/,
+    "shutdownNativeResources takes the hold from stopAllForQuit");
+  assert.match(shutdown[1], /const pending = \[[^\]]*\bpreviews\b[^\]]*\]\.filter\(Boolean\);\s*\n\s*return pending\.length \? Promise\.allSettled\(pending\) : null;/,
+    "and returns it with the other teardowns, or null when nothing is held");
   const m = /app\.on\("before-quit", \(event\) => \{([\s\S]*?)\n\}\);/.exec(src);
   assert.ok(m, "before-quit has a handler that sees the event");
   const body = m[1];

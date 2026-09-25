@@ -47,18 +47,15 @@ const version = require('../package.json').version;
     await rejects(/ambiguous/, () => preflight(root));
     fs.unlinkSync(path.join(root, url));
     assert.equal((await preflight(root)).artifacts, 1); checks++;
-    const publisher = path.join(__dirname, 'publish-rclone.sh');
-    const dry = spawnSync('bash', [publisher, root], { cwd: os.tmpdir(), env: { ...process.env, DRY_RUN: '1' }, encoding: 'utf8' });
-    assert.equal(dry.status, 0, dry.stderr);
-    assert.match(dry.stdout, /nothing uploaded/); checks++;
-    // Even without dry-run, an invalid release must fail before invoking rclone.
+    // Exercise the exact preflight subprocess boundary, never the publisher.
+    // Even a publisher dry run is not permission to load signing/cloud auth.
+    const cli = (...flags) => spawnSync(process.execPath, [path.join(__dirname, 'preflight-release.js'), root, ...flags], { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH } });
+    const dry = cli();
+    assert.equal(dry.status, 0, dry.stderr); checks++;
     const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
-    const marker = path.join(root, 'upload-invoked');
-    fs.writeFileSync(path.join(bin, 'rclone'), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
     write({ version: '0.0.0', files: [item] });
-    const bad = spawnSync('bash', [publisher, root], { env: { ...process.env, DRY_RUN: '0', PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
-    assert.notEqual(bad.status, 0);
-    assert.equal(fs.existsSync(marker), false); checks++;
+    const bad = cli();
+    assert.notEqual(bad.status, 0); checks++;
     // The developer edition's feed is developers-mac.yml. The default channel
     // must not read it, or a developer build could be published as the full
     // app; and the developers channel must not read latest-mac.yml.
@@ -69,18 +66,86 @@ const version = require('../package.json').version;
     assert.deepEqual(await preflight(root, version, 'developers'), { channel: 'developers', feeds: ['developers-mac.yml'], artifacts: 1 }); checks++;
     await rejects(/no release feeds found for the developers channel/, () => preflight(bin, version, 'developers'));
     for (const flags of [['--channel', 'developers'], ['--config', path.join(__dirname, '..', 'electron-builder.developer.js')]]) {
-      const devDry = spawnSync('bash', [publisher, root, ...flags], { cwd: os.tmpdir(), env: { ...process.env, DRY_RUN: '1' }, encoding: 'utf8' });
+      const devDry = cli(...flags);
       assert.equal(devDry.status, 0, devDry.stderr);
-      assert.match(devDry.stdout, /dry run passed for the developers channel/); checks++;
+      assert.match(devDry.stdout, /developers channel/); checks++;
     }
-    // The default publisher refuses that directory before rclone is ever invoked.
-    const cross = spawnSync('bash', [publisher, root], { env: { ...process.env, DRY_RUN: '0', PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+    const cross = cli();
     assert.notEqual(cross.status, 0);
-    assert.match(cross.stderr, /no release feeds found for the latest channel/);
-    assert.equal(fs.existsSync(marker), false); checks++;
+    assert.match(cross.stderr, /no release feeds found for the latest channel/); checks++;
     fs.renameSync(devFeed, feedFile);
     fs.unlinkSync(feedFile);
     await rejects(/no release feeds/, () => preflight(root));
+    const matrix = 'mac:arm64:dmg+zip,mac:x64:dmg+zip';
+    const strict = { strict: true, matrix };
+    const mycFeed = path.join(root, 'mycology-mac.yml');
+    const items = ['arm64', 'x64'].flatMap(arch => ['zip', 'dmg'].map(type => ({ ...item, url: `CroweLogic-mycology-${version}-${arch}.${type}` })));
+    // Exercise the installed builder's actual sidecar shape and the installed
+    // updater's name matching, not only a hand-authored schema fixture.
+    const zlib = require('zlib');
+    const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+    const { computeOperations } = require('electron-updater/out/differentialDownloader/downloadPlanBuilder');
+    const generatedMap = path.join(root, 'fixture.blockmap');
+    await buildBlockMap(path.join(root, dotted), 'gzip', generatedMap);
+    const blockmap = fs.readFileSync(generatedMap);
+    const builderMap = JSON.parse(zlib.gunzipSync(blockmap));
+    assert.equal(builderMap.files[0].name, 'file'); checks++;
+    const logger = { info() {}, warn() {} };
+    assert.doesNotThrow(() => computeOperations(builderMap, builderMap, logger)); checks++;
+    for (const file of items) {
+      fs.writeFileSync(path.join(root, file.url), body);
+      fs.writeFileSync(path.join(root, `${file.url}.blockmap`), blockmap);
+    }
+    const writeMyc = (files = items) => fs.writeFileSync(mycFeed, yaml.dump({ version, files, path: files[0]?.url }));
+    writeMyc();
+    assert.equal((await preflight(root, version, 'mycology', strict)).artifacts, 4); checks++;
+    for (const name of [undefined, '', null, 7, 'wrong']) {
+      const invalid = structuredClone(builderMap);
+      if (name === undefined) delete invalid.files[0].name;
+      else invalid.files[0].name = name;
+      assert.throws(() => computeOperations(builderMap, invalid, logger), /no file .* in old blockmap/); checks++;
+      fs.writeFileSync(path.join(root, `${items[0].url}.blockmap`), zlib.gzipSync(Buffer.from(JSON.stringify(invalid))));
+      await rejects(/invalid blockmap file name/, () => preflight(root, version, 'mycology', strict));
+    }
+    fs.writeFileSync(path.join(root, `${items[0].url}.blockmap`), blockmap);
+    const goodStrict = cli('--channel', 'mycology', '--strict', '--matrix', matrix);
+    assert.equal(goodStrict.status, 0, goodStrict.stderr); checks++;
+    const noMatrix = cli('--channel', 'mycology', '--strict');
+    assert.notEqual(noMatrix.status, 0); assert.match(noMatrix.stderr, /requires an explicit --matrix/); checks++;
+    writeMyc(items.filter(file => !file.url.endsWith('x64.zip')));
+    await rejects(/missing required artifact/, () => preflight(root, version, 'mycology', strict));
+    writeMyc(items.map((file, i) => i ? file : { ...file, sha512: undefined }));
+    await rejects(/missing or invalid sha512/, () => preflight(root, version, 'mycology', strict));
+    writeMyc();
+    fs.writeFileSync(path.join(root, 'mycology-linux-arm64.yml'), 'version: 1');
+    await rejects(/unexpected advertised feed/, () => preflight(root, version, 'mycology', strict));
+    fs.unlinkSync(path.join(root, 'mycology-linux-arm64.yml'));
+    fs.writeFileSync(path.join(root, `${items[0].url}.blockmap`), 'invalid');
+    await rejects(/blockmap does not inflate/, () => preflight(root, version, 'mycology', strict));
+    fs.writeFileSync(path.join(root, `${items[0].url}.blockmap`), blockmap);
+    fs.unlinkSync(path.join(root, items[0].url));
+    await rejects(/missing release file/, () => preflight(root, version, 'mycology', strict));
+    fs.unlinkSync(mycFeed);
+    await rejects(/missing required feed/, () => preflight(root, version, 'mycology', strict));
+    // Actual updater tail format, synthetic payload. This is not an AppImage
+    // executable and therefore cannot be evidence of Linux install acceptance.
+    const payload = Buffer.alloc(32, 7);
+    const map = require('zlib').deflateRawSync(Buffer.from(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, sizes: [32], checksums: ['synthetic'] }] })));
+    const trailer = Buffer.alloc(4); trailer.writeUInt32BE(map.length);
+    const appImage = Buffer.concat([payload, map, trailer]);
+    const linuxUrl = `CroweLogic-mycology-${version}-x64.AppImage`;
+    const linuxItem = { url: linuxUrl, size: appImage.length, blockMapSize: map.length, sha512: crypto.createHash('sha512').update(appImage).digest('base64') };
+    const linuxFeed = path.join(root, 'mycology-linux.yml');
+    fs.writeFileSync(path.join(root, linuxUrl), appImage);
+    fs.writeFileSync(linuxFeed, yaml.dump({ version, files: [linuxItem] }));
+    const linuxStrict = { strict: true, matrix: 'linux:x64:AppImage' };
+    assert.equal((await preflight(root, version, 'mycology', linuxStrict)).artifacts, 1); checks++;
+    fs.writeFileSync(linuxFeed, yaml.dump({ version, files: [{ ...linuxItem, blockMapSize: undefined }] }));
+    await rejects(/invalid blockMapSize/, () => preflight(root, version, 'mycology', linuxStrict));
+    const corrupt = Buffer.from(appImage); corrupt.writeUInt32BE(7, corrupt.length - 4);
+    fs.writeFileSync(path.join(root, linuxUrl), corrupt);
+    fs.writeFileSync(linuxFeed, yaml.dump({ version, files: [{ ...linuxItem, sha512: crypto.createHash('sha512').update(corrupt).digest('base64') }] }));
+    await rejects(/blockmap trailer mismatch/, () => preflight(root, version, 'mycology', linuxStrict));
     console.log(`preflight-release: ${checks} checks passed`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

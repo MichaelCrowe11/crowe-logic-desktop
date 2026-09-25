@@ -29,6 +29,13 @@ const BANNER = `<!-- GENERATED FILE. Do not edit.
 // serves a stale stylesheet or script from the browser cache.
 const BUSTED = [
   "styles.css",
+  "farm-compliance.css",
+  "farm-recovery.js",
+  "farm-compliance.js",
+  "mycology-transfer.js",
+  "mycology-transfer.css",
+  "mycology-vision.js",
+  "mycology-vision.css",
   "mark-geometry.js",
   "mark.js",
   "messages.js",

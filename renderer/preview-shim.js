@@ -162,7 +162,7 @@
       "name": "SOP Agent",
       "domain": "operations",
       "autonomyCeiling": "edit",
-      "role": "SOP and digital-product library management (R2 bucket swm-sops)."
+      "role": "Procedure drafting, revision review, and document organization."
     },
     {
       "id": "revenue",
@@ -176,7 +176,7 @@
       "name": "Email Agent",
       "domain": "operations",
       "autonomyCeiling": "edit",
-      "role": "Transactional and outreach email from michael@crowelogic.com."
+      "role": "Draft and review email for the user's explicitly configured identity."
     },
     {
       "id": "auction",
@@ -472,10 +472,29 @@
   }
 
   window.crowe = {
-    // Null is an ordinary install: every space. A test narrows it by assigning
-    // here and calling applySpaceProfile(), which is what a packaged build with
-    // a croweSpaces key looks like from the renderer's side.
+    // Non-desktop shells use ordinary Desktop navigation, never local farm access.
     installSpaces: null,
+    edition: Object.freeze({
+      id: "desktop", productName: "Crowe Logic",
+      allowedSpaces: Object.freeze(["chat", "projects"]),
+      defaultSpaces: Object.freeze(["chat", "projects"]), landingSpace: "chat",
+      capabilities: Object.freeze({ grow: false, farm: false, sense: false, legacyAccess: false }),
+      legacyAccess: false,
+    }),
+    editionAccess: {
+      async enterLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery requires the source desktop installation. No local records are accessed here." } }; },
+      async leaveLegacy() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy farm recovery is unavailable in this runtime." } }; },
+      async openWorkbench() { return { ok: false, error: { code: "UNAVAILABLE", message: "Opening the local desktop workbench is unavailable in this runtime." } }; },
+    },
+    vision: { async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook photo inspection requires the Mycology desktop app. No image is read or sent here." } }; } },
+    transfer: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Notebook and compliance transfers require the local desktop app. No records are imported or exported here." } }; },
+    },
+    // Preview never creates a second compliance store or simulates a write.
+    farm: {
+      async request() { return { ok: false, error: { code: "UNAVAILABLE", message: "Farm & Compliance is available in the local desktop app, not this preview. No farm records are stored here." } }; },
+      async legacyHarvests() { return { ok: false, error: { code: "UNAVAILABLE", message: "Legacy harvest adoption is available only in the local desktop Farm & Compliance workspace." } }; },
+    },
     agent: {
       onEvent(fn) { agentListeners.push(fn); return () => { agentListeners = agentListeners.filter((f) => f !== fn); }; },
       async run(messages, id) {
