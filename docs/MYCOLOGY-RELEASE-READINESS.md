@@ -102,3 +102,10 @@ Source: [Apple: Remove a submission from review](https://developer.apple.com/hel
 - Use screenshots from the selected platform/build, not desktop mockups.
 
 No exact remote metadata patch can be truthfully finalized before the selected build and current field values are inspected. No store edit, upload, withdrawal, resubmission, approval or publication has been performed by this worktree's release work.
+
+## Mac App Store upload (2026-09-24)
+
+- `CroweLogic-mycology-mas-0.24.15.pkg` (universal, Apple Distribution, com.crowelogic.mycology) uploaded with `xcrun altool --upload-package -t macos --apple-id 6787277835`. Result: UPLOAD SUCCEEDED, Delivery UUID `57b3adf7-d38b-4100-98e3-23472970f4b8`, 219,222,893 bytes.
+- App Store Connect app record: Crowe Logic Mycology, Apple ID 6787277835. At upload time the record had only an iOS platform (1.0, Rejected). A macOS platform must be added in App Store Connect before the build can be attached to a version. `--validate-app` without `--apple-id` fails with "Cannot determine the Apple ID from Bundle ID" for this reason.
+- Authentication: App Store Connect API key from `~/.appstoreconnect/private_keys` with the account issuer UUID. Developer Portal keys (APNs and similar) do not work for upload.
+- Not done: macOS platform record, version metadata, screenshots, review submission, processing result of this delivery.
