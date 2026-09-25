@@ -26,8 +26,10 @@ exports.default = async function afterPack(context) {
     version: FuseVersion.V1,
     // arm64 Mach-O binaries have to carry a valid signature to launch at all;
     // the flip invalidates the ad-hoc one, so put a fresh ad-hoc one back for
-    // electron-builder's real signing to replace.
-    resetAdHocDarwinSignature: mac && arch === 3,
+    // electron-builder's real signing to replace. Not in the per-arch halves of
+    // a universal build: those are only merged, never launched, and a signature
+    // on one half and not the other stops the merge.
+    resetAdHocDarwinSignature: mac && arch === 3 && !appOutDir.endsWith("-temp"),
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableCookieEncryption]: true,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
