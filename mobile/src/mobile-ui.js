@@ -68,6 +68,7 @@
     syncTabs();
     if (pane === "home" && typeof renderHome === "function") renderHome();
     if (pane === "camera" && typeof renderCamera === "function") renderCamera();
+    if (pane === "playground" && window.crowePlayground) window.crowePlayground.render();
     // The transcript and the panel deck each remember their own scroll, and a
     // deck that was laid out while display:none has no size. Nudging resize
     // lets the panels measure themselves the moment they become visible.
@@ -80,6 +81,7 @@
      machine is paired, as one "Machine" tab onto the workspace pane. */
   const HOME_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>';
   const MESSAGES_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><path d="M19 9h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-1v3l-4-3h-4"/></svg>';
+  const PLAYGROUND_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
   const CAMERA_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
   const railIcon = (space) => { const b = spaceButtons().find((x) => x.dataset.space === space); return b && b.querySelector("svg") ? b.querySelector("svg").outerHTML : ""; };
   const spaceOn = (space) => Boolean(spaceButtons().find((b) => b.dataset.space === space && !b.classList.contains("hidden")));
@@ -89,7 +91,9 @@
     items.push({ kind: "space", id: "chat", label: "Chat", icon: railIcon("chat") });
     // Messages run on the phone itself, so the tab needs no paired machine.
     if ($("rooms-drawer")) items.push({ kind: "pane", id: "messages", label: "Messages", icon: MESSAGES_ICON });
-    items.push({ kind: "pane", id: "camera", label: "Camera", icon: CAMERA_ICON });
+    // Photo questions start from the camera button in Chat; the tab slot goes
+    // to the Playground (playground.js), which owns its pane.
+    items.push({ kind: "pane", id: "playground", label: "Playground", icon: PLAYGROUND_ICON });
 
     // Read the class directly: isPaired is declared further down and this runs at boot.
     if (body.classList.contains("m-paired")) items.push({ kind: "pane", id: "workspace", label: "Machine", icon: PANE_ICON });
@@ -136,6 +140,28 @@
 
   buildTabs();
   window.addEventListener("crowe:remote", () => buildTabs());
+
+  /* The account badge: an avatar with the address's initial (mobile.css draws
+     it). On the desktop a click signs out at once; on a phone that is one
+     stray tap from losing the session, so here the tap opens Settings, where
+     signing out is a deliberate row. Captured so the renderer's handler never
+     runs. */
+  const badge = $("userbadge");
+  if (badge) {
+    const initial = () => {
+      const t = (badge.textContent || "").trim();
+      if (t) { badge.dataset.initial = t[0].toUpperCase(); badge.setAttribute("aria-label", `Account: ${t}`); }
+      else delete badge.dataset.initial;
+    };
+    new MutationObserver(initial).observe(badge, { childList: true, characterData: true, subtree: true });
+    initial();
+    badge.setAttribute("role", "button");
+    badge.title = "Account and settings";
+    badge.addEventListener("click", (e) => {
+      e.stopImmediatePropagation(); e.preventDefault();
+      const s = $("settings-btn"); if (s) s.click();
+    }, true);
+  }
 
   /* ── Home and Camera: the phone's own panes ─────────────────────────────────
      Two sections beside the workbench and the surfaces. Home answers "what
@@ -229,19 +255,33 @@
   async function renderHome() {
     const paired = body.classList.contains("m-paired");
     const sessions = window.crowe?.sessions?.list ? await window.crowe.sessions.list().catch(() => []) : [];
+    const hour = new Date().getHours();
+    const greeting = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+    const TASKS = [
+      ["Understand a problem", "Explain an error or compare approaches", "Explain this problem and help me choose the next step: ", '<path d="M12 17h.01"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/><circle cx="12" cy="12" r="9"/>'],
+      ["Review a file", "An attachment or a file on your computer", "Help me review a file. First ask me to attach it or provide its path on my paired computer.", '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>'],
+      ["Plan a change", "See the action before it runs", "Help me plan a change. Show the proposed action and how we will verify the result before doing any work.", '<path d="M4 6h10M4 12h16M4 18h7"/><path d="M17 4l3 2-3 2"/>'],
+    ];
     homePane.innerHTML = [
-      '<div class="m-home-inner">',
-      '<header class="m-home-head"><div class="m-kicker">From question to result</div><h1 class="m-title">Turn a question into work you can inspect</h1><p class="m-home-sub">Understand a problem. Work with your files. See what changed.</p></header>',
-      '<section class="m-home-sec m-task-grid" aria-label="Start a task"><button type="button" class="m-task-card" data-task="Explain this problem and help me choose the next step: "><b>Understand a problem</b><span>Explain an error or compare approaches.</span><i class="m-chev" aria-hidden="true"></i></button><button type="button" class="m-task-card" data-task="Help me review a file. First ask me to attach it or provide its path on my paired computer."><b>Work with a file</b><span>Review an attachment or a file on your computer.</span><i class="m-chev" aria-hidden="true"></i></button><button type="button" class="m-task-card" data-task="Help me plan a change. Show the proposed action and how we will verify the result before doing any work."><b>Make a change</b><span>Plan the action, then inspect the result.</span><i class="m-chev" aria-hidden="true"></i></button></section>',
-      `<section class="m-home-sec"><h2>${paired ? "Computer paired" : "Pair your computer"}</h2><p class="m-home-empty">Chat and attachments work without pairing. Connect a computer when your task needs its files or commands.</p><details><summary>Connection requirements</summary><p class="m-home-empty">Enable Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network. Keep the computer awake and its companion running.</p></details><button type="button" class="ghost" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button></section>`,
-      '<section class="m-home-sec"><h2>Inspect the result</h2><p class="m-home-empty">Chat keeps the answer and returned tool output together. Open an action card to inspect its details. A suggested change is not an executed change.</p><button type="button" class="ghost" id="m-home-chat">Start a task</button></section>',
-      '<section class="m-home-sec"><h2>Know the limits</h2><p class="m-home-empty">This is not screen sharing or an interactive terminal. Commands can time out and long output can be shortened. An asleep or disconnected computer is unavailable.</p></section>',
-      paired ? '<section class="m-home-sec" id="m-activity" aria-live="polite"><h2>Activity on your computer</h2><p class="m-home-empty">Checking&hellip;</p></section>' : '',
-      sessions.length ? '<section class="m-home-sec"><h2>Recent conversations</h2>' + sessions.slice(0, 3).map((x) => `<button type="button" class="m-sess" data-session="${esc(x.id)}"><span>${esc(x.name || x.title || "Untitled")}</span><i class="m-chev" aria-hidden="true"></i></button>`).join("") + '</section>' : '',
+      '<div class="m-home-inner m-h">',
+      `<header class="m-h-head"><p class="m-h-hello">${greeting}</p><h1 class="m-h-title">What are we working on?</h1></header>`,
+      '<button type="button" class="m-h-ask" id="m-home-chat"><span>Ask anything</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>',
+      '<section class="m-h-tiles" aria-label="Start a task">',
+      TASKS.map(([t, sub, task, icon]) => `<button type="button" class="m-h-tile" data-task="${esc(task)}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><b>${t}</b><span>${sub}</span></button>`).join(""),
+      '<button type="button" class="m-h-tile m-h-tile-pg" id="m-home-pg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/></svg><b>Try a model</b><span>Compare models side by side</span></button>',
+      '</section>',
+      `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
+      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Commands and files on your computer are one message away." : "Chat works without it. Pair to read files and run commands on your own computer."}</span></div></div>`,
+      `<button type="button" class="${paired ? "ghost" : "primary"} m-h-cta" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button>`,
+      '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Every command, read and write is listed here afterwards. This is not screen sharing or an interactive terminal: commands can time out and long output can be shortened.</p></details>',
+      '</div></section>',
+      paired ? '<section class="m-h-group" id="m-activity" aria-live="polite"><h2>Activity on your computer</h2><p class="m-home-empty">Checking&hellip;</p></section>' : '',
+      sessions.length ? '<section class="m-h-group"><h2 class="m-h-label">Recent</h2><div class="m-h-card m-h-list">' + sessions.slice(0, 4).map((x) => `<button type="button" class="m-sess" data-session="${esc(x.id)}"><span>${esc(x.name || x.title || "Untitled")}</span><i class="m-chev" aria-hidden="true"></i></button>`).join("") + '</div></section>' : '',
       '</div>',
     ].join('');
     $("m-home-pair").addEventListener("click", () => { $("settings-btn").click(); remoteSection.scrollIntoView({ block: "center" }); });
-    $("m-home-chat").addEventListener("click", () => __tapTab("Chat"));
+    $("m-home-chat").addEventListener("click", () => { __tapTab("Chat"); const i = $("input"); if (i) i.focus(); });
+    $("m-home-pg").addEventListener("click", () => __tapTab("Playground"));
     homePane.querySelectorAll("[data-session]").forEach((b) => b.addEventListener("click", async () => {
       if (typeof loadSession === "function") await loadSession(b.dataset.session);
       __tapTab("Chat");
@@ -395,8 +435,8 @@
      in one sentence with a Try again button that sends the same message, and
      the same photo, again. */
   const TOOL_SUMMARY = {
-    read_grow: "Looked up your grow records",
-    log_grow: "Added to your grow log",
+    read_grow: "Looked up your records",
+    log_grow: "Added to your log",
     open_url: "Opened a web page",
     read_file: "Read a file",
     write_file: "Wrote a file",
@@ -627,7 +667,7 @@
   // while Execute can delete a directory would be the friendliest lie here.
   const TIER_HINT_PAIRED = {
     plan: "Describe a task. It plans it out first, and touches nothing.",
-    readonly: "Ask anything. It reads your log and files on the paired machine.",
+    readonly: "Ask anything. It reads files on the paired machine.",
     edit: "Ask anything. It can write files on the paired machine.",
     execute: "Ask anything. It can run commands on the paired machine.",
   };
@@ -1157,23 +1197,23 @@
   accountSection.parentNode && accountSection.parentNode.insertBefore(diagSection, accountSection.nextSibling);
   /* Reply voice. speak.js reads localStorage crowe-reply-voice on every tap of
      the speaker, so this row needs no bridge round trip and no config key.
-     "michael" needs a paid plan at the gateway; when the plan says no, speak.js
-     takes the first voice the gateway allows and says which one spoke. */
+     "phone" is Apple's on-device voice and the default; "neural" is the cloud
+     voice from the crowe-ai worker. No choice here is a real person's voice. */
   const voiceSection = document.createElement("section");
   voiceSection.className = "key-manager m-voice";
   voiceSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Reply voice</b>',
-    "<span>What the speaker button uses to read a reply. Michael's voice needs a paid plan; the Crowe Logic voice is the gateway's own; the phone's voice never leaves the device.</span></div></div>",
-    '<label class="m-voice-row">Voice <select id="m-voice"><option value="michael">Michael\'s voice</option><option value="neural">Crowe Logic voice</option><option value="phone">This phone\'s voice</option></select></label>',
+    "<span>What the speaker button uses to read a reply. Apple's voice runs on this phone and never leaves it; the natural voice is generated in the Crowe Logic cloud.</span></div></div>",
+    '<label class="m-voice-row">Voice <select id="m-voice"><option value="phone">Apple voice (on this phone)</option><option value="neural">Natural voice (cloud)</option></select></label>',
   ].join("");
   diagSection.parentNode && diagSection.parentNode.insertBefore(voiceSection, diagSection);
-  const VOICES = ["michael", "neural", "phone"];
+  const VOICES = ["neural", "phone"];
   const voiceSel = $("m-voice");
-  try { const v = localStorage.getItem("crowe-reply-voice"); voiceSel.value = VOICES.includes(v) ? v : "michael"; } catch { voiceSel.value = "michael"; }
+  try { const v = localStorage.getItem("crowe-reply-voice"); voiceSel.value = VOICES.includes(v) ? v : "phone"; } catch { voiceSel.value = "phone"; }
   voiceSel.addEventListener("change", () => {
-    const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "michael";
-    try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to michael */ }
-    say(v === "michael" ? "Replies read in Michael's voice" : v === "neural" ? "Replies read in the Crowe Logic voice" : "Replies read by this phone", "note");
+    const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "phone";
+    try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to phone */ }
+    say(v === "neural" ? "Replies read in the natural voice" : "Replies read by Apple's voice on this phone", "note");
   });
   const diagText = async () => {
     const rows = window.crowe && window.crowe.diag ? await window.crowe.diag.list().catch(() => []) : [];

@@ -357,7 +357,8 @@ function methodPaths(surface) {
     const speak = read("mobile/src/speak.js"), ui = read("mobile/src/mobile-ui.js");
     assert(/localStorage\.getItem\("crowe-reply-voice"\)/.test(speak), "speak.js must read crowe-reply-voice");
     assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
-    assert(/\["michael", "neural", "phone"\]/.test(speak) && /VOICES = \["michael", "neural", "phone"\]/.test(ui), "the two sides must agree on the three voices");
+    assert(/\["neural", "phone"\]/.test(speak) && /VOICES = \["neural", "phone"\]/.test(ui), "the two sides must agree on the two voices");
+    assert(/id !== "michael"/.test(speak) && !/value="michael"/.test(ui), "the retired cloned voice must never be offered or requested");
     assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
     assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
     return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";

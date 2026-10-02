@@ -122,7 +122,7 @@ const tests = [
       __pair(false); await __settle(50);
       const current = __current().join(","); __tap("Chat"); await __settle();
       return { tabs: before, current, paired };`,
-    expect: { tabs: "Home,Chat,Messages,Camera", current: "Home", paired: "Home,Chat,Messages,Camera,Machine" },
+    expect: { tabs: "Home,Chat,Messages,Playground", current: "Home", paired: "Home,Chat,Messages,Playground,Machine" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
@@ -247,7 +247,7 @@ const tests = [
       const said = { text: err.childNodes[0].textContent, retry: Boolean(retry) && retry.checkVisibility() };
       msgU.remove(); msgA.remove();
       return { ...folded, ...opened, ...said, rawLogged: logged.some((l) => /overloaded_error/.test(l)) };`,
-    expect: { line: "Looked up your grow records", summaryShown: true, headHidden: true, resultHidden: true, headShown: true, resultShown: true,
+    expect: { line: "Looked up your records", summaryShown: true, headHidden: true, resultHidden: true, headShown: true, resultShown: true,
               text: "The reader is busy. Try again in a moment.", retry: true, rawLogged: true },
   },
   {
@@ -678,15 +678,18 @@ const tests = [
     expect: { paneShown: true, pairing: true, limits: true, noGrowHeadline: true, backToChat: true },
   },
   {
-    name: "Camera offers Photograph and Choose a photo, and names the engine",
-    body: `__tap("Camera");
-      await __settle(300);
-      const out = { paneShown: __shown("#m-camera-pane"), shoot: __shown("#m-camera-pane .m-cam-shoot"), pick: __shown("#m-camera-pane .m-cam-pick"),
-                    engine: /CroweLM Vision/.test(document.querySelector("#m-camera-pane").textContent), input: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
+    name: "Playground is a tab of its own, and signed out it says so instead of failing",
+    body: `__tap("Playground");
+      await __settle(800);
+      const pane = document.querySelector("#m-playground-pane");
+      const out = { paneShown: __shown("#m-playground-pane"), chatHidden: !__shown("#agent"),
+                    title: /Playground/.test(pane ? pane.textContent : ""),
+                    signIn: /Sign in to use the Playground|Loading models|unavailable/.test(pane ? pane.textContent : ""),
+                    photoStillReachable: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
       __tap("Chat");
       await __settle();
       return out;`,
-    expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
+    expect: { paneShown: true, chatHidden: true, title: true, signIn: true, photoStillReachable: true },
   },
   {
     name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
@@ -703,11 +706,13 @@ const tests = [
       out.voiceOptions = sel ? [...sel.options].map((o) => o.value).join(",") : "";
       if (sel) { sel.value = "neural"; sel.dispatchEvent(new Event("change")); }
       out.voiceStored = localStorage.getItem("crowe-reply-voice");
-      if (sel) { sel.value = "michael"; sel.dispatchEvent(new Event("change")); }
+      if (sel) { sel.value = "phone"; sel.dispatchEvent(new Event("change")); }
+      out.voiceStored += "," + localStorage.getItem("crowe-reply-voice");
+      localStorage.removeItem("crowe-reply-voice");
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "michael,neural,phone", voiceStored: "neural" },
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "phone,neural", voiceStored: "neural,phone" },
   },
 ];
 

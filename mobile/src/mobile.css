@@ -325,6 +325,12 @@ body.dark .m-attach-chip .m-attach-share { color: var(--gold); }
 }
 body.mobile .m-tabs { display: flex; }
 body.mobile.kb-open .m-tabs { display: none; }   /* the keyboard is the toolbar now */
+/* In the iOS shell UIKit draws the bar (native-chrome.js); the web bar stays
+   as an empty spacer of the native bar's height so nothing sits under it. */
+body.mobile.native-tabs .m-tabs {
+  height: var(--native-tab-h, 83px); padding: 0; border: none; box-shadow: none; background: transparent;
+}
+body.mobile.native-tabs .m-tabs > * { display: none; }
 
 .m-tab {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -453,6 +459,16 @@ body.mobile .chip:active { background: var(--panel); }
   body.mobile #web-workspace { display: none; }
   body.mobile #signin, body.mobile #upgrade-pill { white-space: nowrap; padding: 4px 9px; font-size: var(--fs-cap); }
   body.mobile #userbadge { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Signed in, the badge is an avatar: the initial in a brass ring, the way
+     every phone app shows an account, instead of a truncated address. */
+  body.mobile #userbadge[data-initial] {
+    width: 34px; height: 34px; padding: 0; border-radius: 50%; display: inline-grid; place-items: center;
+    font-size: 0; background: var(--accent-wash); border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); cursor: pointer;
+  }
+  body.mobile #userbadge[data-initial].hidden { display: none; }
+  body.mobile #userbadge[data-initial]::after {
+    content: attr(data-initial); font: 600 15px/1 var(--body); color: var(--gold-text); letter-spacing: 0;
+  }
 }
 
 /* Photos: the camera button beside the paperclip, photo chips, and the strip
@@ -470,7 +486,9 @@ body.mobile .m-pane { display: none; overflow-y: auto; -webkit-overflow-scrollin
 body.mobile[data-pane="home"] #m-home-pane, body.mobile[data-pane="camera"] #m-camera-pane, body.mobile[data-pane="messages"] #m-messages-pane { display: block; }
 body.mobile[data-pane="home"] #workbench, body.mobile[data-pane="home"] .surface, body.mobile[data-pane="home"] #hud,
 body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .surface, body.mobile[data-pane="camera"] #hud,
-body.mobile[data-pane="messages"] #workbench, body.mobile[data-pane="messages"] .surface, body.mobile[data-pane="messages"] #hud { display: none !important; }
+body.mobile[data-pane="messages"] #workbench, body.mobile[data-pane="messages"] .surface, body.mobile[data-pane="messages"] #hud,
+body.mobile[data-pane="playground"] #workbench, body.mobile[data-pane="playground"] .surface, body.mobile[data-pane="playground"] #hud { display: none !important; }
+body.mobile[data-pane="playground"] #m-playground-pane { display: block; }
 
 /* Messages: the list owns the pane; a room is its one panel, full screen. */
 /* #shell is a flex row, and a pane without flex shrinks to its content: a
@@ -796,3 +814,85 @@ body.mobile button.m-sess:active { background: var(--accent-wash); }
 body.mobile details.m-advanced { margin: 14px 0; border-top: 1px solid var(--line); padding-top: 10px; }
 body.mobile details.m-advanced > summary { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 14px; cursor: pointer; }
 body.mobile #m-remote-state { white-space: nowrap; }
+
+/* ── Home and Playground (0.26.6) ──
+   Drawn the way iOS draws its own apps: a large title, one obvious entry
+   point, tiles for the common starts, and inset grouped cards whose rows are
+   separated by hairlines. Brass is the only accent, used for state and the
+   primary action, never for decoration. */
+body.mobile .m-h, body.mobile .m-pg { padding: 18px 18px calc(120px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto; }
+body.mobile .m-h-head { margin: 6px 2px 18px; }
+body.mobile .m-h-hello { margin: 0 0 4px; font: 500 15px/1.3 var(--body); color: var(--muted); }
+body.mobile .m-h-title, body.mobile .m-pg-title { margin: 0; font: 600 32px/1.12 var(--display); letter-spacing: -0.015em; color: var(--ink); }
+body.mobile .m-h-ask {
+  display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 56px; padding: 0 8px 0 20px;
+  border-radius: 28px; border: 1px solid var(--line); background: var(--raised); color: var(--muted);
+  font: 400 17px/1 var(--body); text-align: left; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px -12px rgba(0,0,0,.25);
+}
+body.mobile .m-h-ask svg { width: 40px; height: 40px; padding: 9px; border-radius: 50%; background: var(--gold); color: var(--cream);
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+body.mobile .m-h-ask:active { transform: scale(.985); }
+body.mobile .m-h-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0 6px; }
+body.mobile .m-h-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 118px; padding: 16px;
+  border-radius: 18px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); text-align: left; font: inherit;
+}
+body.mobile .m-h-tile svg { width: 26px; height: 26px; margin-bottom: auto; fill: none; stroke: var(--gold-text); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+body.mobile .m-h-tile b { font: 600 15px/1.25 var(--body); margin-top: 14px; }
+body.mobile .m-h-tile span { font: 400 13px/1.35 var(--body); color: var(--muted); }
+body.mobile .m-h-tile:active { transform: scale(.97); background: var(--accent-wash); }
+body.mobile .m-h-tile-pg { background: linear-gradient(160deg, var(--accent-wash), transparent 70%), var(--raised); }
+body.mobile .m-h-group { margin-top: 26px; }
+body.mobile .m-h-group > h2, body.mobile .m-h-label { margin: 0 0 8px 16px; font: 600 13px/1.2 var(--body); letter-spacing: .02em; text-transform: uppercase; color: var(--muted); }
+body.mobile .m-h-card { border-radius: 16px; border: 1px solid var(--line); background: var(--raised); padding: 16px; }
+body.mobile .m-h-status { display: flex; gap: 12px; align-items: flex-start; }
+body.mobile .m-h-status b { display: block; font: 600 16px/1.3 var(--body); color: var(--ink); }
+body.mobile .m-h-status span { display: block; margin-top: 2px; font: 400 14px/1.45 var(--body); color: var(--muted); }
+body.mobile .m-h-dot { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--line-strong); }
+body.mobile .m-h-dot.on { background: #34C759; box-shadow: 0 0 0 4px rgba(52,199,89,.18); }
+body.mobile .m-h-cta { width: 100%; min-height: 48px; margin-top: 14px; border-radius: 12px; font: 600 16px/1 var(--body); }
+body.mobile #m-home-pane details.m-h-more { margin: 12px 0 0; }
+body.mobile .m-h-more { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+body.mobile .m-h-more summary { list-style: none; cursor: pointer; font: 500 15px/1.4 var(--body); color: var(--gold-text); min-height: 32px; display: flex; align-items: center; }
+body.mobile .m-h-more summary::-webkit-details-marker { display: none; }
+body.mobile .m-h-more summary::after { content: "›"; margin-left: 6px; transition: transform .2s; }
+body.mobile .m-h-more[open] summary::after { transform: rotate(90deg); }
+body.mobile .m-h-more p { margin: 6px 0 0; font: 400 14px/1.5 var(--body); color: var(--muted); }
+body.mobile .m-h-list { padding: 0 0 0 16px; overflow: hidden; }
+body.mobile .m-h-list button.m-sess { border: none; border-radius: 0; margin: 0; min-height: 50px; padding: 0 16px 0 0; background: none;
+  border-bottom: 1px solid var(--line); font: 400 16px/1.3 var(--body); color: var(--ink); }
+body.mobile .m-h-list button.m-sess:last-child { border-bottom: none; }
+
+body.mobile .m-pg-head { margin: 6px 2px 18px; }
+body.mobile .m-pg-sub { margin: 6px 0 0; font: 400 15px/1.45 var(--body); color: var(--muted); }
+body.mobile .m-pg-note { font: 400 15px/1.45 var(--body); color: var(--muted); }
+body.mobile .m-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 2px; border-radius: 9px; background: rgba(118,118,128,.16); margin-bottom: 14px; }
+body.mobile .m-seg button { min-height: 34px; border: none; border-radius: 8px; background: none; font: 600 14px/1 var(--body); color: var(--ink); }
+body.mobile .m-seg button { color: var(--muted); transition: background .2s, color .2s; }
+body.mobile .m-seg button[aria-selected="true"] { background: #fff; color: var(--ink); box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); }
+body.mobile.dark .m-seg { background: rgba(118,118,128,.24); }
+body.mobile.dark .m-seg button[aria-selected="true"] { background: #636366; color: #fff; box-shadow: none; }
+body.mobile .m-group { border-radius: 16px; border: 1px solid var(--line); background: var(--raised); padding-left: 16px; overflow: hidden; }
+body.mobile .m-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 50px; padding-right: 14px;
+  border-bottom: 1px solid var(--line); font: 400 16px/1.3 var(--body); color: var(--ink); }
+body.mobile .m-row:last-child { border-bottom: none; }
+body.mobile .m-row select { max-width: 60%; min-height: 36px; border: none; background: none; color: var(--gold-text); font: 400 16px/1.2 var(--body); text-align: right; text-align-last: right; }
+body.mobile .m-switch { appearance: none; -webkit-appearance: none; position: relative; width: 51px; height: 31px; border-radius: 16px; background: var(--line-strong); transition: background .2s; margin: 0; }
+body.mobile .m-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.25); transition: transform .2s; }
+body.mobile .m-switch:checked { background: #34C759; }
+body.mobile .m-switch:checked::after { transform: translateX(20px); }
+body.mobile .m-pg-compose { margin-top: 14px; border-radius: 16px; border: 1px solid var(--line); background: var(--raised); padding: 12px; display: grid; gap: 10px; }
+body.mobile .m-pg-compose textarea { width: 100%; border: none; background: none; resize: none; color: var(--ink); font: 400 16px/1.45 var(--body); outline: none; }
+body.mobile .m-pg-run { justify-self: end; min-height: 40px; min-width: 96px; border-radius: 20px; font: 600 15px/1 var(--body); }
+body.mobile .m-pg-out { display: grid; gap: 12px; margin-top: 16px; }
+body.mobile .m-pg-card { border-radius: 16px; border: 1px solid var(--line); background: var(--raised); padding: 14px 16px; }
+body.mobile .m-pg-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+body.mobile .m-pg-card header b { font: 600 15px/1.3 var(--body); color: var(--ink); }
+body.mobile .m-pg-meta { font: 400 13px/1.3 var(--body); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+body.mobile .m-pg-try { margin-top: 22px; }
+body.mobile .m-pg-try .m-h-label { margin-left: 2px; }
+body.mobile .m-pg-chips { display: grid; gap: 8px; }
+body.mobile .m-pg-chips button { text-align: left; min-height: 48px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: 400 15px/1.4 var(--body); }
+body.mobile .m-pg-chips button:active { transform: scale(.98); background: var(--accent-wash); }
+body.mobile .m-pg-body { font: 400 16px/1.5 var(--body); color: var(--ink); overflow-wrap: anywhere; }
+body.mobile .m-pg-img { display: block; width: 100%; border-radius: 12px; }

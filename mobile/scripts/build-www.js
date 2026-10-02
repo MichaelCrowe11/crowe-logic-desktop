@@ -58,7 +58,10 @@ const COPY = [
   ["mobile/src/vault.js", "vault.js"],
   ["mobile/src/mobile-bridge.js", "mobile-bridge.js"],
   ["mobile/src/mobile-ui.js", "mobile-ui.js"],
+  ["mobile/src/cloud-ai.js", "cloud-ai.js"],
   ["mobile/src/speak.js", "speak.js"],
+  ["mobile/src/playground.js", "playground.js"],
+  ["mobile/src/native-chrome.js", "native-chrome.js"],
   ["mobile/src/share-inbox.js", "share-inbox.js"],
   ["mobile/src/connectors.js", "connectors.js"],
 ];
@@ -68,7 +71,7 @@ const COPY = [
 const BUSTED = [
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -147,7 +150,7 @@ function buildIndex() {
   // after renderer.js rather than before it.
   must(html, '<script src="renderer.js"></script>', "the renderer script tag");
   html = html.replace('<script src="renderer.js"></script>',
-    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
+    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="native-chrome.js"></script>\n  <script src="cloud-ai.js"></script>\n  <script src="speak.js"></script>\n  <script src="playground.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
 
   // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
   // sells a subscription through Stripe, which is the app store's business on

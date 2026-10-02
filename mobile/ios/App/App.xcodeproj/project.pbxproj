@@ -24,6 +24,8 @@
 		D9152EC5AAD677F249700132 /* CroweVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5505C68BB36F661E12A22584 /* CroweVault.swift */; };
 		F962F08575D0BECA5702DE2C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C69DDDA527351AAA3C9F4D6B /* Foundation.framework */; };
 		FAE554F7A5CF8401FE850FB5 /* CroweShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		7EBA097B08914748B6117613 /* CroweVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 117726D5520E4D1F86B1080D /* CroweVoice.swift */; };
+		C47B67F7AD5F422A97340A3B /* CroweChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB3F1E79D00B4115A1A4D9E4 /* CroweChrome.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +75,8 @@
 		DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweIntents.swift; sourceTree = "<group>"; };
 		E7A6B88648052CC71E8657BD /* App.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		EE47028C44CCF129170B3EDA /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		117726D5520E4D1F86B1080D /* CroweVoice.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweVoice.swift; sourceTree = "<group>"; };
+		EB3F1E79D00B4115A1A4D9E4 /* CroweChrome.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweChrome.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +144,8 @@
 				DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */,
 				E7A6B88648052CC71E8657BD /* App.entitlements */,
 				5505C68BB36F661E12A22584 /* CroweVault.swift */,
+				EB3F1E79D00B4115A1A4D9E4 /* CroweChrome.swift */,
+				117726D5520E4D1F86B1080D /* CroweVoice.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -287,6 +293,8 @@
 				6A4A72741514347C5135A79B /* CroweBridgeViewController.swift in Sources */,
 				119EB8316A3CF3C43DBA7597 /* CroweIntents.swift in Sources */,
 				D9152EC5AAD677F249700132 /* CroweVault.swift in Sources */,
+				C47B67F7AD5F422A97340A3B /* CroweChrome.swift in Sources */,
+				7EBA097B08914748B6117613 /* CroweVoice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -437,7 +445,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2605;
+				CURRENT_PROJECT_VERSION = 2606;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -445,7 +453,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.5;
+				MARKETING_VERSION = 0.26.6;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -461,7 +469,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2605;
+				CURRENT_PROJECT_VERSION = 2606;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -469,7 +477,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.5;
+				MARKETING_VERSION = 0.26.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -484,7 +492,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2605;
+				CURRENT_PROJECT_VERSION = 2606;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -494,7 +502,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.5;
+				MARKETING_VERSION = 0.26.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -510,7 +518,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2605;
+				CURRENT_PROJECT_VERSION = 2606;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -520,7 +528,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.5;
+				MARKETING_VERSION = 0.26.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

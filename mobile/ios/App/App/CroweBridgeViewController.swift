@@ -8,5 +8,7 @@ class CroweBridgeViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(CroweSpeech())
         bridge?.registerPluginInstance(CroweVault())
+        bridge?.registerPluginInstance(CroweVoice())
+        bridge?.registerPluginInstance(CroweChrome())
     }
 }
