@@ -55,7 +55,7 @@ app.whenReady().then(async () => {
       layout: document.getElementById("panel-deck").className,
       voiceButtons: ["voice-input","voice-output"].every((id) => document.getElementById(id)),
       conversationCopy: Boolean(document.getElementById("copy-conversation")),
-      glassLauncher: Boolean(document.querySelector("#glass-launcher img")),
+      glassLauncher: Boolean(document.querySelector("#glass-launcher .cl-mark svg")),
       agentLauncherDocked: Boolean(document.querySelector(".dock-bar #glass-launcher")),
       nothingFloatsOverDeck: [...document.querySelectorAll("body > *")].every((el) => getComputedStyle(el).position !== "fixed" || el.id === "hud" || el.hidden || getComputedStyle(el).display === "none"),
       agentPanels: document.querySelectorAll('.workspace-panel[data-id^="agent-"]').length,

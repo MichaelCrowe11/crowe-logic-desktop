@@ -58,6 +58,18 @@ every shipped file on the VM against the working tree, so the deploy is
 verified by the artifact and not by the exit code of `scp`. The steps stay
 written out here so the script can be checked against them.
 
+The `app.html` that ships is not byte for byte the committed one. Its asset
+tags read `name.js?v=<stamp>`, and the committed stamp is fixed, so a deploy
+that copied the committed file left browsers serving the previous `renderer.js`
+and `styles.css` from cache (six renderer changes shipped behind one stamp
+between 2026-09-07 and 2026-09-16). The script rewrites every `?v=` query to
+the commit time of `HEAD` before copying, so each committed tree carries its
+own stamp and a browser fetches the new assets once per deploy. `--check`
+rebuilds the same stamped file from the same commit for its comparison; a
+`DIFF` on `app.html` from another commit means a different tree is live, which
+is what it should mean. `--stamped-app-html` prints the file that would ship,
+and `scripts/test-deploy-web.js` holds the rewrite and the ship list.
+
 All of the below is one command now: `bash scripts/deploy-web.sh` (and
 `--verify`, `--rollback`). It refuses uncommitted renderer files and a stale
 rooms bundle, takes the dated backup, reloads Caddy, and checks the served

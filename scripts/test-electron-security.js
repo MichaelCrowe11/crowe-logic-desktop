@@ -24,7 +24,27 @@ function check(value, message) { assert(value, message); checks++; }
 
 const appUrl = pathToFileURL(entry).toString();
 check(isAppDocument(appUrl, entry), "the packaged renderer must remain navigable");
+
+// Sign-in: one loopback listener at a time. A second click while a sign-in waits in the
+// browser joins the pending attempt instead of opening a second listener on the same ports.
+const mainSrc = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
+check(/let pendingSignIn = null;/.test(mainSrc), "sign-in must track the pending attempt");
+check(/if \(pendingSignIn\) \{ if \(pendingSignIn\.authUrl\) shell\.openExternal\(pendingSignIn\.authUrl\); return pendingSignIn\.promise; \}/.test(mainSrc), "a click during a pending sign-in must reopen its page and join its promise");
+check(/if \(pendingSignIn === pending\) pendingSignIn = null;/.test(mainSrc), "finishing a sign-in must clear the pending attempt");
+check(/pending\.authUrl = authUrl;/.test(mainSrc), "the pending attempt must remember its page so a second click can reopen it");
 check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remain navigable");
+
+// Rooms are readable from the person's own chat seat and from nowhere else. The
+// hook rides the chat run's ctx; harnessCtx, which a room seat runs on, never
+// carries it, because a seat that could read a sibling room would bypass the
+// operator's relay, the one sanctioned path between rooms.
+const harnessCtxSrc = (mainSrc.match(/\nconst harnessCtx = \{[\s\S]*?\n\};/) || [""])[0];
+check(harnessCtxSrc.length > 0, "harnessCtx must be findable for the rooms pin");
+check(!/^\s{2}rooms:/m.test(harnessCtxSrc), "harnessCtx must not carry the rooms hook");
+check(/const ctx = \{ \.\.\.harnessCtx, rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook");
+check((mainSrc.match(/rooms: roomsForHarness\(\)/g) || []).length === 1, "the rooms hook is handed out in exactly one place");
+check(/harness\.runAgent\(harnessCtx, messages\.slice\(\)/.test(mainSrc), "room seats must run on the bare harnessCtx");
+check(/if \(!\/\^r-\[A-Za-z0-9_-\]\{1,80\}\$\/\.test\(String\(id \|\| ""\)\)\) return null;/.test(mainSrc), "the rooms hook must load only r- ids");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
 check(isTrustedPermissionUrl("https://crowelogic.com/call", entry), "the exact Crowe Logic origin must be trusted");
@@ -159,19 +179,60 @@ check(/isTrustedIpcSender/.test(main) && /Blocked IPC from an untrusted renderer
   check(!/ipcMain\.(?:addListener|once|handleOnce|prependListener|prependOnceListener)\(/.test(main),
     "IPC handlers must register only through the two wrapped entry points");
   check(/crowe:rooms:say[\s\S]{0,200}slice\(0, MAX_MESSAGE_CHARS\)/.test(main), "room speech must carry the same length cap as agent messages");
-  check(/crowe:keys:remove[\s\S]{0,300}if \(!KEY_PROVIDERS\[provider\]\)/.test(main), "key removal must validate the provider like key storage does");
+  check(/crowe:keys:set[\s\S]{0,200}if \(!keyStoreAccepts\(provider\)/.test(main) && /crowe:keys:remove[\s\S]{0,300}if \(!keyStoreAccepts\(provider\)\)/.test(main), "key storage and key removal must validate the id through the one gate");
 }
 check(/contextFileGrants/.test(main) && /File access was not granted by the picker/.test(main), "context reads must require a picker grant");
 // Git runs without a shell. On Windows exec() means cmd.exe, where a
 // single-quoted argument is not quoted at all and a file name is a command.
 check(!/exec\(`git /.test(main) && !/\bshq\(/.test(main) && /execFile\("git", args\.map\(String\)/.test(main), "git must run through execFile with an argv, never a shell string");
 check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checkout must end options before the branch name");
+// A shell that will not start is a refusal the panel prints, not an exception
+// the renderer never catches. The spawn sits inside try/catch and answers
+// { ok: false, error }; the dev-only mode-bit repair never touches a packaged
+// bundle, which the code signature seals.
+check(/try \{ proc = spawnShell\(cols, rows\); \}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed spawn into { ok: false, error }");
+check(/if \(app\.isPackaged \|\| process\.platform === "win32" \|\| !\/posix_spawnp\/i\.test/.test(main), "the spawn-helper mode-bit repair must be dev-only");
+check(!/pty\.spawn\([^\n]*\n[^\n]*ptyProcs\.set/.test(main), "no bare pty.spawn may feed ptyProcs outside spawnShell");
+// The terminal is the operator's login shell (their PATH, even from a Finder
+// launch), and PowerShell where there is no $SHELL.
+check(/if \(process\.platform === "win32"\) return \{ file: "powershell\.exe", args: \[\] \};/.test(main)
+  && /return \{ file: process\.env\.SHELL \|\| "\/bin\/zsh", args: \["-l"\] \};/.test(main), "the terminal must be a login shell, and PowerShell on Windows");
 check(/const CHECKOUT_URL = \(!app\.isPackaged && process\.env\.CROWE_CHECKOUT_URL\)/.test(main), "the checkout URL override must be dev-only");
-check(/spawn\(spec\.command, spec\.args \|\| \[\], \{ env: \{ \.\.\.require\("\.\/harness"\)\.safeShellEnv\(\)/.test(main), "MCP servers must inherit the filtered shell environment, not the app's");
+// The plugin server's environment is built by harness.pluginSpawnEnv, which
+// starts from safeShellEnv (the agent shell's filtered variables) and only adds
+// the plugin's own variables plus a login-shell PATH so npx resolves from a
+// Finder launch. Both halves are pinned, for a spawned server and a forked one:
+// each must use that env, and the builder must start from the filtered environment.
+check(/const env = harness\.pluginSpawnEnv\(spec\.env \|\| \{\}\);/.test(main) && /spawn\(spec\.command, spec\.args \|\| \[\], \{ env, stdio: \["pipe", "pipe", "pipe"\]/.test(main) && /utilityProcess\.fork\(spec\.fork, spec\.args \|\| \[\], \{ env, stdio: \["ignore", "pipe", "pipe"\]/.test(main), "MCP servers, spawned or forked, must inherit the filtered shell environment, not the app's");
+check(/function pluginSpawnEnv\([^)]*\) \{\s*const env = \{ \.\.\.safeShellEnv\(\)/.test(fs.readFileSync(path.join(__dirname, "..", "harness.js"), "utf8")), "pluginSpawnEnv must start from safeShellEnv");
+// The packaged binary has the RunAsNode fuse off (pinned below), so ELECTRON_RUN_AS_NODE
+// on it does not make a Node: it starts a second copy of the app. A server that ships
+// inside the app runs in a utility process, the one Node runtime a packaged build has.
+check(!/ELECTRON_RUN_AS_NODE:/.test(main) && /p\.mcp\.command === "\$\{NODE\}"/.test(main) && /\{ fork: args\[0\], args: args\.slice\(1\), env: merged \}/.test(main), "a bundled ${NODE} server must be forked as a utility process, never spawned through ELECTRON_RUN_AS_NODE");
 check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame" && !isSafeGuestUrl\(details\.url\)/.test(main), "guest main-frame requests must be checked at the session, since webview.src is a loadURL");
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
 check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "the renderer must not be able to write a bearer token through set-config");
+// Crowe Browser: the renderer may set the service URL, which must be https
+// (loopback http for a local fake). The key is not config: it goes to the
+// encrypted store through crowe:keys:set under its own id, outside the model
+// provider table, and get-config hands back the URL and which credential is
+// in force, never a value.
+check(Object.hasOwn(sanitizeConfigPatch({ croweBrowser: { url: "https://browser.crowelogic.com/" } }), "croweBrowser"), "the renderer must be able to set the Crowe Browser URL through set-config");
+check(!Object.hasOwn(sanitizeConfigPatch({ croweBrowser: { key: "k" } }), "croweBrowser") && !("key" in sanitizeConfigPatch({ croweBrowser: { url: "https://browser.crowelogic.com/", key: "k" } }).croweBrowser), "a Crowe Browser key sent through set-config must be dropped; it belongs to the encrypted store");
+check(/const SERVICE_KEYS = \{ croweBrowser:/.test(main) && !/croweBrowser/.test((main.match(/const KEY_PROVIDERS = \{[\s\S]*?\n\};/) || [""])[0]), "the Crowe Browser key must be a store id of its own, outside KEY_PROVIDERS");
+check(/function browserServiceKey\(\) \{ const e = readKeyStore\(\)\.croweBrowser/.test(main) && !/croweBrowser\.key\b/.test(main), "main.js must read the Crowe Browser key from the encrypted store only");
+check(/credential: browserCredential/.test(main) && /Browser\.credentialProvider\(\{ getToken: \(\) => loadConfig\(\)\.token, getKey: browserServiceKey, refresh: refreshToken \}\)/.test(main), "the cloud browser must be created with the Crowe ID token first, refreshed through the one refresh path, and the key as the fallback");
+check(!Object.hasOwn(sanitizeConfigPatch({ croweBrowser: { url: "http://browser.example/" } }), "croweBrowser"), "a plaintext remote Crowe Browser URL must be dropped");
+check(!Object.hasOwn(sanitizeConfigPatch({ croweBrowser: "https://browser.crowelogic.com" }), "croweBrowser"), "a Crowe Browser block that is not an object must be dropped");
+check(/const browserConfigView = \(c\) => \(\{ croweBrowser: \{ url: .*?\}, croweBrowserAuth: browserAuthKind\(c\) \}\)/.test(main), "get-config must expose the Crowe Browser URL and which credential is in force");
+{
+  const getConfig = (main.match(/ipcMain\.handle\("crowe:get-config", \(\) => \{[\s\S]*?\n\}\);/) || [""])[0];
+  const setConfig = (main.match(/ipcMain\.handle\("crowe:set-config", async \(_e, rawPatch\) => \{[\s\S]*?\n\}\);/) || [""])[0];
+  check(getConfig && setConfig, "the config handlers must be findable for the Crowe Browser key check");
+  check(!/\.key\b/.test(getConfig) && !/\.key\b/.test(setConfig), "neither config handler may touch the Crowe Browser key");
+}
+check(/^\s{2}browser: browserSessions,/m.test(harnessCtxSrc), "harnessCtx must carry the cloud browser session pool");
 {
   const companion = fs.readFileSync(path.join(root, "companion.js"), "utf8");
   check(/this\.tierAllows\("run"\)/.test(companion) && /this\.tierAllows\("write"\)/.test(companion), "the companion must refuse runs and writes the tier does not allow");
@@ -186,6 +247,9 @@ check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "
 check(/will-redirect/.test(main) && /guardGuestNavigation/.test(main), "guest redirects must remain under the navigation policy");
 const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "utf8");
 check(!/setAttribute\(["']allowpopups/.test(renderer), "the browser guest must not opt into popups");
+check(!/croweBrowser\.key\b/.test(renderer), "the renderer must never read the Crowe Browser key");
+check(/window\.crowe\.keys\.set\("croweBrowser", k\)/.test(renderer) && /window\.crowe\.keys\.remove\("croweBrowser"\)/.test(renderer) && !/patch\.croweBrowser = \{[^}]*\bkey\b/.test(renderer), "the renderer must save and remove the Crowe Browser key through the key store, never through set-config");
+check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser"\)/.test(renderer), "cloud browser panels, whose address carries a session token, must not be saved with the deck");
 check(!/\sstyle=["']/.test(renderer), "dynamic renderer markup must not contain inline style attributes");
 check(/liftMotionStyle/.test(renderer) && /croweAdoptStyle/.test(renderer), "the logotype's style block must be adopted, not inlined");
 check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not write style attributes, which the policy blocks");

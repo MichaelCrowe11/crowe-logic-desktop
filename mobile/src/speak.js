@@ -6,8 +6,11 @@
  * GET /api/gateway/speech/voices and audio from POST /api/gateway/speech
  * (control plane 0.2.20). Until that gateway is live the voices call 404s and
  * the system voice reads the reply exactly as before, so shipping this ahead of
- * the deploy costs nothing. "michael" is chosen when the plan allows it, else
- * "neural"; a later Settings row can write config.replyVoice and this reads it.
+ * the deploy costs nothing. The voice is the Settings row "Reply voice"
+ * (localStorage crowe-reply-voice): "michael" when the plan allows it, "neural"
+ * for the gateway's own voice, "phone" for the device's speech engine without a
+ * gateway call. Each gateway read is noted in Diagnostics with the voice that
+ * actually spoke and the characters it cost, from the X-Crowe-* headers.
  * Handed over by the gateway session on 2026-09-10; adapted here. */
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -36,13 +39,14 @@
     if (player) { stop(); say("Ready"); return; }
     const said = [...document.querySelectorAll(".msg.assistant .said")].pop();
     if (!said) { say("Nothing to read yet", "note"); return; }
+    const preferred = replyVoice();
+    if (preferred === "phone") return fallback(said);
     const t = await token();
     if (!t || !t.bearer) { say("Sign in to hear replies", "note"); return; }
     let list;
     try { list = await voices(t.base, t.bearer); } catch { return fallback(said); }
     const allowed = list.voices.filter((v) => v.allowed && v.configured).map((v) => v.voice);
     if (!allowed.length) return fallback(said);
-    const preferred = (t.cfg && t.cfg.replyVoice) || "michael";
     const voice = allowed.includes(preferred) ? preferred : allowed[0];
     const text = said.innerText.slice(0, list.max_chars || 1500);
     btn.classList.add("active"); btn.setAttribute("aria-pressed", "true"); say(voice === "michael" ? "Michael is reading" : "Reading", "running");
@@ -51,6 +55,10 @@
       body: JSON.stringify({ text, voice }),
     });
     if (!r.ok) { stop(); const d = await r.json().catch(() => ({})); say((d.detail && (d.detail.message || d.detail)) || `Could not read aloud (${r.status})`, "error"); return; }
+    // What actually spoke, and what it cost: the gateway says so in headers.
+    const spoke = r.headers.get("x-crowe-voice") || voice, fell = r.headers.get("x-crowe-fallback") || "", chars = r.headers.get("x-crowe-chars") || String(text.length);
+    if (window.crowe.diag && window.crowe.diag.note) window.crowe.diag.note("speech", `${spoke}${fell ? " (asked " + voice + ", fell back: " + fell + ")" : ""} · ${chars} chars`);
+    if (fell) say(spoke === "michael" ? "Michael is reading" : "Reading with the Crowe Logic voice", "running");
     const blob = await r.blob();
     player = new Audio(URL.createObjectURL(blob));
     player.onended = () => { stop(); say("Ready"); };
@@ -58,8 +66,16 @@
     try { await player.play(); } catch (e) { stop(); say("Playback blocked: " + String(e.message || e).slice(0, 60), "error"); }
   }
 
+  // The Settings row writes this; anything unrecognised reads as "michael" so a
+  // stale value never silences the button.
+  function replyVoice() {
+    let v = "";
+    try { v = localStorage.getItem("crowe-reply-voice") || ""; } catch { /* storage refused */ }
+    return ["michael", "neural", "phone"].includes(v) ? v : "michael";
+  }
+
   function fallback(said) {
-    // Older gateway or nothing configured: the system voice, as before.
+    // Older gateway, nothing configured, or the person chose the phone's own voice.
     if (speechSynthesis.speaking) { speechSynthesis.cancel(); return; }
     speechSynthesis.speak(new SpeechSynthesisUtterance(said.innerText));
   }

@@ -86,6 +86,8 @@ function loadMobileSurface(fetchImpl, capacitor) {
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
   };
+  for (const file of ["rooms-web.js", "council.js", "rooms-local.js"])
+    new Function("window", "setInterval", read("renderer/" + file))(win, () => 0);
   const src = read("mobile/src/mobile-bridge.js");
   new Function(...Object.keys(sandbox), src)(...Object.values(sandbox));
   assert(win.crowe, "mobile-bridge.js did not install window.crowe");
@@ -156,7 +158,7 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "remote.activity", "mobile.openExternal", "auth.deleteAccount",
       "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
@@ -292,7 +294,7 @@ function methodPaths(surface) {
     off();
     assert(result.done && /Harvest at 9/.test(result.text), `turn returned ${JSON.stringify(result)}`);
     const names = (bodies[0].tools || []).map((t) => t.function.name);
-    assert(names.includes("google_calendar_list_events") && names.includes("read_grow"), `tools sent: ${names.join(",")}`);
+    assert(names.includes("google_calendar_list_events") && !names.includes("read_grow") && !names.includes("log_grow"), `tools sent: ${names.join(",")}`);
     assert(acted.length === 1 && acted[0][0] === "google_calendar_list_events" && acted[0][1].query === "harvest", `act saw ${JSON.stringify(acted)}`);
     const toolMsg = bodies[1].messages.find((m) => m.role === "tool");
     assert(toolMsg && /Harvest/.test(toolMsg.content), "the connector result did not go back to the model");
@@ -301,6 +303,66 @@ function methodPaths(surface) {
     delete win.croweConnectors;
     return "tools merged, call answered via the gateway, result fed back";
   });
+  await check("the vault falls back to Preferences when the Keychain refuses, instead of signing the person out", async () => {
+    // vault.js sits in front of the bridge's store for the "config" record. A
+    // rejected Keychain read must answer from Preferences and leave the key
+    // unmigrated; a rejected write must land in Preferences.
+    const load = (vaultStub) => {
+      const prefs = new Map([["config", JSON.stringify({ token: "t.o.k", refreshToken: "r" })]]);
+      const Preferences = { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } };
+      const win = { Capacitor: { isNativePlatform: () => true, Plugins: { CroweVault: vaultStub, Preferences } } };
+      new Function("window", read("mobile/src/vault.js"))(win);
+      assert(win.croweVault && win.croweVault.handles("config") && !win.croweVault.handles("grow"), "vault.js did not install croweVault for config only");
+      return { vault: win.croweVault, prefs };
+    };
+    // 1. Keychain refuses every read: Preferences answers, and keeps the record.
+    let calls = [];
+    let { vault, prefs } = load({ get: async () => { calls.push("get"); throw new Error("keychain read failed: -25300"); }, set: async () => { calls.push("set"); }, remove: async () => {} });
+    const v = await vault.get("config");
+    assert(v && JSON.parse(v).token === "t.o.k", `a refused Keychain read did not fall back to Preferences: ${v}`);
+    assert(prefs.has("config"), "the fallback read removed the record from Preferences");
+    // 2. Keychain refuses the write: Preferences takes it.
+    ({ vault, prefs } = load({ get: async () => ({ value: null }), set: async () => { throw new Error("keychain write failed: -34018"); }, remove: async () => {} }));
+    await vault.set("config", JSON.stringify({ token: "new" }));
+    assert(JSON.parse(prefs.get("config")).token === "new", "a refused Keychain write was lost");
+    // 3. Healthy Keychain: the first read migrates Preferences into it and clears Preferences.
+    const kc = new Map();
+    ({ vault, prefs } = load({ get: async ({ key }) => ({ value: kc.has(key) ? kc.get(key) : null }), set: async ({ key, value }) => { kc.set(key, value); }, remove: async ({ key }) => { kc.delete(key); } }));
+    const m = await vault.get("config");
+    assert(m && JSON.parse(m).token === "t.o.k" && kc.has("config") && !prefs.has("config"), "a healthy Keychain did not take over the record on first read");
+    return "refused read -> Preferences (kept); refused write -> Preferences; healthy -> migrated once";
+  });
+
+  await check("the share inbox reads the App Group natively and never switches the Preferences group", async () => {
+    // The Capacitor Preferences plugin never opens a UserDefaults suite: its
+    // "group" is a key prefix on the standard defaults, and configure() swaps
+    // one shared instance. So the extension's note is read in Swift, and the
+    // two sides must agree on the suite and the key.
+    const inbox = read("mobile/src/share-inbox.js");
+    const vaultSwift = read("mobile/ios/App/App/CroweVault.swift");
+    const shareSwift = read("mobile/ios/App/CroweShare/ShareViewController.swift");
+    assert(/Vault\.takeShared\(\)/.test(inbox), "share-inbox.js must read the note through CroweVault.takeShared");
+    assert(!/Preferences\.configure/.test(inbox), "share-inbox.js must never call Preferences.configure");
+    assert(/name: "takeShared"/.test(vaultSwift) && /UserDefaults\(suiteName: shareGroup\)/.test(vaultSwift), "CroweVault.swift must declare takeShared over the App Group suite");
+    const group = /shareGroup = "([^"]+)"/.exec(vaultSwift), key = /shareKey = "([^"]+)"/.exec(vaultSwift);
+    assert(group && shareSwift.includes(`"${group[1]}"`), "the extension and the vault name different App Groups");
+    assert(key && shareSwift.includes(`"${key[1]}"`), "the extension and the vault name different keys");
+    assert(/removeObject\(forKey: shareKey\)/.test(vaultSwift), "takeShared must remove the note as it reads it");
+    return `${group[1]} / ${key[1]}, read natively, removed on read`;
+  });
+
+  await check("the speaker reads the Reply voice setting, keeps the phone's voice off the network, and notes what spoke", async () => {
+    // speak.js and the Settings row share one key in localStorage; nothing in
+    // the bridge carries the preference, so the contract is held here in text.
+    const speak = read("mobile/src/speak.js"), ui = read("mobile/src/mobile-ui.js");
+    assert(/localStorage\.getItem\("crowe-reply-voice"\)/.test(speak), "speak.js must read crowe-reply-voice");
+    assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
+    assert(/\["michael", "neural", "phone"\]/.test(speak) && /VOICES = \["michael", "neural", "phone"\]/.test(ui), "the two sides must agree on the three voices");
+    assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
+    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
+    return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
+  });
+
   await check("a streamed turn with a tool call emits the events the UI reads", async () => {
     const bridge = loadMobileSurface(fakeGateway([
       // Round one: a little prose, then a call to write the flush down.
@@ -420,7 +482,7 @@ function methodPaths(surface) {
     assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
       && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
       `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
-    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    assert(/Follow the user's question, not an assumed industry or task/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
     const route = seen.find((e) => e.type === "route");
     assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
     const photos = seen.find((e) => e.type === "photos");

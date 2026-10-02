@@ -83,7 +83,11 @@ function loadWebSurface({ fetchImpl, seedConfig, rooms = true, location } = {}) 
   // app.html loads rooms-web.js ahead of the bridge; do the same here so the
   // bridge sees the engine the way a browser tab does. `rooms:false` is the
   // old-app.html case, where the surface must still answer.
-  if (rooms) new Function("window", read("renderer/rooms-web.js"))(win);
+  if (rooms) {
+    new Function("window", read("renderer/rooms-web.js"))(win);
+    new Function("window", read("renderer/council.js"))(win);
+    new Function("window", "setInterval", read("renderer/rooms-local.js"))(win, () => 0);
+  }
   new Function(...Object.keys(sandbox), read("renderer/web-bridge.js"))(...Object.values(sandbox));
   assert(win.crowe, "web-bridge.js did not install window.crowe");
   return { crowe: win.crowe, store, win };

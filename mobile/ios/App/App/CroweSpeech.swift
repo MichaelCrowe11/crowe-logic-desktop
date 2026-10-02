@@ -83,6 +83,9 @@ public class CroweSpeech: CAPPlugin, CAPBridgedPlugin {
             }
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = call.getBool("partialResults") ?? true
+            // On-device when this phone and language can, so dictation does not
+            // leave the device; Apple's server otherwise, as the usage string says.
+            if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
             self.request = request
 
             let input = self.audioEngine.inputNode

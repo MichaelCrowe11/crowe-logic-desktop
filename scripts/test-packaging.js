@@ -103,5 +103,87 @@ check("the preview harness and the web build are excluded, not shipped", () => {
   return excluded.map((f) => f.replace("renderer/", "")).join(", ");
 });
 
+check("the developer edition config narrows the app and changes nothing else", () => {
+  // Built from package.json's build section by require, so anything it does
+  // not name is the full app's. electron-builder never runs here; this is the
+  // cheap proof that the file loads and says what dist:developers relies on.
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  assert(dev.appId === `${pkg.build.appId}.developers`, `appId is ${dev.appId}`);
+  assert(dev.productName === "Crowe Logic for Developers" && dev.extraMetadata.productName === dev.productName,
+    "productName must be set on the config and in extraMetadata");
+  assert(JSON.stringify(dev.extraMetadata.croweSpaces) === '["chat","projects"]',
+    `croweSpaces is ${JSON.stringify(dev.extraMetadata.croweSpaces)}`);
+  assert(/-developers-/.test(dev.artifactName) && /-developers-/.test(dev.mac.artifactName), "artifactName does not mark the edition");
+  assert(dev.publish.every((p) => p.channel === "developers"), "the edition shares the full app's update channel");
+  // The feeds live under the edition's own prefix, beside the full app's rather
+  // than in its channel directory, so the url has to end there too.
+  assert(dev.publish.every((p) => p.url === pkg.build.publish[0].url.replace("/desktop/channel/", "/desktop/developers/channel/")),
+    `the edition's feed url is not under desktop/developers/: ${JSON.stringify(dev.publish.map((p) => p.url))}`);
+  assert(dev.directories.output !== pkg.build.directories.output, "the edition shares the full app's output directory");
+  assert(JSON.stringify(dev.files) === JSON.stringify(pkg.build.files) && dev.mac.identity === pkg.build.mac.identity
+    && dev.afterPack === pkg.build.afterPack && dev.afterSign === pkg.build.afterSign, "the edition drifted from package.json");
+  return `${dev.appId}, ${dev.directories.output}/`;
+});
+
+check("the developer edition installs beside the full app on Linux", () => {
+  // The deb is named after deb.packageName, falling back to package.json's
+  // name (app-builder-lib/out/targets/FpmTarget.js, computeFpmMetaInfoOptions);
+  // the binary, the /usr/bin symlink, the .desktop file and the icons after
+  // linux.executableName, falling back to that name lowercased
+  // (app-builder-lib/out/linuxPackager.js). The full app sets neither, so both
+  // of its names are crowe-logic-desktop, and an edition that also set neither
+  // would replace it on `apt install`. Worked out here the way app-builder-lib
+  // does, so the check still holds if the full app names them one day.
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  const devName = (dev.extraMetadata && dev.extraMetadata.name) || pkg.name;
+  const fullPackage = (pkg.build.deb && pkg.build.deb.packageName) || pkg.name;
+  const fullExe = (pkg.build.linux && pkg.build.linux.executableName) || pkg.build.executableName || pkg.name.toLowerCase();
+  const devPackage = (dev.deb && dev.deb.packageName) || devName;
+  const devExe = (dev.linux && dev.linux.executableName) || dev.executableName || devName.toLowerCase();
+  assert(devPackage !== fullPackage, `both editions' deb package is named ${fullPackage}`);
+  assert(devExe !== fullExe, `both editions' Linux executable is named ${fullExe}`);
+  assert(/^[a-z0-9][a-z0-9+.-]+$/.test(devPackage), `${devPackage} is not a valid Debian package name`);
+  assert(JSON.stringify(dev.linux.target) === JSON.stringify(pkg.build.linux.target)
+    && JSON.stringify(dev.deb.depends) === JSON.stringify(pkg.build.deb.depends), "the edition's Linux config drifted from package.json");
+  return `${devPackage} beside ${fullPackage}, ${devExe} beside ${fullExe}`;
+});
+
+check("the DMG stapler finds each edition's artifacts and feed from its config", () => {
+  // staple-dmg.js patches the update feed by name after stapling. The developer
+  // edition writes developers-mac.yml into release-developers/, so a stapler
+  // fixed on latest-mac.yml in release/ would staple the DMG and then throw
+  // with the feed unpatched. Both editions are resolved here without running
+  // xcrun; the default has to come out exactly as build:mac has always run it.
+  const { target } = require(path.join(root, "scripts", "staple-dmg.js"));
+  const dev = require(path.join(root, "electron-builder.developer.js"));
+  const plain = target(["node", "staple-dmg.js"]);
+  assert(plain.dir === path.resolve(root, "release") && plain.feed === "latest-mac.yml",
+    `default resolves to ${plain.dir} / ${plain.feed}`);
+  const named = target(["node", "staple-dmg.js", "release"]);
+  assert(named.dir === plain.dir && named.feed === plain.feed, "the positional directory changed the default");
+  const edition = target(["node", "staple-dmg.js", "--config", path.join(root, "electron-builder.developer.js")]);
+  assert(edition.dir === path.resolve(root, dev.directories.output), `edition resolves to ${edition.dir}`);
+  assert(edition.feed === `${dev.publish[0].channel}-mac.yml`, `edition feed is ${edition.feed}`);
+  return `${path.basename(plain.dir)}/${plain.feed}, ${path.basename(edition.dir)}/${edition.feed}`;
+});
+
+check("the phone bundle carries every script and stylesheet the shell loads", () => {
+  // The same mistake one layer down. build-www.js copies an allowlist into
+  // mobile/www and rewrites index.html; a <script> tag added to the shell
+  // without a COPY line shipped as a 404 on the phone with every desktop test
+  // green, three times in one week. The build now reads its own page back and
+  // throws on a reference it did not copy. Requiring the script runs the build
+  // (www/ is generated and git-ignored) and with it that guard.
+  const script = path.join(root, "mobile", "scripts", "build-www.js");
+  delete require.cache[require.resolve(script)];
+  require(script);
+  const html = fs.readFileSync(path.join(root, "mobile", "www", "index.html"), "utf8");
+  const refs = [...html.matchAll(/<(?:script\b[^>]*\ssrc|link\b[^>]*\shref)="([^"?]+\.(?:m?js|css))/g)].map((m) => m[1]);
+  assert(refs.length >= 10, `only ${refs.length} local script and stylesheet tags in the built page`);
+  const gone = refs.filter((r) => !fs.existsSync(path.join(root, "mobile", "www", r)));
+  assert(gone.length === 0, `built page names files not in www: ${gone.join(", ")}`);
+  return `${refs.length} references, every one a file in mobile/www`;
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall packaging checks passed");
 process.exit(failures ? 1 : 0);

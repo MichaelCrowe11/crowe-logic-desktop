@@ -373,6 +373,20 @@
   }
   window.__croweNeedsKeyboard = needsKeyboard;
 
+  /* One question, asked the same way everywhere a person stands between the
+     agent and a consequence. mobile-ui.js draws it as a sheet that names the
+     machine, the tier and the exact text; without the UI (tests, a desktop
+     browser) it degrades to the system confirm with the same words. */
+  function dismissApprovals() { try { window.__croweApproveDismiss && window.__croweApproveDismiss(); } catch { /* no sheet UI */ } }
+
+  async function approve(spec) {
+    if (typeof window.__croweApprove === "function") {
+      try { return Boolean(await window.__croweApprove(spec)); } catch { /* fall through to the plain prompt */ }
+    }
+    return window.confirm([spec.title, spec.reason, spec.detail, spec.question].filter(Boolean).join("\n\n"));
+  }
+  const machineName = () => { try { return new URL(remoteBase()).hostname.split(".")[0]; } catch { return "your computer"; } };
+
   function persistenceRisk(text) {
     const s = String(text || "");
     for (const [re, why] of PERSISTENCE) if (re.test(s)) return why;
@@ -434,6 +448,30 @@
       return note;
     } finally { takingIntent = false; }
   }
+  /* Where a pairing may point. The token rides every request as a bearer header
+     and the requests are shell commands, so cleartext is allowed only where the
+     network itself is private: the tailnet (WireGuard underneath), the LAN, and
+     .local. Anything else must be https. Parsed with URL rather than a regex so
+     "http://100.64.0.1@evil.example" is judged by its real host, and the host
+     — not the raw string — is what the confirm shows. */
+  function pairAddress(raw) {
+    let u;
+    try { u = new URL(String(raw || "").trim()); } catch { return { error: "that is not a web address" }; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "the address needs http:// or https://" };
+    if (u.username || u.password) return { error: "a pairing address cannot carry a user name" };
+    const host = u.hostname.toLowerCase();
+    const ip = host.split(".").map(Number);
+    const v4 = ip.length === 4 && ip.every((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+    const privateNet = host.endsWith(".ts.net") || host.endsWith(".local") || host === "localhost" ||
+      (v4 && (ip[0] === 10 || ip[0] === 127 || (ip[0] === 192 && ip[1] === 168) ||
+              (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31) || (ip[0] === 100 && ip[1] >= 64 && ip[1] <= 127)));
+    if (u.protocol === "http:" && !privateNet) {
+      return { error: `${host} is on the open internet, so pairing needs https. Tailscale and home-network addresses may use http.` };
+    }
+    return { url: `${u.protocol}//${u.host}`, host: u.host };
+  }
+  window.__crowePairAddress = pairAddress;
+
   function pairFromUrl(rawUrl) {
     const url = String(rawUrl || "");
     if (!/^com\.crowelogic\.mobile:\/\/pair\b/i.test(url)) return false;
@@ -443,14 +481,17 @@
       host = String(q.get("url") || "").trim().replace(/\/$/, "");
       token = String(q.get("token") || "");
     } catch { return false; }
-    if (!/^https?:\/\//i.test(host)) return false;
+    const where = pairAddress(host);
     (async () => {
       await ready;
-      const ok = window.confirm(
-        `Pair this phone with ${host}?\n\n` +
-        "It will be able to read files, write files and run shell commands there, " +
-        "as the tier you choose allows.\n\nOnly continue if you started this."
-      );
+      if (where.error) { window.alert(`This pairing code was not used: ${where.error}`); return; }
+      host = where.url;
+      const ok = await approve({
+        kind: "pair", title: `Pair with ${where.host}?`,
+        reason: "This phone will be able to read files, write files and run commands there, as far as the tier you choose allows. The computer can revoke it at any time.",
+        detail: where.url, question: "Only continue if you started this from your own computer.",
+        confirm: "Pair this phone",
+      });
       if (!ok) return;
       await saveConfig({ remoteUrl: host, remoteToken: token });
       announceRemote();
@@ -863,18 +904,12 @@
   const FREE_MODEL = "crowelm-flash";
   // Photos go here, whatever the words routed to. Same id the catalog serves.
   const VISION_MODEL = "crowelm-vision";
-  const PHOTO_DEFAULT_ASK = "Look at this photo. Is this contamination, and what should I do?";
+  const PHOTO_DEFAULT_ASK = "Describe this photo and explain the details relevant to my question.";
   const VISION_BRIEF = [
-    "A photo taken on this phone is attached to the user's message. Describe what is actually visible first:",
-    "the substrate or agar, the mycelium's color and texture, any discoloration, wet or slimy patches, pins or",
-    "fruit bodies. Then assess: healthy, or contamination and which kind (green Trichoderma, cobweb mold,",
-    "bacterial blotch or wet spot, black pin mold, yellow metabolite staining), where on the block or plate,",
-    "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
-    "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
-    "Offer to log the finding with log_grow when the tier allows it.",
-    "Begin with exactly one line of the form REGIONS: [{\"label\": \"...\", \"x\": 0.1, \"y\": 0.2, \"w\": 0.3, \"h\": 0.2}] naming up to",
-    "four areas of the photo you examined, x y w h as fractions of the image width and height from the top left, then a",
-    "blank line, then the answer. The line drives the phone's display of what you looked at; never refer to it in the answer.",
+    "Describe what is actually visible in the attached photo. Follow the user's question, not an assumed industry or task.",
+    "Distinguish observation from inference, state uncertainty, and do not invent text or details that are not legible.",
+    'Begin with exactly one line REGIONS: [{"label":"...","x":0.1,"y":0.2,"w":0.3,"h":0.2}] naming up to four relevant areas.',
+    "Coordinates are fractions of image dimensions from the top left. Follow with a blank line and the answer; do not mention the display data.",
   ].join("\n");
   /* The REGIONS line is display data, not prose. It is lifted out of the
      stream before the transcript sees a character of it and handed to the UI
@@ -1159,8 +1194,8 @@
   // write. Plan and Read look at the log; Edit and Execute may add to it.
   const mayWrite = () => config.autonomy === "edit" || config.autonomy === "execute";
   function toolsForTurn() {
-    const tools = [READ_GROW, OPEN_URL];
-    if (mayWrite() && Object.keys(GROW.GROW_SCHEMA).length) tools.push(growToolSpec());
+    const tools = [OPEN_URL];
+
     /* The tier ladder means the same thing here as it does on the desktop, and
        it is the whole safety story for a shell you are carrying in a pocket:
          plan:     nothing on the machine, not even a read
@@ -1233,7 +1268,10 @@
          reached without a person seeing where it goes. */
       let host = url;
       try { host = new URL(url).host; } catch { /* shown in full below instead */ }
-      const ok = window.confirm(`Open ${host}?\n\n${url.slice(0, 300)}\n\nThe agent asked for this. Check the address if you did not expect it.`);
+      const ok = await approve({
+        kind: "open", title: `Open ${host}?`, reason: "The agent asked to open this page. Check the address if you did not expect it.",
+        detail: url.slice(0, 300), confirm: "Open page",
+      });
       if (!ok) return { text: `refused: the user declined to open ${host}`, status: "error" };
       const Browser = plugin("Browser");
       if (Browser) await Browser.open({ url }).catch(() => {});
@@ -1280,7 +1318,10 @@
         const command = String(args.command || "").trim();
         if (!command) return { text: "refused: no command given", status: "error" };
         const why = persistenceRisk(command);
-        if (why && !window.confirm(`This ${why}.\n\n${command.slice(0, 300)}\n\nRun it on ${remoteBase()}?`)) {
+        if (why && !(await approve({
+          kind: "run", danger: true, title: `Run this on ${machineName()}?`, reason: `This ${why}.`,
+          detail: command.slice(0, 600), machine: remoteBase(), tier: config.autonomy, confirm: "Run command",
+        }))) {
           return { text: `refused: the user declined a command that ${why}`, status: "error" };
         }
         const timeout = Math.max(1, Math.min(600, Number(args.timeout) || 60));
@@ -1307,7 +1348,10 @@
       const path = String(args.path || "");
       if (!path) return { text: "refused: no path given", status: "error" };
       const risk = persistenceRisk(path);
-      if (risk && !window.confirm(`Writing this file ${risk}.\n\n${path}\n\nWrite it on ${remoteBase()}?`)) {
+      if (risk && !(await approve({
+        kind: "write", danger: true, title: `Write this file on ${machineName()}?`, reason: `Writing it ${risk}.`,
+        detail: path, machine: remoteBase(), tier: config.autonomy, confirm: "Write file",
+      }))) {
         return { text: `refused: the user declined a write that ${risk}`, status: "error" };
       }
       const r = await remoteCall("/write_file", { path, content: String(args.content ?? "") }, "the write");
@@ -1363,11 +1407,9 @@
       attached,
       route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
       "",
-      "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
-      "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
-      "journal must come from read_grow, not from memory.",
+      "Use available tools only. Separate advice, proposed actions, executed actions, and verified results. Never claim a file changed or a command ran without its tool result.",
       "",
-      "Write for a small screen held in one hand, often in a grow room: short paragraphs, the answer first,",
+      "Write for a small screen held in one hand: short paragraphs, the answer first,",
       "no long tables, no ASCII diagrams. Give the number or the action before the reasoning.",
       route.expert && route.expert !== "operator" ? `You are answering as the ${route.expert} expert.` : "",
       user && user.email ? `The signed-in user is ${user.email}.` : "",
@@ -1457,7 +1499,7 @@
         diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
       emit({ ...ev, agentId: id });
     };
-    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
+    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: currentUser() ? "signed in" : "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
     const budget = Number(config.turnBudgetUsd) > 0 ? Number(config.turnBudgetUsd) : 0;
     let text = "";
@@ -1579,16 +1621,24 @@
           send({ type: "final", note: "answered" }); return { done: true, text };
         }
 
+        // Every call gets an id and every id gets an answer, even when Stop lands
+        // mid-round: a tool_call with no tool result is a conversation the
+        // provider rejects outright, which is how a stopped turn used to brick
+        // the ones after it.
+        calls.forEach((c, i) => { if (!c.id) c.id = `call_${round}_${i}_${Math.random().toString(36).slice(2, 8)}`; });
         convo.push({ role: "assistant", content: r.content || "", tool_calls: calls });
         for (const call of calls) {
-          if (run.aborted) break;
+          if (run.aborted) {
+            convo.push({ role: "tool", tool_call_id: call.id, name: call.function?.name || "", content: "cancelled: the user stopped the turn before this ran" });
+            continue;
+          }
           const name = call.function?.name || "";
           let args = {};
           try { args = JSON.parse(call.function?.arguments || "{}"); } catch { args = {}; }
           send({ type: "tool_call", name, args });
           const out = await execTool(name, args);
           send({ type: "tool_result", name, result: String(out.text).slice(0, TOOL_RESULT_MAX), status: out.status });
-          convo.push({ role: "tool", tool_call_id: call.id || name, name, content: String(out.text).slice(0, TOOL_RESULT_MAX) });
+          convo.push({ role: "tool", tool_call_id: call.id, name, content: String(out.text).slice(0, TOOL_RESULT_MAX) });
         }
       }
       send({ type: "final", note: `stopped after ${MAX_ROUNDS} rounds` });
@@ -1731,7 +1781,10 @@
         return;
       }
       const risky = persistenceRisk(command);
-      if (risky && !window.confirm(`This ${risky}.\n\n${command.slice(0, 300)}\n\nRun it?`)) {
+      if (risky && !(await approve({
+        kind: "run", danger: true, title: `Run this on ${machineName()}?`, reason: `This ${risky}.`,
+        detail: command.slice(0, 600), machine: remoteBase(), tier: config.autonomy, confirm: "Run command",
+      }))) {
         return write("cancelled", "term-console-note");
       }
       const head = needsKeyboard(command);
@@ -1848,7 +1901,7 @@
   const noop = () => () => {};
   window.crowe = promisify({
     // Every space ships on mobile; the phone chrome decides how they are reached.
-    installSpaces: null,
+    installSpaces: ["home", "chat", "projects"],
     /* Also the flag renderer.js branches on: it is the one part of the bridge
        that exists before any class is put on the body, so a panel deck mounting
        during init can still tell which shell it is in. */
@@ -1879,12 +1932,25 @@
         // A call with no messages answers, it does not reject: an unhandled
         // rejection is a console error in the WebView and a crash in Node.
         if (!Array.isArray(messages)) return { done: false, error: "nothing to send", text: "" };
-        const result = await runAgent(messages.slice(), String(id || "main"), options || {});
+        // Saved before the turn, so a phone that iOS kills mid-reply still has
+        // the question when it comes back.
+        if (id === "main") { try { await persistSession(messages); } catch { /* not worth failing a turn over */ } }
+        let result;
+        try {
+          result = await runAgent(messages.slice(), String(id || "main"), options || {});
+        } catch (e) {
+          const text = `This turn hit an error and stopped: ${String(e && e.message || e).slice(0, 200)}`;
+          diag("run:threw", text);
+          emit({ type: "error", text, agentId: String(id || "main") });
+          emit({ type: "final", note: "error", agentId: String(id || "main") });
+          result = { done: false, error: text, text: "" };
+        }
         if (id === "main") { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
         return { done: Boolean(result.done), text: result.text || "", error: result.error };
       },
-      stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
-      stopAll: () => { for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true, stopped: runs.size }; },
+      // A question about a turn that has stopped is answered "no" for it.
+      stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true, stopped: runs.size }; },
       onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
@@ -1892,7 +1958,29 @@
     intents: { take: takePendingIntent },
     auth: {
       login: signIn,
-      logout: async () => { await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config); return { ok: true }; },
+      /* Signing out leaves nothing the next person holding the phone could use:
+         the refresh token is revoked at Crowe ID (best effort; a phone offline
+         still forgets it locally), and the paired machine, provider keys,
+         conversations and diagnostics go with it. The grower's own records stay —
+         they are farm data, not account credentials. */
+      logout: async () => {
+        const refresh = config.refreshToken;
+        if (refresh) {
+          const body = new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }).toString();
+          const url = `${CROWE_ID}/protocol/openid-connect/revoke`;
+          const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+          try { if (CapHttp) await nativePost(url, headers, body); else await fetch(url, { method: "POST", headers, body }); }
+          catch { /* offline: the local copy is still forgotten below */ }
+        }
+        for (const id of (await sessionIndex()).map((x) => x.id)) { try { await store.remove(`session:${id}`); } catch { /* gone */ } }
+        try { await store.remove("sessions"); await store.remove("diag"); } catch { /* gone */ }
+        diagBuf = null;
+        currentSession = null;
+        config.token = "";
+        await saveConfig({ refreshToken: "", remoteUrl: "", remoteToken: "", keys: {} });
+        announceRemote();
+        return { ok: true };
+      },
       /* App Store guideline 5.1.1(v): an account a person can create in the app
          must be one they can delete from the app. The deletion itself lives on
          the Crowe ID account page (Keycloak's delete_account action), so the
@@ -2042,8 +2130,12 @@
       status: async () => { await ready; return remoteStatus(); },
       pair: async ({ url, token } = {}) => {
         await ready;
-        const clean = String(url || "").trim().replace(/\/$/, "");
-        if (clean && !/^https?:\/\//i.test(clean)) return { error: "the address needs http:// or https://" };
+        let clean = String(url || "").trim().replace(/\/$/, "");
+        if (clean) {
+          const where = pairAddress(clean);
+          if (where.error) return { error: where.error };
+          clean = where.url;
+        }
         const patch = { remoteUrl: clean };
         // Same rule Settings uses for the Crowe ID token: blank means keep the
         // current one, so re-saving the address does not silently unpair.
@@ -2052,6 +2144,16 @@
         await saveConfig(patch);
         announceRemote();
         return { ok: true, ...(await remoteStatus()) };
+      },
+      // This phone's receipts from the paired machine: what it ran, read,
+      // wrote, and was refused. Read-only, and the machine filters to this
+      // device's own lines.
+      activity: async (limit = 30) => {
+        await ready;
+        if (!remoteBase()) return { error: "no machine is paired" };
+        const r = await remoteCall("/audit", { limit }, "activity");
+        if (r.error) return /no \/audit endpoint/.test(r.error) ? { error: "Update Crowe Logic on your computer to see its activity here.", outdated: true } : r;
+        return { ok: true, device: (r.data && r.data.device) || "", entries: (r.data && r.data.entries) || [] };
       },
       run: async (command, cwd) => {
         await ready;
@@ -2136,6 +2238,19 @@
       commit: () => ({ error: NO_WORKSPACE() }), log: () => [], branches: () => [],
       checkout: () => ({ error: NO_WORKSPACE() }), pull: () => ({ error: NO_WORKSPACE() }),
       push: () => ({ error: NO_WORKSPACE() }),
+    },
+    // Local checkouts live on the desktop, and so does the GitHub plugin's
+    // token. The phone lists none and says why, in git's own shapes.
+    repos: {
+      recent: async () => [],
+      open: async () => ({ error: NO_WORKSPACE() }),
+      pick: async () => ({ error: NO_WORKSPACE() }),
+      forget: async () => ({ ok: true }),
+      remote: async () => ({ cwd: "", repo: false, remote: null, error: NO_WORKSPACE() }),
+      githubStatus: async () => ({ configured: false }),
+      githubRepos: async () => ({ configured: false, repos: [], error: NO_WORKSPACE() }),
+      githubWork: async () => ({ configured: false, error: NO_WORKSPACE() }),
+      clone: async () => ({ error: NO_WORKSPACE() }),
     },
 
     sessions: {
@@ -2314,19 +2429,16 @@
        a TypeError at a tap. Every method answers in the shape its caller
        expects - a list is an empty list, an action is a stated reason - which
        is the same contract the plugin and git refusals above keep. */
-    rooms: {
-      agents: async () => ({ agents: [], templates: [] }),
-      list: async () => [],
-      create: async () => ({ error: ROOMS_OFF }),
-      load: async () => ({ error: ROOMS_OFF }),
-      delete: async () => ({ ok: true }),
-      join: async () => ({ error: ROOMS_OFF }),
-      leave: async () => ({ error: ROOMS_OFF }),
-      setAgentModel: async () => ({ error: ROOMS_OFF }),
-      say: async () => ({ error: ROOMS_OFF }),
-      critique: async () => ({ error: ROOMS_OFF }),
-      revise: async () => ({ error: ROOMS_OFF }),
-      project: async () => ({ calls: 0, agents: 0, note: ROOMS_OFF }),
+    rooms: window.CroweLocalRooms && window.CroweRooms ? window.CroweLocalRooms.create({
+      read: async () => (await store.get("rooms")) || [],
+      write: async records => { if (!await store.set("rooms", records)) throw new Error("Room storage could not be saved. Autopilot stopped."); },
+      catalog: async () => { await ready; if (config.token && !catalogCache.models.length) await fetchCatalog(); return catalogCache.models; },
+      chat: async (model, messages, signal) => gatewayChat(messages, [], signal, model),
+      emit,
+    }) : {
+      agents: async () => ({ agents: [], templates: [] }), list: async () => [],
+      create: async () => ({ error: "Room engine is missing; rebuild the mobile payload." }),
+      onChanged: () => () => {}, onOpen: () => () => {},
     },
 
     keys: {
@@ -2385,7 +2497,7 @@
           platform: PLATFORM === "ios" ? "iOS" : PLATFORM === "android" ? "Android" : "browser",
         };
       },
-      stopAll: () => { for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
     },
 
     getConfig: async () => { await ready; return publicConfig(); },

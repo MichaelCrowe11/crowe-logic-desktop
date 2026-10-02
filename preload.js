@@ -82,6 +82,22 @@ contextBridge.exposeInMainWorld("crowe", {
     pull: () => ipcRenderer.invoke("crowe:git:pull"),
     push: () => ipcRenderer.invoke("crowe:git:push"),
   },
+  /* Repositories: the folders this app has opened, and what GitHub knows about
+     the ones the plugin's token can see. `open` and `pick` change the
+     workspace the way Settings does and record it; `clone` is a shell action
+     and passes the same approval gate the agent's run_shell does. Reads only
+     on the GitHub side: the token stays in main. */
+  repos: {
+    recent: () => ipcRenderer.invoke("crowe:repos:recent"),
+    open: (path) => ipcRenderer.invoke("crowe:repos:open", { path }),
+    pick: () => ipcRenderer.invoke("crowe:repos:pick"),
+    forget: (path) => ipcRenderer.invoke("crowe:repos:forget", { path }),
+    remote: () => ipcRenderer.invoke("crowe:repos:remote"),
+    githubStatus: () => ipcRenderer.invoke("crowe:repos:github-status"),
+    githubRepos: () => ipcRenderer.invoke("crowe:repos:github-repos"),
+    githubWork: (owner, name) => ipcRenderer.invoke("crowe:repos:github-work", { owner, name }),
+    clone: (owner, name) => ipcRenderer.invoke("crowe:repos:clone", { owner, name }),
+  },
   // Conversation history (persisted on disk in the main process).
   sessions: {
     list: () => ipcRenderer.invoke("crowe:sessions:list"),
@@ -97,6 +113,9 @@ contextBridge.exposeInMainWorld("crowe", {
      them, and `say` is the only one that spends money without being asked to -
      which is why `project` exists to price a round before it runs. */
   rooms: {
+    councilState: (id) => ipcRenderer.invoke("crowe:rooms:council-state", { id }),
+    councilStart: (id, spec) => ipcRenderer.invoke("crowe:rooms:council-start", { id, spec }),
+    councilStop: (id, revoke = false) => ipcRenderer.invoke("crowe:rooms:council-stop", { id, revoke }),
     agents: () => ipcRenderer.invoke("crowe:rooms:agents"),
     list: () => ipcRenderer.invoke("crowe:rooms:list"),
     create: (opts) => ipcRenderer.invoke("crowe:rooms:create", opts || {}),
@@ -109,6 +128,22 @@ contextBridge.exposeInMainWorld("crowe", {
     critique: (id) => ipcRenderer.invoke("crowe:rooms:critique", { id }),
     revise: (id) => ipcRenderer.invoke("crowe:rooms:revise", { id }),
     project: (id, kind) => ipcRenderer.invoke("crowe:rooms:project", { id, kind }),
+    // A room as a standing colleague: its brief and title, the read mark that
+    // clears the rail's dot, a tap on one of a seat's options, a message carried
+    // into another room, and the routines that let it speak first.
+    update: (id, patch) => ipcRenderer.invoke("crowe:rooms:update", { id, patch: patch || {} }),
+    markRead: (id) => ipcRenderer.invoke("crowe:rooms:mark-read", { id }),
+    answer: (id, messageId, optionId) => ipcRenderer.invoke("crowe:rooms:answer", { id, messageId, optionId }),
+    react: (id, messageId, kind) => ipcRenderer.invoke("crowe:rooms:react", { id, messageId, kind }),
+    forward: (fromId, messageId, toId, to) => ipcRenderer.invoke("crowe:rooms:forward", { fromId, messageId, toId, to: to || null }),
+    routineAdd: (id, spec) => ipcRenderer.invoke("crowe:rooms:routine-add", { id, spec: spec || {} }),
+    routineUpdate: (id, routineId, patch) => ipcRenderer.invoke("crowe:rooms:routine-update", { id, routineId, patch: patch || {} }),
+    routineRemove: (id, routineId) => ipcRenderer.invoke("crowe:rooms:routine-remove", { id, routineId }),
+    routineRun: (id, routineId) => ipcRenderer.invoke("crowe:rooms:routine-run", { id, routineId }),
+    // Main owns rooms and every window subscribes: a routine that posts with no
+    // panel open still moves the rail, and a notification click opens the room.
+    onChanged: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:changed", h); return () => ipcRenderer.removeListener("crowe:rooms:changed", h); },
+    onOpen: (cb) => { const h = (_e, ev) => cb(ev); ipcRenderer.on("crowe:rooms:open", h); return () => ipcRenderer.removeListener("crowe:rooms:open", h); },
   },
   // Cultivation records — blocks, flushes, contamination, environment, strains,
   // recipes, grow log. Persisted on disk in the main process, like sessions.

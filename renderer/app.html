@@ -33,9 +33,10 @@
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)" />
   <title>Crowe Logic</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css?v=1788786753000" />
   <!-- The phone layer, after the desktop sheet and never editing it. Its
@@ -47,6 +48,7 @@
        styles at runtime, and this is what lets them do it under the policy
        above. -->
   <script src="adopted-styles.js?v=1788786753000"></script>
+  <link rel="stylesheet" href="council.css" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -66,19 +68,19 @@
        still lifts and the shell underneath is whatever the app managed to
        render. JS only fills in the animated logotype and removes the node. -->
   <div id="launch" aria-hidden="true">
+    <div class="launch-identity"><svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
     <span class="lockup launch-mark"><span class="lockup-ink" aria-hidden="true"></span></span>
+    </div>
   </div>
 
   <header id="bar">
     <button id="sidebar-toggle" class="bar-icon" title="Toggle sidebar (Cmd+B)" aria-label="Toggle sidebar" aria-expanded="true" aria-controls="sidebar">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
     </button>
-    <!-- The logotype, not the name set in a font. The spore is the tittle of
-         the i, so the mark is inside the word and does not need to sit beside
-         it - which is why the separate #mark span that used to live here is
-         gone. The animated mark still speaks, but as a spinner and as an agent
-         avatar, where movement means something. -->
+    <!-- Gate Glyph beside the original custom wordmark. -->
+    <span class="header-identity"><svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
     <span class="lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></span>
+    </span>
     <span class="ws-sep" aria-hidden="true"></span>
     <span id="ws-path" class="ws-path" title="Workspace folder"></span>
     <div class="spacer"></div>
@@ -136,7 +138,7 @@
         <button class="sn-item" data-lane="sessions">Sessions</button>
         <span class="sn-group">Work</span>
         <button class="sn-item" data-lane="deepwork">Deep work</button>
-        <span class="sn-group">Models</span>
+        <span class="sn-group">Engines</span>
         <button class="sn-item" data-lane="training">Training</button>
         <button class="sn-item" data-lane="evals">Evals</button>
         <button class="sn-item" data-lane="deployments">Deployments</button>
@@ -172,10 +174,10 @@
            same place: a room closed with its panel was otherwise reachable
            only by remembering it existed. -->
       <aside id="rooms-drawer" class="drawer">
-        <div class="drawer-head"><span>Rooms</span><button id="room-new" class="side-icon" title="Open a room">
+        <div class="drawer-head"><span>Messages</span><button id="room-new" class="side-icon" title="New message">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </button></div>
-        <div id="room-list" class="sess-list"></div>
+        <div id="room-list" class="sess-list msg-list"></div>
       </aside>
 
       <div class="side-foot">
@@ -205,7 +207,7 @@
           <div class="card"><div class="card-h">Recent sessions</div><div id="home-sessions" class="card-b"></div></div>
           <div class="card"><div class="card-h">Who answers what</div><div id="home-routing" class="card-b"></div></div>
           <div class="card"><div class="card-h">Gateway</div><div id="home-gateway" class="card-b"></div></div>
-          <div class="card"><div class="card-h">Models</div><div id="home-models" class="card-b"></div></div>
+          <div class="card"><div class="card-h">Engines</div><div id="home-models" class="card-b"></div></div>
         </div>
         <div class="surface-status">
           <span id="ss-gw"><span class="ss-dot"></span>gateway</span>
@@ -253,12 +255,8 @@
         </div>
         <div id="transcript">
           <div class="welcome">
-            <!-- The logotype, held still. This was a 104px mark animating at
-                 idle with the name retyped in Fraunces underneath: the hyphae
-                 turning under a wordmark reads as an animated novelty rather
-                 than as an identity, and the words below it were the third time
-                 the same name appeared on screen. The mark still moves where
-                 motion reports something - thinking glyphs and agent panels. -->
+            <!-- One standalone identity across every platform. -->
+            <svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
             <h1 class="welcome-logotype lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></h1>
             <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
             <div class="chips">
@@ -273,7 +271,7 @@
             <textarea id="input" rows="2" maxlength="50000" aria-label="Message Crowe Logic" aria-describedby="composer-help" placeholder="Describe the outcome, constraints, and checks..."></textarea>
             <div class="composer-foot">
               <div class="composer-mode">
-                <div id="autonomy" class="seg" role="group" aria-label="Autonomy: what the agent may do without asking" title="Autonomy: what the agent may do without asking">
+                <div id="autonomy" class="seg" role="group" aria-label="Operating envelope: what the agent may do without asking" title="Operating envelope: what the agent may do without asking">
                   <button type="button" class="seg-btn" data-tier="plan" aria-pressed="false">Plan</button>
                   <button type="button" class="seg-btn" data-tier="readonly" aria-pressed="false">Read</button>
                   <button type="button" class="seg-btn" data-tier="edit" aria-pressed="false">Edit</button>
@@ -309,6 +307,7 @@
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 12h5M16 9l3 3-3 3"/></svg>
           </button>
           <div id="dock-tabs" class="dock-tabs">
+            <button class="dock-tab" data-pane="activity" title="What the agent is doing right now">Activity</button>
             <button class="dock-tab" data-pane="git" title="Version control">Changes</button>
             <button class="dock-tab" data-pane="files" title="Files">Files</button>
             <button class="dock-tab" data-pane="output" title="Agent event stream">Output</button>
@@ -318,7 +317,7 @@
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
           <button id="glass-launcher" class="dock-icon agent-launch" type="button" title="Open a Crowe Logic CLI agent in the workspace" aria-label="Open Crowe Logic agent in workspace">
-            <img src="../assets/mark-simple.svg" alt="">
+            <span class="cl-mark" aria-hidden="true"></span>
           </button>
           <div class="spacer"></div>
           <span id="cwd" class="cwd"></span>
@@ -335,6 +334,16 @@
 
         <div class="pane legacy-pane-view" id="pane-files">
           <div id="files-tree"></div><pre id="files-view"></pre>
+        </div>
+        <div class="pane legacy-pane-view" id="pane-activity">
+          <div class="activity-head">
+            <label class="activity-follow" title="Bring the pane forward that shows what the agent is doing"><input type="checkbox" id="follow-agent" checked /> Follow the agent</label>
+            <span id="activity-status" class="activity-status">idle</span>
+            <button id="activity-clear" type="button" class="ghost sm" title="Clear the list">Clear</button>
+          </div>
+          <div id="activity-log" class="activity-log" aria-live="polite">
+            <div class="activity-empty">When the agent reads, edits, runs or opens something, it shows up here as it happens. Commands stream their output; landed edits open as a diff in Changes; pages open in the browser.</div>
+          </div>
         </div>
         <div class="pane legacy-pane-view" id="pane-output"><pre id="output-log" title="Agent event stream"></pre></div>
         <div class="pane legacy-pane-view" id="pane-git">
@@ -374,7 +383,7 @@
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
       <section class="key-manager"><div class="settings-section-head"><div><b>Key Manager</b><span>Provider keys are encrypted by the operating system and never stored in workspace state.</span></div><span id="key-vault-state" class="badge">Checking vault</span></div><div id="key-provider-list"></div></section>
-      <label class="chk"><input id="cfg-auto" type="checkbox" /> Auto-approve file edits (skip the diff review)</label>
+      <label class="chk"><input id="cfg-auto" type="checkbox" /> Authorize file edits automatically (skip the diff review)</label>
       <!-- The phone companion. Nothing here listens until Start is pressed, and
            the code is only drawn while it is running: a pairing QR left on a
            screen is a shell token left on a screen. -->
@@ -383,7 +392,7 @@
       <!-- Guardrails sits below Spaces deliberately: the space checkboxes have to
            stay above the fold of a scrolling card, and test-panels.js hit-tests
            them where they are drawn to keep it that way. -->
-      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the autonomy tier. The tier decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
+      <section class="key-manager"><div class="settings-section-head"><div><b>Guardrails</b><span>Independent of the operating envelope. The operating mode decides what the agent may reach for; these decide what it may do without asking, and what a turn may cost.</span></div></div>
         <label>Ask before an action that cannot be taken back
           <select id="cfg-approvals">
             <option value="high-risk">Irreversible actions only (recommended)</option>
@@ -425,7 +434,7 @@
         <button id="panel-add-term" class="pal-row" title="New terminal panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
           <span>Terminal</span></button>
-        <button id="panel-add-agent" class="pal-row" title="New terminal-backed Crowe Logic agent">
+        <button id="panel-add-agent" class="pal-row" title="New Crowe Logic agent with a plain shell console">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 4.2v2.4M12 17.4v2.4M4.2 12h2.4M17.4 12h2.4M6.5 6.5l1.7 1.7M15.8 15.8l1.7 1.7M17.5 6.5l-1.7 1.7M8.2 15.8l-1.7 1.7"/></svg>
           <span>Crowe Logic agent</span></button>
         <button id="panel-add-system" class="pal-row" title="Open the isolated CroweLM system terminal">
@@ -437,9 +446,9 @@
         <button id="panel-add-operator" class="pal-row" title="Operator control panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
           <span>Operator control</span></button>
-        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent workflows">
+        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent missions">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
-          <span>Workflows</span></button>
+          <span>Missions</span></button>
         <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
           <span>Agent fleet</span></button>
@@ -469,10 +478,17 @@
        must define window.CroweRooms before web-bridge.js reads it, or the
        rooms surface answers with a stated reason instead of a roster. -->
   <script src="rooms-web.js?v=1788786753000"></script>
+  <script src="council.js"></script>
+  <script src="rooms-local.js"></script>
   <script src="web-bridge.js?v=1788786753000"></script>
+  <script src="council-ui.js"></script>
   <script src="mark-geometry.js?v=1788786753000"></script>
   <script src="mark.js?v=1788786753000"></script>
-  <script src="renderer.js?v=1788786753000"></script>
+  <script src="messages.js?v=1788786753000"></script>
+  <script src="marks.js?v=1788786753000"></script>
+  <script src="first-run.js?v=1788786753000"></script>
+  <script src="activity.js?v=1788786753000"></script>
+<script src="renderer.js?v=1788786753000"></script>
   <!-- The web chrome: what the shell says it can do, in a browser. Rewrites the
        desktop's first-run copy to turns the web can take and hides the two
        autonomy tiers the bridge refuses. After renderer.js, before the phone

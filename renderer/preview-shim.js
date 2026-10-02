@@ -396,18 +396,26 @@
         const meta = DEMO_REGISTRY.find((a) => a.id === id) || { id, name: id, domain: "", autonomyCeiling: "plan" };
         return { agentId: id, name: meta.name, domain: meta.domain, ceiling: meta.autonomyCeiling, model: "", state: "idle", cost: zeroCost() };
       }),
-      defaultAgent: seatIds[0], messages: [],
+      defaultAgent: seatIds[0], messages: [], brief: "", routines: [], readSeq: 0,
       budgetUsd: typeof budgetUsd === "number" ? budgetUsd : 0.5, spentUsd: 0, critiqueRounds: 0, halted: "",
     };
   }
+  // The rail's inbox view, as main.js answers it: seats by name, the last thing
+  // said, what is unread, whether anyone is working.
+  const demoUnread = () => DEMO_ROOM.messages.filter((m, i) => i >= (DEMO_ROOM.readSeq || 0) && m.author !== ":operator").length;
+  const demoPreview = () => { const m = DEMO_ROOM.messages[DEMO_ROOM.messages.length - 1]; return m ? String(m.content || "").slice(0, 120) : ""; };
   const demoRoomSummary = () => ({ id: DEMO_ROOM.id, title: DEMO_ROOM.title, updatedAt: Date.now(),
-    template: DEMO_ROOM.template, agents: DEMO_ROOM.agents.map((a) => a.agentId), spentUsd: DEMO_ROOM.spentUsd, halted: DEMO_ROOM.halted });
+    template: DEMO_ROOM.template, agents: DEMO_ROOM.agents.map((a) => a.agentId), names: DEMO_ROOM.agents.map((a) => a.name),
+    spentUsd: DEMO_ROOM.spentUsd, halted: DEMO_ROOM.halted, unread: demoUnread(), preview: demoPreview(),
+    working: DEMO_ROOM.agents.some((a) => a.state === "working" || a.state === "queued"),
+    routines: (DEMO_ROOM.routines || []).filter((r) => r.enabled).length, openAsk: DEMO_ROOM.messages.some((m) => m.ask && m.ask.state === "open") });
   const demoRoomState = () => (DEMO_ROOM ? {
     id: DEMO_ROOM.id, title: DEMO_ROOM.title, template: DEMO_ROOM.template,
     agents: DEMO_ROOM.agents, defaultAgent: DEMO_ROOM.defaultAgent,
     tier: "readonly",   // rooms do not write until worktree isolation lands
     budgetUsd: DEMO_ROOM.budgetUsd, spentUsd: DEMO_ROOM.spentUsd,
     critiqueRounds: DEMO_ROOM.critiqueRounds, maxCritiqueRounds: 2, halted: DEMO_ROOM.halted,
+    brief: DEMO_ROOM.brief || "", routines: DEMO_ROOM.routines || [], unread: demoUnread(),
   } : null);
 
   // Who a message is for: @room is everyone, @handle is one, bare is the
@@ -554,6 +562,55 @@
       },
       async diff() { return "@@ -1,4 +1,4 @@\n-  --gold: #b7791f;\n+  --gold: #c49a3c;\n   --blue: #0054b2;"; },
       async stage() { return { ok: true }; }, async unstage() { return { ok: true }; }, async commit() { return { ok: true, out: "ok" }; },
+    },
+    /* Repositories, as crowe:repos:* return them: three remembered folders with
+       their git state, and a token that can see four GitHub repositories. One
+       default branch is red so the marker has something to draw. Tests swap
+       githubStatus and githubRepos for the empty states. */
+    repos: {
+      async recent() {
+        const remote = { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-desktop", full: "MichaelCrowe11/crowe-logic-desktop", github: true };
+        return [
+          { path: "/Users/crowelogic/Projects/crowe-logic-desktop", name: "crowe-logic-desktop", openedAt: Date.now() - 12 * 60e3, exists: true, current: true, repo: true, branch: "main", dirty: 3, remote },
+          { path: "/Users/crowelogic/Projects/crowe-logic-foundry", name: "crowe-logic-foundry", openedAt: Date.now() - 26 * 3600e3, exists: true, current: false, repo: true, branch: "feat/control-plane", dirty: 0,
+            remote: { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-foundry", full: "MichaelCrowe11/crowe-logic-foundry", github: true } },
+          { path: "/Users/crowelogic/Notes", name: "Notes", openedAt: Date.now() - 4 * 86400e3, exists: true, current: false, repo: false, branch: "", dirty: 0, remote: null },
+        ];
+      },
+      async open(p) { return { ok: true, cwd: p }; },
+      async pick() { return { canceled: true }; },
+      async forget() { return { ok: true }; },
+      async remote() {
+        return { cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", repo: true, branch: "main",
+          remote: { host: "github.com", owner: "MichaelCrowe11", name: "crowe-logic-desktop", full: "MichaelCrowe11/crowe-logic-desktop", github: true } };
+      },
+      async githubStatus() { return { configured: true }; },
+      async githubRepos() {
+        const row = (owner, name, openPulls, checks, extra = {}) => ({ owner, name, full: `${owner}/${name}`, url: `https://github.com/${owner}/${name}`,
+          private: false, archived: false, pushedAt: Date.now() - 3 * 3600e3, openPulls, defaultBranch: "main", checks, localPath: "", ...extra });
+        return { configured: true, login: "MichaelCrowe11", total: 4, warning: "", repos: [
+          row("MichaelCrowe11", "crowe-logic-desktop", 2, "passed", { localPath: "/Users/crowelogic/Projects/crowe-logic-desktop" }),
+          row("MichaelCrowe11", "crowe-logic-foundry", 1, "failed", { private: true, localPath: "/Users/crowelogic/Projects/crowe-logic-foundry", pushedAt: Date.now() - 26 * 3600e3 }),
+          row("MichaelCrowe11", "crowe-agents", 0, "none", { pushedAt: Date.now() - 6 * 86400e3 }),
+          row("crowe-logic", "crowe-x402", 4, "pending", { pushedAt: Date.now() - 40 * 60e3 }),
+        ] };
+      },
+      async githubWork(owner, name) {
+        const full = `${owner}/${name}`;
+        return { configured: true, full, url: `https://github.com/${full}`, pullCount: 2, issueCount: 3, warning: "",
+          pulls: [
+            { kind: "pull", number: 74, title: "Repositories in the sidebar: local checkouts, GitHub repos, PR and issue lanes", url: `https://github.com/${full}/pull/74`, draft: true,
+              updatedAt: Date.now() - 20 * 60e3, author: "MichaelCrowe11", head: "feat/repositories-sidebar", base: "main", body: "Local checkouts and GitHub repositories listed in the Projects sidebar." },
+            { kind: "pull", number: 72, title: "Linux: read the fuses path from the unpacked AppImage", url: `https://github.com/${full}/pull/72`, draft: false,
+              updatedAt: Date.now() - 3 * 86400e3, author: "MichaelCrowe11", head: "fix/linux-fuses-path", base: "main", body: "" },
+          ],
+          issues: [
+            { kind: "issue", number: 61, title: "Terminal panel loses scrollback after a theme switch", url: `https://github.com/${full}/issues/61`, updatedAt: Date.now() - 2 * 3600e3, author: "MichaelCrowe11", labels: ["bug"], body: "Switching Dark to Light while a terminal is open resets its buffer." },
+            { kind: "issue", number: 58, title: "Rooms: land agent worktrees one at a time", url: `https://github.com/${full}/issues/58`, updatedAt: Date.now() - 5 * 86400e3, author: "MichaelCrowe11", labels: ["rooms", "gate-4"], body: "" },
+            { kind: "issue", number: 49, title: "Deployments lane: show the routed model per role", url: `https://github.com/${full}/issues/49`, updatedAt: Date.now() - 9 * 86400e3, author: "", labels: [], body: "" },
+          ] };
+      },
+      async clone(owner, name) { return { ok: true, cwd: `/Users/crowelogic/Crowe/repos/${owner}/${name}`, cloned: true }; },
     },
     pty: {
       async start() { return { ok: false, error: "preview" }; },
@@ -743,13 +800,64 @@
       async say(_id, text) { return demoRound("say", String(text || "")); },
       async critique() { return demoRound("critique"); },
       async revise() { return demoRound("revise"); },
+      // The room as a standing colleague: brief and title, the read mark, a tap
+      // on an option, a forward, and routines. The preview has no clock, so a
+      // routine here runs only when pressed.
+      async update(_id, patch = {}) {
+        if (!DEMO_ROOM) DEMO_ROOM = newDemoRoom();
+        if (patch.title && String(patch.title).trim()) DEMO_ROOM.title = String(patch.title).trim().slice(0, 80);
+        if (Object.prototype.hasOwnProperty.call(patch, "brief")) DEMO_ROOM.brief = String(patch.brief || "").slice(0, 4000);
+        if (Number.isFinite(Number(patch.budgetUsd)) && Number(patch.budgetUsd) >= 0) DEMO_ROOM.budgetUsd = Number(patch.budgetUsd);
+        return { room: demoRoomState(), changed: Object.keys(patch) };
+      },
+      async markRead() { if (DEMO_ROOM) DEMO_ROOM.readSeq = DEMO_ROOM.messages.length; return { unread: 0 }; },
+      async answer(_id, messageId, optionId) {
+        const m = DEMO_ROOM && DEMO_ROOM.messages.find((x) => x.id === messageId);
+        if (!m || !m.ask) return { error: "that message is not a question" };
+        if (m.ask.state !== "open") return { error: "that question was already " + m.ask.state };
+        const opt = (m.ask.options || []).find((o) => o.id === optionId);
+        if (!opt) return { error: "no such option" };
+        m.ask.state = "answered"; m.ask.chosen = opt.id; m.ask.answer = opt.label;
+        return demoRound("say", "@" + m.author + " " + opt.label);
+      },
+      async forward() { return { error: "The preview has one demo room; there is nowhere to forward to." }; },
+      async routineAdd(_id, spec = {}) {
+        if (!DEMO_ROOM) DEMO_ROOM = newDemoRoom();
+        if (!String(spec.text || "").trim()) return { error: "a routine needs the message it will send" };
+        const r = { id: "rt-" + Math.random().toString(36).slice(2, 7), agentId: spec.agentId || DEMO_ROOM.defaultAgent, text: String(spec.text).trim(),
+          every: spec.every || "daily", at: spec.at || "07:00", minutes: Number(spec.minutes) || 60, weekday: Number(spec.weekday) || 0,
+          enabled: true, lastRunAt: 0, lastStatus: "", runs: 0, nextRunAt: Date.now() + 60 * 60 * 1000 };
+        DEMO_ROOM.routines.push(r);
+        return { routine: r, room: demoRoomState() };
+      },
+      async routineUpdate(_id, routineId, patch = {}) {
+        const r = DEMO_ROOM && DEMO_ROOM.routines.find((x) => x.id === routineId);
+        if (!r) return { error: "no such routine" };
+        if (Object.prototype.hasOwnProperty.call(patch, "enabled")) r.enabled = Boolean(patch.enabled);
+        return { routine: r, room: demoRoomState() };
+      },
+      async routineRemove(_id, routineId) {
+        if (DEMO_ROOM) DEMO_ROOM.routines = DEMO_ROOM.routines.filter((x) => x.id !== routineId);
+        return { removed: true, room: demoRoomState() };
+      },
+      async routineRun(_id, routineId) {
+        const r = DEMO_ROOM && DEMO_ROOM.routines.find((x) => x.id === routineId);
+        if (!r) return { error: "no such routine" };
+        r.lastRunAt = Date.now(); r.runs += 1; r.lastStatus = "ran";
+        return demoRound("say", "@" + r.agentId + " " + r.text);
+      },
+      onChanged() { return () => {}; },
+      onOpen() { return () => {}; },
     },
 
     plugins: {
-      async list() { return { plugins: [
-        { id: "crowe-skills", name: "Crowe Skills", official: true, enabled: true, tools: 6 },
-        { id: "github", name: "GitHub", official: true, enabled: false, tools: 9 },
-      ] }; },
+      // The same shape pluginList() in main.js returns: a bare array, each row
+      // carrying the manifest's spaces, which renderPlugins() filters on.
+      async list() { return [
+        { id: "crowe-skills", name: "Crowe Skills", description: "The Crowe skills corpus.", spaces: ["chat", "projects", "cultivation"], available: true, envPrompts: [], enabled: true, connected: true, toolCount: 6 },
+        { id: "crowe-sense", name: "Crowe Sense", description: "Grow-room telemetry and farmlog for the Cultivation space.", spaces: ["cultivation"], available: false, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+        { id: "github", name: "GitHub", description: "Repositories, issues and pull requests.", spaces: ["projects", "chat"], available: true, envPrompts: [], enabled: false, connected: false, toolCount: 0 },
+      ]; },
       async enable() { return { ok: true }; },
       async disable() { return { ok: true }; },
     },
@@ -763,7 +871,7 @@
       async test() { return { ok: true, healthy: true }; },
     },
     async chat() { return { content: "" }; },
-    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false }; },
+    async getConfig() { return { baseUrl: "https://api.crowelogic.com", hasToken: true, cwd: "/Users/crowelogic/Projects/crowe-logic-desktop", autoApprove: false, autonomy: "edit", approvals: "high-risk", verifier: true, turnBudgetUsd: 2, version: "0.7.0", mcp: [{ name: "filesystem", tools: 11 }], ptyAvailable: false, croweBrowser: { url: "https://browser.crowelogic.com" }, croweBrowserAuth: "none" }; },
     async setConfig() { return this.getConfig(); },
     onBrowserNavigate() {}, onMenuAction() {},
   };

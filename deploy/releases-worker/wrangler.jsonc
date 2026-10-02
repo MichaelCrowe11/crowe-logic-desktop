@@ -6,5 +6,8 @@
   "r2_buckets": [
     { "binding": "RELEASES", "bucket_name": "crowe-releases" }
   ],
+  "analytics_engine_datasets": [
+    { "binding": "crowe_releases", "dataset": "crowe_releases" }
+  ],
   "observability": { "enabled": true }
 }

@@ -59,6 +59,26 @@ const version = require('../package.json').version;
     const bad = spawnSync('bash', [publisher, root], { env: { ...process.env, DRY_RUN: '0', PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
     assert.notEqual(bad.status, 0);
     assert.equal(fs.existsSync(marker), false); checks++;
+    // The developer edition's feed is developers-mac.yml. The default channel
+    // must not read it, or a developer build could be published as the full
+    // app; and the developers channel must not read latest-mac.yml.
+    write();
+    const devFeed = path.join(root, 'developers-mac.yml');
+    fs.renameSync(feedFile, devFeed);
+    await rejects(/no release feeds found for the latest channel/, () => preflight(root));
+    assert.deepEqual(await preflight(root, version, 'developers'), { channel: 'developers', feeds: ['developers-mac.yml'], artifacts: 1 }); checks++;
+    await rejects(/no release feeds found for the developers channel/, () => preflight(bin, version, 'developers'));
+    for (const flags of [['--channel', 'developers'], ['--config', path.join(__dirname, '..', 'electron-builder.developer.js')]]) {
+      const devDry = spawnSync('bash', [publisher, root, ...flags], { cwd: os.tmpdir(), env: { ...process.env, DRY_RUN: '1' }, encoding: 'utf8' });
+      assert.equal(devDry.status, 0, devDry.stderr);
+      assert.match(devDry.stdout, /dry run passed for the developers channel/); checks++;
+    }
+    // The default publisher refuses that directory before rclone is ever invoked.
+    const cross = spawnSync('bash', [publisher, root], { env: { ...process.env, DRY_RUN: '0', PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+    assert.notEqual(cross.status, 0);
+    assert.match(cross.stderr, /no release feeds found for the latest channel/);
+    assert.equal(fs.existsSync(marker), false); checks++;
+    fs.renameSync(devFeed, feedFile);
     fs.unlinkSync(feedFile);
     await rejects(/no release feeds/, () => preflight(root));
     console.log(`preflight-release: ${checks} checks passed`);

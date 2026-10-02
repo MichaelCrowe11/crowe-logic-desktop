@@ -3,6 +3,7 @@
 const path = require("path");
 const { fileURLToPath } = require("url");
 const { normalizeSense } = require("./sense");
+const { normalizeBaseUrl } = require("./browser-client");
 
 const TRUSTED_WEB_ORIGINS = new Set([
   "https://crowelogic.com",
@@ -104,8 +105,13 @@ function sanitizeConfigPatch(raw) {
     const url = parsedUrl(patch.baseUrl.trim());
     if (url && isSafeGuestUrl(url.toString())) out.baseUrl = url.toString().replace(/\/$/, "").slice(0, 2048);
   }
-  for (const key of ["cwd", "model", "licenseWorkspaceId"]) {
-    if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" ? 4096 : 256);
+  // imageModel overrides the image tool's per-provider default. The harness
+  // checks the id's shape again before it is sent: an OpenAI id is bare
+  // (gpt-image-1, dall-e-3) and an OpenRouter id is a vendor/model slug
+  // (openai/gpt-image-1, google/gemini-2.5-flash-image); an id shaped for the
+  // other provider falls back to that provider's default.
+  for (const key of ["cwd", "reposRoot", "model", "licenseWorkspaceId", "imageModel"]) {
+    if (typeof patch[key] === "string") out[key] = patch[key].slice(0, key === "cwd" || key === "reposRoot" ? 4096 : 256);
   }
   // No token. Sign-in writes it in main; nothing in the renderer has a reason
   // to, and a document that could would be choosing where the bearer goes.
@@ -121,6 +127,14 @@ function sanitizeConfigPatch(raw) {
   }
   if (Object.hasOwn(patch, "mcpServers")) out.mcpServers = sanitizeMcpServers(patch.mcpServers);
   if (patch.sense && typeof patch.sense === "object") out.sense = normalizeSense(patch.sense);
+  // Crowe Browser: an https service URL (loopback http for a local fake). The
+  // key is not a config field: it goes to the encrypted store through
+  // crowe:keys:set, and a key that arrives here is dropped, like the token.
+  if (patch.croweBrowser && typeof patch.croweBrowser === "object" && !Array.isArray(patch.croweBrowser)) {
+    const cb = {};
+    if (typeof patch.croweBrowser.url === "string") { const u = normalizeBaseUrl(patch.croweBrowser.url); if (u) cb.url = u; }
+    if (Object.keys(cb).length) out.croweBrowser = cb;
+  }
   return out;
 }
 

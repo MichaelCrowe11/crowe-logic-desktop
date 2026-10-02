@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -33,6 +33,20 @@ jobs:
       # Node, so it needs neither Electron nor xvfb and fails in seconds.
       - name: Run harness tests
         run: node scripts/test-harness.js
+
+      # The headless runner is a second caller of that same loop, so it is the
+      # cheapest place to catch the seam going wrong: a CLI that auto-approves in
+      # a pipe, or treats a missing terminal as consent, passes every harness
+      # test above and is still a hole.
+      # The billing path, before the runner that uses it. A turn billed twice or
+      # a plane outage served unmetered is not something a later test catches.
+      - name: Run control-plane tests
+        run: node scripts/test-cloud.js
+
+      - name: Run CLI tests
+        run: |
+          node scripts/test-cli.js
+          node scripts/smoke-cli.js
 
       # Second, and for the same reason: pure Node, seconds to run, and it is
       # the only thing holding the mobile port to the desktop it copies. The
@@ -61,15 +75,26 @@ jobs:
       # is added here in the same commit, and this step is where it goes.
       - name: Run the remaining node contract checks
         run: |
+          node scripts/test-export-document.js
+          node scripts/test-generate-image.js
           node scripts/test-plan.js
+          node scripts/test-mail.js
           node scripts/test-version-parity.js
           node mobile/scripts/sync-version.js --check
           node scripts/test-brand-copy.js
           node scripts/test-companion.js
           node scripts/test-qr.js
           node scripts/test-sense.js
+          node scripts/test-channel-analytics.js
+          node scripts/test-repos.js
           node scripts/test-releases-worker.js
           node scripts/test-verify-release.js
+          node scripts/test-share-preview.js
+          node scripts/test-messages.js
+          node scripts/test-marks.js
+          node scripts/test-plugin-path.js
+          node scripts/test-first-run.js
+          node scripts/test-activity.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
@@ -174,10 +199,35 @@ jobs:
           CROWE_ALLOW_PLAINTEXT_AUTH: "1"
         run: xvfb-run -a npx electron scripts/test-rooms-live.js
 
+      # The bundled plugin server, forked the way a packaged app forks it. The
+      # node wire test drives it as `node server.js`; this drives it through
+      # main.js as an Electron utility process, the one Node runtime a packaged
+      # build has (its RunAsNode fuse is off), and reads a room seat's answer
+      # back through the process's message port.
+      - name: Run bundled plugin fork test (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+          CROWE_ALLOW_PLAINTEXT_AUTH: "1"
+        run: xvfb-run -a npx electron scripts/test-plugin-fork.js
+
+      # scripts/smoke-packaged-mac.sh puts a packaged build under test on a
+      # throwaway profile with --user-data-dir, a Chromium switch Electron maps
+      # onto userData. Nothing in this repo makes that so, and a bump that
+      # stopped honouring it would land the smoke on the live profile beside
+      # the running app. This pins the mapping for the Electron shipped here.
+      - name: Run the user-data-dir pin (headless via xvfb)
+        env:
+          ELECTRON_ENABLE_LOGGING: "1"
+        run: xvfb-run -a npx electron scripts/test-user-data-dir.js
+
       - name: Upload smoke screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-shots
           path: /tmp/crowe-shots/
           if-no-files-found: ignore
+          # Screenshots are for reading a failed run, not for keeping. The
+          # account's artifact storage is shared across every repo and small,
+          # so they leave after three days instead of the default ninety.
+          retention-days: 3

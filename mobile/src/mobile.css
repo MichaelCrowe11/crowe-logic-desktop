@@ -434,17 +434,6 @@ body.mobile .card { box-shadow: var(--z2); }
 body.mobile .chip { box-shadow: var(--z1); }
 body.mobile .chip:active { background: var(--panel); }
 
-/* The current tab, as a gold wash with its own lit edge rather than a colour
-   change alone. Children are lifted over the pill: the pill is positioned and
-   they are not, so without this it paints on top of its own label. */
-body.mobile .m-tab { position: relative; }
-body.mobile .m-tab[aria-current="true"]::before {
-  content: ""; position: absolute; inset: 4px 6px auto; height: calc(100% - 10px);
-  border-radius: var(--r-lg); background: var(--accent-wash);
-  box-shadow: inset 0 1px 0 var(--hair-top);
-}
-body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1; }
-
 /* Where the platform asks for less, the material stands down to the opaque
    step it was drawn over. Nothing here is load-bearing. */
 @media (prefers-reduced-transparency: reduce) {
@@ -478,9 +467,38 @@ body.mobile .m-tab .ic, body.mobile .m-tab span { position: relative; z-index: 1
    chooses one pane at a time; while Home or Camera is up, the conversation, the
    surfaces and the HUD are off screen rather than merely covered. */
 body.mobile .m-pane { display: none; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 104px; min-height: 0; }
-body.mobile[data-pane="home"] #m-home-pane, body.mobile[data-pane="camera"] #m-camera-pane { display: block; }
+body.mobile[data-pane="home"] #m-home-pane, body.mobile[data-pane="camera"] #m-camera-pane, body.mobile[data-pane="messages"] #m-messages-pane { display: block; }
 body.mobile[data-pane="home"] #workbench, body.mobile[data-pane="home"] .surface, body.mobile[data-pane="home"] #hud,
-body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .surface, body.mobile[data-pane="camera"] #hud { display: none !important; }
+body.mobile[data-pane="camera"] #workbench, body.mobile[data-pane="camera"] .surface, body.mobile[data-pane="camera"] #hud,
+body.mobile[data-pane="messages"] #workbench, body.mobile[data-pane="messages"] .surface, body.mobile[data-pane="messages"] #hud { display: none !important; }
+
+/* Messages: the list owns the pane; a room is its one panel, full screen. */
+/* #shell is a flex row, and a pane without flex shrinks to its content: a
+   short list drew at 201px of a 390px screen. */
+body.mobile .m-pane { flex: 1 1 auto; min-width: 0; }
+#m-messages-pane #rooms-drawer { padding: 22px 10px calc(100px + env(safe-area-inset-bottom)); border: none; box-shadow: none; }
+#m-messages-pane .drawer-head { box-shadow: none; padding: 0 6px 12px; }
+#m-messages-pane .drawer-head > span:first-child { font-family: var(--display); font-size: clamp(30px, 8vw, 40px); font-weight: 600;
+  letter-spacing: 0; text-transform: none; color: var(--ink); }
+#m-messages-pane #room-new { width: 44px; height: 44px; }
+#m-messages-pane .sess-list { padding: 0; overflow: visible; }
+#m-messages-pane .msg-row { min-height: 64px; padding: 12px; }
+#m-messages-pane .card-empty { padding: 4px 6px; line-height: 1.55; }
+body.mobile[data-pane="room"] #agent, body.mobile[data-pane="room"] #hud { display: none !important; }
+body.mobile[data-pane="room"] #workspace > :not(#panel-deck) { display: none !important; }
+body.mobile[data-pane="room"] #panel-deck .workspace-panel:not(.m-room-on) { display: none !important; }
+body.mobile[data-pane="room"] #panel-deck .workspace-panel.m-room-on { display: flex !important; flex-direction: column; height: 100%; }
+body.mobile[data-pane="room"] .m-room-back { margin-right: 4px; }
+body.mobile[data-pane="room"] .m-room-back::before { content: "\2039"; margin-right: 4px; font-size: 1.2em; line-height: 1; }
+/* The stacked deck hides panel heads and its ghost buttons wait for a hover a
+   phone never sends, so the room's head is shown here with Back always lit. */
+body.mobile[data-pane="room"] .m-room-on .panel-head { display: flex !important; min-height: 44px; padding: 4px 8px; cursor: default;
+  padding-left: calc(8px + env(safe-area-inset-left)); padding-right: calc(8px + env(safe-area-inset-right)); }
+body.mobile[data-pane="room"] .m-room-on .panel-head .ghost { opacity: 1; min-height: 36px; }
+body.mobile[data-pane="room"] .m-room-on .panel-title { font-weight: 600; pointer-events: none; }
+body.mobile[data-pane="room"] .panel-dup { display: none; }
+.m-room-back { display: none; }
+body.mobile[data-pane="room"] .m-room-back { display: inline-flex; align-items: center; }
 .m-home-inner { padding: 22px 16px 26px; }
 .m-home-head h1 { font-size: 1.45rem; margin: 0 0 6px; }
 .m-home-sub, .m-home-empty, .m-cam-lot { color: var(--muted, #8b8b93); margin: 0 0 16px; }
@@ -664,3 +682,117 @@ body.mobile .err { font-size: var(--fs-body); line-height: 1.45; }
 .m-founders-n { font: 600 11px/1 ui-monospace, "JetBrains Mono", Menlo, monospace; color: #b8965a; letter-spacing: 0.08em; min-width: 22px; }
 .m-founders-farm { color: var(--muted, #8b8b93); font-size: 0.88rem; }
 .m-founders-card .m-home-empty { margin-top: 12px; }
+
+/* Task entry is the primary mobile surface. */
+body.mobile .m-task-grid { display: grid; gap: 12px; }
+body.mobile .m-task-card { display: grid; gap: 8px; width: 100%; text-align: left; padding: 20px; border: 1px solid var(--line, #b8b4aa); border-radius: 16px; background: var(--panel, #f4f0e7); color: var(--ink, #191919); font: inherit; }
+body.mobile .m-task-card b { font-size: 18px; }
+body.mobile .m-task-card span { font-size: 14px; line-height: 1.5; }
+body.mobile .m-task-card:focus-visible { outline: 3px solid #997d32; outline-offset: 3px; }
+body.mobile #m-home-pane .m-title { font-size: clamp(30px, 8vw, 44px); line-height: 1.1; max-width: 16ch; }
+body.mobile #m-home-pane .m-home-sub { font-size: 17px; line-height: 1.55; }
+
+body.mobile .m-task-card small { color: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+body.mobile #m-home-pane .m-home-inner { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
+body.mobile #m-home-pane .m-home-empty { opacity: 1; color: inherit; line-height: 1.55; }
+body.mobile #m-home-pane details { margin: 12px 0 18px; }
+body.mobile #m-tabs .m-tab { opacity: 1; }
+
+/* ─── Approval sheet ─────────────────────────────────────────────────────────
+   The one place the app slows a person down on purpose. */
+.m-approve {
+  position: fixed; inset: 0; z-index: 400; display: flex; align-items: flex-end;
+  background: var(--overlay); opacity: 0; transition: opacity var(--dur-slow) var(--ease);
+}
+.m-approve.open { opacity: 1; }
+.m-approve.leaving { opacity: 0; }
+.m-approve-card {
+  width: 100%; max-height: 82dvh; overflow: auto;
+  padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  background: var(--raised); border-top: 1px solid var(--line-strong);
+  border-radius: 18px 18px 0 0; box-shadow: 0 -12px 40px rgba(0,0,0,.28);
+  transform: translateY(24px); transition: transform 260ms var(--ease);
+}
+.m-approve.open .m-approve-card { transform: none; }
+.m-approve-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.m-chip {
+  font: 600 11px/1 var(--body); letter-spacing: .03em; padding: 6px 9px;
+  border-radius: var(--r-pill); border: 1px solid var(--line-strong); color: var(--muted);
+}
+.m-chip.tier-execute { color: var(--tier-execute); border-color: currentColor; }
+.m-chip.tier-edit { color: var(--gold-text); border-color: currentColor; }
+.m-approve-title { font: 600 21px/1.2 var(--display); margin: 0 0 6px; color: var(--ink); }
+.m-approve-reason, .m-approve-q { margin: 0 0 12px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.m-approve.danger .m-approve-reason { color: var(--err-fg); }
+.m-approve-detail {
+  margin: 0 0 14px; padding: 12px; max-height: 32dvh; overflow: auto;
+  font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
+  background: var(--term-bg); color: var(--term-fg); border-radius: var(--r-lg);
+  user-select: text; -webkit-user-select: text;
+}
+.m-approve-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; }
+.m-approve-actions button { min-height: 50px; font-size: 16px; border-radius: 12px; }
+.m-approve-yes {
+  position: relative; overflow: hidden; border: 0; font-weight: 600;
+  background: var(--gold); color: var(--on-gold); touch-action: none;
+}
+.m-approve.danger .m-approve-yes { background: var(--danger); color: var(--on-danger); }
+.m-approve.danger .m-approve-yes::before {
+  content: ""; position: absolute; inset: 0; background: rgba(255,255,255,.22);
+  transform: scaleX(0); transform-origin: left; pointer-events: none;
+}
+.m-approve.danger .m-approve-yes.holding::before { transform: scaleX(1); transition: transform 650ms linear; }
+@media (prefers-reduced-motion: reduce) {
+  .m-approve, .m-approve-card { transition: none; }
+  .m-approve.danger .m-approve-yes.holding::before { transition: none; transform: scaleX(1); }
+}
+
+/* ─── Home polish ────────────────────────────────────────────────────────────
+   The whole card is the target; a chevron says so, rather than an underlined
+   "Open task" that read as a link inside a button. */
+.m-chev { width: 9px; height: 9px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(-45deg); opacity: .55; flex: none; }
+body.mobile .m-task-card { position: relative; grid-template-columns: 1fr auto; column-gap: 14px; align-items: center;
+  transition: transform 120ms var(--ease), border-color 120ms var(--ease); }
+body.mobile .m-task-card b, body.mobile .m-task-card span { grid-column: 1; }
+body.mobile .m-task-card .m-chev { grid-column: 2; grid-row: 1 / span 2; }
+body.mobile .m-task-card:active { transform: scale(.985); border-color: var(--gold); }
+body.mobile button.m-sess { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+  min-height: 48px; text-align: left; font: inherit; color: var(--ink); background: transparent; }
+body.mobile button.m-sess span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mobile button.m-sess:active { background: var(--accent-wash); }
+
+/* Receipts: what this phone caused on the paired computer. */
+.m-act { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; }
+.m-act-row { display: grid; grid-template-columns: 62px 1fr; grid-template-rows: auto auto; column-gap: 10px; row-gap: 2px;
+  padding: 11px 13px; border-top: 1px solid var(--line); }
+.m-act-row:first-child { border-top: 0; }
+.m-act-kind { grid-row: 1 / span 2; align-self: start; font: 600 11px/1.9 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--ok); }
+.m-act-row.bad .m-act-kind { color: var(--err-fg); }
+.m-act-what { font: 13px/1.45 var(--mono); color: var(--ink); background: none; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-act-meta { font-size: 12px; color: var(--muted); }
+
+/* ─── Tab bar ────────────────────────────────────────────────────────────────
+   11px is the floor for a label read at arm's length; the active tab carries a
+   pill, not only a colour, so it survives a glance and colour blindness. */
+.m-tab { font-size: 11px; }
+.m-tab .ic { width: 22px; height: 22px; padding: 3px 14px; box-sizing: content-box; border-radius: var(--r-pill);
+  transition: background var(--dur) var(--ease); }
+.m-tab[aria-current="true"] .ic { background: var(--accent-wash); color: var(--gold-text); }
+.m-tab:active { background: transparent; }
+.m-tab:active .ic { background: var(--accent-wash); }
+
+/* Settings and other sheets: the sticky action row covers the scroll beneath
+   it down to the home indicator, so the last section never shows through the
+   buttons. */
+@media (max-width: 820px) {
+  body.mobile .modal-card .row {
+    bottom: calc(-18px - env(safe-area-inset-bottom));
+    margin-bottom: calc(-18px - env(safe-area-inset-bottom));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    background: var(--raised); border-top: 1px solid var(--line);
+    box-shadow: 0 -10px 18px -12px rgba(0,0,0,.35);
+  }
+}
+body.mobile details.m-advanced { margin: 14px 0; border-top: 1px solid var(--line); padding-top: 10px; }
+body.mobile details.m-advanced > summary { min-height: 44px; display: flex; align-items: center; color: var(--muted); font-size: 14px; cursor: pointer; }
+body.mobile #m-remote-state { white-space: nowrap; }

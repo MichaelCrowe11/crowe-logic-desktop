@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
-root="${1:-release}"
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Which channel, and with it which directory, bucket prefix and feed names.
+# Defaults are the full edition's: release/ onto desktop/, feeds under
+# desktop/channel/<os>/latest*.yml. The developer edition publishes beside it
+# under desktop/developers/ (scripts/release-channel.js has the layout):
+#
+#   scripts/publish-r2.sh                                          # release/, latest
+#   scripts/publish-r2.sh --config electron-builder.developer.js   # release-developers/, developers
+#   scripts/publish-r2.sh release-developers --channel developers
+resolved=$(node "$here/release-channel.js" --shell "$@") || exit 1
+eval "$resolved"
+root="${root:-$dir}"
+
 # Locally there is no ref, so fall back to the version being built. CI passes
 # the tag it was triggered by.
 version="${GITHUB_REF_NAME:-}"
@@ -13,8 +26,8 @@ if [ -z "$version" ]; then
   echo "publish-r2: set GITHUB_REF_NAME to a tag such as v0.14.0" >&2
   exit 1
 fi
-node "$(dirname "${BASH_SOURCE[0]}")/preflight-release.js" "$root" "$version"
-echo "publish-r2: publishing $version from $root"
+node "$here/preflight-release.js" "$root" "$version" --channel "$channel"
+echo "publish-r2: publishing $version from $root to the $channel channel ($prefix/)"
 
 # Uploads to the R2 API fail intermittently regardless of file size, so a single
 # attempt is not enough to get a release out. Observed on a run where a 20 MB
@@ -33,6 +46,7 @@ echo "publish-r2: publishing $version from $root"
 # retrying and reverse the direction:
 #
 #   INGEST_TOKEN=... scripts/ingest-release.sh v0.21.0
+#   CHANNEL=developers INGEST_TOKEN=... scripts/ingest-release.sh v0.24.7
 #
 # That has the releases worker pull the artifacts from the GitHub release over
 # Cloudflare's own network. v0.21.0's three largest macOS artifacts failed
@@ -65,14 +79,17 @@ put() {
 # version's SHA256SUMS.
 #
 # Reading the feeds fixes both: the key is the url the updater will actually
-# request, and a stale artifact no feed mentions is simply never uploaded.
+# request, and a stale artifact no feed mentions is simply never uploaded. The
+# feeds read are the channel's own, so the other edition's build in the same
+# directory is not a feed here and is never published under this channel.
 feeds=()
-for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
-  file=$(find "$root" -type f -name "${spec#*/}" -print -quit)
+for os in win mac linux; do
+  var="feed_$os"; name="${!var}"
+  file=$(find "$root" -type f -name "$name" -print -quit)
   [ -z "$file" ] || feeds+=("$file")
 done
 if [ ${#feeds[@]} -eq 0 ]; then
-  echo "publish-r2: no latest*.yml under $root - nothing to publish" >&2
+  echo "publish-r2: no $channel feeds ($feed_win, $feed_mac, $feed_linux) under $root - nothing to publish" >&2
   exit 1
 fi
 
@@ -96,12 +113,12 @@ while IFS= read -r url; do
   [ -n "$url" ] || continue
   file=$(resolve "$url")
   if [ -z "$file" ]; then missing+=("$url"); continue; fi
-  put "desktop/$version/$url" "$file"
+  put "$prefix/$version/$url" "$file"
   installers+=("$file"); names+=("$url")
   # Blockmaps are requested as <url>.blockmap, so they follow the feed's naming
   # too, not the local file's.
   bmap=$(resolve "$url.blockmap")
-  [ -z "$bmap" ] || put "desktop/$version/$url.blockmap" "$bmap"
+  [ -z "$bmap" ] || put "$prefix/$version/$url.blockmap" "$bmap"
 done < "$wanted"
 rm -f "$wanted"
 
@@ -128,7 +145,7 @@ if [ ${#installers[@]} -gt 0 ]; then
     fi
   done
   sort -k2 -o "$sums" "$sums"
-  put "desktop/$version/SHA256SUMS" "$sums"
+  put "$prefix/$version/SHA256SUMS" "$sums"
   rm -f "$sums"
 fi
 
@@ -136,10 +153,12 @@ fi
 # publish url, which expands to mac, win and linux (Platform.MAC is
 # new Platform("mac", "mac", "darwin"), so it is the build key, not the node
 # platform). Writing to darwin/ and windows/ instead is why macOS clients sat on
-# 0.12.0 and Windows never had a feed at all.
-for spec in "win/latest.yml" "mac/latest-mac.yml" "linux/latest-linux.yml"; do
-  os=${spec%%/*}; name=${spec#*/}; file=$(find "$root" -type f -name "$name" -print -quit)
-  [ -z "$file" ] || put "desktop/channel/$os/$name" "$file"
+# 0.12.0 and Windows never had a feed at all. Feeds last: an artifact must exist
+# before a feed advertises it.
+for os in win mac linux; do
+  var="feed_$os"; name="${!var}"
+  file=$(find "$root" -type f -name "$name" -print -quit)
+  [ -z "$file" ] || put "$prefix/channel/$os/$name" "$file"
 done
 
 # Uploading is not publishing. A feed that names a file the bucket does not have
@@ -147,4 +166,4 @@ done
 # never move off the old version. So prove the release over the network before
 # calling it done, from here, where there is still someone watching.
 echo "publish-r2: verifying the published release"
-node scripts/verify-release.js "$version"
+node "$here/verify-release.js" "$version" --channel "$channel"

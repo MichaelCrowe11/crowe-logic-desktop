@@ -95,6 +95,41 @@ CROWE_SKIP_NOTARIZE=1 npm run build:mac
 A build made with `CROWE_SKIP_NOTARIZE=1` is not shippable. Gatekeeper will refuse
 it on any machine but the one that built it.
 
+### Smoke a packaged build without touching your profile
+
+```
+scripts/smoke-packaged-mac.sh                          # build this checkout unsigned, launch, check, clean up
+scripts/smoke-packaged-mac.sh --app "/Applications/Crowe Logic.app"   # smoke an existing build: the installed app, or a release unzipped from the feed
+scripts/smoke-packaged-mac.sh --keep                   # leave the build and the profile for a look
+```
+
+The dev Electron in `node_modules` has its fuses on, so every suite in
+`npm test` runs with RunAsNode available and cannot see a feature that only the
+shipped binary refuses. The 2026-09-15 review of the Channel Analytics
+connector found exactly that: a bundled server launched through
+`ELECTRON_RUN_AS_NODE` worked in every test and could not start in an
+installed build. This script builds the checkout the way electron-builder
+lays it out (same files, same `asarUnpack`, same fuse flip; identity null, so
+unsigned and local only), or takes an existing `.app`, reads the fuses back,
+launches the app once with the connector pre-enabled, and checks that its
+utility process comes up and survives the 15 s handshake timeout.
+
+The launch is put on a throwaway profile with `--user-data-dir`, the Chromium
+switch Electron maps onto `userData` and `sessionData`; it works on a shipped,
+signed binary too, which is how a release from the feed is verified in place.
+`HOME=` does not do this on macOS: Electron takes Application Support from the
+system, not from that variable, and three test launches on 2026-09-15 landed on
+the installed app's live profile beside the running app that way, with
+`config.json` and `auth.bin` in play. The script kills the app and fails if the
+throwaway has not filled within 5 s, so a binary that ignored the switch could
+not sit on the live profile for long, and it reports whether the live
+profile's files moved during the run (the running app rewrites `config.json`
+and `auth.bin` every 4 minutes on its own, so read the times before reading
+anything into a change). `scripts/test-user-data-dir.js` pins the mapping for
+the Electron this checkout ships. `--use-mock-keychain` keeps the launch away
+from the real Keychain item. Never launch a packaged build for a test here
+without both switches.
+
 ### iOS
 
 `mobile/ios/ExportOptions.plist` selects the App Store channel: method
@@ -207,6 +242,116 @@ Updates are served by a Cloudflare Worker, not by GitHub:
 ```
 https://crowe-releases.yellow-block-3adc.workers.dev/desktop/channel/${os}
 ```
+
+### Before you start
+
+Verified on 2026-09-17, the night 0.24.12 shipped; each line below cost a retry
+that night or on 0.24.11.
+
+- **Clock.** `sntp time.apple.com` must read an offset near zero. This Mac was
+  21 hours behind; notarytool signs a short-lived token with the local clock and
+  Apple answered every request with `401 Unauthenticated`, which reads like a bad
+  credential and is not one. Fix with `sudo sntp -sS time.apple.com`, then turn
+  automatic time back on in System Settings.
+- **Disk.** `df -h /System/Volumes/Data` (not `/`, the sealed system volume) must
+  show 6 GB or more, and keep sampling it: the Colima VM's sparse disks move free
+  space by 5 to 9 GB within minutes with nothing written to any file. A notarized
+  mac build peaks near 2 GB per pass and each channel's artifacts are 1.4 GB.
+  0.24.11 and 0.24.12 each lost a build to ENOSPC below 600 MB, and 0.24.13 lost
+  one at the x64 dmg (`hdiutil`, 165 MB free) after starting from 11 GB, so the
+  floor buys odds, not a guarantee: a failed build is retried clean, and a
+  `ditto` into /Applications on a full disk writes a truncated bundle that only
+  Gatekeeper rejects; run `codesign --verify --deep --strict` on the installed
+  copy.
+- **Actions artifact storage.** The account has the Free plan's 500 MB.
+  `release.yml` attaches the installers to the GitHub release itself, so its
+  artifact upload is a copy and does not gate the release step.
+- **Peers.** Other sessions on this machine build and render too. Say which lane
+  you hold before you start, and ask for the disk while a notarize pass runs.
+
+### The cut, step by step
+
+Done in a detached worktree on `origin/main` (`~/crowe-logic-desktop-release` on
+this machine), never in a branch worktree someone else is editing.
+
+```
+git checkout --detach origin/main
+npm version X.Y.Z --no-git-tag-version
+node mobile/scripts/sync-version.js --check && node scripts/test-version-parity.js \
+  && node scripts/test-packaging.js && node scripts/test-preflight-release.js \
+  && node scripts/test-release-channel.js
+git commit -am "release: X.Y.Z" && git push origin HEAD:main
+git tag vX.Y.Z && git push origin vX.Y.Z
+gh run watch <release run id>       # then read .conclusion: --exit-status is 0 on a CANCELLED run
+npm run build:mac                   # signs, notarizes and staples both arches, about 10 minutes
+gh release download vX.Y.Z -D release -p '*' --clobber
+DRY_RUN=1 bash scripts/publish-rclone.sh && bash scripts/publish-rclone.sh
+gh release edit vX.Y.Z --notes-file docs/releases/X.Y.Z.md    # CI creates the release bodiless
+```
+
+Then the byte proof, the local copy against what the bucket serves. Feeds name
+the Windows and Linux files with spaces where the build wrote dots, so link the
+installers into a directory under the feed names first:
+
+```
+rclone check --download --one-way <dir of installers under their feed names> swmr2:crowe-releases/desktop/X.Y.Z
+```
+
+The developers channel: `release-developers.yml` lives on `main` since PR 78, so
+dispatch **Release developers** from the tagged commit (`gh workflow run
+release-developers.yml --ref main`, or `-f ref=vX.Y.Z`), `npm run
+dist:developers:mac`, `gh run download <run id> -D release-developers`, then the
+same dry run, publish and `rclone check` with `--config
+electron-builder.developer.js` against `desktop/developers/X.Y.Z`.
+
+Delete `release/` and `release-developers/` as soon as their byte proof passes:
+R2 and the GitHub release hold the bytes, and the next pass needs the room.
+`publish-rclone.sh` publishes whatever feeds it finds and fails only on zero, so
+confirm all three platforms' files are present before the real run.
+
+### The developers channel
+
+Crowe Logic for Developers (`electron-builder.developer.js`, the Azure
+Marketplace edition) publishes on its own channel, under its own prefix in the
+same bucket. `scripts/release-channel.js` is the one place the layout is written
+down; the publishers, the preflight, the verifier and the developer config read
+it, and `scripts/test-releases-worker.js` holds the worker to the same keys.
+
+| | full app (`latest`) | developers |
+| --- | --- | --- |
+| build output | `release/` | `release-developers/` |
+| installers, blockmaps, SHA256SUMS | `desktop/<version>/` | `desktop/developers/<version>/` |
+| update feeds | `desktop/channel/<os>/latest*.yml` | `desktop/developers/channel/<os>/developers*.yml` |
+| download page | `/` | `/developers` |
+| stable installer links | | `/developers/mac`, `/developers/mac-intel`, `/developers/windows`, `/developers/appimage`, `/developers/deb` |
+
+Feeds included: nothing the developer publish writes can land on a key the full
+app serves, and the default publisher reads only `latest*.yml`, so a
+`release-developers/` directory has no feeds as far as it is concerned and is
+refused rather than published as the full app.
+
+```
+npm run dist:developers:mac
+npm run publish:rclone:developers        # or publish:r2:developers; both preflight, upload, then verify
+npm run verify:release:developers
+```
+
+Windows and Linux developer builds come from `.github/workflows/release-developers.yml`
+(manual dispatch only; a `ref` input, empty for the branch dispatched from).
+It runs `npm run dist:developers -- --win` and `-- --linux` and uploads what
+landed in `release-developers/` as run artifacts. It publishes nothing; the
+publisher downloads the artifacts into `release-developers/` beside the
+notarized macOS build and runs the publish script above. Windows is unsigned,
+as the full app's is. On Linux the edition is `crowe-logic-developers`, deb
+package and binary both (`linux.executableName`, `deb.packageName` in the
+config), so it installs beside the full app's `crowe-logic-desktop` rather
+than replacing it; `scripts/test-packaging.js` holds the two apart.
+
+Every script also takes `--channel developers` or `--config
+electron-builder.developer.js` directly. `scripts/ingest-release.sh` takes
+`CHANNEL=developers`. On an edition's channel the verifier warns, rather than
+fails, for a platform that has no feed at all (the first developer release is
+macOS only); on `latest` a missing feed is still a failure.
 
 ### Verifying a release
 

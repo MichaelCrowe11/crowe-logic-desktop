@@ -2,15 +2,18 @@
 // Owns the window, the gateway bridge (token stays here), a real PTY shell, the
 // filesystem, an MCP client, and the agentic tool loop. File edits are gated
 // through an approve/reject review unless auto-approve is on.
-const { app, BrowserWindow, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog } = require("electron");
+const { app, BrowserWindow, session, ipcMain, Menu, Tray, globalShortcut, nativeImage, shell, crashReporter, safeStorage, dialog, Notification, powerMonitor, utilityProcess } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const http = require("http");
 const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const { spawn, exec, execFile } = require("child_process");
 const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
+const Repos = require("./repos");
+const Browser = require("./browser-client");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
   hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
@@ -63,8 +66,24 @@ const DEFAULTS = {
   // Crowe Sense: off | direct (the node's own API) | cloud (the relay, with the
   // Crowe ID bearer). Normalised in loadConfig like the tier and the approvals.
   sense: { ...Sense.SENSE_DEFAULTS },
+  // Crowe Browser, the cloud browser for agents. The service URL alone. The
+  // credential is not config: the signed-in user's Crowe ID token, or the
+  // service key in the encrypted store, both read in this process only.
+  croweBrowser: { url: Browser.DEFAULT_URL },
+  // The hosted control plane: off | local | remote. Off is the desktop exactly
+  // as it ships today, and it is the default so this changes nothing for an
+  // existing install. See cloud/contract.js.
+  controlPlane: "off",
+  tenantId: "",
+  // Folders this app has opened as the workspace, newest first, capped in
+  // repos.js. Written only from this process: the renderer opens a folder
+  // through crowe:repos:open and main records it.
+  recentWorkspaces: [],
+  // Where a GitHub repository lands when cloned from the sidebar: <root>/<owner>/<name>.
+  reposRoot: Repos.defaultReposRoot(),
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
+const PLANE_MODES = new Set(["off", "local", "remote"]);
 
 // ─── Crash reporting + minimal telemetry ─────────────────────────────────────
 // Local crash dumps always write to userData/crashes so the user can inspect
@@ -173,8 +192,24 @@ function loadConfig() {
     const tokenCap = Number(cfg.turnTokenCap);
     cfg.turnTokenCap = Number.isFinite(tokenCap) && tokenCap >= 0 ? tokenCap : DEFAULTS.turnTokenCap;
     cfg.sense = Sense.normalizeSense(cfg.sense);
+    // A key still in the file from before the store took it is moved once
+    // on the way through, and the block comes out with the URL alone.
+    cfg.croweBrowser = normalizeBrowserConfig(Browser.migrateKeyIntoStore(configPath(), cfg.croweBrowser, { readStore: readKeyStore, writeStore: writeKeyStore }));
+    // Same closed-set rule again: an unrecognised plane mode means no plane,
+    // never an unmetered remote one.
+    if (!PLANE_MODES.has(cfg.controlPlane)) cfg.controlPlane = DEFAULTS.controlPlane;
+    // Same closed-set discipline for the repository list: a hand-edited or
+    // future-version store is sanitized on every read, cap included.
+    cfg.recentWorkspaces = Repos.sanitizeRecent(cfg.recentWorkspaces);
+    if (typeof cfg.reposRoot !== "string" || !cfg.reposRoot.trim()) cfg.reposRoot = DEFAULTS.reposRoot;
     return cfg;
   } catch { return { ...DEFAULTS, ...readAuthStore() }; }
+}
+// The Crowe Browser block as a closed shape: an https URL (the default when
+// the stored one is unusable). Anything else, a key included, is dropped.
+function normalizeBrowserConfig(raw) {
+  const c = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  return { url: Browser.normalizeBaseUrl(c.url) || Browser.DEFAULT_URL };
 }
 function saveConfig(patch) {
   const current = loadConfig();
@@ -195,6 +230,12 @@ const KEY_PROVIDERS = {
   openrouter: { label: "OpenRouter", url: "https://openrouter.ai/api/v1/models", header: "Bearer" },
   groq: { label: "Groq", url: "https://api.groq.com/openai/v1/models", header: "Bearer" },
 };
+// Crowe Browser's service key rests in the same encrypted store, under its
+// own id. It is a credential for a Crowe service, not a model provider, so it
+// is not in KEY_PROVIDERS and appears in no list built from that table: the
+// Key Manager rows, the image tool's providers, the test endpoint.
+const SERVICE_KEYS = { croweBrowser: { label: "Crowe Browser" } };
+const keyStoreAccepts = (id) => Boolean(KEY_PROVIDERS[id] || SERVICE_KEYS[id]);
 function keyStorePath() { return path.join(app.getPath("userData"), "credentials.bin"); }
 function readKeyStore() {
   try {
@@ -215,15 +256,20 @@ function keyStatus() {
 }
 ipcMain.handle("crowe:keys:list", () => ({ encrypted: safeStorage.isEncryptionAvailable(), providers: keyStatus() }));
 ipcMain.handle("crowe:keys:set", (_e, { provider, key }) => {
-  if (!KEY_PROVIDERS[provider] || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
+  if (!keyStoreAccepts(provider) || typeof key !== "string" || !key.trim()) return { error: "Invalid provider or key" };
   const store = readKeyStore(); store[provider] = { value: key.trim(), updatedAt: Date.now() }; writeKeyStore(store);
+  // Cloud browser sessions opened under the old key end; the next tool call
+  // opens one under the new key.
+  if (provider === "croweBrowser") browserSessions.endAll().catch(() => {});
   return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:remove", (_e, { provider }) => {
-  // Same provider gate as set: the store also carries the plugin secrets
-  // namespace, and an unchecked name could clear it in one call.
-  if (!KEY_PROVIDERS[provider]) return { error: "Invalid provider" };
-  const store = readKeyStore(); delete store[provider]; writeKeyStore(store); return { ok: true, providers: keyStatus() };
+  // Same gate as set: the store also carries the plugin secrets namespace,
+  // and an unchecked name could clear it in one call.
+  if (!keyStoreAccepts(provider)) return { error: "Invalid provider" };
+  const store = readKeyStore(); delete store[provider]; writeKeyStore(store);
+  if (provider === "croweBrowser") browserSessions.endAll().catch(() => {});
+  return { ok: true, providers: keyStatus() };
 });
 ipcMain.handle("crowe:keys:test", async (_e, { provider }) => {
   const spec = KEY_PROVIDERS[provider], secret = readKeyStore()[provider]?.value;
@@ -306,7 +352,7 @@ function createWindow() {
   const appEntry = APP_ENTRY;
   mainWindow = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 560,
-    backgroundColor: "#f7f3ea", title: "Crowe Logic", show: false,
+    backgroundColor: "#F4F0E7", title: "Crowe Logic", show: false,
     // macOS ignores this and uses the bundle icon. Windows and Linux do read it,
     // and neither can decode .icns, so pointing at the icns left them on the
     // default Electron icon.
@@ -446,13 +492,20 @@ async function refreshToken() {
   } catch { /* noop */ }
   return null;
 }
+/* One sign-in at a time. The loopback listener holds its port for up to five
+   minutes while the browser page waits, so a second click used to open a second
+   listener, collide with the first on EADDRINUSE, and blame the ports. A click
+   while one is pending now brings that page back up and joins its promise. */
+let pendingSignIn = null;
 function signIn() {
-  return new Promise((resolve) => {
+  if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const pending = { promise: null, authUrl: "" };
+  pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
     const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
     const state = b64url(crypto.randomBytes(16));
     let redirect = "", settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const finish = (v) => { if (!settled) { settled = true; if (pendingSignIn === pending) pendingSignIn = null; resolve(v); } };
     const server = http.createServer(async (req, res) => {
       const u = new URL(req.url, "http://127.0.0.1");
       if (u.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
@@ -462,7 +515,7 @@ function signIn() {
       // too, and one stray request must not cancel the user's real callback.
       if (!code || st !== state) { res.writeHead(400, { "Content-Type": "text/plain" }); res.end("not this sign-in"); return; }
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#f7f3ea;color:#1a1714;text-align:center;padding-top:14vh"><h2 style="color:#96702c;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
+      res.end('<!doctype html><meta charset="utf-8"><body style="font-family:-apple-system,Segoe UI,Inter,sans-serif;background:#F4F0E7;color:#121212;text-align:center;padding-top:14vh"><h2 style="color:#7A663C;font-family:Fraunces,Georgia,serif">Crowe Logic</h2><p>You are signed in. You can close this window and return to the app.</p></body>');
       try { server.close(); } catch {}
       try {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
@@ -477,7 +530,7 @@ function signIn() {
     let pIdx = 0;
     server.on("error", (e) => {
       if (e && e.code === "EADDRINUSE" && pIdx < PORTS.length - 1) { pIdx += 1; setTimeout(() => server.listen(PORTS[pIdx], "127.0.0.1"), 40); return; }
-      finish({ error: "could not open a loopback port (8765/9275 in use): " + String(e).slice(0, 100) });
+      finish({ error: "could not open a loopback port: 8765 and 9275 are both busy on this Mac, so the browser has nowhere to send you back. Another app, or another Crowe Logic window waiting on a sign-in, holds them; finish or close that and try again. " + String(e).slice(0, 100) });
     });
     server.on("listening", () => {
       redirect = `http://127.0.0.1:${server.address().port}/callback`;
@@ -485,14 +538,22 @@ function signIn() {
         client_id: CROWE_ID_CLIENT, response_type: "code", scope: "openid profile email offline_access",
         redirect_uri: redirect, state, code_challenge: challenge, code_challenge_method: "S256",
       }).toString();
+      pending.authUrl = authUrl;
       shell.openExternal(authUrl);
     });
     server.listen(PORTS[pIdx], "127.0.0.1");
     setTimeout(() => { try { server.close(); } catch {} finish({ error: "sign-in timed out" }); }, 300000);
   });
+  pendingSignIn = pending;
+  return pending.promise;
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
-ipcMain.handle("crowe:auth:logout", () => { saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {} return { ok: true }; });
+ipcMain.handle("crowe:auth:logout", () => {
+  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
+  browserSessions.endAll().catch(() => {});
+  return { ok: true };
+});
 ipcMain.handle("crowe:auth:status", async () => {
   let u = currentUser();
   if (u && u.exp) {
@@ -673,37 +734,64 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
 
-// ─── MCP client (stdio, newline-delimited JSON-RPC) ──────────────────────────
+// ─── MCP client: newline-delimited JSON-RPC over stdio, or the same messages over a utility process's port ──
 const MCP = {}; // name -> { proc, tools, send, pending, nextId }
 function mcpConnect(name, spec) {
   return new Promise((resolve) => {
-    let proc;
+    let proc, send;
     // The same filtered environment the agent shell gets: a plugin server is a
     // process the user did not write, and it does not need the app's tokens.
-    try { proc = spawn(spec.command, spec.args || [], { env: { ...require("./harness").safeShellEnv(), ...(spec.env || {}) }, stdio: ["pipe", "pipe", "pipe"] }); }
-    catch (e) { return resolve({ error: String(e) }); }
-    const srv = { proc, tools: [], pending: new Map(), nextId: 1, buf: "" };
-    const send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+    const harness = require("./harness");
+    const env = harness.pluginSpawnEnv(spec.env || {});
+    const srv = { proc: null, tools: [], pending: new Map(), nextId: 1, buf: "" };
+    const receive = (msg) => {
+      if (!msg || !msg.id || !srv.pending.has(msg.id)) return;
+      const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
+      msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
+    };
+    try {
+      if (spec.fork) {
+        /* A server that ships inside the app runs in an Electron utility process:
+           the Node runtime the app carries, so no node is needed on the machine.
+           Not ELECTRON_RUN_AS_NODE on this binary: a packaged build has the
+           RunAsNode fuse off, so that variable is ignored and the "server" would
+           come up as a second copy of the app. A utility process has no stdin to
+           give it, so requests and replies cross its message port as objects. */
+        proc = utilityProcess.fork(spec.fork, spec.args || [], { env, stdio: ["ignore", "pipe", "pipe"], serviceName: `crowe-plugin-${name}` });
+        // Drained, not read: a server that writes to its stdio must never block on a full pipe.
+        proc.stdout.on("data", () => {});
+        proc.stderr.on("data", () => {});
+        proc.on("message", receive);
+        send = (msg) => proc.postMessage(msg);
+      } else {
+        // Resolve the binary ourselves so the failure names it. A Finder launch has
+        // no npx on PATH, and "spawn failed" told nobody that.
+        if (!harness.findOnPath(spec.command, env.PATH)) {
+          return resolve({ error: `${spec.command} is not installed or not on PATH; install Node.js (nodejs.org or Homebrew) and reopen the app` });
+        }
+        proc = spawn(spec.command, spec.args || [], { env, stdio: ["pipe", "pipe", "pipe"] });
+        proc.stdout.on("data", (chunk) => {
+          srv.buf += chunk.toString();
+          let i;
+          while ((i = srv.buf.indexOf("\n")) >= 0) {
+            const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
+            if (!line) continue;
+            let msg; try { msg = JSON.parse(line); } catch { continue; }
+            receive(msg);
+          }
+        });
+        send = (msg) => proc.stdin.write(JSON.stringify(msg) + "\n");
+      }
+    } catch (e) { return resolve({ error: String(e) }); }
+    srv.proc = proc;
     srv.request = (method, params) => new Promise((res, rej) => {
       const id = srv.nextId++; srv.pending.set(id, { res, rej });
-      send({ jsonrpc: "2.0", id, method, params });
+      try { send({ jsonrpc: "2.0", id, method, params }); } catch (e) { srv.pending.delete(id); return rej(e); }
       setTimeout(() => { if (srv.pending.has(id)) { srv.pending.delete(id); rej(new Error("timeout")); } }, 15000);
     });
-    srv.notify = (method, params) => send({ jsonrpc: "2.0", method, params });
-    proc.stdout.on("data", (chunk) => {
-      srv.buf += chunk.toString();
-      let i;
-      while ((i = srv.buf.indexOf("\n")) >= 0) {
-        const line = srv.buf.slice(0, i).trim(); srv.buf = srv.buf.slice(i + 1);
-        if (!line) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id && srv.pending.has(msg.id)) {
-          const p = srv.pending.get(msg.id); srv.pending.delete(msg.id);
-          msg.error ? p.rej(new Error(msg.error.message || "rpc error")) : p.res(msg.result);
-        }
-      }
-    });
-    proc.on("error", () => resolve({ error: "spawn failed" }));
+    srv.notify = (method, params) => { try { send({ jsonrpc: "2.0", method, params }); } catch {} };
+    proc.on("error", (e) => resolve({ error: e && e.code === "ENOENT" ? `${spec.command} not found on PATH` : `spawn failed (${(e && (e.code || e.message)) || "unknown"})` }));
+    // Both report the code first: child_process as (code, signal), a utility process as (code).
     proc.on("exit", (code) => {
       // Identity check: a late exit from a superseded process must not
       // deregister a freshly reconnected server under the same name.
@@ -735,6 +823,7 @@ async function mcpConnectAll() {
     if (spec && spec.command) await mcpConnect(name, spec);
   }
 }
+const mail = require("./mail");
 // ─── Official plugins (Phase 1: bundled manifest over the MCP client) ────────
 // A plugin IS a manifest entry + an MCP server + declared tiers. Enable is one
 // click, disable is one click, and a dead server never breaks the app.
@@ -748,9 +837,21 @@ const BUILTIN_PLUGINS = (() => {
   catch { return []; }
 })();
 const PLUGIN_IDS = new Set(BUILTIN_PLUGINS.map((p) => p.id));
-const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager
+const PLUGIN_MANAGED = new Set();      // ids whose MCP[id] was started by the manager, or whose built-in tools are on
 const PLUGIN_GEN = Object.create(null); // id -> int; disable bumps to void in-flight connects
 const PLUGIN_CONNECTING = new Set();
+/* A built-in plugin has no server: its tools live in the harness, and the
+   manifest entry exists so its credentials, its tier rule, and its on/off
+   switch travel the same road as every other plugin. The tool names come from
+   this table and not from the manifest, so an entry cannot claim a built-in it
+   does not own, and an entry that names a server is never treated as one.
+   Connecting a built-in is checking that its account is complete: a switched-on
+   Mail with no password is a tool the agent can see and can never use. */
+const BUILTIN_PLUGIN_TOOLS = { [mail.PLUGIN_ID]: mail.TOOLS };
+const BUILTIN_PLUGIN_CHECKS = {
+  [mail.PLUGIN_ID]: (env) => (mail.isConfigured(env) ? "" : "Mail needs the SMTP host (host or host:port), the full mail address you send from, and the app password"),
+};
+function pluginBuiltinTools(p) { return p && !p.mcp && BUILTIN_PLUGIN_TOOLS[p.id] ? BUILTIN_PLUGIN_TOOLS[p.id] : null; }
 function pluginState() { return loadConfig().plugins || {}; }
 function pluginSecretState() { return readKeyStore().__plugins || {}; }
 function pluginEnv(id) { return pluginSecretState()[id] || {}; }
@@ -786,25 +887,52 @@ function expandHome(s) { return String(s).replace(/^~(?=$|\/)/, os.homedir()); }
 function pluginList() {
   const st = pluginState();
   return BUILTIN_PLUGINS.map((p) => {
-    const connected = PLUGIN_MANAGED.has(p.id) && Boolean(MCP[p.id]);
+    const builtin = pluginBuiltinTools(p);
+    const connected = PLUGIN_MANAGED.has(p.id) && (builtin ? true : Boolean(MCP[p.id]));
     return {
       id: p.id, name: p.name, description: p.description, category: p.category,
       spaces: p.spaces || [], available: p.available !== false, envPrompts: p.envPrompts || [],
       glyph: p.glyph || "", chips: p.chips || [],
       enabled: Boolean(st[p.id] && st[p.id].enabled),
       connected,
-      toolCount: connected ? MCP[p.id].tools.length : 0,
+      toolCount: connected ? (builtin ? builtin.length : MCP[p.id].tools.length) : 0,
     };
   });
 }
+/* Two placeholders a bundled manifest may use, so a server that ships inside
+   the app can be named without knowing where the app was installed. ${APP} is
+   the app's own directory, read from outside the asar (plugins/ is unpacked
+   for this), and ${NODE} as the command runs the named script in an Electron
+   utility process, the Node runtime the app carries, so a bundled server needs
+   no node on the machine and starts under a packaged build's fuses (RunAsNode
+   is off there, so this binary will not run a script as plain Node). Both
+   resolve here and nowhere else; the manifest stays the only source of commands. */
+function resolvePluginPath(s) {
+  // main.js's own directory, not app.getAppPath(): the two agree for `electron .`
+  // and for a packaged app, but a script launched as `electron scripts/x.js` gets
+  // that script's folder as its app path. The manifest itself is read from here.
+  // Either separator: on Windows the archive is spelled C:\...\app.asar\main.js.
+  const appDir = __dirname.replace(/app\.asar(?=[\\/]|$)/, "app.asar.unpacked");
+  return expandHome(String(s).replace(/\$\{APP\}/g, appDir));
+}
 async function pluginConnect(p, env) {
+  const builtin = pluginBuiltinTools(p);
+  if (builtin) {
+    const check = BUILTIN_PLUGIN_CHECKS[p.id];
+    const problem = check ? check(env || {}) : "";
+    if (problem) return { error: problem };
+    PLUGIN_MANAGED.add(p.id);
+    return { ok: true, tools: builtin.length };
+  }
   if (!p.mcp || !p.mcp.command) return { error: "no server declared for this plugin yet" };
+  const asNode = p.mcp.command === "${NODE}";
+  const args = (p.mcp.args || []).map(resolvePluginPath);
+  if (asNode && !args.length) return { error: "the manifest names ${NODE} but no server script" };
   const gen = (PLUGIN_GEN[p.id] = (PLUGIN_GEN[p.id] || 0) + 1);
-  const r = await mcpConnect(p.id, {
-    command: expandHome(p.mcp.command),
-    args: (p.mcp.args || []).map(expandHome),
-    env: { ...(p.mcp.env || {}), ...(env || {}) },
-  });
+  const merged = { ...(p.mcp.env || {}), ...(env || {}) };
+  const r = await mcpConnect(p.id, asNode
+    ? { fork: args[0], args: args.slice(1), env: merged }
+    : { command: resolvePluginPath(p.mcp.command), args, env: merged });
   if (PLUGIN_GEN[p.id] !== gen) {
     // Disabled (or superseded) while connecting: tear down our registration.
     const srv = MCP[p.id];
@@ -866,6 +994,7 @@ async function mcpCall(fullName, args) {
 
 // ─── Agent harness (tools, system prompt, loop) — see harness.js ─────────────
 const harness = require("./harness");
+const { makeControlPlane, runTurn } = require("./cloud/index.js");
 function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.homedir()); return path.isAbsolute(p) ? p : path.join(CWD, p); }
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
@@ -937,6 +1066,8 @@ function requestApproval(req) {
   mainWindow.webContents.send("crowe:agent:event", {
     type: "approval_request", id, agentId, kind: req.kind, title: req.title,
     detail: req.detail, why: req.why, risk: req.risk, hash: req.hash,
+    // Seat, connector and tool, when a room seat is the one asking.
+    meta: req.meta || undefined,
     expiresInMs: APPROVAL_TIMEOUT_MS,
   });
   journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });
@@ -1027,9 +1158,87 @@ async function fetchCatalog() {
   } catch { /* keep last good; the router degrades to the default model */ }
 }
 
+// ─── The document printer ────────────────────────────────────────────────────
+/* export_document lays its page out in Chromium, and Chromium is here, not in
+   the harness, so the harness is handed this hook. The page loads into a hidden
+   window with scripts off and no network at all: an image URL the model
+   composed, fetched while printing, is the same outbound GET open_url asks
+   about, so on this session every request that is not the document itself is
+   cancelled. One job at a time, since each is a renderer process, and the whole
+   job - load and print - has one deadline, with the window destroyed either
+   way, so a hung page cannot outlive the turn that asked for it. */
+const PRINT_TIMEOUT_MS = 30000;
+const PRINT_MAX_DATA_URL_CHARS = 1800000;   // Chromium will not navigate to a URL past 2M characters
+let printSess = null, printAllow = "", printChain = Promise.resolve();
+function printSession() {
+  if (printSess) return printSess;
+  printSess = session.fromPartition("crowe-print");   // no persist: prefix, so it lives in memory only
+  printSess.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
+    callback({ cancel: !(details.url === printAllow || details.url.startsWith("data:") || details.url.startsWith("about:")) });
+  });
+  printSess.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  printSess.setPermissionCheckHandler(() => false);
+  return printSess;
+}
+async function printOne(html) {
+  printSession();
+  const win = new BrowserWindow({ show: false, width: 816, height: 1056, webPreferences: {
+    partition: "crowe-print", sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  let timer = null, tmp = null;
+  try {
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`printing took longer than ${PRINT_TIMEOUT_MS / 1000}s`)), PRINT_TIMEOUT_MS); });
+    let url = "data:text/html;charset=utf-8;base64," + Buffer.from(html, "utf8").toString("base64");
+    if (url.length > PRINT_MAX_DATA_URL_CHARS) {
+      // Too long for a URL: a private temp file, readable by this user only, removed in finally.
+      tmp = path.join(app.getPath("temp"), `crowe-print-${crypto.randomBytes(8).toString("hex")}.html`);
+      fs.writeFileSync(tmp, html, { mode: 0o600 });
+      url = pathToFileURL(tmp).toString();
+    }
+    printAllow = url;
+    await Promise.race([win.loadURL(url), deadline]);
+    return await Promise.race([win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true, generateDocumentOutline: true }), deadline]);
+  } finally {
+    clearTimeout(timer);
+    printAllow = "";
+    if (!win.isDestroyed()) win.destroy();
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+}
+function printToPdf(html) {
+  const job = printChain.then(() => printOne(String(html ?? "")));
+  printChain = job.catch(() => {});
+  return job;
+}
+
+/* Crowe Browser sessions, one per turn owner. The map lives here because the
+   sessions outlive turns: the chat's browser stays on its page between
+   messages, a Room seat keeps its own until the seat is stopped or the room
+   deleted, and quitting ends them all. A URL changed in Settings applies to
+   the next session, and the live ones under the old service are ended. The
+   harness reaches this through ctx.browser.
+
+   The credential a session is created with (API.md, Authentication): the
+   signed-in user's Crowe ID access token, refreshed through the one refresh
+   path when it is within a minute of expiry, or the service key from the
+   encrypted store when nobody is signed in. Both are read in this process at
+   request time and handed to no one; the renderer is told which kind is in
+   force, never a value. */
+function browserServiceKey() { const e = readKeyStore().croweBrowser; return e && typeof e.value === "string" ? e.value : ""; }
+function browserAuthKind(cfg) { return Browser.authKind({ getToken: () => (cfg || loadConfig()).token, getKey: browserServiceKey }); }
+const browserCredential = Browser.credentialProvider({ getToken: () => loadConfig().token, getKey: browserServiceKey, refresh: refreshToken });
+const browserSessions = new Browser.BrowserSessions({
+  clientFor: () => {
+    const cfg = loadConfig();
+    if (!cfg.croweBrowser || !cfg.croweBrowser.url || browserAuthKind(cfg) === "none") return null;
+    try { return new Browser.CroweBrowserClient({ url: cfg.croweBrowser.url, credential: browserCredential }); } catch { return null; }
+  },
+});
 const harnessCtx = {
   getCwd: () => CWD,
   setCwd: (p) => { CWD = p; },
+  browser: browserSessions,
   loadConfig,
   proposeEdit,
   // The gate in front of anything that cannot be taken back, and the receipt
@@ -1041,6 +1250,8 @@ const harnessCtx = {
   mcpTools: () => Object.values(MCP).flatMap((s) => s.tools),
   mcpCall,
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
+  // The document printer above. The harness never requires electron itself.
+  printToPdf,
   // The Runbook lives in the renderer's store, so authoring is an event, not a
   // write from here: the renderer saves it and surfaces the canvas. Stamped
   // "main" because chat is the only surface that offers the tool.
@@ -1059,21 +1270,56 @@ const harnessCtx = {
   // indistinguishable from a hand-logged one and both are equally correctable.
   growWrite: (type, record) => growWrite(type, record),
   growRead: (type) => growRead(type),
+  /* Mail. The account never crosses into the harness: the message comes in,
+     the credentials are read from the encrypted store here at send time, and
+     only the server's verdict goes back. No IPC handler sends mail; the one
+     road to sendMail is the harness gate in front of send_email. */
+  mailConfigured: () => PLUGIN_MANAGED.has(mail.PLUGIN_ID) && mail.isConfigured(pluginEnv(mail.PLUGIN_ID)),
+  // The sender and the server for the approval card; the password stays here.
+  mailAccount: () => mail.accountIdentity(mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID))),
+  /* Pinned to the account the card showed: the store is read once, and if the
+     sender or the server it holds is not what the user approved, nothing
+     goes. The harness makes the same check a moment earlier; this one stands
+     where the credentials are actually in hand. */
+  sendMail: (message, approved) => {
+    const account = mail.accountFromEnv(pluginEnv(mail.PLUGIN_ID));
+    if (!mail.sameIdentity(account, approved)) return Promise.reject(new mail.SmtpError("the Mail account is not the one the approval card showed"));
+    return mail.sendMail(account, message, { mailer: `Crowe Logic ${app.getVersion()}` });
+  },
+  // The image tool's key, read at call time from the same encrypted store the
+  // Key Manager writes, and handed over as a value the harness keeps inside one
+  // request header. OpenAI first because it is the native images endpoint,
+  // OpenRouter otherwise. Null means no key, which the tool answers in words.
+  imageCredential: () => {
+    const store = readKeyStore();
+    for (const provider of ["openai", "openrouter"]) {
+      const secret = store[provider] && store[provider].value;
+      if (typeof secret === "string" && secret) return { provider, secret };
+    }
+    return null;
+  },
   rateIn: RATE_IN, rateOut: RATE_OUT,
 };
 const agentRuns = new Map();
+// A stopped Room seat gives its cloud browser back. The chat's own session
+// stays: stopping a turn is not closing the browser, and the next message
+// finds the page where it was.
+const isSeatId = (id) => /^room:/.test(String(id || ""));
 ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   const run = agentRuns.get(id);
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
   denyPendingApprovals(id);
+  if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
 ipcMain.handle("crowe:agent:stop-all", () => {
+  councilHost.stopAll();
   for (const run of agentRuns.values()) {
     run.aborted = true;
     try { if (run.controller) run.controller.abort(); } catch {}
   }
   denyPendingApprovals();
+  browserSessions.dropWhere(isSeatId).catch(() => {});
   return { ok: true, stopped: agentRuns.size };
 });
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
@@ -1087,27 +1333,66 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
   agentRuns.set(id, run);
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
-    const result = await harness.runAgent(harnessCtx, messages.slice(), {
-      gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
-      send: (ev) => evt.sender.send("crowe:agent:event", { ...ev, agentId: id }),
-      isAborted: () => run.aborted,
-      setController: (c) => { run.controller = c; },
-      role: String(role || ""),
-      agentId: String(id || "main"),
-      // Per-turn situational state from the renderer - today the cultivation
-      // records. Capped here rather than trusted from the caller: the renderer
-      // decides what is worth saying, the main process decides how much of the
-      // context window a caller may spend saying it.
-      context: String(context || "").slice(0, 8000),
-      // The session's standing brief is who is speaking for this thread; the
-      // harness already composes `persona` ahead of `context`, so a briefed
-      // session and a room seat are the same mechanism from here down.
-      persona: String(brief || "").slice(0, 4000),
+    const cfg = loadConfig();
+    const user = currentUser();
+    const plane = makeControlPlane({
+      mode: cfg.controlPlane, baseUrl: cfg.baseUrl, token: cfg.token,
+      dir: app.getPath("userData"),
+      // The desktop is a local agent someone already paid for. A plane it
+      // cannot reach must not brick it, so this one degrades and says so; the
+      // hosted seat is the deployment that fails closed.
+      requirePlane: false,
     });
-    if (id === "main") {
-      try { persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch {}
+    const meter = { in: 0, out: 0, model: "" };
+    const send = (ev) => {
+      if (ev && ev.type === "telemetry") {
+        meter.in = Number(ev.promptTokens) || meter.in;
+        meter.out = Number(ev.completionTokens) || meter.out;
+      }
+      // The routed deployment, so the usage row names what answered.
+      if (ev && ev.type === "route" && ev.expert !== "verifier" && ev.model) meter.model = String(ev.model);
+      evt.sender.send("crowe:agent:event", { ...ev, agentId: id });
+    };
+
+    const turn = await runTurn({
+      plane, cfg, model: "",
+      identity: { tenantId: cfg.tenantId || (user && user.email) || "local", workspaceId: String(workspaceId || "") },
+      journal: journalWrite,
+      run: async ({ ceiling }) => {
+        // The plane's remaining quota arrives as the ceiling the harness
+        // already enforces, so it ends a turn with a reserve and a closing
+        // call rather than as a second, blunter stop.
+        // Rooms are readable from the person's own seat only; see roomsForHarness.
+        const ctx = { ...harnessCtx, rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        const r = await harness.runAgent(ctx, messages.slice(), {
+          gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
+          send,
+          isAborted: () => run.aborted,
+          setController: (c) => { run.controller = c; },
+          role: String(role || ""),
+          agentId: String(id || "main"),
+          // Per-turn situational state from the renderer - today the cultivation
+          // records. Capped here rather than trusted from the caller: the renderer
+          // decides what is worth saying, the main process decides how much of the
+          // context window a caller may spend saying it.
+          context: String(context || "").slice(0, 8000),
+          // The session's standing brief is who is speaking for this thread; the
+          // harness already composes `persona` ahead of `context`, so a briefed
+          // session and a room seat are the same mechanism from here down.
+          persona: String(brief || "").slice(0, 4000),
+        });
+        return { ...r, inputTokens: meter.in, outputTokens: meter.out, model: r.model || meter.model };
+      },
+    });
+
+    if (!turn.authorized) {
+      send({ type: "error", text: turn.decision.reason });
+      return { done: false, error: turn.decision.reason, text: turn.decision.reason };
     }
-    return { done: true, text: result.text || "" };
+    if (id === "main") {
+      try { persistSession([...messages, { role: "assistant", content: turn.text || "" }]); } catch {}
+    }
+    return { done: true, text: turn.text || "" };
   } finally {
     agentRuns.delete(id);
   }
@@ -1124,11 +1409,58 @@ const ptyProcs = new Map();
    environment, the same one Terminal.app would give them, and the gateway token
    is not in it - it lives in the auth store. */
 function shellBlocked() { return (loadConfig().autonomy || "edit") !== "execute"; }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows } = {}) => {
+/* The autonomy tier is the agent's leash, not the operator's. A terminal the
+   user opens is the user typing, the same as Terminal.app, and gating it by the
+   agent's tier made the default layout open a terminal that refused to start.
+   The gate stays for panels that hand the shell to an agent (kind "agent"),
+   where the tier's "no shell" promise is the point. */
+/* node-pty runs the shell through a small helper binary beside its native
+   module. The prebuilt copy npm installs is not executable (upstream ships it
+   0644), so a fresh checkout failed every spawn with "posix_spawnp failed" and
+   the handler threw it at the renderer, which never catches: the panel sat on
+   "starting" forever. A packaged build was never affected - electron-builder
+   rebuilds the module from source and that helper carries its mode bit - and a
+   packaged app is never modified here, its bundle is sealed by the signature.
+   A dev checkout gets the bit set once and the spawn retried. Whatever the
+   cause, a shell that will not start is a refusal the panel can print. */
+function ptyHelperPaths() {
+  try {
+    const dir = path.dirname(require.resolve("node-pty/package.json"));
+    return [path.join(dir, "build", "Release", "spawn-helper"), path.join(dir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper")];
+  } catch { return []; }
+}
+/* The operator's login shell, started as one (`-l`), so the PATH they set in
+   .zprofile is there even from a Finder or Dock launch, where the app itself
+   inherits only /usr/bin:/bin:/usr/sbin:/sbin; without it the first terminal a
+   user opened said "command not found" to node, brew and crowe. Windows has no
+   $SHELL and no /bin/zsh: PowerShell is on every supported Windows, and until
+   this the Windows build's terminal could not start at all. */
+function shellCommand() {
+  if (process.platform === "win32") return { file: "powershell.exe", args: [] };
+  return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
+}
+function spawnShell(cols, rows) {
+  const { file, args } = shellCommand();
+  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env };
+  try { return pty.spawn(file, args, opts); }
+  catch (err) {
+    if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
+    let fixed = false;
+    for (const helper of ptyHelperPaths()) {
+      if (!fs.existsSync(helper)) continue;
+      try { fs.accessSync(helper, fs.constants.X_OK); } catch { try { fs.chmodSync(helper, 0o755); fixed = true; } catch {} }
+    }
+    if (!fixed) throw err;
+    return pty.spawn(file, args, opts);
+  }
+}
+ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
-  if (shellBlocked()) return { ok: false, error: `shell is off at "${loadConfig().autonomy || "edit"}" autonomy - switch to Execute to open a terminal` };
+  if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `the shell is off in "${loadConfig().autonomy || "edit"}" operating mode. Switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
-  const proc = pty.spawn(process.env.SHELL || "/bin/zsh", [], { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env });
+  let proc;
+  try { proc = spawnShell(cols, rows); }
+  catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
   ptyProcs.set(id, proc);
   proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
@@ -1145,6 +1477,7 @@ ipcMain.handle("crowe:operator:status", () => ({
   cwd: CWD, autonomy: loadConfig().autonomy || "edit", version: app.getVersion(), uptime: Math.round(process.uptime()),
 }));
 ipcMain.handle("crowe:operator:stop-all", () => {
+  councilHost.stopAll();
   for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
   denyPendingApprovals();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
@@ -1185,12 +1518,13 @@ ipcMain.handle("crowe:fs:walk", () => {
    repo can be anyone's: a file called `x & evil.cmd & y` is a legal name, and
    through cmd.exe a single-quoted argument is not a quoted argument at all.
    execFile hands git an argv and nothing interprets it on the way. */
-function gitRun(args) {
+function gitRunIn(dir, args) {
   return new Promise((resolve) => {
-    execFile("git", args.map(String), { cwd: CWD, timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
+    execFile("git", args.map(String), { cwd: dir, timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
       (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" }));
   });
 }
+function gitRun(args) { return gitRunIn(CWD, args); }
 function gitWritesBlocked() { const t = loadConfig().autonomy || "edit"; return t === "readonly" || t === "plan"; }
 ipcMain.handle("crowe:git:status", async () => {
   const probe = await gitRun(["rev-parse", "--is-inside-work-tree"]);
@@ -1207,10 +1541,10 @@ ipcMain.handle("crowe:git:diff", async (_e, { path: p, staged }) => {
   const r = await gitRun(["diff", ...(staged ? ["--staged"] : []), "--", p || "."]);
   return r.out || r.err || "(no textual diff)";
 });
-ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["add", "--", p]); });
-ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["restore", "--staged", "--", p]); });
+ipcMain.handle("crowe:git:stage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["add", "--", p]); });
+ipcMain.handle("crowe:git:unstage", async (_e, { path: p }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["restore", "--staged", "--", p]); });
 ipcMain.handle("crowe:git:commit", async (_e, { message }) => {
-  if (gitWritesBlocked()) return { error: "read-only autonomy" };
+  if (gitWritesBlocked()) return { error: "read-only operating mode" };
   if (!message || !message.trim()) return { error: "empty commit message" };
   const r = await gitRun(["commit", "-m", message]);
   return { ok: r.ok, out: (r.out || "") + (r.err || "") };
@@ -1224,28 +1558,256 @@ ipcMain.handle("crowe:git:branches", async () => {
   const r = await gitRun(["branch", "--format=%(refname:short)"]);
   return { current: cur, branches: r.out.split("\n").map((s) => s.trim()).filter(Boolean) };
 });
-ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; return await gitRun(["checkout", "--end-of-options", branch]); });
-ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
-ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only autonomy" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:checkout", async (_e, { branch }) => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; return await gitRun(["checkout", "--end-of-options", branch]); });
+ipcMain.handle("crowe:git:pull", async () => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; const r = await gitRun(["pull", "--ff-only"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+ipcMain.handle("crowe:git:push", async () => { if (gitWritesBlocked()) return { error: "read-only operating mode" }; const r = await gitRun(["push"]); return { ok: r.ok, out: (r.out || "") + (r.err || "") }; });
+
+// ─── Repositories ────────────────────────────────────────────────────────────
+/* The sidebar's repository list: folders this app has opened, and what GitHub
+   knows about the ones the token can see. The rules live in repos.js; this is
+   the side of them that touches git, the folder dialog, the token and the gate.
+
+   Two things are deliberately narrow. The renderer never names a URL to clone
+   from, only owner and name, and the address is built here from those two
+   validated segments, so the approval card and the fetch cannot disagree about
+   which repository is meant. And a clone goes through the same gateAction the
+   harness puts in front of run_shell, review class with the floor raised: it
+   asks under high-risk and strict, is journaled under every setting, and the
+   command itself is an argv to execFile, never a shell string. */
+function rememberWorkspace(dir) {
+  try {
+    if (!fs.statSync(dir).isDirectory()) return;
+    saveConfig({ recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir) });
+  } catch { /* a folder that is not there is not remembered */ }
+}
+// One place changes the workspace from the sidebar. Existence is checked here
+// because a stored path is stale input: the folder may have moved since.
+function openWorkspace(rawPath) {
+  const dir = Repos.normalizePath(rawPath);
+  if (!dir) return { error: "No folder given" };
+  let stat;
+  try { stat = fs.statSync(dir); } catch { return { error: "That folder is not there any more" }; }
+  if (!stat.isDirectory()) return { error: "That path is not a folder" };
+  CWD = dir;
+  saveConfig({ cwd: dir, recentWorkspaces: Repos.rememberWorkspace(loadConfig().recentWorkspaces, dir) });
+  return { ok: true, cwd: dir };
+}
+function isGitCheckout(dir) { return fs.existsSync(path.join(dir, ".git")); }
+async function repoSummary(dir) {
+  const probe = await gitRunIn(dir, ["rev-parse", "--is-inside-work-tree"]);
+  if (!probe.ok) return { repo: false, branch: "", dirty: 0, remote: null };
+  const [branch, status, origin] = await Promise.all([
+    gitRunIn(dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    gitRunIn(dir, ["status", "--porcelain=v1"]),
+    gitRunIn(dir, ["remote", "get-url", "origin"]),
+  ]);
+  return {
+    repo: true,
+    branch: branch.out.trim() || "(detached)",
+    dirty: status.out.split("\n").filter(Boolean).length,
+    remote: origin.ok ? Repos.parseRemote(origin.out.trim()) : null,
+  };
+}
+let lastRecentRows = [];
+async function recentRows() {
+  const cur = Repos.normalizePath(CWD);
+  const rows = await Promise.all(loadConfig().recentWorkspaces.map(async (r) => {
+    let exists = false;
+    try { exists = fs.statSync(r.path).isDirectory(); } catch { exists = false; }
+    const s = exists ? await repoSummary(r.path) : { repo: false, branch: "", dirty: 0, remote: null };
+    return { path: r.path, name: path.basename(r.path) || r.path, openedAt: r.openedAt, exists, current: r.path === cur, ...s };
+  }));
+  lastRecentRows = rows;
+  return rows;
+}
+ipcMain.handle("crowe:repos:recent", () => recentRows());
+ipcMain.handle("crowe:repos:open", (_e, { path: p } = {}) => openWorkspace(p));
+ipcMain.handle("crowe:repos:pick", async () => {
+  const r = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], title: "Open a folder as the workspace" });
+  if (r.canceled || !r.filePaths.length) return { canceled: true };
+  return openWorkspace(r.filePaths[0]);
+});
+ipcMain.handle("crowe:repos:forget", (_e, { path: p } = {}) => {
+  saveConfig({ recentWorkspaces: Repos.forgetWorkspace(loadConfig().recentWorkspaces, p) });
+  return { ok: true };
+});
+ipcMain.handle("crowe:repos:remote", async () => {
+  const s = await repoSummary(CWD);
+  return { cwd: CWD, repo: s.repo, branch: s.branch, remote: s.remote };
+});
+
+/* GitHub, read-only, with the plugin's own token.
+
+   The token is the one the GitHub plugin stores at enable time, read from the
+   encrypted key store and used here for queries only. It reaches GitHub and
+   nothing else: not the renderer, not the journal, not an error message. The
+   answer is cached for a minute per query and keyed to a digest of the token,
+   so a changed token is never served another token's private repositories. */
+const GITHUB_GRAPHQL = "https://api.github.com/graphql";
+const GITHUB_CACHE_MS = 60000;
+const githubCache = new Map(); // key -> { at, tag, value | pending }
+function githubToken() { return String(pluginEnv("github").GITHUB_PERSONAL_ACCESS_TOKEN || ""); }
+function githubTag(token) { return crypto.createHash("sha256").update(token).digest("hex").slice(0, 16); }
+async function githubGraphql(query, variables) {
+  const token = githubToken();
+  if (!token) return { error: "GitHub is not connected", unconfigured: true };
+  try {
+    const r = await fetch(GITHUB_GRAPHQL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json",
+        "User-Agent": `crowe-logic-desktop/${app.getVersion()}` },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.status === 401) return { error: "GitHub rejected the token" };
+    if (r.status === 403 || r.status === 429) return { error: "GitHub is rate limiting this token. Try again in a minute" };
+    if (!r.ok) return { error: `GitHub answered HTTP ${r.status}` };
+    const j = await r.json();
+    const first = Array.isArray(j.errors) && j.errors[0] && j.errors[0].message ? String(j.errors[0].message).slice(0, 200) : "";
+    // A 200 can carry both data and errors. That is a partial answer: keep what
+    // came back and say what did not, rather than drawing nothing.
+    if (!j.data) return { error: first || "GitHub returned no data" };
+    return { data: j.data, warning: first };
+  } catch (e) {
+    return { error: e && e.name === "TimeoutError" ? "GitHub took too long to answer" : "GitHub could not be reached" };
+  }
+}
+function githubCached(key, query, variables) {
+  const tag = githubTag(githubToken());
+  const hit = githubCache.get(key);
+  if (hit && hit.tag === tag) {
+    if (hit.pending) return hit.pending;
+    if (Date.now() - hit.at < GITHUB_CACHE_MS) return Promise.resolve(hit.value);
+  }
+  const pending = githubGraphql(query, variables).then((value) => {
+    githubCache.set(key, { at: Date.now(), tag, value });
+    return value;
+  });
+  githubCache.set(key, { at: 0, tag, pending });
+  return pending;
+}
+// A GitHub repository already on this machine: at the clone target, or in the
+// recent list under any path, matched on the remote rather than the folder name.
+function localCheckoutFor(row) {
+  const target = Repos.cloneTarget(loadConfig().reposRoot, row.owner, row.name);
+  if (target && isGitCheckout(target)) return target;
+  const known = lastRecentRows.find((x) => x.exists && x.remote && x.remote.github
+    && x.remote.owner.toLowerCase() === row.owner.toLowerCase() && x.remote.name.toLowerCase() === row.name.toLowerCase());
+  return known ? known.path : "";
+}
+ipcMain.handle("crowe:repos:github-status", () => ({ configured: Boolean(githubToken()) }));
+ipcMain.handle("crowe:repos:github-repos", async () => {
+  if (!githubToken()) return { configured: false, repos: [] };
+  const r = await githubCached("repos", Repos.REPOS_QUERY, { n: 40 });
+  if (r.error) return { configured: true, repos: [], error: r.error };
+  const repos = Repos.repoRows(r.data).map((row) => ({ ...row, localPath: localCheckoutFor(row) }));
+  const viewer = r.data.viewer || {};
+  return { configured: true, repos, login: viewer.login || "", warning: r.warning || "",
+    total: (viewer.repositories && viewer.repositories.totalCount) || repos.length };
+});
+ipcMain.handle("crowe:repos:github-work", async (_e, { owner, name } = {}) => {
+  if (!Repos.safeSegment(owner) || !Repos.safeSegment(name)) return { error: "Not a repository name" };
+  if (!githubToken()) return { configured: false };
+  const r = await githubCached(`work:${owner}/${name}`, Repos.WORK_QUERY, { owner, name, n: 30 });
+  if (r.error) return { configured: true, error: r.error };
+  const work = Repos.workRows(r.data);
+  if (!work) return { configured: true, error: r.warning || "GitHub did not return that repository" };
+  return { configured: true, ...work, warning: r.warning || "" };
+});
+
+/* Cloning is a shell action and is treated as one. The renderer says which
+   repository; this builds the address and the destination, checks that the
+   destination really sits under the clone root once symlinks are followed, and
+   then asks through the harness gate before git runs. Nothing is created on
+   disk before the answer. */
+const cloning = new Set();
+const firstLine = (s) => String(s || "").trim().split("\n")[0].slice(0, 200);
+function deepestExisting(p) {
+  let cur = p;
+  for (;;) {
+    if (fs.existsSync(cur)) return cur;
+    const up = path.dirname(cur);
+    if (up === cur) return cur;
+    cur = up;
+  }
+}
+function underRoot(target, root) {
+  try {
+    const realRoot = fs.realpathSync(deepestExisting(root));
+    const realNear = fs.realpathSync(deepestExisting(path.dirname(target)));
+    return realNear === realRoot || realNear.startsWith(realRoot + path.sep);
+  } catch { return false; }
+}
+ipcMain.handle("crowe:repos:clone", async (_e, { owner, name } = {}) => {
+  const url = Repos.cloneUrl(owner, name);
+  const root = Repos.normalizePath(loadConfig().reposRoot || Repos.defaultReposRoot());
+  const target = Repos.cloneTarget(root, owner, name);
+  if (!url || !target) return { error: "Not a repository name" };
+  if (fs.existsSync(target)) {
+    if (isGitCheckout(target)) return { ...openWorkspace(target), existed: true };
+    return { error: "The clone folder already exists and is not a git checkout", path: target };
+  }
+  if (cloning.has(target)) return { error: "That clone is already running" };
+  if (!underRoot(target, root)) return { error: "The clone folder resolves outside the repositories root" };
+  const detail = `git clone ${url} ${target}`;
+  const hash = harness.inputHash("run_shell", { command: detail });
+  // Held from before the question is asked: a second click while the card is
+  // up is the same clone, not a second one.
+  cloning.add(target);
+  try {
+    const gate = await harness.gateAction(harnessCtx, { journal: journalWrite, agentId: "repos" }, {
+      risk: harness.RISK.REVIEW, why: "clones a repository over the network", kind: "run_shell",
+      title: "Clone a repository", detail, hash, floorReview: true,
+    });
+    if (!gate.ok) return { error: "The clone was not approved", denied: true };
+    try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch { return { error: "Could not create the clone folder" }; }
+    // Re-checked after the approval and the mkdir: the answer is bound to this
+    // destination, and the filesystem is not frozen while the card is up.
+    if (!underRoot(target, root) || fs.existsSync(target)) return { error: "The clone folder changed while waiting for authorization" };
+    const r = await new Promise((resolve) => execFile("git", ["clone", "--", url, target], {
+      cwd: root, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+      env: { ...harness.safeShellEnv(), GIT_TERMINAL_PROMPT: "0" },
+    }, (err, stdout, stderr) => resolve({ ok: !err, out: stdout || "", err: stderr || "" })));
+    journalWrite({ event_type: "TOOL_CALLED", tool_id: "run_shell", input_hash: hash,
+      output_summary: r.ok ? `cloned ${owner}/${name}` : `clone failed: ${firstLine(r.err)}` });
+    if (!r.ok) return { error: firstLine(r.err) || "git clone failed", path: target };
+    return { ...openWorkspace(target), cloned: true };
+  } finally { cloning.delete(target); }
+});
 
 // ─── Config + status ─────────────────────────────────────────────────────────
+// The Crowe Browser block as the renderer may see it: the URL, and which
+// credential is in force ("crowe-id", "key" or "none"). Never a value.
+const browserConfigView = (c) => ({ croweBrowser: { url: (c.croweBrowser || {}).url || Browser.DEFAULT_URL }, croweBrowserAuth: browserAuthKind(c) });
 ipcMain.handle("crowe:get-config", () => {
   const c = loadConfig();
-  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
+  return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
+    reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
+    ...browserConfigView(c),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty),
     version: require("./package.json").version };
 });
 ipcMain.handle("crowe:set-config", async (_e, rawPatch) => {
   const patch = sanitizeConfigPatch(rawPatch);
+  const before = loadConfig().croweBrowser;
+  // A Crowe Browser patch carries the URL alone; the key goes through the
+  // key store, and sanitizeConfigPatch has already dropped one sent here.
+  if (patch && patch.croweBrowser) patch.croweBrowser = normalizeBrowserConfig({ ...before, ...patch.croweBrowser });
   const c = saveConfig(patch);
-  if (patch && patch.cwd) CWD = patch.cwd;
+  // Typing a folder into Settings is opening it, the same as picking one from
+  // the sidebar, so it lands in the same list.
+  if (patch && patch.cwd) { CWD = patch.cwd; rememberWorkspace(CWD); }
   if (patch && patch.mcpServers) await mcpConnectAll();
   if (patch && patch.sense) sensePoller().start();
+  // Sessions opened under the old URL are ended; the next tool call opens
+  // one under the new one.
+  if (patch && patch.croweBrowser && c.croweBrowser.url !== before.url) browserSessions.endAll().catch(() => {});
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd, sense: c.sense,
+    ...browserConfigView(c),
     mcp: Object.entries(MCP).map(([n, s]) => ({ name: n, tools: s.tools.length })), ptyAvailable: Boolean(pty) };
 });
 
@@ -1318,14 +1880,16 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
 });
 
 // ─── Rooms ───────────────────────────────────────────────────────────────────
-/* Several named agents and the operator in one thread.
+/* Several named agents and the operator in one thread, kept as standing
+   colleagues: each room has an inbox, a brief, and routines that let it speak
+   first.
 
    The orchestration is in rooms/engine.js, which takes its model call as an
    injected dependency; this file supplies the real one. That seam is why
    scripts/test-rooms.js can prove addressing, concurrency, attribution, the
-   budget and the critique loop without a gateway.
+   budget, the critique loop, questions and routines without a gateway.
 
-   Two things are deliberately wired through the machinery that already exists
+   Four things are deliberately wired through the machinery that already exists
    rather than beside it:
 
      stop      every room seat registers its run in `agentRuns` under a
@@ -1335,7 +1899,15 @@ ipcMain.handle("crowe:sessions:delete", (_e, id) => {
                written when there was only ever one agent.
      storage   a room is a session with kind:"room". It inherits listing,
                deletion and backup, and a session written before rooms existed
-               still loads as an ordinary thread. */
+               still loads as an ordinary thread.
+     order     one turn at a time per room. The engine mutates a room's
+               transcript and seat states as it runs, and a routine firing in
+               the middle of the operator's turn would interleave two rounds
+               into one transcript. A per-room queue makes that impossible;
+               stop does not wait in it.
+     delivery  main owns the room and every window is a subscriber. A routine
+               that fires with no panel open still lands, persists and notifies;
+               a window that closed mid-turn loses nothing. */
 const roomsEngine = require("./rooms/engine");
 const roomsRegistry = require("./rooms/registry");
 
@@ -1346,8 +1918,14 @@ function roomPath(id) {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) throw new Error("invalid room id");
   return path.join(sessionsDir(), id + ".json");
 }
+// Written whole then renamed into place, so a crash mid-write leaves the last
+// good transcript rather than half of a new one.
 function saveRoom(room) {
-  try { fs.writeFileSync(roomPath(room.id), JSON.stringify(roomsEngine.toSession(room), null, 2)); } catch {}
+  try {
+    const p = roomPath(room.id);
+    fs.writeFileSync(p + ".tmp", JSON.stringify(roomsEngine.toSession(room), null, 2));
+    fs.renameSync(p + ".tmp", p);
+  } catch {}
 }
 function loadRoom(id) {
   if (liveRooms.has(id)) return liveRooms.get(id);
@@ -1357,19 +1935,78 @@ function loadRoom(id) {
     return room;
   } catch { return null; }
 }
+/* The chat seat's read-only window onto Rooms (harness list_rooms/read_room).
+   Summaries are the rail's own; messages carry the display name main can
+   resolve and the harness cannot, and System notes stay out because the engine
+   keeps them for the person, never for a model. Only the chat run gets this
+   hook: a room seat runs on harnessCtx and so cannot read a sibling room
+   except through the operator's relay. */
+function roomsForHarness() {
+  const summaries = () => listRoomIds().map((id) => { const room = loadRoom(id); return room ? roomsEngine.summary(room) : null; }).filter(Boolean);
+  return {
+    list: summaries,
+    load: (id) => {
+      if (!/^r-[A-Za-z0-9_-]{1,80}$/.test(String(id || ""))) return null;
+      const room = loadRoom(id); if (!room) return null;
+      return {
+        summary: roomsEngine.summary(room),
+        messages: room.messages.filter((m) => m && m.author !== roomsEngine.SYSTEM).map((m) => ({
+          seq: m.seq, at: m.at, author: m.author, authorName: roomsEngine.displayName(m.author), kind: m.kind || "",
+          content: m.content, ask: m.ask || null, reactions: Array.isArray(m.reactions) ? m.reactions : [],
+          from: m.from ? { roomTitle: m.from.roomTitle } : null,
+        })),
+      };
+    },
+  };
+}
+function listRoomIds() {
+  try { return fs.readdirSync(sessionsDir()).filter((f) => f.startsWith("r-") && f.endsWith(".json")).map((f) => f.slice(0, -5)); }
+  catch { return []; }
+}
+
+// Every window hears about a room, not only the one that asked: a room is
+// main's, and the rail in a second window is as entitled to the unread mark.
+function broadcast(channel, payload) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch { /* window gone */ }
+  }
+}
+function roomChanged(room, reason, { save = true } = {}) {
+  if (save) saveRoom(room);
+  broadcast("crowe:rooms:changed", { id: room.id, reason, summary: roomsEngine.summary(room) });
+}
+
+/* One turn at a time per room. Chained promises, so a routine that fires
+   while the operator's message is being answered waits its turn instead of
+   writing into the same transcript. A failed turn does not poison the queue. */
+const roomQueues = new Map();
+function withRoom(id, fn) {
+  const prev = roomQueues.get(id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  roomQueues.set(id, next);
+  next.catch(() => {}).finally(() => { if (roomQueues.get(id) === next) roomQueues.delete(id); });
+  return next;
+}
 
 /* The real runner. One room seat, one harness turn.
 
    The seat's persona and pinned model ride the two additive deps the harness
    grew for this; everything else about the turn is the ordinary operator path,
-   which is what keeps a one-agent room honestly identical to today's thread. */
-function roomRunner(sender, room) {
+   which is what keeps a one-agent room honestly identical to today's thread.
+
+   Two more things ride along. Each complete thing the seat says between tool
+   rounds is handed to the engine as progress the moment it arrives, so the
+   thread shows a seat working rather than a seat silent for a minute and then
+   an essay. And a question the seat puts through propose_options comes back
+   structured, for the engine to turn into a card. */
+function roomRunner(room) {
   return {
-    runAgent: async ({ agentId, model, systemBrief, messages, tier }) => {
+    runAgent: async ({ agentId, runId, model, systemBrief, messages, tier, onProgress }) => {
       const seatId = roomSeatId(room.id, agentId);
       const run = { aborted: false, controller: null };
       agentRuns.set(seatId, run);
       let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
+      let proposal = null;
       try {
         const result = await harness.runAgent(harnessCtx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
@@ -1380,7 +2017,10 @@ function roomRunner(sender, room) {
             if (ev.type === "telemetry") {
               usage = { usd: ev.cost || 0, promptTokens: ev.promptTokens || 0, completionTokens: ev.completionTokens || 0 };
             }
-            try { sender.send("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId }); } catch {}
+            if (ev.type === "assistant" && typeof onProgress === "function" && !run.aborted) {
+              if (onProgress(ev.text)) roomChanged(room, "progress", { save: false });
+            }
+            broadcast("crowe:agent:event", { ...ev, agentId: seatId, roomId: room.id, roomAgent: agentId, runId });
           },
           isAborted: () => run.aborted,
           setController: (c) => { run.controller = c; },
@@ -1388,9 +2028,10 @@ function roomRunner(sender, room) {
           persona: systemBrief,
           model: model || "",
           tier,
+          onPropose: (p) => { proposal = p; },
         });
         if (run.aborted) return { stopped: true, usage };
-        return { text: result.text || "", error: result.error, usage };
+        return { text: result.text || "", error: result.error, usage, proposal: result.proposal || proposal };
       } finally {
         agentRuns.delete(seatId);
       }
@@ -1398,32 +2039,34 @@ function roomRunner(sender, room) {
   };
 }
 
+const councilHost = require("./rooms/council-host").installCouncilHost({
+  ipcMain, loadRoom, changed: (room, reason) => roomChanged(room, reason, { save: false }),
+  save: room => { const file = roomPath(room.id); fs.writeFileSync(file + ".council-tmp", JSON.stringify(roomsEngine.toSession(room)), { mode: 0o600 }); fs.renameSync(file + ".council-tmp", file); },
+  busy: id => roomQueues.has(id), queue: withRoom,
+  config: () => ({ ...loadConfig(), cwd: CWD }), catalog: () => catalogCache.models, chat: gatewayChat,
+});
+
 // The renderer needs the roster and the templates to compose a room at all.
 ipcMain.handle("crowe:rooms:agents", () => ({
-  agents: roomsRegistry.listAgents(),
+  agents: [...roomsRegistry.listAgents(), ...catalogCache.models.filter(m => m.available !== false).map(m => roomsRegistry.modelAgent(m.id)).filter(Boolean)],
   templates: roomsRegistry.listTemplates(),
 }));
 
+// The rail's view: who is in each room, the last thing said, what is unread,
+// who is working. Live rooms answer from memory so a seat mid-turn reads as
+// working; the rest are read off disk.
 ipcMain.handle("crowe:rooms:list", () => {
-  try {
-    return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
-      try {
-        const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8"));
-        if (d.kind !== "room" || !d.room) return null;
-        return { id: d.id, title: d.title, updatedAt: d.updatedAt, template: d.room.template || "",
-          agents: (d.room.agents || []).map((a) => a.agentId), spentUsd: d.room.spentUsd || 0, halted: d.room.halted || "" };
-      } catch { return null; }
-    }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
-  } catch { return []; }
+  return listRoomIds().map((id) => { const room = loadRoom(id); return room ? roomsEngine.summary(room) : null; })
+    .filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
 });
 
-ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd } = {}) => {
+ipcMain.handle("crowe:rooms:create", (_e, { template = "", title = "", agentIds = [], budgetUsd, brief = "" } = {}) => {
   const room = template
-    ? roomsEngine.fromTemplate(template, { title, budgetUsd })
-    : roomsEngine.createRoom({ title, agentIds, budgetUsd });
+    ? roomsEngine.fromTemplate(template, { title, budgetUsd, brief })
+    : roomsEngine.createRoom({ title, agentIds, budgetUsd, brief });
   if (!room || !room.agents.length) return { error: "a room needs at least one agent from the registry" };
   liveRooms.set(room.id, room);
-  saveRoom(room);
+  roomChanged(room, "create");
   return { room: roomState(room) };
 });
 
@@ -1434,8 +2077,12 @@ ipcMain.handle("crowe:rooms:load", (_e, { id } = {}) => {
 
 ipcMain.handle("crowe:rooms:delete", (_e, { id } = {}) => {
   if (!isSafeRecordId(id) || !String(id).startsWith("r-")) return { ok: false, error: "invalid room id" };
+  if (councilHost.busy(id)) return { error: "Pause council autopilot before deleting the room." };
   liveRooms.delete(id);
+  // The room's seats go with it, cloud browsers included.
+  browserSessions.dropWhere((owner) => owner.startsWith(`room:${id}:`)).catch(() => {});
   try { fs.unlinkSync(roomPath(id)); } catch {}
+  broadcast("crowe:rooms:changed", { id, reason: "delete" });
   return { ok: true };
 });
 
@@ -1446,7 +2093,7 @@ ipcMain.handle("crowe:rooms:join", (_e, { id, agentId } = {}) => {
   if (room.agents.some((a) => a.agentId === agentId)) return { room: roomState(room) };
   room.agents.push({ agentId, model: (roomsRegistry.getAgent(agentId) || {}).model || "", state: "idle" });
   if (!room.defaultAgent) room.defaultAgent = agentId;
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1454,7 +2101,7 @@ ipcMain.handle("crowe:rooms:leave", (_e, { id, agentId } = {}) => {
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   room.agents = room.agents.filter((a) => a.agentId !== agentId);
   if (room.defaultAgent === agentId) room.defaultAgent = room.agents[0] ? room.agents[0].agentId : "";
-  saveRoom(room);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
@@ -1462,18 +2109,47 @@ ipcMain.handle("crowe:rooms:set-agent-model", (_e, { id, agentId, model } = {}) 
   const room = loadRoom(id); if (!room) return { error: "no such room" };
   const seat = room.agents.find((a) => a.agentId === agentId);
   if (!seat) return { error: "that agent is not in this room" };
-  seat.model = String(model || "");
-  saveRoom(room);
+  seat.model = String(model || "").slice(0, 80);
+  roomChanged(room, "roster");
   return { room: roomState(room) };
 });
 
+// Title, standing brief, budget, default seat. The engine holds the caps.
+ipcMain.handle("crowe:rooms:update", (_e, { id, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const changed = roomsEngine.updateRoom(room, patch || {});
+  roomChanged(room, "update");
+  return { room: roomState(room), changed };
+});
+
+// The operator has seen everything up to now. Answered from memory; the
+// broadcast is what clears the dot in every rail.
+ipcMain.handle("crowe:rooms:mark-read", (_e, { id } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  if (roomsEngine.unreadCount(room) === 0) return { unread: 0 };
+  roomsEngine.markRead(room);
+  roomChanged(room, "read");
+  return { unread: 0 };
+});
+
+// A reaction is a word on a worker's bubble, not a turn: no seat runs, the
+// room is saved, and every window learns of it. Queued behind the room's turns
+// so it cannot land on a message list mid-write.
+ipcMain.handle("crowe:rooms:react", (_e, { id, messageId, kind } = {}) => withRoom(id, async () => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const r = roomsEngine.react(room, String(messageId || ""), String(kind || ""));
+  if (r.error) return { error: r.error };
+  roomChanged(room, "react");
+  return { ok: true, on: r.on, reactions: r.message.reactions || [] };
+}));
+
 /* What the renderer is told about a room. The tier is computed rather than
    stored, so a room that was created while the app sat at Execute cannot come
-   back later still believing it may write. */
+   back and run at Execute after the operator moved the app down. */
 function roomState(room) {
   const cfg = loadConfig();
   return {
-    id: room.id, title: room.title, template: room.template,
+    id: room.id, title: room.title, template: room.template, brief: room.brief || "",
     agents: room.agents.map((a) => {
       const meta = roomsRegistry.getAgent(a.agentId) || {};
       return { agentId: a.agentId, name: meta.name || a.agentId, domain: meta.domain || "",
@@ -1485,35 +2161,149 @@ function roomState(room) {
     budgetUsd: room.budgetUsd, spentUsd: room.spentUsd,
     critiqueRounds: room.critiqueRounds, maxCritiqueRounds: roomsEngine.MAX_CRITIQUE_ROUNDS,
     halted: room.halted,
+    council: room.council || null,
+    routines: room.routines || [],
+    unread: roomsEngine.unreadCount(room), seq: room.seq || 0, readSeq: room.readSeq || 0,
   };
 }
 
-async function runRoomTurn(evt, id, fn) {
+async function runRoomTurn(id, fn) {
   const room = loadRoom(id);
   if (!room) return { error: "no such room" };
-  room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
-  const deps = roomRunner(evt.sender, room);
-  const out = await fn(room, deps);
-  saveRoom(room);
-  return { ...out, room: roomState(room) };
+  if (councilHost.busy(id)) return { error: "Pause council autopilot before sending a manual turn." };
+  return withRoom(id, async () => {
+    room.tier = roomsEngine.roomTier(room, (loadConfig().autonomy || "edit"));
+    /* speak() stores what the operator said before its first await, so by the
+       time the turn's promise exists the text is in the room. Broadcast that
+       now: a thread that only heard "turn" drew the operator's own text when
+       the seats came back, with a typing bubble standing over its absence. */
+    const pending = fn(room, roomRunner(room));
+    roomChanged(room, "message", { save: false });
+    const out = await pending;
+    roomChanged(room, "turn");
+    return { ...out, room: roomState(room) };
+  });
 }
 
-ipcMain.handle("crowe:rooms:say", (evt, { id, text } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
+ipcMain.handle("crowe:rooms:say", (_e, { id, text } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.speak(room, String(text || "").slice(0, MAX_MESSAGE_CHARS), deps)));
 
-ipcMain.handle("crowe:rooms:critique", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.critique(room, deps)));
+// A tap on an option. The engine checks the card is still open before it
+// speaks, and the queue means two taps from two windows arrive in order.
+ipcMain.handle("crowe:rooms:answer", (_e, { id, messageId, optionId } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.answerAsk(room, String(messageId || ""), String(optionId || ""), deps)));
 
-ipcMain.handle("crowe:rooms:revise", (evt, { id } = {}) =>
-  runRoomTurn(evt, id, (room, deps) => roomsEngine.revise(room, deps)));
+ipcMain.handle("crowe:rooms:critique", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.critique(room, deps)));
 
-// What a round is about to cost, so the operator can decline it. Calls rather
-// than dollars: the price depends on a transcript nobody has generated yet, and
-// a projected figure with a decimal point in it would be a guess wearing a suit.
+ipcMain.handle("crowe:rooms:revise", (_e, { id } = {}) =>
+  runRoomTurn(id, (room, deps) => roomsEngine.revise(room, deps)));
+
+/* A message carried into another room by the operator. Both rooms are
+   touched: the source only to read, the target to append and to answer, so
+   only the target's queue is taken. */
+ipcMain.handle("crowe:rooms:forward", (_e, { fromId, messageId, toId, to } = {}) => {
+  const from = loadRoom(fromId); if (!from) return { error: "no such source room" };
+  return runRoomTurn(toId, (target, deps) => roomsEngine.forward(from, target, String(messageId || ""), deps, { to: Array.isArray(to) ? to : null }));
+});
+
+// Calls, not dollars: see engine.projectRound for why the honest unit is calls.
 ipcMain.handle("crowe:rooms:project", (_e, { id, kind = "critique" } = {}) => {
   const room = loadRoom(id);
   return room ? roomsEngine.projectRound(room, kind) : { error: "no such room" };
 });
+
+// ─── Routines: a room speaks first ───────────────────────────────────────────
+/* Recurring messages a room sends itself on a schedule, each addressed to one
+   seat. The rules (when a run is due, when a late run is skipped, that a claim
+   is written before the model is called) are in the engine and tested there;
+   this is the clock and the delivery.
+
+   Timers wake the scheduler; they are not the schedule. Every tick compares
+   the wall clock against the persisted due times, so a laptop that slept
+   through 07:00 runs the brief on waking if it is still within the grace
+   window, and says so and moves on if it is not. Nothing is replayed. */
+ipcMain.handle("crowe:rooms:routine-add", (_e, { id, spec } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.addRoutine(room, spec || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  startRoutineScheduler();
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-update", (_e, { id, routineId, patch } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.updateRoutine(room, String(routineId || ""), patch || {});
+  if (out.error) return out;
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+ipcMain.handle("crowe:rooms:routine-remove", (_e, { id, routineId } = {}) => {
+  const room = loadRoom(id); if (!room) return { error: "no such room" };
+  const out = roomsEngine.removeRoutine(room, String(routineId || ""));
+  roomChanged(room, "routine");
+  return { ...out, room: roomState(room) };
+});
+// Run it now, in the room's queue, exactly as the clock would have.
+ipcMain.handle("crowe:rooms:routine-run", (_e, { id, routineId } = {}) =>
+  runRoomTurn(id, async (room, deps) => {
+    const r = (room.routines || []).find((x) => x.id === String(routineId || ""));
+    if (!r) return { error: "no such routine" };
+    r.lastRunAt = Date.now(); r.runs = (r.runs || 0) + 1; r.lastStatus = "running";
+    return roomsEngine.runRoutine(room, r.id, deps, Date.now());
+  }));
+
+const ROUTINE_TICK_MS = 30 * 1000;
+let routineTimer = null;
+let routineTicking = false;
+async function routineTick() {
+  if (routineTicking) return;
+  routineTicking = true;
+  try {
+    const now = Date.now();
+    for (const id of listRoomIds()) {
+      const room = loadRoom(id);
+      if (!room || !(room.routines || []).length) continue;
+      for (const r of roomsEngine.dueRoutines(room, now)) {
+        const claim = roomsEngine.claimRoutine(room, r.id, now);
+        // The claim is on disk before the model is called, so a crash mid-run
+        // cannot fire the same scheduled instant again on restart.
+        saveRoom(room);
+        if (!claim.run) { if (claim.skip === "too late") roomChanged(room, "routine-skipped"); continue; }
+        withRoom(room.id, async () => {
+          room.tier = roomsEngine.roomTier(room, loadConfig().autonomy || "edit");
+          const out = await roomsEngine.runRoutine(room, r.id, roomRunner(room), Date.now());
+          roomChanged(room, "routine");
+          notifyRoom(room, r, out);
+        }).catch(() => {});
+      }
+    }
+  } finally { routineTicking = false; }
+}
+/* A routine that posted is worth a knock on the door: the whole point of a
+   room speaking first is that the person was not looking at it. One
+   notification per run, carrying the room's name and the last thing said;
+   clicking it opens the room. */
+function notifyRoom(room, routine, out) {
+  try {
+    if (!Notification.isSupported()) return;
+    const body = out && out.skip ? String(routine.lastStatus || "skipped") : roomsEngine.preview(room);
+    const n = new Notification({ title: room.title, body: String(body || "").slice(0, 200) });
+    n.on("click", () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.show(); mainWindow.focus();
+      mainWindow.webContents.send("crowe:rooms:open", { id: room.id });
+    });
+    n.show();
+  } catch { /* a notification is a courtesy, never a dependency */ }
+}
+function startRoutineScheduler() {
+  if (routineTimer) return;
+  routineTimer = setInterval(() => { routineTick().catch(() => {}); }, ROUTINE_TICK_MS);
+  setTimeout(() => { routineTick().catch(() => {}); }, 5000);
+  // A laptop that slept through a due time checks the moment it is back.
+  try { powerMonitor.on("resume", () => { routineTick().catch(() => {}); }); } catch {}
+}
 
 // ─── Cultivation records ─────────────────────────────────────────────────────
 /* The farm's own notebook, on disk beside the sessions. No gateway and no
@@ -1579,6 +2369,7 @@ function companionInstance() {
   if (!companion) {
     companion = new Companion({
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
+      privateDir: app.getPath("userData"),
       // Electron's own blocker: "prevent-app-suspension" keeps the system from
       // idling out while still letting the display sleep, which is what a
       // machine being driven from a phone wants.
@@ -1742,7 +2533,7 @@ function buildMenu() {
       crowe("Browser", "pane:browser", "CmdOrCtrl+2"),
       crowe("Files", "pane:files", "CmdOrCtrl+3"),
       { type: "separator" },
-      { label: "Autonomy", submenu: [
+      { label: "Operating envelope", submenu: [
         { label: "Plan (explore read-only, then propose a plan)", type: "radio", checked: tier === "plan", click: () => setAutonomy("plan") },
         { label: "Read-only (no shell, no writes)", type: "radio", checked: tier === "readonly", click: () => setAutonomy("readonly") },
         { label: "Edit (reviewed writes, no shell)", type: "radio", checked: tier === "edit", click: () => setAutonomy("edit") },
@@ -1800,8 +2591,13 @@ app.whenReady().then(async () => {
   mcpConnectAll();
   pluginsConnectAll();
   pruneArtifacts();
+  // The workspace this install boots into was opened at some point, so it
+  // belongs in the list; the untouched default (the home folder) does not.
+  if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
+  // Rooms with routines speak first; the scheduler is what lets them.
+  startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
   // before expiry so a long-lived window never silently loses the harness.
   setInterval(() => {
@@ -1813,12 +2609,45 @@ app.whenReady().then(async () => {
 // Native children outlive the window unless we kill them. node-pty in
 // particular throws from its destructor if a PTY is still open at exit, which
 // aborts the process with SIGABRT after the app has otherwise shut down
-// cleanly. Tear both down on every quit path.
+// cleanly. Tear all of them down on every quit path. Preview tunnels are on
+// the list because a public link that outlives the app is a link nobody can
+// stop from here. stopAllForQuit signals every cloudflared before its first
+// await, and returns a promise for the rest of the teardown (the grace period,
+// the SIGKILL behind a SIGTERM that was ignored, the loopback listeners) only
+// when a preview was running; null means there is nothing to wait for. The
+// scripts that call this by hand before app.exit ignore the return value.
 function shutdownNativeResources() {
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
+  // Cloud browsers are ended the same way: best effort, bounded by the
+  // client's own end timeout, and the server's idle timer finishes the rest.
+  // Their teardown is chained onto the preview hold, so the one quit waits on
+  // both; with no preview up, the browsers are the hold.
+  const browsers = browserSessions.owners().length ? browserSessions.endAll().catch(() => {}) : null;
+  try { return require("./share-preview").stopAllForQuit("the app is quitting")?.then(() => browsers) ?? browsers; } catch { return browsers; }
 }
-app.on("before-quit", shutdownNativeResources);
+/* Electron does not wait on a promise from before-quit, and the SIGKILL that
+   follows the grace period lives in this process, so a cloudflared that sat
+   through SIGTERM used to outlive the app. When a preview is up, this first
+   quit is cancelled, the teardown is awaited (bounded inside stopAllForQuit,
+   about six seconds at most), and quit is asked for again; that pass is let
+   through. A quit asked for during the wait (a second Cmd+Q, window-all-closed
+   on Windows and Linux, the updater) is held as well, so nothing but the bound
+   can cut the teardown short. If the released quit is cancelled by something
+   else, a window that refuses to close for one, the barrier re-arms a second
+   later, so a later quit is held again rather than let through unguarded.
+   With no preview up there is no hold and the quit is what it always was. */
+let quitPhase = "idle";   // idle -> draining -> releasing -> idle
+app.on("before-quit", (event) => {
+  if (quitPhase === "releasing") { setTimeout(() => { quitPhase = "idle"; }, 1000); return; }
+  if (quitPhase === "draining") { event.preventDefault(); return; }
+  const pending = shutdownNativeResources();
+  if (!pending) return;
+  quitPhase = "draining";
+  event.preventDefault();
+  const release = () => { quitPhase = "releasing"; app.quit(); };
+  pending.then(release, release);
+});
 app.on("will-quit", () => { shutdownNativeResources(); try { globalShortcut.unregisterAll(); } catch {} });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 

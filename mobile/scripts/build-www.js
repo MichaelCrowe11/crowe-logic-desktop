@@ -29,13 +29,21 @@ const stamp = dev ? String(Date.now()) : version;
 // Files copied verbatim: [from, to]. The renderer's own sources come first
 // because everything else exists to serve them.
 const COPY = [
+  ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
   ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
   ["renderer/adopted-styles.js", "adopted-styles.js"],
   ["renderer/mark-geometry.js", "mark-geometry.js"],
   ["renderer/mark.js", "mark.js"],
+  ["renderer/marks.js", "marks.js"],
+  ["renderer/messages.js", "messages.js"],
+  ["renderer/first-run.js", "first-run.js"],
+  ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
+  ["assets/gate-glyph.svg", "assets/gate-glyph.svg"],
+  ["assets/gate-glyph-dark.svg", "assets/gate-glyph-dark.svg"],
+  ["assets/icon.svg", "assets/icon.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
   ["assets/wordmark-motion.svg", "assets/wordmark-motion.svg"],
   ["assets/wordmark-motion-sm.svg", "assets/wordmark-motion-sm.svg"],
@@ -58,8 +66,9 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
+  "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -69,8 +78,8 @@ const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/icon.png" />`;
 
@@ -132,7 +141,7 @@ function buildIndex() {
   // window.crowe, and mark-geometry.js is the first of them.
   must(html, '<script src="mark-geometry.js"></script>', "the mark-geometry script tag");
   html = html.replace('<script src="mark-geometry.js"></script>',
-    '<script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
+    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
 
   // The phone chrome mirrors controls the renderer wires up on load, so it goes
   // after renderer.js rather than before it.
@@ -157,7 +166,7 @@ function buildIndex() {
 const MANIFEST = {
   name: "Crowe Logic",
   short_name: "Crowe Logic",
-  description: "Agentic reasoning and cultivation console over the CroweLM gateway.",
+  description: "Chat and a paired-computer workspace over the CroweLM gateway.",
   start_url: "index.html",
   display: "standalone",
   orientation: "portrait",
@@ -186,6 +195,25 @@ function main() {
   // keeps the number in package.json rather than duplicated in a script.
   fs.writeFileSync(path.join(www, "build.json"),
     JSON.stringify({ version, builtFor: "capacitor", stamp }, null, 2) + "\n");
+
+  /* The shell's script tags are the other allowlist. A renderer module added to
+     index.html with a <script> tag but not to COPY above ships as a tag that
+     points at nothing: the phone's webview logs a 404, the feature is silently
+     absent on the phone, and every desktop test passes because from the
+     checkout the file is right there. Three branches did exactly that in one
+     is read back, and every local script and stylesheet it names must be a
+     file in www. Same bargain as scripts/test-packaging.js, one layer down. */
+  const built = fs.readFileSync(path.join(www, "index.html"), "utf8");
+  const missing = [];
+  for (const m of built.matchAll(/<(?:script\b[^>]*\ssrc|link\b[^>]*\shref)="([^"]+)"/g)) {
+    const ref = m[1].split("?")[0];
+    if (/^(https?:)?\/\//.test(ref) || ref.startsWith("data:") || !/\.(m?js|css)$/.test(ref)) continue;
+    if (!fs.existsSync(path.join(www, ref))) missing.push(ref);
+  }
+  if (missing.length) {
+    throw new Error(`index.html loads ${missing.join(", ")} but nothing copies ${missing.length === 1 ? "it" : "them"} into www. ` +
+      "Add each to COPY (and BUSTED) in mobile/scripts/build-www.js, or strip the tag in buildIndex().");
+  }
 
   const files = [];
   (function walk(dir) {

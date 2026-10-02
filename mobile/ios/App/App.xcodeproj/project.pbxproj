@@ -19,6 +19,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		6A4A72741514347C5135A79B /* CroweBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE3236F49AA5510E801D035 /* CroweBridgeViewController.swift */; };
 		C7F1BC2ACFE2CDD033DA4A23 /* CroweSpeech.swift in Sources */ = {isa = PBXBuildFile; fileRef = B64A6164660BF5854AA86E3F /* CroweSpeech.swift */; };
+		CE0000000000000000000012 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000011 /* PrivacyInfo.xcprivacy */; };
 		CE0000000000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CE0000000000000000000001 /* PrivacyInfo.xcprivacy */; };
 		D9152EC5AAD677F249700132 /* CroweVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5505C68BB36F661E12A22584 /* CroweVault.swift */; };
 		F962F08575D0BECA5702DE2C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C69DDDA527351AAA3C9F4D6B /* Foundation.framework */; };
@@ -67,6 +68,7 @@
 		B64A6164660BF5854AA86E3F /* CroweSpeech.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweSpeech.swift; sourceTree = "<group>"; };
 		C69DDDA527351AAA3C9F4D6B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		CBEDAC0369576D45CCBF1C31 /* CroweShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CroweShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CE0000000000000000000011 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		CE0000000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		DEEC8EC792F064CC2E0B23F0 /* CroweIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CroweIntents.swift; sourceTree = "<group>"; };
 		E7A6B88648052CC71E8657BD /* App.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
@@ -148,6 +150,7 @@
 				17426A05D9366BBE764FBE65 /* ShareViewController.swift */,
 				EE47028C44CCF129170B3EDA /* Info.plist */,
 				7F3C599222720C0B7D0CB8E7 /* CroweShare.entitlements */,
+				CE0000000000000000000011 /* PrivacyInfo.xcprivacy */,
 			);
 			name = CroweShare;
 			path = CroweShare;
@@ -260,6 +263,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CE0000000000000000000012 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -433,7 +437,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2600;
+				CURRENT_PROJECT_VERSION = 2605;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -441,7 +445,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.0;
+				MARKETING_VERSION = 0.26.5;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -457,7 +461,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2600;
+				CURRENT_PROJECT_VERSION = 2605;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -465,7 +469,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.0;
+				MARKETING_VERSION = 0.26.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -480,7 +484,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2600;
+				CURRENT_PROJECT_VERSION = 2605;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -490,7 +494,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.0;
+				MARKETING_VERSION = 0.26.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -506,7 +510,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2600;
+				CURRENT_PROJECT_VERSION = 2605;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -516,7 +520,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.0;
+				MARKETING_VERSION = 0.26.5;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

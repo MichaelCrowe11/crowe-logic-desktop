@@ -11,9 +11,15 @@ const path = require("path");
 exports.default = async function afterPack(context) {
   const { electronPlatformName, appOutDir, packager, arch } = context;
   const name = packager.appInfo.productFilename;
+  // Linux is the odd one out: electron-builder names the executable after
+  // `executableName` (the package name unless build.linux.executableName says
+  // otherwise), not the product filename. Reading it from the packager is what
+  // let 0.24.6 and 0.24.7 ship mac-only: the hook looked for "Crowe Logic" in
+  // linux-unpacked, found nothing, and the Linux build died at afterPack.
+  const linuxExe = (electronPlatformName === "linux" && packager.executableName) || name;
   const binary = electronPlatformName === "darwin"
     ? path.join(appOutDir, `${name}.app`, "Contents", "MacOS", name)
-    : electronPlatformName === "win32" ? path.join(appOutDir, `${name}.exe`) : path.join(appOutDir, name);
+    : electronPlatformName === "win32" ? path.join(appOutDir, `${name}.exe`) : path.join(appOutDir, linuxExe);
   await flipFuses(binary, {
     version: FuseVersion.V1,
     // arm64 Mach-O binaries have to carry a valid signature to launch at all;

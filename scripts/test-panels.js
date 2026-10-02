@@ -110,17 +110,19 @@ const PRELUDE = `
      Both helpers hand back a restore. Leaving either behind is the same hazard
      as a leftover space profile: every later test would run against a recorder
      instead of the shim, or would mount this fixture as workflow zero. */
-  window.__stubAgentScript = (script) => {
+  window.__stubAgentScript = (script, gapMs = 0) => {
     const priorRun = window.crowe.agent.run, priorOn = window.crowe.agent.onEvent;
     let listeners = [];
     window.crowe.agent.onEvent = (fn) => {
       listeners.push(fn);
       return () => { listeners = listeners.filter((f) => f !== fn); };
     };
+    // gapMs spaces the events out, for a check that has to look at the turn
+    // while it is still running rather than at what it left behind.
     window.crowe.agent.run = async (messages, id) => {
       for (const ev of script(id || "main")) {
         listeners.slice().forEach((f) => f({ agentId: id || "main", ...ev }));
-        await new Promise((r) => setTimeout(r, 0));
+        await new Promise((r) => setTimeout(r, gapMs));
       }
       return {};
     };
@@ -994,7 +996,7 @@ const tests = [
       el.querySelector(".wf-compose-go").click();
       await __settle();
       const result = {
-        failed: /^Failed · the agent did not return a workflow/.test(el.querySelector(".wf-compose-state").textContent),
+        failed: /^Failed · the agent did not return a mission/.test(el.querySelector(".wf-compose-state").textContent),
         nodes: el.querySelectorAll(".wf-node").length,
         empty: !!el.querySelector(".wf-empty"),
         enabled: !el.querySelector(".wf-compose-go").disabled,
@@ -1067,6 +1069,136 @@ const tests = [
       restore(); transcript.innerHTML = ""; messages.length = 0;
       return result;`,
     expect: { once: true, noFragment: true, recorded: true },
+  },
+  {
+    // The mark at the head of a turn is the one thing in motion, and a turn of
+    // a few tool cards scrolls that head off the top. While the turn runs the
+    // mark rides beside the newest block (its rail dot for a card, its first
+    // line for text); when the turn lands it plays the landing there and goes
+    // home. Measured against the blocks themselves, not against fixed numbers.
+    name: "the worker's mark rides beside the newest block while a turn runs, and goes home when it lands",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+        { type: "tool_call", id: "t2", name: "run_shell", args: { command: "ls" } },
+        { type: "tool_result", id: "t2", name: "run_shell", result: "ok" },
+        { type: "assistant", text: "Two reads, then done." },
+      ], 200);
+      const turn = send("follow me");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => parseFloat(who() && who().style.getPropertyValue("--mark-y")) || 0;
+      const seen = []; let atSecondCard = null, secondCardTop = null;
+      const deadline = Date.now() + 6000;
+      while (Date.now() < deadline) {
+        const cards = transcript.querySelectorAll(".msg.assistant .toolcard");
+        const v = y(); if (v && seen[seen.length - 1] !== v) seen.push(v);
+        if (cards.length === 2 && atSecondCard === null) {
+          // A timer, not a frame: a hidden window under xvfb paints no frames.
+          await new Promise((r) => setTimeout(r, 60));
+          atSecondCard = y(); secondCardTop = cards[1].offsetTop;
+        }
+        if (transcript.querySelector(".msg.assistant .said") && atSecondCard !== null) break;
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      // The answer is streaming and the target is text now: its first line,
+      // not a card's dot. Read while the turn still runs, before send() ends
+      // the follow, or a broken text branch would pass on the landing alone.
+      // The block is growing as it types, so the offset and the geometry are
+      // read together and re-read once or twice if a placement fell between.
+      let atText = null, textLine = null, streaming = false;
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        const said = transcript.querySelector(".msg.assistant .said"); if (!said) continue;
+        streaming = said.classList.contains("streaming");
+        atText = y(); textLine = Math.max(0, said.offsetTop + Math.min(said.offsetHeight, 26) / 2 - 13);
+        if (Math.abs(atText - textLine) <= 1) break;
+      }
+      await turn;
+      const landedY = y();
+      await new Promise((r) => setTimeout(r, 1000));
+      // Printed to the runner's stderr under ELECTRON_ENABLE_LOGGING, so a red
+      // run on a headless runner says what the mark actually did.
+      console.log("mark-follow diag", JSON.stringify({ seen, atSecondCard, secondCardTop, atText, textLine, streaming, landedY, hidden: document.hidden, reduced: matchMedia("(prefers-reduced-motion: reduce)").matches }));
+      const result = {
+        moved: seen.length >= 2 && seen.every((v, i) => i === 0 || v > seen[i - 1]),
+        besideSecondCard: atSecondCard !== null && Math.abs(atSecondCard - (secondCardTop + 14.5 - 13)) <= 1,
+        besideTextWhileStreaming: streaming && textLine !== null && Math.abs(atText - textLine) <= 1,
+        stillOutWhenLanding: landedY > 0,
+        home: who().style.getPropertyValue("--mark-y") === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { moved: true, besideSecondCard: true, besideTextWhileStreaming: true, stillOutWhenLanding: true, home: true },
+  },
+  {
+    // A turn that ran tools and said nothing ends with its cards swapped for a
+    // one-line hint. The landing must play beside that hint, not at the offset
+    // of a card that is no longer there.
+    name: "a tool-only turn lands its mark beside the hint that replaces the cards",
+    body: `await __reset();
+      const restore = __stubAgentScript(() => [
+        { type: "route", expert: "operator", model: "crowelm" },
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+      ], 120);
+      const turn = send("read it and say nothing");
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      let outAtCard = 0;
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      await turn;
+      const hint = transcript.querySelector(".msg.assistant .body .said.hint");
+      const landed = y(), landedY = parseFloat(landed);
+      const hintLine = hint ? Math.max(0, hint.offsetTop + Math.min(hint.offsetHeight, 26) / 2 - 13) : null;
+      await new Promise((r) => setTimeout(r, 1000));
+      console.log("mark-follow tool-only diag", JSON.stringify({ outAtCard, landed, hintLine }));
+      const result = {
+        outWhileTheCardShowed: outAtCard > 0,
+        cardsGone: !transcript.querySelector(".msg.assistant .toolcard"),
+        besideTheHint: hint !== null && landed !== "" && Math.abs(landedY - hintLine) <= 1,
+        home: y() === "",
+      };
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return result;`,
+    expect: { outWhileTheCardShowed: true, cardsGone: true, besideTheHint: true, home: true },
+  },
+  {
+    // Nothing to celebrate on an errored or stopped turn: the mark goes home in
+    // the same task as the turn's end, not a paint later.
+    name: "an errored or stopped turn sends the mark home before the next paint",
+    body: `await __reset();
+      const who = () => transcript.querySelector(".msg.assistant .who");
+      const y = () => who() ? who().style.getPropertyValue("--mark-y") : "";
+      const out = {};
+      for (const last of [{ type: "error", text: "the gateway refused the call" }, { type: "stopped" }]) {
+        const restore = __stubAgentScript(() => [
+          { type: "route", expert: "operator", model: "crowelm" },
+          { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+          { type: "tool_result", id: "t1", name: "read_file", result: Array(30).fill("# a line of the file").join("\\n") },
+          last,
+        ], 120);
+        const turn = send("then fail");
+        let outAtCard = 0; const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+          if (transcript.querySelector(".msg.assistant .toolcard")) { await new Promise((r) => setTimeout(r, 60)); outAtCard = parseFloat(y()) || 0; break; }
+          await new Promise((r) => setTimeout(r, 16));
+        }
+        await turn;
+        out[last.type] = { outAtCard, homeAtOnce: y() === "", marked: !!transcript.querySelector(".msg.assistant ." + (last.type === "error" ? "err" : "stopped")) };
+        restore(); transcript.innerHTML = ""; messages.length = 0;
+      }
+      console.log("mark-follow fail diag", JSON.stringify(out));
+      return {
+        errorOut: out.error.outAtCard > 0, errorHomeAtOnce: out.error.homeAtOnce, errorMarked: out.error.marked,
+        stoppedOut: out.stopped.outAtCard > 0, stoppedHomeAtOnce: out.stopped.homeAtOnce, stoppedMarked: out.stopped.marked,
+      };`,
+    expect: { errorOut: true, errorHomeAtOnce: true, errorMarked: true, stoppedOut: true, stoppedHomeAtOnce: true, stoppedMarked: true },
   },
   {
     // The chat transcript's listener is registered per turn and used to take
@@ -1510,6 +1642,48 @@ const tests = [
     expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
   },
   {
+    // The agent panel used to type "crowe-logic" and Enter into its console the
+    // moment the PTY came up, so every agent panel opened as a CLI session (and
+    // every plain terminal once did too). Terminals are shells now. This stands
+    // in a PTY that says yes and records every byte written to it, mounts each
+    // terminal-backed panel type, and asserts nothing was typed for the
+    // operator. The source check closes the other door: no call site may hand
+    // pty.input a string literal, so an auto-enter cannot return on a path this
+    // stub does not walk.
+    name: "no terminal types a command for the operator on start",
+    body: `const real = window.crowe.pty; const typed = []; const opened = [];
+      window.crowe.pty = { ...real, start: async (o) => ({ ok: true, id: o.id }), input: (id, data) => typed.push(String(data)), resize() {}, close: async () => ({ ok: true }) };
+      try {
+        for (const [type, seed] of [["agent", { title: "Probe agent" }], ["terminal", {}], ["system", {}]]) opened.push(await addPanel(type, seed));
+        await new Promise((r) => setTimeout(r, 150));
+        const src = await (await fetch("renderer.js")).text();
+        const literal = /pty\\.input\\([^,)]+,\\s*["'\`]/.test(src);
+        const head = document.querySelector('[data-id="' + opened[0].id + '"] .agent-operation-head small');
+        return { typed: typed.join("|"), literal, label: head ? head.textContent : null, mounted: opened.length };
+      } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
+    expect: { typed: "", literal: false, label: "AGENT", mounted: 3 },
+  },
+  {
+    // The IPC used to throw when node-pty could not spawn (a fresh checkout's
+    // spawn-helper has no execute bit), and the panel awaited it with no catch:
+    // an unhandled rejection and a state label stuck on "starting". A thrown
+    // start is the same refusal as a returned one, printed where the operator
+    // can read it, on both terminal-backed panel kinds.
+    name: "a pty that throws on start leaves the panel refused, with the reason on screen",
+    body: `const real = window.crowe.pty; const opened = [];
+      window.crowe.pty = { ...real, start: async () => { throw new Error("posix_spawnp failed."); }, input() {}, resize() {}, close: async () => ({ ok: true }) };
+      try {
+        const t = await addPanel("terminal"); const a = await addPanel("agent", { title: "Probe agent" }); opened.push(t, a);
+        await new Promise((r) => setTimeout(r, 200));
+        const el = (p) => document.querySelector('.workspace-panel[data-id="' + p.id + '"]');
+        const shown = (p) => el(p).querySelector(".xterm") ? terminalPanels.get(p.id).term.buffer.active : null;
+        const text = (p) => { const b = shown(p); if (!b) return ""; let s = ""; for (let i = 0; i < b.length; i++) s += (b.getLine(i)?.translateToString(true) || "") + "\\n"; return s; };
+        return { termState: el(t).querySelector(".terminal-state").textContent, termSaysWhy: /posix_spawnp/.test(text(t)),
+          agentChip: el(a).querySelector(".agent-operation-chip").textContent, agentEvent: /posix_spawnp/.test(el(a).querySelector(".agent-event-stream").textContent) };
+      } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
+    expect: { termState: "no shell", termSaysWhy: true, agentChip: "READY", agentEvent: true },
+  },
+  {
     name: "lane navigation exposes the current page and follows programmatic changes",
     body: `__resetSpaces();
       projLane = "deployments"; setSpace("projects");
@@ -1637,6 +1811,88 @@ const tests = [
     expect: { size: 2, has: false, rail: 2 },
   },
   {
+    // Two places the farm showed through on a Chat and Projects build: the Home
+    // card's "growing" row and the grower's line in Deployments. Both read the
+    // same catalog, so both are asserted here, in both directions - a rule that
+    // simply hid the grower everywhere would pass the narrowed half alone.
+    name: "a build without Cultivation shows no grower on Home or in Deployments",
+    body: `__resetSpaces();
+      const rows = async () => {
+        await refreshHome();
+        const asks = [...$("home-routing").querySelectorAll(".k")].map((k) => k.textContent);
+        await renderLane("deployments");
+        const ids = [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent);
+        return { growing: asks.includes("growing"), grower: ids.includes("crowelm-grower"), models: ids.length };
+      };
+      const full = await rows();
+      window.crowe.installSpaces = ["chat", "projects"];
+      applySpaceProfile();
+      const rail = [...document.querySelectorAll('#spaces .seg-btn')].filter((b) => !b.classList.contains("hidden")).map((b) => b.dataset.space).join(",");
+      const narrowed = await rows();
+      __resetSpaces();
+      return { fullGrowing: full.growing, fullGrower: full.grower, rail,
+        growing: narrowed.growing, grower: narrowed.grower, dropped: full.models - narrowed.models };`,
+    expect: { fullGrowing: true, fullGrower: true, rail: "chat,projects", growing: false, grower: false, dropped: 1 },
+  },
+  {
+    // The live catalog carries no role tags: crowelm-grower is only known as
+    // the model the router resolves for cultivation, through the bridge table.
+    // A rule keyed on the tag alone would pass the shim above and leak in
+    // production, so this hands the lane a catalog shaped like the real one.
+    name: "the grower is hidden by what the router resolves, not only by a role tag",
+    body: `__resetSpaces();
+      const real = window.crowe.catalog.get;
+      const live = { models: [{ model: "crowelm", name: "CroweLM" }, { model: "crowelm-grower", name: "CroweLM Grower" }, { model: "GPT-5.6-Sol", name: "GPT 5.6 Sol" }],
+        at: Date.now(), defaultModel: "crowelm",
+        resolved: { cultivation: { model: "crowelm-grower", source: "bridge" }, coding: { model: "crowelm", source: "default" } } };
+      window.crowe.catalog.get = async () => live;
+      const ids = async () => { await renderLane("deployments"); return [...$("lane-body").querySelectorAll(".m-id")].map((k) => k.textContent); };
+      try {
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = (await ids()).join(",");
+        // A cultivation role that fell through to the default model names the
+        // model everything else uses. Hiding that would take the one model
+        // every install has out of the lane.
+        live.resolved.cultivation = { model: "crowelm", source: "default" };
+        const defaultKept = (await ids()).includes("crowelm");
+        return { narrowed, defaultKept };
+      } finally { window.crowe.catalog.get = real; __resetSpaces(); }`,
+    expect: { narrowed: "crowelm,GPT-5.6-Sol", defaultKept: true },
+  },
+  {
+    // The Settings plugin list filters on a plugin's declared spaces. Handed a
+    // fixture with one plugin per shape - cultivation only, several spaces
+    // including cultivation, projects and chat, and no spaces at all - and read
+    // in both directions, since a rule that hid every cultivation mention would
+    // pass the narrowed half and take Crowe Skills out of every install. The
+    // Crowe Sense section beside it follows the same profile, and the picker
+    // path is exercised too: switching Cultivation back on brings both back.
+    name: "a build without Cultivation lists no cultivation-only plugin and hides Crowe Sense",
+    body: `__resetSpaces();
+      const real = window.crowe.plugins.list;
+      const row = (id, name, spaces) => ({ id, name, description: "", spaces, available: true, enabled: false, envPrompts: [] });
+      window.crowe.plugins.list = async () => [
+        row("crowe-skills", "Crowe Skills", ["chat", "projects", "cultivation"]),
+        row("crowe-sense", "Crowe Sense", ["cultivation"]),
+        row("github", "GitHub", ["projects", "chat"]),
+        row("everywhere", "Everywhere", []),
+      ];
+      const names = async () => { await renderPlugins(); return [...$("cfg-plugins").querySelectorAll(".plug-name")].map((n) => n.firstChild.textContent.trim()).join(","); };
+      const senseHidden = () => $("cfg-sense").classList.contains("hidden");
+      try {
+        const full = await names(), fullSense = senseHidden();
+        window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
+        const narrowed = await names(), narrowedSense = senseHidden();
+        // The picker wins over the build: tick Cultivation and both come back.
+        setSpaceProfile(["chat", "projects", "cultivation"]);
+        const restored = await names(), restoredSense = senseHidden();
+        return { full, fullSense, narrowed, narrowedSense, restored, restoredSense };
+      } finally { window.crowe.plugins.list = real; __resetSpaces(); }`,
+    expect: { full: "Crowe Skills,Crowe Sense,GitHub,Everywhere", fullSense: false,
+      narrowed: "Crowe Skills,GitHub,Everywhere", narrowedSense: true,
+      restored: "Crowe Skills,Crowe Sense,GitHub,Everywhere", restoredSense: false },
+  },
+  {
     name: "the picker cannot turn chat off",
     body: `__resetSpaces();
       renderSpacePicker();
@@ -1666,6 +1922,293 @@ const tests = [
       $("settings").classList.add("hidden");
       return { covered: covered.join(",") };`,
     expect: { covered: "" },
+  },
+
+  // Repositories. The drawer and the three lanes read the shim's three
+  // remembered folders and four GitHub repositories; the empty states and the
+  // two actions that change the machine (open, clone) are exercised against
+  // recorders, so what is asserted is which bridge call was made and where the
+  // shell ended up, not that a folder dialog opened.
+  {
+    name: "the Projects rail carries the code lanes and the repositories drawer follows the space",
+    body: `__resetSpaces();
+      const lanes = [...document.querySelectorAll("#space-nav .sn-item")].map((b) => b.dataset.lane);
+      setSpace("projects"); const inProjects = !$("repos-drawer").classList.contains("hidden");
+      setSpace("chat"); const inChat = $("repos-drawer").classList.contains("hidden");
+      __resetSpaces();
+      return { lanes: lanes.filter((l) => ["repos", "pulls", "issues"].includes(l)).join(","), inProjects, inChat };`,
+    expect: { lanes: "repos,pulls,issues", inProjects: true, inChat: true },
+  },
+  {
+    name: "the repositories lane lists checkouts with branch and changes, and GitHub rows with PR counts and the failed-check marker",
+    body: `__resetSpaces(); projLane = "repos"; setSpace("projects"); await __settle();
+      const sections = $("lane-body").querySelectorAll(".repo-section");
+      const local = [...sections[0].querySelectorAll(".lane-repo")];
+      const gh = [...sections[1].querySelectorAll(".lane-repo")];
+      const red = gh.find((r) => r.querySelector(".repo-flag.failed"));
+      const out = {
+        locals: local.length, current: sections[0].querySelector(".lane-repo.current .repo-name span").textContent,
+        meta: local[0].querySelectorAll(".repo-meta")[1].textContent,
+        plain: local[2].querySelectorAll(".repo-meta")[1].textContent,
+        github: gh.length, failed: sections[1].querySelectorAll(".repo-flag.failed").length,
+        failedOn: red ? red.querySelector(".repo-name span").textContent : "",
+        prs: gh[0].querySelector(".repo-meta").textContent,
+        clones: gh.filter((r) => [...r.querySelectorAll("button")].some((b) => b.textContent === "Clone")).length,
+        drawerRows: $("repo-list").querySelectorAll(".repo-side").length,
+        drawerFailed: $("repo-list").querySelectorAll(".repo-flag.failed").length,
+      };
+      __resetSpaces(); return out;`,
+    expect: { locals: 3, current: "crowe-logic-desktop", meta: "main · 3 changes · opened 12m ago", plain: "not a git repository · opened 4d ago",
+      github: 4, failed: 1, failedOn: "MichaelCrowe11/crowe-logic-foundry", prs: "2 open PRs · pushed 3h ago · checked out", clones: 2,
+      drawerRows: 7, drawerFailed: 1 },
+  },
+  {
+    // The two empty states, each with its way in. The token button has to land
+    // on the GitHub plugin's own prompt in Settings, not on a second field.
+    name: "no folders and no token each show a short empty state, and Add token opens the plugin's prompt",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const orig = { recent: R.recent, githubStatus: R.githubStatus, githubRepos: R.githubRepos };
+      R.recent = async () => []; R.githubStatus = async () => ({ configured: false }); R.githubRepos = async () => ({ configured: false, repos: [] });
+      const plugList = window.crowe.plugins.list;
+      window.crowe.plugins.list = async () => [{ id: "github", name: "GitHub", description: "Repos.", spaces: ["projects"], available: true,
+        envPrompts: [{ key: "GITHUB_PERSONAL_ACCESS_TOKEN", label: "GitHub personal access token" }], enabled: false, connected: false, toolCount: 0 }];
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const empties = [...$("lane-body").querySelectorAll(".repo-empty")].map((e) => e.querySelector("span").textContent + "|" + (e.querySelector("button") ? e.querySelector("button").textContent : ""));
+      const drawerEmpties = $("repo-list").querySelectorAll(".repo-empty").length;
+      [...$("lane-body").querySelectorAll(".repo-empty button")].find((b) => b.textContent === "Add token").click();
+      await __settle();
+      const settingsOpen = !$("settings").classList.contains("hidden");
+      // The prompt is the plugin row's own password input, revealed by its
+      // Enable; a hidden test window cannot prove focus, so what is held is
+      // that the input exists, is a password field, and nothing else opened.
+      const tokenInput = document.querySelector('#cfg-plugins .plug-row[data-plugin="github"] .plug-env input');
+      const prompt = Boolean(tokenInput) && tokenInput.type === "password" && document.querySelectorAll("#cfg-plugins .plug-env").length === 1;
+      $("cfg-cancel").click(); window.crowe.plugins.list = plugList; Object.assign(R, orig); __resetSpaces();
+      return { empties: empties.join(";"), drawerEmpties, settingsOpen, prompt, exclaims: /!/.test(empties.join("")) };`,
+    expect: { empties: "No folders opened yet. Open one and its branch and changes show here.|Open folder;Connect GitHub to list your repositories, pull requests and issues.|Add token",
+      drawerEmpties: 2, settingsOpen: true, prompt: true, exclaims: false },
+  },
+  {
+    name: "clicking a checkout opens it as the workspace and lands on Changes",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const origOpen = R.open; let opened = "";
+      R.open = async (p) => { opened = p; return { ok: true, cwd: p }; };
+      const origCfg = window.crowe.getConfig; window.crowe.getConfig = async () => ({ ...(await origCfg()), cwd: opened || "/x" });
+      projLane = "repos"; setSpace("projects"); await __settle();
+      $("lane-body").querySelectorAll(".repo-section")[0].querySelectorAll(".lane-repo")[1].click(); await __settle();
+      const out = { opened, space: document.body.dataset.space, changes: $("pane-git").classList.contains("active"), cwd: $("cwd").textContent };
+      R.open = origOpen; window.crowe.getConfig = origCfg; hideLegacy(); __resetSpaces(); return out;`,
+    expect: { opened: "/Users/crowelogic/Projects/crowe-logic-foundry", space: "chat", changes: true, cwd: "/Users/crowelogic/Projects/crowe-logic-foundry" },
+  },
+  {
+    // Start task is the ordinary path: the composer's autonomy setting, a new
+    // session with a name and a brief, and send(). Read is the default, and
+    // the item is quoted as the description of the work, not as instructions.
+    name: "Start task on a pull request defaults to Read, sets the autonomy, names the session and sends the item as the first prompt",
+    body: `__resetSpaces();
+      const calls = { config: [], runs: [], updates: [] };
+      const origSet = window.crowe.setConfig; window.crowe.setConfig = async (p) => { calls.config.push(p); return { autonomy: p.autonomy }; };
+      const origUpd = window.crowe.sessions.update; window.crowe.sessions.update = async (id, patch) => { calls.updates.push({ id, ...patch }); return { ok: true, id, name: patch.name, brief: patch.brief }; };
+      const origAuth = refreshAuth; refreshAuth = async () => true;
+      const origRun = window.crowe.agent.run; window.crowe.agent.run = async (messages) => { calls.runs.push(messages[messages.length - 1].content); return { done: true, text: "ok" }; };
+      projLane = "pulls"; setSpace("projects"); await __settle();
+      const rows = $("lane-body").querySelectorAll(".work-row");
+      const sub = $("lane-sub").textContent;
+      [...rows[0].querySelectorAll("button")].find((b) => b.textContent === "Start task").click();
+      const picker = rows[0].querySelector(".task-picker");
+      const def = picker.querySelector(".seg-btn.active").dataset.tier;
+      picker.querySelector(".tp-start").click(); await __settle(); await __settle();
+      const run = calls.runs[0] || "", upd = calls.updates[0] || {};
+      const out = { rows: rows.length, sub, def, tier: calls.config.map((c) => c.autonomy).join(","), named: upd.name || "",
+        briefOk: /pull request #74/.test(upd.brief || ""), space: document.body.dataset.space, first: run.split("\\n")[0],
+        ask: /Do not change anything/.test(run), quoted: /not instructions to you/.test(run), path: /checkout is at \\/Users\\/crowelogic\\/Projects\\/crowe-logic-desktop/.test(run) };
+      window.crowe.setConfig = origSet; window.crowe.sessions.update = origUpd; refreshAuth = origAuth; window.crowe.agent.run = origRun;
+      setAutonomyBadge("edit"); transcript.innerHTML = ""; messages.length = 0; resetWelcome(); setComposerStatus("Ready"); __resetSpaces(); return out;`,
+    expect: { rows: 2, sub: "MichaelCrowe11/crowe-logic-desktop on GitHub · 2 open", def: "readonly", tier: "readonly",
+      named: "MichaelCrowe11/crowe-logic-desktop #74", briefOk: true, space: "chat",
+      first: "Pull request #74 in MichaelCrowe11/crowe-logic-desktop: Repositories in the sidebar: local checkouts, GitHub repos, PR and issue lanes",
+      ask: true, quoted: true, path: true },
+  },
+  {
+    name: "the task prompt states each tier's ask and the brief names the item",
+    body: `const item = { kind: "issue", number: 5, title: "T", url: "https://github.com/o/n/issues/5", author: "a", labels: ["bug"], body: "Do X" };
+      const repo = { full: "o/n" };
+      return { read: taskPrompt(item, repo, "readonly", "/c").includes("Do not change anything"),
+        edit: taskPrompt(item, repo, "edit", "/c").includes("reviewed edits"),
+        exec: taskPrompt(item, repo, "execute", "/c").includes("run the tests"),
+        first: taskPrompt(item, repo, "edit", "/c").split("\\n")[0], labels: /Labels: bug/.test(taskPrompt(item, repo, "edit", "/c")),
+        brief: taskBrief(item, repo, "/c") };`,
+    expect: { read: true, edit: true, exec: true, first: "Issue #5 in o/n: T", labels: true,
+      brief: "Working in o/n, checked out at /c. This session is about issue #5: T" },
+  },
+  {
+    // The clone's approval card is the transcript's card, drawn in the lane
+    // and addressed to the "repos" agent, so the chat never shows it. The
+    // listener is mounted before the call and gone after it.
+    name: "cloning from GitHub draws the approval card in the lane, not the chat, and opens the checkout when it lands",
+    body: `__resetSpaces();
+      const R = window.crowe.repos; const origClone = R.clone; let cloned = "";
+      const priorOn = window.crowe.agent.onEvent; let listeners = [];
+      window.crowe.agent.onEvent = (fn) => { listeners.push(fn); return () => { listeners = listeners.filter((f) => f !== fn); }; };
+      R.clone = async (owner, name) => {
+        cloned = owner + "/" + name;
+        listeners.slice().forEach((f) => f({ agentId: "repos", type: "approval_request", id: 501, kind: "run_shell", risk: "review",
+          why: "clones a repository over the network", detail: "git clone https://github.com/" + cloned + ".git /r/" + cloned }));
+        await new Promise((r) => setTimeout(r, 30));
+        return { ok: true, cwd: "/r/" + cloned, cloned: true };
+      };
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const gh = $("lane-body").querySelectorAll(".repo-section")[1];
+      [...gh.querySelectorAll("button")].find((b) => b.textContent === "Clone").click();
+      await new Promise((r) => setTimeout(r, 10));
+      const card = gh.querySelector(".repo-gate .gatecard");
+      const drawn = Boolean(card), title = card ? card.querySelector(".ec-title").textContent : "", detail = card ? card.querySelector(".ec-diff").textContent : "";
+      const transcriptCards = transcript.querySelectorAll(".gatecard").length;
+      await __settle();
+      const out = { cloned, drawn, title, detail, transcriptCards, status: gh.querySelector(".repo-status").textContent,
+        space: document.body.dataset.space, changes: $("pane-git").classList.contains("active"), listenersLeft: listeners.length };
+      R.clone = origClone; window.crowe.agent.onEvent = priorOn; hideLegacy(); __resetSpaces(); return out;`,
+    expect: { cloned: "MichaelCrowe11/crowe-agents", drawn: true, title: "Reaches past the workspace",
+      detail: "git clone https://github.com/MichaelCrowe11/crowe-agents.git /r/MichaelCrowe11/crowe-agents", transcriptCards: 0,
+      status: "Cloned MichaelCrowe11/crowe-agents. Opened it.", space: "chat", changes: true, listenersLeft: 0 },
+  },
+  {
+    name: "Assign to room opens the room composer on the checkout, named after it",
+    body: `__resetSpaces(); await __reset();
+      const R = window.crowe.repos; const origOpen = R.open; let opened = "";
+      R.open = async (p) => { opened = p; return { ok: true, cwd: p }; };
+      projLane = "repos"; setSpace("projects"); await __settle();
+      const row = $("lane-body").querySelectorAll(".repo-section")[0].querySelectorAll(".lane-repo")[1];
+      [...row.querySelectorAll("button")].find((b) => b.textContent === "Assign to room").click(); await __settle();
+      const panel = panelDeck.querySelector('.workspace-panel[data-id^="room-"]');
+      const base = panel ? panel.querySelector(".rc-base") : null;
+      const out = { opened, space: document.body.dataset.space, room: Boolean(panel), base: base ? base.textContent : "",
+        name: panel ? panel.querySelector(".rc-name").value : "" };
+      R.open = origOpen; await __reset(); __resetSpaces(); return out;`,
+    expect: { opened: "/Users/crowelogic/Projects/crowe-logic-foundry", space: "chat", room: true,
+      base: "Working from MichaelCrowe11/crowe-logic-foundry /Users/crowelogic/Projects/crowe-logic-foundry.",
+      name: "MichaelCrowe11/crowe-logic-foundry" },
+  },
+  {
+    name: "a workspace without a GitHub remote says so in the issue lane and points at Repositories",
+    body: `__resetSpaces(); const R = window.crowe.repos; const orig = R.remote;
+      R.remote = async () => ({ cwd: "/x", repo: true, branch: "main", remote: null });
+      projLane = "issues"; setSpace("projects"); await __settle();
+      const e = $("lane-body").querySelector(".repo-empty");
+      const out = { text: e ? e.querySelector("span").textContent : "", action: e ? e.querySelector("button").textContent : "" };
+      R.remote = orig; __resetSpaces(); return out;`,
+    expect: { text: "This workspace has no GitHub remote. Open a checkout of a GitHub repository to see its pull requests and issues.", action: "Repositories" },
+  },
+  {
+    // send()'s no-text fallback names what happened: tools ran, so the work is
+    // in the workspace; or nothing ran, so the model returned an empty reply.
+    // acts is an object, and for a week its .length was read, which is never
+    // truthy, so every tool-only turn was told the model returned nothing.
+    name: "a turn that ran tools and said nothing points at the workspace; one that ran nothing names the empty reply",
+    body: `await __reset();
+      const hintAfter = async (script) => {
+        const restore = __stubAgentScript(() => script);
+        await send("go");
+        const h = transcript.querySelector(".msg.assistant .said.hint");
+        const text = h ? h.textContent : "";
+        restore(); transcript.innerHTML = ""; messages.length = 0;
+        return text;
+      };
+      const tools = await hintAfter([
+        { type: "tool_call", id: "t1", name: "read_file", args: { path: "README.md" } },
+        { type: "tool_result", id: "t1", name: "read_file", result: "# a line" },
+      ]);
+      const nothing = await hintAfter([]);
+      return { toolsPointAtWorkspace: /^Done/.test(tools), emptyNamed: /returned no text/.test(nothing), tools, nothing };`,
+    expect: { toolsPointAtWorkspace: true, emptyNamed: true },
+  },
+  {
+    // The Cloud browser card: one per session, updated in place by later
+    // events, the live view address kept off the DOM, and Open mounting a
+    // cloud browser panel in a <webview> with no popups that the deck never
+    // saves. A second Open focuses the panel rather than opening another.
+    name: "a browser event draws one Cloud browser card per session, updates it in place, and Open mounts a cloud browser panel",
+    body: `await __reset();
+      const thumb = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+      const live = "https://browser.invalid/v1/sessions/s_t1/view?token=st_test_token";
+      const restore = __stubAgentScript(() => [
+        { type: "tool_call", id: "t1", name: "browser_open", args: { url: "https://example.com/docs/start" } },
+        { type: "browser", session_id: "s_t1", url: "https://example.com/docs/start", title: "Start", thumb, live_view_url: live, expires_at: "2026-09-18T18:40:00Z" },
+        { type: "tool_result", id: "t1", name: "browser_open", result: "opened https://example.com/docs/start" },
+        { type: "tool_call", id: "t2", name: "browser_click", args: { ref: "e1" } },
+        { type: "browser", session_id: "s_t1", url: "https://example.com/docs/next", title: "Next", thumb, live_view_url: live, expires_at: "2026-09-18T18:40:00Z" },
+        { type: "tool_result", id: "t2", name: "browser_click", result: "clicked e1." },
+        // A turn that says nothing ends as the "Done" hint and its cards go with
+        // it (send()'s no-text fallback); a real browsing turn ends in prose.
+        { type: "assistant", text: "The next page is open." },
+      ]);
+      await send("browse");
+      const cards = [...transcript.querySelectorAll(".browsercard")];
+      const card = cards[0];
+      const args = [...transcript.querySelectorAll(".toolcard .tc-arg")].map((a) => a.textContent);
+      const out = { cards: cards.length, chip: card ? card.querySelector(".bc-url").textContent : "", full: card ? card.querySelector(".bc-url").title : "",
+        title: card ? card.querySelector(".bc-title").textContent : "", thumb: Boolean(card && card.querySelector(".bc-thumb").src.startsWith("data:image/jpeg")),
+        leaked: transcript.innerHTML.includes("st_test_token"), toolCards: transcript.querySelectorAll(".toolcard").length,
+        clickArg: args[1] || args.join("|") };
+      if (!card) { restore(); transcript.innerHTML = ""; messages.length = 0; return out; }
+      card.querySelector(".bc-open").click();
+      await __settle();
+      const p = panels.find((x) => x.type === "cloud-browser");
+      const el = p && panelDeck.querySelector('[data-id="' + p.id + '"]');
+      out.panel = Boolean(p); out.panelUrl = Boolean(p && p.url === live); out.header = el ? el.querySelector(".cb-url").textContent : "";
+      out.view = el ? (el.querySelector("webview") ? "webview" : el.querySelector("iframe") ? "iframe" : "none") : "none";
+      out.popups = Boolean(el && el.querySelector("webview") && el.querySelector("webview").hasAttribute("allowpopups"));
+      out.saved = JSON.stringify(JSON.parse(localStorage.getItem("crowe-workspace-panels") || "{}")).includes("cloud-browser");
+      out.tab = [...__tabs()].some((t) => t.title === "Cloud browser");
+      card.querySelector(".bc-open").click(); await __settle();
+      out.panelsAfterSecondOpen = panels.filter((x) => x.type === "cloud-browser").length;
+      if (p) closePanel(p.id);
+      out.closed = panels.filter((x) => x.type === "cloud-browser").length;
+      restore(); transcript.innerHTML = ""; messages.length = 0;
+      return out;`,
+    expect: { cards: 1, chip: "example.com/docs/next", full: "https://example.com/docs/next", title: "Next", thumb: true, leaked: false, toolCards: 2, clickArg: "e1",
+      panel: true, panelUrl: true, header: "example.com/docs/next", view: "webview", popups: false, saved: false, tab: true, panelsAfterSecondOpen: 1, closed: 0 },
+  },
+  {
+    // Settings reads which credential is in force, never a value. Signed in,
+    // the sentence says no key is needed and there is no key field; signed
+    // out, the masked field with Save and Remove writing through the key
+    // store; and the modal's own Save carries the URL alone, whatever was
+    // left in the field.
+    name: "Crowe Browser in Settings: the badge and the sentence follow the credential, the key row shows only signed out, and a pasted key goes through the key store",
+    body: `const origCfg = window.crowe.getConfig; const out = {};
+      const read = () => [$("browser-state").textContent, $("cfg-browser-note").textContent,
+        $("cfg-browser-keyrow").classList.contains("hidden") ? "no field" : "field", $("cfg-browser-key").placeholder,
+        $("cfg-browser-key-remove").disabled ? "remove off" : "remove on"].join("|");
+      for (const auth of ["crowe-id", "key", "none"]) {
+        window.crowe.getConfig = async () => ({ ...(await origCfg()), croweBrowserAuth: auth });
+        renderBrowserSettings(await window.crowe.getConfig());
+        out[auth] = read();
+      }
+      window.crowe.getConfig = origCfg;
+      const K = window.crowe.keys, origSet = K.set, origRemove = K.remove, origSetConfig = window.crowe.setConfig;
+      const stores = []; let patched = null;
+      K.set = async (id, key) => { stores.push(id + ":" + key); return { ok: true }; };
+      K.remove = async (id) => { stores.push("remove:" + id); return { ok: true }; };
+      window.crowe.setConfig = async (p) => { patched = p; return origCfg(); };
+      $("cfg-browser-key").value = " cbk_pasted "; $("cfg-browser-key-save").click(); await __settle();
+      out.saved = stores.join(","); out.cleared = $("cfg-browser-key").value === "";
+      out.afterSave = $("browser-state").textContent;
+      $("cfg-browser-key-remove").disabled = false; $("cfg-browser-key-remove").click(); await __settle();
+      out.removed = stores.slice(-1)[0];
+      $("settings").classList.remove("hidden"); $("cfg-browser-url").value = "https://browser.crowelogic.com"; $("cfg-browser-key").value = "cbk_left_in_field";
+      $("cfg-save").click(); await __settle();
+      out.patch = patched && patched.croweBrowser ? JSON.stringify(patched.croweBrowser) : String(patched);
+      out.patchLeak = JSON.stringify(patched || {}).includes("cbk_");
+      out.closed = $("settings").classList.contains("hidden");
+      K.set = origSet; K.remove = origRemove; window.crowe.setConfig = origSetConfig;
+      return out;`,
+    expect: {
+      "crowe-id": "Crowe ID|Your Crowe ID signs you in to the cloud browser. No key is needed.|no field|paste the service key|remove off",
+      key: "Key|Sign in with Crowe ID, or paste a service key.|field|key set; paste to replace|remove on",
+      none: "Not set|Sign in with Crowe ID, or paste a service key.|field|paste the service key|remove off",
+      saved: "croweBrowser:cbk_pasted", cleared: true, afterSave: "Not set", removed: "remove:croweBrowser",
+      patch: '{"url":"https://browser.crowelogic.com"}', patchLeak: false, closed: true },
   },
 ];
 
