@@ -651,12 +651,15 @@ body.mobile[data-pane="room"] .m-room-back { display: inline-flex; align-items: 
    sets the class from the bridge's showUsage and flips it on the tap. */
 body.mobile:not(.m-usage) .colophon,
 body.mobile:not(.m-usage) .routecard,
-body.mobile:not(.m-usage) #autonomy,
-body.mobile:not(.m-usage) .composer-mode,
 body.mobile:not(.m-usage) .conversation-toolbar,
 body.mobile:not(.m-usage) #copy-conversation,
 body.mobile:not(.m-usage) .message-copy,
 body.mobile:not(.m-usage) #hud { display: none !important; }
+/* The operating mode is not developer chrome once a computer is paired: it is
+   what decides whether this phone may write files or run commands there, so it
+   stays on screen whenever it gates something real. Unpaired it gates nothing
+   the person can see, and goes back under the switch. */
+body.mobile:not(.m-usage):not(.m-paired) .composer-mode { display: none !important; }
 
 /* A tool card folds to one plain line and opens on tap. The line is written by
    mobile-ui.js from the tool's name; the card underneath is untouched, so the
@@ -850,10 +853,14 @@ body.mobile .m-h-status b { display: block; font: 600 16px/1.3 var(--body); colo
 body.mobile .m-h-status span { display: block; margin-top: 2px; font: 400 14px/1.45 var(--body); color: var(--muted); }
 body.mobile .m-h-dot { flex: none; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--line-strong); }
 body.mobile .m-h-dot.on { background: #34C759; box-shadow: 0 0 0 4px rgba(52,199,89,.18); }
+body.mobile .m-h-mode { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; align-items: baseline; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+body.mobile .m-h-mode-k { font: 500 11px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+body.mobile .m-h-mode b { font: 600 15px/1.3 var(--body); color: var(--gold-text); }
+body.mobile .m-h-mode-v { grid-column: 1 / -1; font: 400 14px/1.45 var(--body); color: var(--muted); }
 body.mobile .m-h-cta { width: 100%; min-height: 48px; margin-top: 14px; border-radius: 12px; font: 600 16px/1 var(--body); }
 body.mobile #m-home-pane details.m-h-more { margin: 12px 0 0; }
 body.mobile .m-h-more { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-body.mobile .m-h-more summary { list-style: none; cursor: pointer; font: 500 15px/1.4 var(--body); color: var(--gold-text); min-height: 32px; display: flex; align-items: center; }
+body.mobile .m-h-more summary { list-style: none; cursor: pointer; font: 500 15px/1.4 var(--body); color: var(--gold-text); min-height: 44px; display: flex; align-items: center; }
 body.mobile .m-h-more summary::-webkit-details-marker { display: none; }
 body.mobile .m-h-more summary::after { content: "›"; margin-left: 6px; transition: transform .2s; }
 body.mobile .m-h-more[open] summary::after { transform: rotate(90deg); }

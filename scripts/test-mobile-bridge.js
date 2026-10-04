@@ -1172,6 +1172,82 @@ function methodPaths(surface) {
     return "editor taps ignored";
   });
 
+  /* native-chrome.js against a scripted CroweChrome: a bridge call can reject
+     or resolve late, and the native bar must still end up showing what the web
+     tabs say, with the web bar back in charge whenever the native one is not. */
+  function nativeChromeHarness(plugin) {
+    const vm = require("vm");
+    const observers = [];
+    const classes = new Set(["mobile"]);
+    const props = {};
+    const mk = (id, label, current) => ({ dataset: { id }, textContent: label, current,
+      getAttribute: function (n) { return n === "aria-current" && this.current ? "true" : null; }, click() {} });
+    const items = [mk("home", "Home", true), mk("chat", "Chat", false), mk("playground", "Playground", false)];
+    const tabs = { querySelectorAll: () => items, querySelector: (s) => items.find((t) => s.includes(`"${t.dataset.id}"`)) };
+    const body = { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      style: { setProperty: (k, v) => { props[k] = v; } }, appendChild() {} };
+    const listeners = {};
+    plugin.addListener = (ev, fn) => { listeners[ev] = fn; return Promise.resolve({ remove() {} }); };
+    const ctx = {
+      window: {}, setTimeout, CSS: { escape: (s) => s },
+      document: { getElementById: (id) => (id === "m-tabs" ? tabs : null), createElement: () => ({ style: {} }), body },
+      getComputedStyle: () => ({ color: "rgb(160, 120, 40)" }),
+      MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} },
+    };
+    ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
+    vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
+    const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
+    return { classes, props, listeners, select };
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  await check("native tabs recover from a rejected setTabs and hand navigation back meanwhile", async () => {
+    let calls = 0;
+    const plugin = { setTabs: async () => { if (++calls === 1) throw new Error("no host view"); return { height: 83 }; },
+      setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(50);
+    assert(!h.classes.has("native-tabs"), "the spacer claimed a native bar after setTabs rejected");
+    await sleep(700);
+    assert(calls >= 2, "a rejected setTabs was never retried");
+    assert(h.classes.has("native-tabs"), "the retry succeeded but native-tabs was not set");
+    assert(h.props["--native-tab-h"] === "83px", `reserved height ${h.props["--native-tab-h"]}`);
+    return `${calls} setTabs calls, spacer 83px`;
+  });
+
+  await check("native tab selection is serialised and lands on the last web state", async () => {
+    let inFlight = 0, overlap = false; const seen = [];
+    const plugin = { setTabs: async () => ({ height: 83 }), setHidden: async () => {}, haptic: async () => {},
+      setCurrent: async ({ id }) => { if (++inFlight > 1) overlap = true; await sleep(id === "chat" ? 60 : 5); seen.push(id); inFlight--; } };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    h.select("chat"); h.select("playground"); h.select("home"); h.select("playground");
+    await sleep(250);
+    assert(!overlap, "two setCurrent calls were in flight at once");
+    assert(seen[seen.length - 1] === "playground", `native bar ended on ${seen[seen.length - 1]}, not playground`);
+    return `calls: ${seen.join(" -> ")}`;
+  });
+
+  await check("native bar geometry changes move the web spacer", async () => {
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    assert(typeof h.listeners.geometry === "function", "native-chrome does not listen for geometry");
+    h.listeners.geometry({ height: 53 });
+    assert(h.props["--native-tab-h"] === "53px", `spacer stayed at ${h.props["--native-tab-h"]} after rotation`);
+    return "83px -> 53px";
+  });
+
+  await check("dictation refuses to start natively without permission, and stops when the app leaves the foreground", () => {
+    const ios = read("mobile/ios/App/App/CroweSpeech.swift");
+    assert(/guard self\.permissionState\(\) == "granted"/.test(ios), "CroweSpeech.start does not check permission itself");
+    assert(/willResignActiveNotification/.test(ios) && /appWillResignActive\(\) \{ teardown\(notify: true\) \}/.test(ios),
+      "CroweSpeech keeps listening after the app leaves the foreground");
+    const ui = read("mobile/src/mobile-ui.js");
+    assert(/perm\.speechRecognition !== "granted"/.test(ui), "the composer no longer stops on a denied permission");
+    return "iOS guarded";
+  });
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();

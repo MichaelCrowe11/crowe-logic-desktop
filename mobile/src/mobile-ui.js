@@ -252,6 +252,22 @@
   const transcript = $("transcript");
 
   const isIOS = () => Boolean(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "ios");
+  /* What the phone may do on the paired computer, said where the connection is
+     shown. The mode is chosen in the composer and applies to every request
+     until it is changed; this is not a per-action approval, and the wording
+     does not suggest one. Risky commands still stop for a yes on their own. */
+  const HOME_MODE = {
+    plan: ["Plan", "Proposes steps and changes nothing."],
+    readonly: ["Read", "Reads files. Changes nothing."],
+    edit: ["Edit", "Reads and writes files. Commands need Execute."],
+    execute: ["Execute", "Reads, writes and runs commands."],
+  };
+  const homeMode = () => {
+    const [name, means] = HOME_MODE[body.dataset.tier] || HOME_MODE.edit;
+    return `<div class="m-h-mode" id="m-home-mode"><span class="m-h-mode-k">Operating mode</span><b>${name}</b><span class="m-h-mode-v">${means} Change it in Chat, under the message box.</span></div>`;
+  };
+  new MutationObserver(() => { if (body.dataset.pane === "home" && $("m-home-mode")) $("m-home-mode").outerHTML = homeMode(); })
+    .observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   async function renderHome() {
     const paired = body.classList.contains("m-paired");
     const sessions = window.crowe?.sessions?.list ? await window.crowe.sessions.list().catch(() => []) : [];
@@ -271,7 +287,8 @@
       '<button type="button" class="m-h-tile m-h-tile-pg" id="m-home-pg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/></svg><b>Try a model</b><span>Compare models side by side</span></button>',
       '</section>',
       `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
-      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Commands and files on your computer are one message away." : "Chat works without it. Pair to read files and run commands on your own computer."}</span></div></div>`,
+      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
+      paired ? homeMode() : '',
       `<button type="button" class="${paired ? "ghost" : "primary"} m-h-cta" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button>`,
       '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Every command, read and write is listed here afterwards. This is not screen sharing or an interactive terminal: commands can time out and long output can be shortened.</p></details>',
       '</div></section>',

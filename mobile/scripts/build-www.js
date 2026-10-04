@@ -117,9 +117,15 @@ function buildIndex() {
   // native, whole-body request and arrives in one piece. The other half of
   // that fix lives on the gateway: its CORS allowlist carries the phone's
   // capacitor:// and https://localhost origins (control plane 0.2.18).
+  // The Playground and cloud voices talk to the crowe-ai Worker (the BASE in
+  // src/cloud-ai.js), which is not under crowelogic.com; without it here the
+  // page refuses the fetch before it leaves the device and the pane reports
+  // "Load failed" with nothing in the Worker's log.
   const csp = "connect-src 'self';";
   if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
-  html = html.replace(csp, "connect-src 'self' https://*.crowelogic.com;");
+  const cloud = fs.readFileSync(path.join(__dirname, "..", "src", "cloud-ai.js"), "utf8").match(/const BASE = "(https:\/\/[^"]+)"/);
+  if (!cloud) throw new Error("src/cloud-ai.js no longer declares the Worker BASE this CSP must allow");
+  html = html.replace(csp, `connect-src 'self' https://*.crowelogic.com ${cloud[1]};`);
 
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);

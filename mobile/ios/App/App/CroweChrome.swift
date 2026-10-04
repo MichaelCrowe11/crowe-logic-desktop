@@ -15,6 +15,7 @@ import Capacitor
 ///   setHidden({hidden})                                -> resolves
 ///   haptic({style: "selection"|"light"|"medium"|"success"|"warning"|"error"})
 ///   event "tabSelected"                                -> { id }
+///   event "geometry"                                   -> { height }  (whenever layout changes it: rotation, safe area)
 @objc(CroweChrome)
 public class CroweChrome: CAPPlugin, CAPBridgedPlugin, UITabBarDelegate {
     public let identifier = "CroweChrome"
@@ -28,12 +29,31 @@ public class CroweChrome: CAPPlugin, CAPBridgedPlugin, UITabBarDelegate {
 
     private var bar: UITabBar?
     private var ids: [String] = []
+    private var reported: CGFloat = -1
+
+    /// A UITabBar that says when its height changes. The bar's height depends on
+    /// orientation and the bottom safe-area inset, neither of which the web
+    /// side asks about, so the web spacer would otherwise keep the height from
+    /// the last setTabs and leave content under the bar after a rotation.
+    private final class MeasuredTabBar: UITabBar {
+        var onHeight: ((CGFloat) -> Void)?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onHeight?(bounds.height)
+        }
+    }
 
     private func ensureBar() -> UITabBar? {
         if let bar = bar { return bar }
         guard let host = bridge?.viewController?.view else { return nil }
-        let tabBar = UITabBar()
+        let tabBar = MeasuredTabBar()
         tabBar.delegate = self
+        tabBar.accessibilityLabel = "Sections"
+        tabBar.onHeight = { [weak self] h in
+            guard let self = self, h > 0, abs(h - self.reported) >= 0.5, !(self.bar?.isHidden ?? true) else { return }
+            self.reported = h
+            self.notifyListeners("geometry", data: ["height": h])
+        }
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(tabBar)
         NSLayoutConstraint.activate([
@@ -69,7 +89,9 @@ public class CroweChrome: CAPPlugin, CAPBridgedPlugin, UITabBarDelegate {
             }
             tabBar.setItems(barItems, animated: false)
             if let current = current, let i = self.ids.firstIndex(of: current) { tabBar.selectedItem = barItems[i] }
-            call.resolve(["height": self.height(tabBar)])
+            let h = self.height(tabBar)
+            self.reported = h
+            call.resolve(["height": h])
         }
     }
 

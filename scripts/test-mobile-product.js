@@ -26,7 +26,10 @@ app.whenReady().then(async () => {
     await run(`localStorage.setItem('crowe-spaces', JSON.stringify(['chat','cultivation'])); localStorage.setItem('crowe-space','cultivation'); localStorage.setItem('crowe:grow:blocks',JSON.stringify([{id:'preserve-me',code:'DEMO'}]));`);
     await win.loadURL(url); await wait();
     assert.equal(await run(`document.body.dataset.pane`), 'home');
-    assert.equal(await run(`document.querySelector('#m-home-pane').textContent.includes('Turn a question into work you can inspect')`), true);
+    assert.equal(await run(`document.querySelector('#m-home-pane .m-h-title').textContent`), 'What are we working on?');
+    // The prerequisite is on screen, not folded into a disclosure.
+    assert.equal(await run(`[...document.querySelectorAll('#m-home-pane .m-h-status span')].some(e => e.checkVisibility() && /awake/.test(e.textContent) && /Tailscale/.test(e.textContent))`), true);
+    assert.equal(await run(`!!document.getElementById('m-home-mode')`), false, 'unpaired Home names no operating mode');
     assert.equal(await run(`document.querySelector('#spaces [data-space="cultivation"]').checkVisibility()`), false);
     assert.equal(await run(`document.querySelector('#m-tabs').textContent.includes('Log')`), false);
     assert.equal(await run(`JSON.parse(localStorage.getItem('crowe:grow:blocks'))[0].id`), 'preserve-me');
@@ -47,6 +50,18 @@ app.whenReady().then(async () => {
     assert.equal(await run(`document.getElementById('sense-state').checkVisibility()`), false);
     assert.equal(await run(`Array.from(document.querySelectorAll('[aria-label]')).some(e => e.getAttribute('aria-label') === 'Photograph a block, bag or plate')`), false);
     console.log('PASS: pairing opens settings; farm space, sensor setup, and founders promotion are absent');
+    // Paired: Home names the operating mode in plain words, follows a change,
+    // never implies per-action approval, and the mode picker is on screen.
+    await run(`document.body.classList.add('m-paired'); document.body.dataset.tier = 'edit'; document.querySelector('#m-tabs [data-id="chat"]').click()`); await wait();
+    assert.equal(await run(`document.getElementById('autonomy').checkVisibility()`), true, 'mode picker visible when paired');
+    await run(`document.querySelector('#m-tabs [data-id="home"]').click()`); await wait();
+    assert.match(await run(`document.getElementById('m-home-mode').textContent`), /Edit.*Commands need Execute/);
+    await run(`document.body.dataset.tier = 'readonly'`); await wait();
+    const mode = await run(`document.getElementById('m-home-mode').textContent`);
+    assert.match(mode, /Read.*Changes nothing/);
+    assert.doesNotMatch(mode, /approve|each action|every action/i);
+    await run(`document.body.classList.remove('m-paired')`);
+    console.log('PASS: paired Home states the operating mode, follows changes, and the picker is visible');
     for (const width of [390, 430]) {
       win.setContentSize(width, 844); await wait();
       assert.equal(await run(`document.documentElement.scrollWidth <= innerWidth`), true);
