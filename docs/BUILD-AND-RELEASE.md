@@ -154,6 +154,35 @@ All three were set and the `.p8` files present as of 2026-08-05, so an export is
 reproducible here. **Actual submission to App Store Connect is a separate,
 outward-facing step and is Michael's call, not an automated one.**
 
+**Export fails with "Copy failed" when Homebrew rsync is on PATH.** Xcode's
+IPA step runs `/usr/bin/rsync`, which is Apple's openrsync, and openrsync
+spawns its server side by name through PATH. With `/opt/homebrew/bin` first,
+that server is rsync 3.5.0, which rejects the `-E` openrsync passes, and the
+step reports only `exportArchive Copy failed`. The real error is in
+`IDEDistributionPipeline.log` inside the `.xcdistributionlogs` bundle the
+failure names. Export with the system path ahead:
+
+```
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH xcodebuild -exportArchive ...
+```
+
+**The archive and the build number.** App Store Connect refuses a build number
+it has already seen, and the number derives from the version (0.26.6 is 2606),
+so a rebuild of the same version cannot be uploaded: bump the patch version
+and run `sync-version.js` first. The 0.26.7 upload on 2026-10-04 was exactly
+this case.
+
+**Screenshots can be replaced through the API** without touching the version's
+other fields: delete the `appScreenshots` in the set, create one per file
+(`fileName`, `fileSize`), PUT each `uploadOperations` chunk with the headers it
+specifies, then PATCH `uploaded: true` with the MD5 `sourceFileChecksum`, and
+PATCH the set's `relationships/appScreenshots` with the ids in display order.
+Submission goes through `reviewSubmissions` and `reviewSubmissionItems`; the
+older `appStoreVersionSubmissions` endpoint is deprecated. Whether the listing
+has actually changed is read back from `itunes.apple.com/lookup?bundleId=...`
+(`screenshotUrls`, `version`, `releaseNotes`), not from the API's `COMPLETE`
+state.
+
 ### Android
 
 Release signing reads `mobile/android/keystore.properties` (git-ignored) or the
@@ -387,7 +416,14 @@ not a version, and it only names a release on a tag-triggered run.
 - **Do not bypass notarization for a release.** `CROWE_SKIP_NOTARIZE=1` exists for
   local packaging diagnosis only; those artifacts are not shippable.
 - **Android is unbuildable here.** No JDK, no SDK; installing them risks filling
-  the disk. Use CI.
+  the disk. Use CI. The Android workflow builds and signs the bundle but does
+  not upload it: no credential on this machine carries the `androidpublisher`
+  scope, so Play uploads, listing screenshots and rollouts are done in Play
+  Console by hand from the workflow artifact, or need a Play service-account
+  key that is not present here.
+- **`gen-store-frames.js` needs a python3 with brotli.** The foundry venv that
+  `python3` resolves to on PATH lacks it and fontTools cannot open the variable
+  woff2; run with `PATH=/opt/homebrew/bin:$PATH`.
 - **A stale screenshot is the product.** Store screenshots that show an old version
   string in the UI have to be recaptured on a version bump. Play also caps a phone
   screenshot at 2:1, and the iOS device capture is 2.17:1, so the iOS set is
