@@ -2864,6 +2864,7 @@ function renderSpacePicker() {
   const box = $("cfg-spaces"); if (!box) return;
   box.innerHTML = "";
   for (const [id, sp] of Object.entries(SPACES)) {
+    if (window.crowe?.mobile && !defaultSpaceIds().includes(id)) continue;
     const fixed = id === "chat"; // the thread every other space funnels into
     const row = document.createElement("label");
     row.className = "chk";
@@ -3744,6 +3745,7 @@ function applySpaceProfile() {
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed) && parsed.length) ids = parsed; }
   } catch {}
   PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(defaultSpaceIds());
+  if (window.crowe?.mobile) PROFILE = new Set([...PROFILE].filter((id) => defaultSpaceIds().includes(id)));
   for (const [id, sp] of Object.entries(SPACES)) {
     const on = PROFILE.has(id);
     const btn = document.querySelector(`#spaces .seg-btn[data-space="${id}"]`);
@@ -5176,7 +5178,10 @@ function showSignInPrompt() {
   clearWelcome();
   const b = addAssistant();
   b.innerHTML = '<p class="said"></p>';
-  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
+  // The phone does not sell plans, so it does not name them either.
+  b.querySelector(".said").textContent = document.body.classList.contains("mobile")
+    ? "Sign in with your Crowe ID to start."
+    : window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
@@ -5196,7 +5201,8 @@ async function maybeShowOnboarding(cfg) {
     '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
-    "<li>" + esc(window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
+    "<li>" + esc(document.body.classList.contains("mobile") ? "Sign in with your Crowe ID."
+      : window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
     "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",

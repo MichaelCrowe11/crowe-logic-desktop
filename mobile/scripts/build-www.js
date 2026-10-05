@@ -41,6 +41,9 @@ const COPY = [
   ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
+  ["assets/gate-glyph.svg", "assets/gate-glyph.svg"],
+  ["assets/gate-glyph-dark.svg", "assets/gate-glyph-dark.svg"],
+  ["assets/icon.svg", "assets/icon.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
   ["assets/wordmark-motion.svg", "assets/wordmark-motion.svg"],
   ["assets/wordmark-motion-sm.svg", "assets/wordmark-motion-sm.svg"],
@@ -55,7 +58,10 @@ const COPY = [
   ["mobile/src/vault.js", "vault.js"],
   ["mobile/src/mobile-bridge.js", "mobile-bridge.js"],
   ["mobile/src/mobile-ui.js", "mobile-ui.js"],
+  ["mobile/src/cloud-ai.js", "cloud-ai.js"],
   ["mobile/src/speak.js", "speak.js"],
+  ["mobile/src/playground.js", "playground.js"],
+  ["mobile/src/native-chrome.js", "native-chrome.js"],
   ["mobile/src/share-inbox.js", "share-inbox.js"],
   ["mobile/src/connectors.js", "connectors.js"],
 ];
@@ -65,7 +71,7 @@ const COPY = [
 const BUSTED = [
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -75,8 +81,8 @@ const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/icon.png" />`;
 
@@ -111,9 +117,15 @@ function buildIndex() {
   // native, whole-body request and arrives in one piece. The other half of
   // that fix lives on the gateway: its CORS allowlist carries the phone's
   // capacitor:// and https://localhost origins (control plane 0.2.18).
+  // The Playground and cloud voices talk to the crowe-ai Worker (the BASE in
+  // src/cloud-ai.js), which is not under crowelogic.com; without it here the
+  // page refuses the fetch before it leaves the device and the pane reports
+  // "Load failed" with nothing in the Worker's log.
   const csp = "connect-src 'self';";
   if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
-  html = html.replace(csp, "connect-src 'self' https://*.crowelogic.com;");
+  const cloud = fs.readFileSync(path.join(__dirname, "..", "src", "cloud-ai.js"), "utf8").match(/const BASE = "(https:\/\/[^"]+)"/);
+  if (!cloud) throw new Error("src/cloud-ai.js no longer declares the Worker BASE this CSP must allow");
+  html = html.replace(csp, `connect-src 'self' https://*.crowelogic.com ${cloud[1]};`);
 
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);
@@ -144,7 +156,7 @@ function buildIndex() {
   // after renderer.js rather than before it.
   must(html, '<script src="renderer.js"></script>', "the renderer script tag");
   html = html.replace('<script src="renderer.js"></script>',
-    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
+    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="native-chrome.js"></script>\n  <script src="cloud-ai.js"></script>\n  <script src="speak.js"></script>\n  <script src="playground.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
 
   // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
   // sells a subscription through Stripe, which is the app store's business on
@@ -163,7 +175,7 @@ function buildIndex() {
 const MANIFEST = {
   name: "Crowe Logic",
   short_name: "Crowe Logic",
-  description: "Agentic reasoning and cultivation console over the CroweLM gateway.",
+  description: "Chat and a paired-computer workspace over the CroweLM gateway.",
   start_url: "index.html",
   display: "standalone",
   orientation: "portrait",

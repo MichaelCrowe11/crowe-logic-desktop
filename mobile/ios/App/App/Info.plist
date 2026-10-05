@@ -60,7 +60,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Crowe Logic uses the camera to photograph blocks, bags and plates so CroweLM Vision can read them.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Crowe Logic listens while you dictate a message. Nothing is recorded or kept.</string>
+	<string>Crowe Logic listens while you dictate a message. Speech is transcribed on this iPhone when it can be, otherwise by Apple. Crowe Logic keeps no recording.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Crowe Logic reads a photo you choose so CroweLM Vision can look at it. Photos are sent once and never stored in the app.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

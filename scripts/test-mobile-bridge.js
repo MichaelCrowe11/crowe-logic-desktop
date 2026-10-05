@@ -73,8 +73,12 @@ function loadMobileSurface(fetchImpl, capacitor) {
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
   };
+  const consoleLog = [];
   const sandbox = {
     window: win, localStorage,
+    // The bridge writes a failed turn's raw error to the console and nowhere a
+    // grower reads; recorded here so a check can see it without it printing.
+    console: { error: (...a) => consoleLog.push(a.map(String).join(" ")), log: () => {}, warn: () => {} },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
     navigator: { clipboard: { writeText: () => Promise.resolve() } },
@@ -91,6 +95,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
   // than on it — the surface parity walk below must see exactly the desktop's
   // shape. Exposed for the phone-file checks without widening the surface.
   loadMobileSurface.lastWindow = win;
+  loadMobileSurface.lastConsole = consoleLog;
   return win.crowe;
 }
 
@@ -153,7 +158,7 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "remote.activity", "mobile.openExternal", "auth.deleteAccount",
       "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
@@ -289,7 +294,7 @@ function methodPaths(surface) {
     off();
     assert(result.done && /Harvest at 9/.test(result.text), `turn returned ${JSON.stringify(result)}`);
     const names = (bodies[0].tools || []).map((t) => t.function.name);
-    assert(names.includes("google_calendar_list_events") && names.includes("read_grow"), `tools sent: ${names.join(",")}`);
+    assert(names.includes("google_calendar_list_events") && !names.includes("read_grow") && !names.includes("log_grow"), `tools sent: ${names.join(",")}`);
     assert(acted.length === 1 && acted[0][0] === "google_calendar_list_events" && acted[0][1].query === "harvest", `act saw ${JSON.stringify(acted)}`);
     const toolMsg = bodies[1].messages.find((m) => m.role === "tool");
     assert(toolMsg && /Harvest/.test(toolMsg.content), "the connector result did not go back to the model");
@@ -352,7 +357,8 @@ function methodPaths(surface) {
     const speak = read("mobile/src/speak.js"), ui = read("mobile/src/mobile-ui.js");
     assert(/localStorage\.getItem\("crowe-reply-voice"\)/.test(speak), "speak.js must read crowe-reply-voice");
     assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
-    assert(/\["michael", "neural", "phone"\]/.test(speak) && /VOICES = \["michael", "neural", "phone"\]/.test(ui), "the two sides must agree on the three voices");
+    assert(/\["neural", "phone"\]/.test(speak) && /VOICES = \["neural", "phone"\]/.test(ui), "the two sides must agree on the two voices");
+    assert(/id !== "michael"/.test(speak) && !/value="michael"/.test(ui), "the retired cloned voice must never be offered or requested");
     assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
     assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
     return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
@@ -477,7 +483,7 @@ function methodPaths(surface) {
     assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
       && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
       `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
-    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    assert(/Follow the user's question, not an assumed industry or task/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
     const route = seen.find((e) => e.type === "route");
     assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
     const photos = seen.find((e) => e.type === "photos");
@@ -709,6 +715,75 @@ function methodPaths(surface) {
     await bridge.diag.clear();
     assert((await bridge.diag.list()).length === 0, "clear left entries");
     return `${kinds.length} entries for a good run; a dead network shows as net:fetch-threw Load failed`;
+  });
+
+  await check("a failed turn is one sentence in the app's voice; the raw error goes to the console and Diagnostics only", async () => {
+    // 1.1. The founder watched a grower be shown the gateway's error dictionary
+    // when the vision model was overloaded. Four ways a turn fails, three
+    // sentences, and the raw text in exactly two places a person can read it
+    // from: the console and the Diagnostics ring.
+    const token = "header." + Buffer.from('{"email":"grower@example.com","tier":"personal","exp":9999999999}').toString("base64") + ".sig";
+    const RAW = {
+      budget: () => new Response('{"detail":{"error":"budget_exhausted","message":"Monthly reading budget used"}}', { status: 429 }),
+      busy: () => new Response('data: {"error":{"type":"overloaded_error","message":"Overloaded"}}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } }),
+      five: () => new Response('{"detail":"upstream unavailable"}', { status: 503 }),
+      net: () => { throw new TypeError("Load failed"); },
+    };
+    const WANT = {
+      budget: "This month's reading budget is used up. It resets on the first.",
+      busy: "The reader is busy. Try again in a moment.",
+      five: "The reading did not come back. Try again.",
+      net: "The reading did not come back. Try again.",
+    };
+    const seen = [];
+    for (const [mode, answer] of Object.entries(RAW)) {
+      const bridge = loadMobileSurface(async (url) => (String(url).includes("/api/gateway/chat") ? answer() : new Response("{}", { status: 200 })));
+      const log = loadMobileSurface.lastConsole;
+      await bridge.setConfig({ token });
+      const events = [];
+      bridge.agent.onEvent((ev) => events.push(ev));
+      const r = await bridge.agent.run([{ role: "user", content: "What is this?" }]);
+      const err = events.find((e) => e.type === "error");
+      assert(err, `${mode}: no error event`);
+      assert(err.text === WANT[mode], `${mode}: said ${JSON.stringify(err.text)}`);
+      assert(r.done === false && r.error === WANT[mode], `${mode}: the run's own error is ${JSON.stringify(r.error)}`);
+      assert(!/HTTP \d|\{|overloaded_error|Load failed/.test(err.text), `${mode}: the raw error leaked into the transcript`);
+      assert(log.some((l) => /turn failed/.test(l) && (/429|overloaded|503|Load failed/i.test(l))), `${mode}: the raw error did not reach the console: ${JSON.stringify(log)}`);
+      const rows = await bridge.diag.list();
+      assert(rows.some((x) => x.k === "run:error-raw" && /429|overloaded|503|Load failed/i.test(x.d)), `${mode}: Diagnostics did not keep the raw error`);
+      seen.push(`${mode} -> ${err.kind}`);
+    }
+    // Sentences the bridge itself writes pass through untouched.
+    const h = loadMobileSurface.lastWindow.__croweHumanError;
+    assert(h('Not signed in. Tap "Sign in with Crowe ID" to continue.').kind === "message", "an app-voice sentence was rewritten");
+    assert(h("HTTP 502: Bad Gateway").text === WANT.five && h("stream broke: TypeError").text === WANT.five, "a 5xx or a broken stream did not read as a failed reading");
+    return seen.join(", ");
+  });
+
+  await check("the phone starts on brisk pace with the developer chrome off, and remembers the switch", async () => {
+    const bridge = loadMobileSurface();
+    const c = await bridge.getConfig();
+    assert(c.textPace === "brisk", `textPace defaults to ${c.textPace}`);
+    assert(c.showUsage === false, `showUsage defaults to ${JSON.stringify(c.showUsage)}`);
+    const after = await bridge.setConfig({ showUsage: true, textPace: "reading" });
+    assert(after.showUsage === true && after.textPace === "reading", "the switch and the pace did not persist through setConfig");
+    return "brisk, quiet; both settable";
+  });
+
+  await check("crowePhone.publicJson reads a public gateway route once a minute and answers null when it cannot", async () => {
+    let calls = 0;    // founders reads only: the bridge's boot also fetches build.json through the same fetch
+    const bridge = loadMobileSurface(async (url) => { if (String(url).includes("/api/public/founders")) calls++; return String(url).includes("/api/public/founders")
+      ? new Response('{"spots":100,"taken":0,"founders":[]}', { status: 200 }) : new Response("", { status: 404 }); });
+    await bridge.getConfig();
+    const phone = loadMobileSurface.lastWindow.crowePhone;
+    const a = await phone.publicJson("/api/public/founders");
+    const b = await phone.publicJson("/api/public/founders");
+    assert(a && a.spots === 100 && b === a && calls === 1, `expected one fetch and a cached answer, got ${calls} call(s): ${JSON.stringify([a, b])}`);
+    assert((await phone.publicJson("/api/public/missing")) === null, "a 404 did not answer null");
+    const down = loadMobileSurface(async () => { throw new TypeError("Load failed"); });
+    await down.getConfig();
+    assert((await loadMobileSurface.lastWindow.crowePhone.publicJson("/api/public/founders")) === null, "a dead network did not answer null");
+    return "1 fetch for 2 reads; 404 and no network read as null";
   });
 
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
@@ -1095,6 +1170,82 @@ function methodPaths(surface) {
     assert(/className\s*=\s*"sess-meta"/.test(rr), "renderer no longer draws .sess-meta; update this check");
     assert(/closest\("\.sess-meta"\)/.test(ui), "mobile-ui closes the drawer on taps inside .sess-meta");
     return "editor taps ignored";
+  });
+
+  /* native-chrome.js against a scripted CroweChrome: a bridge call can reject
+     or resolve late, and the native bar must still end up showing what the web
+     tabs say, with the web bar back in charge whenever the native one is not. */
+  function nativeChromeHarness(plugin) {
+    const vm = require("vm");
+    const observers = [];
+    const classes = new Set(["mobile"]);
+    const props = {};
+    const mk = (id, label, current) => ({ dataset: { id }, textContent: label, current,
+      getAttribute: function (n) { return n === "aria-current" && this.current ? "true" : null; }, click() {} });
+    const items = [mk("home", "Home", true), mk("chat", "Chat", false), mk("playground", "Playground", false)];
+    const tabs = { querySelectorAll: () => items, querySelector: (s) => items.find((t) => s.includes(`"${t.dataset.id}"`)) };
+    const body = { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      style: { setProperty: (k, v) => { props[k] = v; } }, appendChild() {} };
+    const listeners = {};
+    plugin.addListener = (ev, fn) => { listeners[ev] = fn; return Promise.resolve({ remove() {} }); };
+    const ctx = {
+      window: {}, setTimeout, CSS: { escape: (s) => s },
+      document: { getElementById: (id) => (id === "m-tabs" ? tabs : null), createElement: () => ({ style: {} }), body },
+      getComputedStyle: () => ({ color: "rgb(160, 120, 40)" }),
+      MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} },
+    };
+    ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
+    vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
+    const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
+    return { classes, props, listeners, select };
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  await check("native tabs recover from a rejected setTabs and hand navigation back meanwhile", async () => {
+    let calls = 0;
+    const plugin = { setTabs: async () => { if (++calls === 1) throw new Error("no host view"); return { height: 83 }; },
+      setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(50);
+    assert(!h.classes.has("native-tabs"), "the spacer claimed a native bar after setTabs rejected");
+    await sleep(700);
+    assert(calls >= 2, "a rejected setTabs was never retried");
+    assert(h.classes.has("native-tabs"), "the retry succeeded but native-tabs was not set");
+    assert(h.props["--native-tab-h"] === "83px", `reserved height ${h.props["--native-tab-h"]}`);
+    return `${calls} setTabs calls, spacer 83px`;
+  });
+
+  await check("native tab selection is serialised and lands on the last web state", async () => {
+    let inFlight = 0, overlap = false; const seen = [];
+    const plugin = { setTabs: async () => ({ height: 83 }), setHidden: async () => {}, haptic: async () => {},
+      setCurrent: async ({ id }) => { if (++inFlight > 1) overlap = true; await sleep(id === "chat" ? 60 : 5); seen.push(id); inFlight--; } };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    h.select("chat"); h.select("playground"); h.select("home"); h.select("playground");
+    await sleep(250);
+    assert(!overlap, "two setCurrent calls were in flight at once");
+    assert(seen[seen.length - 1] === "playground", `native bar ended on ${seen[seen.length - 1]}, not playground`);
+    return `calls: ${seen.join(" -> ")}`;
+  });
+
+  await check("native bar geometry changes move the web spacer", async () => {
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    assert(typeof h.listeners.geometry === "function", "native-chrome does not listen for geometry");
+    h.listeners.geometry({ height: 53 });
+    assert(h.props["--native-tab-h"] === "53px", `spacer stayed at ${h.props["--native-tab-h"]} after rotation`);
+    return "83px -> 53px";
+  });
+
+  await check("dictation refuses to start natively without permission, and stops when the app leaves the foreground", () => {
+    const ios = read("mobile/ios/App/App/CroweSpeech.swift");
+    assert(/guard self\.permissionState\(\) == "granted"/.test(ios), "CroweSpeech.start does not check permission itself");
+    assert(/willResignActiveNotification/.test(ios) && /appWillResignActive\(\) \{ teardown\(notify: true\) \}/.test(ios),
+      "CroweSpeech keeps listening after the app leaves the foreground");
+    const ui = read("mobile/src/mobile-ui.js");
+    assert(/perm\.speechRecognition !== "granted"/.test(ui), "the composer no longer stops on a denied permission");
+    return "iOS guarded";
   });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");

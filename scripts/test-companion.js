@@ -152,6 +152,94 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     return "write, read, 404";
   });
 
+  await check("the phone's file tools never hand over a credential, at any tier", async () => {
+    const home = os.homedir();
+    const key = await post("/read_file", { path: "~/.ssh/id_ed25519" }, ipad.token);
+    assert(key.status === 403, `reading an ssh key got ${key.status}`);
+    const aws = await post("/read_file", { path: path.join(home, ".aws", "credentials") }, ipad.token);
+    assert(aws.status === 403, `reading aws credentials got ${aws.status}`);
+    // A symlink the agent made in an innocent folder must not be a way round.
+    const link = path.join(dir, "innocent");
+    fs.symlinkSync(path.join(home, ".ssh"), link);
+    const via = await post("/read_file", { path: path.join(link, "id_ed25519") }, ipad.token);
+    assert(via.status === 403, `reading through a symlink to ~/.ssh got ${via.status}`);
+    const own = await post("/read_file", { path: c.devicesPath() }, ipad.token);
+    assert(own.status === 403, `reading the companion's device tokens got ${own.status}`);
+    assert(!JSON.stringify(own.body).includes(ipad.token), "a refusal echoed a live token");
+    const plant = await post("/write_file", { path: "~/.ssh/crowe-test-should-not-exist", content: "x" }, ipad.token);
+    assert(plant.status === 403, `writing into ~/.ssh got ${plant.status}`);
+    assert(!fs.existsSync(path.join(home, ".ssh", "crowe-test-should-not-exist")), "the refused write landed in ~/.ssh");
+    const rel = await post("/read_file", { path: "notes.txt" }, ipad.token);
+    assert(rel.status === 400, `a relative path got ${rel.status}`);
+    assert(c.recentAudit(10).some((e) => e.kind === "denied" && e.reason === "path guard"), "the refusals left no trace in the log");
+    return "keys, cloud creds, symlink, own tokens refused and logged";
+  });
+
+  await check("the guard cannot be talked round by case, a dangling link or the app's own folder", async () => {
+    const { resolveForPhone } = require("../companion.js");
+    const status = (p, opts) => { try { resolveForPhone(p, opts); return 200; } catch (e) { return e.status; } };
+    // macOS volumes ignore case; so must the guard.
+    if (process.platform === "darwin") {
+      assert(status("~/.SSH/id_ed25519") === 403, "~/.SSH slipped past the guard");
+      assert(status("~/library/keychains/login.keychain-db") === 403, "a lowercased Keychains path slipped past");
+    }
+    // A link to a file that does not exist yet still lands the write there.
+    const dangling = path.join(dir, "later");
+    fs.symlinkSync(path.join(os.homedir(), ".ssh", "crowe-test-not-there"), dangling);
+    assert(status(dangling) === 403, "a dangling link into ~/.ssh was allowed");
+    const app = path.join(dir, "userData");
+    fs.mkdirSync(app);
+    assert(status(path.join(app, "config.json"), { ownFiles: [app] }) === 403, "the app's own config was reachable");
+    assert(status("~/.config/crowe-logic/auth.json") === 403, "the CLI sign-in store was reachable");
+    return "case, dangling link, userData, CLI sign-in refused";
+  });
+
+  await check("writes stay in home and temp, and autorun files need Execute", async () => {
+    const outside = await post("/write_file", { path: "/etc/crowe-test-should-not-exist", content: "x" }, ipad.token);
+    assert(outside.status === 403, `writing to /etc got ${outside.status}`);
+    const gated = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0,
+      tierAllows: (kind) => kind !== "run" });
+    const s = await gated.start();
+    const agent = path.join(os.homedir(), "Library", "LaunchAgents", "com.crowelogic.test-should-not-exist.plist");
+    const r = await fetch(`http://127.0.0.1:${s.port}/write_file`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ipad.token}` },
+      body: JSON.stringify({ path: agent, content: "<plist/>" }) });
+    const ordinary = await fetch(`http://127.0.0.1:${s.port}/write_file`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ipad.token}` },
+      body: JSON.stringify({ path: path.join(dir, "fine.txt"), content: "ok" }) });
+    // A git hook runs on the next commit, so it is a command, whatever the tier
+    // calls it. Asked of the same server: restarting it reuses the port, and
+    // fetch can hand the new server a pooled socket the old one just closed.
+    const hook = path.join(dir, "repo", ".git", "hooks", "pre-commit");
+    const h = await fetch(`http://127.0.0.1:${s.port}/write_file`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${ipad.token}` },
+      body: JSON.stringify({ path: hook, content: "#!/bin/sh" }) });
+    await gated.stop();
+    assert(r.status === 403, `a LaunchAgent under Edit got ${r.status}`);
+    assert(!fs.existsSync(agent), "the refused LaunchAgent was written");
+    assert(/Execute/.test((await r.json()).detail || ""), "the refusal must name the tier");
+    assert(ordinary.status === 200, `an ordinary write under Edit got ${ordinary.status}`);
+    assert(h.status === 403 && !fs.existsSync(hook), `a git hook under Edit got ${h.status}`);
+    return "/etc refused; LaunchAgent and git hook refused under Edit; ordinary write fine";
+  });
+
+  await check("a phone reads its own receipts and no other device's", async () => {
+    const r = await post("/audit", { limit: 100 }, ipad.token);
+    assert(r.status === 200, `/audit got ${r.status}`);
+    const e = r.body.entries || [];
+    assert(e.length > 0, "no entries for a device that has run commands");
+    assert(e.some((x) => x.kind === "run" && x.command), "no run receipt with its command");
+    assert(e.some((x) => x.kind === "denied"), "the path-guard refusals are missing from the device's own record");
+    const others = c.recentAudit(500).filter((x) => x.deviceId && x.deviceId !== ipad.id);
+    assert(others.length > 0, "the test needs another device's lines to prove filtering");
+    assert(!e.some((x) => others.some((o) => o.at === x.at && o.command === x.command && x.command)), "another device's command leaked into this one's receipts");
+    assert(!JSON.stringify(r.body).includes(ipad.token), "receipts carry a live token");
+    const after = c.recentAudit(500).length;
+    await post("/audit", {}, ipad.token);
+    assert(c.recentAudit(500).length === after, "reading receipts wrote a receipt");
+    return `${e.length} receipts, own device only`;
+  });
+
   await check("a socket error after startup is announced, not fatal", async () => {
     const events = [];
     c.onEvent = (e) => events.push(e);

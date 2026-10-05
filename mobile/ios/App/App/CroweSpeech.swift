@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Capacitor
 import Speech
 import AVFoundation
@@ -35,6 +36,19 @@ public class CroweSpeech: CAPPlugin, CAPBridgedPlugin {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
+    /// The microphone does not stay with an app in the background, and a
+    /// recognition task left running there ends in an error the composer would
+    /// read as a failure. Leaving the app ends dictation the same way the stop
+    /// button does, so the button is not left lit for a session that is gone.
+    override public func load() {
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive),
+                                               name: UIApplication.willResignActiveNotification, object: nil)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func appWillResignActive() { teardown(notify: true) }
+
     @objc func available(_ call: CAPPluginCall) {
         let locale = Locale(identifier: call.getString("language") ?? "en-US")
         let recognizer = SFSpeechRecognizer(locale: locale)
@@ -67,6 +81,12 @@ public class CroweSpeech: CAPPlugin, CAPBridgedPlugin {
     @objc func start(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             if self.task != nil { self.teardown(notify: false) }
+            // Asked for by the page first; checked here too so a denied or
+            // revoked permission is a plain rejection, not an engine error.
+            guard self.permissionState() == "granted" else {
+                call.reject("microphone or speech recognition permission not granted", "PERMISSION_DENIED")
+                return
+            }
             let locale = Locale(identifier: call.getString("language") ?? "en-US")
             guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
                 call.reject("speech recognition is not available")
@@ -83,6 +103,9 @@ public class CroweSpeech: CAPPlugin, CAPBridgedPlugin {
             }
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = call.getBool("partialResults") ?? true
+            // On-device when this phone and language can, so dictation does not
+            // leave the device; Apple's server otherwise, as the usage string says.
+            if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
             self.request = request
 
             let input = self.audioEngine.inputNode

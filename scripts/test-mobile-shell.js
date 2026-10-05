@@ -112,16 +112,17 @@ const tests = [
     name: "the bridge is installed and the phone chrome is applied",
     body: `return { bridge: typeof window.crowe, mobile: document.body.classList.contains("mobile"),
                     pane: document.body.dataset.pane, tabBar: __shown("#m-tabs") };`,
-    expect: { bridge: "object", mobile: true, pane: "agent", tabBar: true },
+    expect: { bridge: "object", mobile: true, pane: "home", tabBar: true },
   },
   {
-    name: "the phone's tabs are Home, Chat, Camera and Log; Machine appears only once paired",
+    name: "the task-first tabs exclude cultivation; Machine appears only once paired",
     body: `const before = __tabs().join(",");
       __pair(true); await __settle(50);
       const paired = __tabs().join(",");
       __pair(false); await __settle(50);
-      return { tabs: before, current: __current().join(","), paired };`,
-    expect: { tabs: "Home,Chat,Camera,Log", current: "Chat", paired: "Home,Chat,Camera,Log,Machine" },
+      const current = __current().join(","); __tap("Chat"); await __settle();
+      return { tabs: before, current, paired };`,
+    expect: { tabs: "Home,Chat,Messages,Playground", current: "Home", paired: "Home,Chat,Messages,Playground,Machine" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
@@ -150,11 +151,104 @@ const tests = [
     expect: { overflow: 0, width: 390 },
   },
   {
-    name: "the composer and the HUD sit above the tab bar",
-    body: `const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
-      return { composerAbove: composer.bottom <= hud.top + 1, hudAbove: hud.bottom <= tabs.top + 1,
-               tabsOnScreen: tabs.bottom <= window.innerHeight + 1 };`,
-    expect: { composerAbove: true, hudAbove: true, tabsOnScreen: true },
+    name: "the composer sits above the tab bar; the HUD is off by default and, switched on, sits between them",
+    // 1.1: the HUD strip is developer chrome and hidden until Settings says
+    // otherwise. Both states are measured: quiet, the composer meets the tabs;
+    // with the switch on, the HUD is drawn between them.
+    body: `const quiet = { hudHidden: !__shown("#hud"),
+        composerAbove: __box("#composer").bottom <= __box("#m-tabs").top + 1,
+        tabsOnScreen: __box("#m-tabs").bottom <= window.innerHeight + 1 };
+      document.body.classList.add("m-usage"); await __settle(50);
+      const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
+      const loud = { hudShown: __shown("#hud"), composerAboveHud: composer.bottom <= hud.top + 1, hudAboveTabs: hud.bottom <= tabs.top + 1 };
+      document.body.classList.remove("m-usage"); await __settle(50);
+      return { ...quiet, ...loud };`,
+    expect: { hudHidden: true, composerAbove: true, tabsOnScreen: true, hudShown: true, composerAboveHud: true, hudAboveTabs: true },
+  },
+  {
+    name: "usage and routing details are off by default, and one Settings switch turns them on and persists",
+    body: `const off = { hud: __shown("#hud"), tier: __shown("#autonomy"), copy: __shown("#copy-conversation"),
+                    configured: (await window.crowe.getConfig()).showUsage };
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const box = document.getElementById("m-cfg-usage");
+      const row = { present: Boolean(box), shown: __shown("#m-cfg-usage"), checked: box ? box.checked : null };
+      box.checked = true; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const on = { hud: __shown("#hud") || document.body.classList.contains("m-usage"), tier: document.body.classList.contains("m-usage"),
+                   configured: (await window.crowe.getConfig()).showUsage };
+      box.checked = false; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const back = { configured: (await window.crowe.getConfig()).showUsage, cls: document.body.classList.contains("m-usage") };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return { offHud: off.hud, offTier: off.tier, offCopy: off.copy, offConfigured: off.configured,
+               rowPresent: row.present, rowShown: row.shown, rowChecked: row.checked,
+               onHud: on.hud, onTier: on.tier, onConfigured: on.configured, backConfigured: back.configured, backCls: back.cls };`,
+    expect: { offHud: false, offTier: false, offCopy: false, offConfigured: false, rowPresent: true, rowShown: true, rowChecked: false,
+              onHud: true, onTier: true, onConfigured: true, backConfigured: false, backCls: false },
+  },
+  {
+    name: "Settings hides the legacy founders promotion while retaining its handlers",
+    // The roster read is stubbed: this harness must not reach the live gateway.
+    body: `const real = window.crowePhone.publicJson;
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 2, founders: [{ name: "B. Grower", farm: "Second Farm", n: 2 }, { name: "A. Grower", farm: "First Farm", n: 1 }] });
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const row = __shown("#m-founders-open");
+      document.getElementById("m-founders-open").click();
+      await __settle(300);
+      const names = [...document.querySelectorAll("#m-founders-roster li b")].map((b) => b.textContent);
+      const out = { row, sheet: __shown("#m-founders"), settingsClosed: !__shown("#settings"),
+                    seats: document.getElementById("m-founders-seats").textContent, first: names[0], count: names.length,
+                    link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 100, founders: [] });
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const full = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => null;
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const down = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      document.getElementById("m-founders-close").click();
+      window.crowePhone.publicJson = real;
+      await __settle(120);
+      return { ...out, fullSeats: full.seats, fullLink: full.link, downSeats: down.seats, downLink: down.link, closed: !__shown("#m-founders") };`,
+    expect: { row: false, sheet: true, settingsClosed: true, seats: "2 of 100 seats taken.", first: "A. Grower", count: 2, link: true,
+              fullSeats: "All 100 seats are taken.", fullLink: false, downSeats: "The roster could not be reached right now.", downLink: false, closed: true },
+  },
+  {
+    name: "a tool card folds to one plain line that opens on tap; a failed turn is one sentence with Try again",
+    // Drawn the way the renderer draws them (renderer.js addToolCard, addError),
+    // without a gateway: the fold and the button are the phone layer's, and
+    // both are measured on the same DOM the renderer produces.
+    body: `const t = document.getElementById("transcript");
+      const msgU = document.createElement("div"); msgU.className = "msg user"; msgU.innerHTML = '<div class="who"><div class="u">You</div></div><div class="body"><p>Is this lot ready?</p></div>';
+      const msgA = document.createElement("div"); msgA.className = "msg assistant"; msgA.innerHTML = '<div class="who"></div><div class="body"></div>';
+      t.appendChild(msgU); t.appendChild(msgA);
+      const body = msgA.querySelector(".body");
+      const card = document.createElement("div"); card.className = "toolcard ok";
+      card.innerHTML = '<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">read_grow</span><span class="tc-arg">{"type":"blocks"}</span></div><div class="tc-result">2 blocks row(s)</div>';
+      body.appendChild(card);
+      // A raw error is logged to the console on purpose; the harness counts console errors, so it is caught here.
+      const realError = console.error; const logged = []; console.error = (...a) => logged.push(a.join(" "));
+      const err = document.createElement("div"); err.className = "err"; err.textContent = 'gateway: {"type":"overloaded_error","message":"Overloaded"}';
+      body.appendChild(err);
+      await __settle(80);
+      console.error = realError;
+      const sum = card.querySelector(".m-tc-summary");
+      const folded = { line: sum ? sum.querySelector(".m-tc-text").textContent : null, summaryShown: Boolean(sum) && sum.checkVisibility(),
+                       headHidden: !card.querySelector(".tc-head").checkVisibility(), resultHidden: !card.querySelector(".tc-result").checkVisibility() };
+      sum.click(); await __settle(50);
+      const opened = { headShown: card.querySelector(".tc-head").checkVisibility(), resultShown: card.querySelector(".tc-result").checkVisibility() };
+      const retry = err.querySelector(".m-retry");
+      const said = { text: err.childNodes[0].textContent, retry: Boolean(retry) && retry.checkVisibility() };
+      msgU.remove(); msgA.remove();
+      return { ...folded, ...opened, ...said, rawLogged: logged.some((l) => /overloaded_error/.test(l)) };`,
+    expect: { line: "Looked up your records", summaryShown: true, headHidden: true, resultHidden: true, headShown: true, resultShown: true,
+              text: "The reader is busy. Try again in a moment.", retry: true, rawLogged: true },
   },
   {
     name: "the composer shows its whole placeholder before anything is typed",
@@ -171,7 +265,7 @@ const tests = [
       await __settle();
       const onPanels = { pane: document.body.dataset.pane, agentHidden: !__shown("#agent"),
                          workspaceShown: __shown("#workspace"), current: __current().join(",") };
-      __tap("Log");
+      __tap("Chat");
       await __settle();
       const back = { pane: document.body.dataset.pane, current: __current().join(",") };
       __tap("Chat");
@@ -179,7 +273,7 @@ const tests = [
       __pair(false); await __settle(50);
       return { ...onPanels, backPane: back.pane, backCurrent: back.current };`,
     expect: { pane: "workspace", agentHidden: true, workspaceShown: true, current: "Machine",
-              backPane: "agent", backCurrent: "Log" },
+              backPane: "agent", backCurrent: "Chat" },
   },
   {
     name: "the workspace opens on Operator Control, not a terminal that cannot start",
@@ -200,21 +294,26 @@ const tests = [
     name: "a tap in the drawer closes it on the way to where it goes",
     body: `document.getElementById("sidebar-toggle").click();
       await __settle();
-      document.querySelector('#spaces .seg-btn[data-space="cultivation"]').click();
+      document.querySelector('#spaces .seg-btn[data-space="chat"]').click();
       await __settle();
       const state = { space: document.body.dataset.space, closed: !__drawerOpen() };
       __tap("Chat");
       await __settle();
       return state;`,
-    expect: { space: "cultivation", closed: true },
+    expect: { space: "chat", closed: true },
   },
   {
     name: "what this device cannot do is not offered",
     // Settings has to be open for its own rows to be asked about — inside a
     // closed modal everything is invisible, and the check would pass by
     // accident whether the rows were hidden or not.
-    body: `const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
+    // 1.1: the tier picker is developer chrome, off unless the Details switch is
+    // on, so the picker is measured with the switch on; what it hides within
+    // itself (Execute, unpaired) is the question here.
+    body: `document.body.classList.add("m-usage"); await __settle(30);
+      const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
                           editTier: __shown('#autonomy .seg-btn[data-tier="edit"]') };
+      document.body.classList.remove("m-usage");
       // The dock bar lives inside the workspace column, so its controls have to
       // be asked about while that column is the one on screen.
       __pair(true); await __settle(50);
@@ -231,15 +330,16 @@ const tests = [
       document.getElementById("settings-btn").click();
       await __settle();
       const settings = { cwdRow: __shown("#cfg-cwd"), mcpRow: __shown("#cfg-mcp"),
-                         autoApproveRow: __shown("#cfg-auto"), gatewayRow: __shown("#cfg-base") };
+                         autoApproveRow: __shown("#cfg-auto"), gatewayRow: __shown("#cfg-base"),
+                         advanced: __shown(".m-advanced > summary") };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       __pair(false); await __settle(50);
       return { ...composer, ...dock, ...settings };`,
-    // The two trues are the control: they prove this check can still see a row
+    // The trues are the control: they prove this check can still see a row
     // that is meant to be there, rather than reporting everything as hidden.
     expect: { execTier: false, editTier: true, gitTab: false, filesTab: false, outputTab: true,
-              cliAgent: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: true },
+              cliAgent: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: false, advanced: true },
   },
   {
     /* The case above proves Execute is hidden with nothing paired. This proves
@@ -252,7 +352,8 @@ const tests = [
        test asserting only `execTier: false` is happy either way: it cannot tell
        "correctly hidden while unpaired" from "hidden forever". */
     name: "pairing a machine brings the Execute tier back",
-    body: `const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
+    body: `document.body.classList.add("m-usage"); await __settle(30);   // the picker is chrome; see above
+      const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
       document.body.classList.add("m-paired");
       await __settle();
       const paired = __shown('#autonomy .seg-btn[data-tier="execute"]');
@@ -260,6 +361,7 @@ const tests = [
       document.body.classList.remove("m-paired");
       await __settle();
       const restored = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      document.body.classList.remove("m-usage");
       return { unpaired, paired, restored };`,
     expect: { unpaired: false, paired: true, restored: false },
   },
@@ -294,6 +396,104 @@ const tests = [
                reason: risk("launchctl load ~/Library/LaunchAgents/x.plist") };`,
     expect: { everyRiskCaught: true, noFalsePositives: true,
               reason: "installs something that runs at every login" },
+  },
+  {
+    /* The pairing token rides every request and the requests are shell
+       commands, so cleartext is only acceptable where the network is private.
+       A userinfo trick must be judged by its real host. */
+    name: "pairing accepts private networks over http and the internet only over https",
+    body: `const p = window.__crowePairAddress;
+      return {
+        tailnet: p("http://mac.tail1234.ts.net:8787").url,
+        cgnat: !p("http://100.101.1.2:8787").error,
+        lan: !p("http://192.168.1.20:8787").error,
+        publicHttp: Boolean(p("http://203.0.113.9:8787").error),
+        publicHttps: !p("https://mac.example.com").error,
+        userinfo: Boolean(p("http://100.64.0.1@evil.example").error),
+        scheme: Boolean(p("javascript:alert(1)").error),
+      };`,
+    expect: { tailnet: "http://mac.tail1234.ts.net:8787", cgnat: true, lan: true, publicHttp: true,
+              publicHttps: true, userinfo: true, scheme: true },
+  },
+  {
+    /* A phone is handed to someone else more often than a laptop. Signing out
+       has to take the paired machine and the provider keys with it, or the
+       next person can drive the first person's computer. */
+    name: "signing out forgets the paired machine, provider keys and conversations",
+    body: `const c = window.crowe;
+      await c.remote.pair({ url: "http://mac.tail1234.ts.net:8787", token: "t-should-be-forgotten" });
+      const before = (await c.keys.set("openai", "sk-test-should-be-forgotten")).ok;
+      const out = await c.auth.logout();
+      const after = await c.remote.status();
+      const keys = (await c.keys.list()).providers.some((k) => k.configured);
+      const sessions = await c.sessions.list();
+      return { before, out: out.ok, paired: after.configured, keys, sessions: (sessions.sessions || sessions || []).length };`,
+    expect: { before: true, out: true, paired: false, keys: false, sessions: 0 },
+  },
+  {
+    /* The approval sheet is drawn from model output, so it must be inert text;
+       "Not now" declines; assistive activation approves without a hold; and
+       the machine and tier are named, since that is what is being approved. */
+    name: "the approval sheet names machine and tier, renders the command as text, and declines by default",
+    body: `const evil = '<img src=x onerror="window.__pwned=1">rm -rf ~';
+      const p1 = window.__croweApprove({ danger: true, title: "Run this on mac?", reason: "This runs as root.",
+        detail: evil, machine: "http://mac.tail1234.ts.net:8787", tier: "execute", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 30));
+      const sheet = document.querySelector(".m-approve");
+      const shown = { pre: sheet.querySelector(".m-approve-detail").textContent, imgs: sheet.querySelectorAll("img").length,
+        chips: [...sheet.querySelectorAll(".m-chip")].map((c) => c.textContent).join(" | "), hold: sheet.querySelector(".m-approve-yes").textContent,
+        focused: document.activeElement && document.activeElement.textContent };
+      sheet.querySelector(".m-approve-no").click();
+      const declined = await p1;
+      const p2 = window.__croweApprove({ danger: true, title: "x", detail: "sudo true", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 30));
+      document.querySelector(".m-approve:not(.leaving) .m-approve-yes").click();
+      const accessible = await p2;
+      await new Promise((r) => setTimeout(r, 200));
+      return { ...shown, pwned: Boolean(window.__pwned), declined, accessible, left: document.querySelectorAll(".m-approve").length };`,
+    expect: { pre: '<img src=x onerror="window.__pwned=1">rm -rf ~', imgs: 0, chips: "mac.tail1234.ts.net | Execute tier",
+              hold: "Hold to run command", focused: "Not now", pwned: false, declined: false, accessible: true, left: 0 },
+  },
+  {
+    /* Two questions at once queue rather than stack; the page behind is inert
+       while one is up; and stopping the turn answers the open one and the
+       waiting one "no", so a stopped turn never hangs on a sheet. */
+    name: "approval sheets queue, bench the page, and a stop answers them no",
+    body: `const a = window.__croweApprove({ title: "first", confirm: "Allow" });
+      const b = window.__croweApprove({ title: "second", confirm: "Allow" });
+      await new Promise((r) => setTimeout(r, 30));
+      const open = document.querySelectorAll(".m-approve:not(.leaving)").length;
+      const benched = document.getElementById("composer") ? document.getElementById("composer").closest("[inert]") !== null : null;
+      await window.crowe.agent.stop("main");
+      const answers = [await a, await b];
+      await new Promise((r) => setTimeout(r, 200));
+      const restored = !document.querySelector("body > [inert]");
+      return { open, benched, answers: answers.join(","), left: document.querySelectorAll(".m-approve").length, restored };`,
+    expect: { open: 1, benched: true, answers: "false,false", left: 0, restored: true },
+  },
+  {
+    /* Rooms are dock panels, and the dock sits in the workspace pane that only a
+       paired phone can reach, so New message used to open a room nobody could
+       see. Messages is a tab now, a room opens full screen, and Back returns to
+       the list. */
+    name: "Messages is a tab; New message opens a full-screen room with a way back",
+    body: `const tab = document.querySelector('#m-tabs [data-id="messages"]');
+      if (!tab) return { tab: false };
+      tab.click(); await new Promise((r) => setTimeout(r, 100));
+      const listPane = document.body.dataset.pane;
+      const listShown = document.getElementById("rooms-drawer").checkVisibility() && document.getElementById("m-messages-pane").getBoundingClientRect().width >= innerWidth - 1;
+      document.getElementById("room-new").click(); await new Promise((r) => setTimeout(r, 400));
+      const roomPane = document.body.dataset.pane;
+      const roomShown = Boolean(document.querySelector(".m-room-on .room") && document.querySelector(".m-room-on .room").checkVisibility());
+      const back = document.querySelector(".m-room-on .m-room-back");
+      const backShown = Boolean(back && back.checkVisibility());
+      const tabLit = tab.getAttribute("aria-current") === "true";
+      if (back) back.click(); await new Promise((r) => setTimeout(r, 100));
+      const after = document.body.dataset.pane;
+      document.querySelector(".m-room-on .panel-close")?.click();
+      document.querySelector('#m-tabs [data-id="chat"]').click();
+      return { tab: true, listPane, listShown, roomPane, roomShown, backShown, tabLit, after };`,
+    expect: { tab: true, listPane: "messages", listShown: true, roomPane: "room", roomShown: true, backShown: true, tabLit: true, after: "messages" },
   },
   {
     /* The first version of this matched on the program name and nothing else,
@@ -443,69 +643,53 @@ const tests = [
     expect: { hadCard: true, removed: true, emptyBubbles: 0 },
   },
   {
-    name: "an existing block's lot code is read-only while editing; a new block's is not",
-    // Flushes, readings and journal lines point at a block by its lot code, so
-    // retyping it on an existing record would orphan them. A new block's code
-    // is only a default the farm's traceability SOP may overwrite.
-    body: `__tap("Log");
-      await __settle();
-      // The space opens on its Overview; the Blocks lane is a section of it.
-      document.querySelector('#cult-nav .sn-item[data-cult="blocks"]').click();
-      await __settle(500);
-      let form = document.querySelector("#lane-body form.grow-add");
-      if (!form) return { form: false };
-      const newEditable = !form.elements.code.readOnly;
-      form.elements.species.value = "Oyster"; form.elements.count.value = "4"; form.elements.stage.value = "spawned";
-      form.requestSubmit();
-      await __settle(400);
-      const open = document.querySelector(".growrow .gr-open");
-      if (!open) return { form: true, newEditable, saved: false };
-      open.click();
-      await __settle(400);
-      form = document.querySelector("#lane-body form.grow-add");
-      return { form: true, newEditable, saved: true, editing: Boolean(form && form.classList.contains("editing")),
-               lockedWhileEditing: Boolean(form && form.elements.code.readOnly) };`,
-    expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
+    name: "legacy cultivation records remain readable without a Log tab",
+    body: `localStorage.setItem('crowe:grow:blocks', JSON.stringify([{id:'legacy-test',code:'RETAINED'}]));
+      const rows = await window.crowe.grow.list('blocks');
+      return { retained: rows.some(row => row.code === 'RETAINED'), logVisible: __tabs().includes('Log') };`,
+    expect: { retained: true, logVisible: false },
   },
   {
-    name: "Reply pace is a setting and the phone starts on reading pace",
+    name: "Reply pace is a setting and the phone starts on brisk; reading pace stays offered",
     body: `document.getElementById("settings-btn").click();
       await __settle();
       const sel = document.getElementById("cfg-pace");
       const out = { present: Boolean(sel), shown: __shown("#cfg-pace"), value: sel ? sel.value : null,
-                    configured: (await window.crowe.getConfig()).textPace };
+                    configured: (await window.crowe.getConfig()).textPace,
+                    reading: Boolean(sel && [...sel.options].some((o) => o.value === "reading")),
+                    // The desktop's label calls reading pace the phone's default; the phone relabels it.
+                    labelHonest: Boolean(sel && ![...sel.options].some((o) => o.value === "reading" && /default/.test(o.textContent))) };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { present: true, shown: true, value: "reading", configured: "reading" },
+    expect: { present: true, shown: true, value: "brisk", configured: "brisk", reading: true, labelHonest: true },
   },
   {
-    name: "Home lists the lots by stage from the log on this phone, with Remind me and Photograph",
-    // The lot test above added a block; Home must show it without a desktop.
+    name: "Home introduces paired computer work and opens Chat",
     body: `__tap("Home");
       await __settle(500);
-      const lots = [...document.querySelectorAll("#m-home-pane .m-lot")];
-      const out = { paneShown: __shown("#m-home-pane"), chatHidden: !__shown("#agent"), lots: lots.length,
-                    stage: lots.length ? lots[0].querySelector(".m-stage").textContent.trim() : "",
-                    remind: Boolean(document.querySelector("#m-home-pane .m-remind")), photo: Boolean(document.querySelector("#m-home-pane .m-check")),
-                    reminders: __shown("#m-home-reminders"),
-                    // The Siri words show only where Siri is; this harness has no Capacitor, so the gate must hide them.
-                    siriHidden: !document.querySelector("#m-home-siri") };
-      __tap("Chat");
+      const out = { paneShown: __shown("#m-home-pane"),
+        pairing: Boolean(document.querySelector("#m-home-pair")),
+        limits: /not screen sharing/.test(document.querySelector("#m-home-pane").textContent),
+        noGrowHeadline: !/Your grow, today/.test(document.querySelector("#m-home-pane").textContent) };
+      document.getElementById("m-home-chat").click();
       await __settle();
       return { ...out, backToChat: __shown("#agent") };`,
-    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, siriHidden: true, backToChat: true },
+    expect: { paneShown: true, pairing: true, limits: true, noGrowHeadline: true, backToChat: true },
   },
   {
-    name: "Camera offers Photograph and Choose a photo, and names the engine",
-    body: `__tap("Camera");
-      await __settle(300);
-      const out = { paneShown: __shown("#m-camera-pane"), shoot: __shown("#m-camera-pane .m-cam-shoot"), pick: __shown("#m-camera-pane .m-cam-pick"),
-                    engine: /CroweLM Vision/.test(document.querySelector("#m-camera-pane").textContent), input: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
+    name: "Playground is a tab of its own, and signed out it says so instead of failing",
+    body: `__tap("Playground");
+      await __settle(800);
+      const pane = document.querySelector("#m-playground-pane");
+      const out = { paneShown: __shown("#m-playground-pane"), chatHidden: !__shown("#agent"),
+                    title: /Playground/.test(pane ? pane.textContent : ""),
+                    signIn: /Sign in to use the Playground|Loading models|unavailable/.test(pane ? pane.textContent : ""),
+                    photoStillReachable: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
       __tap("Chat");
       await __settle();
       return out;`,
-    expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
+    expect: { paneShown: true, chatHidden: true, title: true, signIn: true, photoStillReachable: true },
   },
   {
     name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
@@ -522,11 +706,13 @@ const tests = [
       out.voiceOptions = sel ? [...sel.options].map((o) => o.value).join(",") : "";
       if (sel) { sel.value = "neural"; sel.dispatchEvent(new Event("change")); }
       out.voiceStored = localStorage.getItem("crowe-reply-voice");
-      if (sel) { sel.value = "michael"; sel.dispatchEvent(new Event("change")); }
+      if (sel) { sel.value = "phone"; sel.dispatchEvent(new Event("change")); }
+      out.voiceStored += "," + localStorage.getItem("crowe-reply-voice");
+      localStorage.removeItem("crowe-reply-voice");
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "michael,neural,phone", voiceStored: "neural" },
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "phone,neural", voiceStored: "neural,phone" },
   },
 ];
 
@@ -556,6 +742,12 @@ app.whenReady().then(async () => {
     // useContentSize, so the numbers above are the viewport and not the
     // viewport plus whatever frame this platform draws around it.
     const win = new BrowserWindow({ ...PHONE, useContentSize: true, show: false });
+    /* Storage is per origin, and the origin is 127.0.0.1 on whatever port the
+       OS handed out. When it hands out one it gave an earlier run, that run's
+       config, its onboarding flag and the block its lot test saved are all
+       still there, and four checks fail for reasons that have nothing to do
+       with the checkout under test. Start clean every time. */
+    await win.webContents.session.clearStorageData({ storages: ["localstorage", "indexdb", "cookies"] });
     const pageErrors = [];
     // Electron 43 passes an event object here and deprecates the old positional
     // (event, level, message). Both are read so this file does not start

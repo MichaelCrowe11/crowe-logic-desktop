@@ -64,7 +64,10 @@ that belongs in the lockfile of an app that ships to a store.
 the same role routing as the desktop (cultivation, coding, reasoning,
 long-context), the model catalog, Crowe ID sign-in, workspace licensing, the
 cost and token HUD, the Workflows / Agent Fleet / Operator Control panels, and
-provider keys.
+provider keys. Since 1.1 the developer chrome (route card, tool cards' bodies,
+colophon, tier picker, copy buttons, HUD strip) is off by default; Settings →
+**Show usage and routing details** turns it on, and a failed turn is one
+sentence with a Try again button rather than the gateway's error object.
 
 **Local.** Sessions and the grower's records live in Capacitor Preferences
 instead of `userData` — the phone keeps its own history and its own grow log,

@@ -2369,6 +2369,7 @@ function companionInstance() {
   if (!companion) {
     companion = new Companion({
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
+      privateDir: app.getPath("userData"),
       // Electron's own blocker: "prevent-app-suspension" keeps the system from
       // idling out while still letting the display sleep, which is what a
       // machine being driven from a phone wants.
