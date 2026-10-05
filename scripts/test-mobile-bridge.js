@@ -997,8 +997,12 @@ function methodPaths(surface) {
     }
     t = await run({ signedIn: false });
     assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `signed out was not refused: ${JSON.stringify(t)}`);
-    t = await run({ url: "https://stripe.com.evil.example/pay" });
-    assert(!t.r.ok && t.opened.length === 0, `an off-Stripe URL was opened: ${JSON.stringify(t)}`);
+    t = await run({ url: "https://pay.crowelogic.com/c/pay/cs_live_1" });
+    assert(t.r.ok && t.opened[0] === "https://pay.crowelogic.com/c/pay/cs_live_1", `the live custom checkout domain was refused: ${JSON.stringify(t)}`);
+    for (const url of ["https://stripe.com.evil.example/pay", "https://pay.crowelogic.com.evil.example/c/pay", "http://pay.crowelogic.com/c/pay"]) {
+      t = await run({ url });
+      assert(!t.r.ok && t.opened.length === 0, `an off-Stripe URL was opened: ${url} ${JSON.stringify(t)}`);
+    }
     return "USA opens Stripe; GBR, none, no plugin, StoreKit error, Android, signed-out, off-Stripe refuse";
   });
 

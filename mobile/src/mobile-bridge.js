@@ -2170,7 +2170,10 @@
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.url) return { ok: false, error: d.error || `Checkout answered ${r.status}` };
         let url; try { url = new URL(d.url); } catch { return { ok: false, error: "Checkout returned an unreadable URL" }; }
-        if (url.protocol !== "https:" || !/(^|\.)stripe\.com$/.test(url.hostname)) return { ok: false, error: "Checkout returned a URL that is not Stripe's" };
+        // pay.crowelogic.com is the live account's Stripe custom domain; live
+        // sessions come back on it, not on checkout.stripe.com.
+        const stripeHost = /(^|\.)stripe\.com$/.test(url.hostname) || url.hostname === "pay.crowelogic.com";
+        if (url.protocol !== "https:" || !stripeHost) return { ok: false, error: "Checkout returned a URL that is not Stripe's" };
         checkoutOpenedAt = Date.now();
         const Browser = plugin("Browser");
         if (Browser) await Browser.open({ url: url.href }).catch(() => {});
