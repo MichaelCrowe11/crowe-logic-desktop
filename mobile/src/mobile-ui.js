@@ -1130,6 +1130,101 @@
     dictBtn.onclick = () => say("Dictation is not available in this build", "error");
   }
 
+  /* The plan, and the way up. Three places a free account meets it:
+
+       · a plan notice in the transcript (the bridge's "plan" event, which the
+         renderer renders as one muted line) gets a See plans button under it;
+       · the Settings row below names the tier and offers the same;
+       · the card itself, in the transcript, in the renderer's own .plan-card
+         markup, with the live price from the ladder.
+
+     The bridge decides whether a sale may happen here at all: billing.plan()
+     answers buyHere, true only on the United States App Store storefront.
+     Where it is false none of the three is drawn, not the button, not the
+     card, not a web price, because showing a way out to buy is itself what
+     App Review calls steering (3.1.1). Nothing is drawn while the answer is
+     pending either, so a refused storefront never sees a flash. The UI never
+     reads the price from anywhere but billing.catalog, and never navigates the
+     webview to Stripe: the bridge opens the system browser and the card waits
+     for crowe:plan, which the bridge fires on the way back. */
+  const billing = window.crowe && window.crowe.billing;
+  const PLAN_NAMES = { free: "Free", personal: "Personal", pro: "Pro", team: "Team", max: "Max", scale: "Scale", studio: "Studio", business: "Business", enterprise: "Enterprise", byok: "BYOK" };
+  const money = (cents, interval) => `$${Math.round(cents / 100)}${interval ? ` a ${interval}` : ""}`;
+  const buyHere = async () => { try { return Boolean((await billing.plan()).buyHere); } catch { return false; } };
+  async function planCard(reason) {
+    if (!transcript || !billing || !(await buyHere())) return;
+    const prior = transcript.querySelector(".plan-card");
+    if (prior) { prior.scrollIntoView({ block: "nearest" }); return; }
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    wrap.innerHTML = '<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"><div class="plan-card">'
+      + '<div class="plan-head"><b>Crowe Logic Pro</b><span class="plan-price">reading the price</span></div>'
+      + '<p class="said plan-why"></p><ul class="plan-feats"></ul>'
+      + '<div class="plan-row"><button type="button" class="primary plan-go">Upgrade on crowelogic.com</button><button type="button" class="ghost plan-later">Not now</button></div>'
+      + '<p class="hint plan-note"></p></div></div>';
+    const welcome = transcript.querySelector(".welcome"); if (welcome) welcome.remove();
+    transcript.appendChild(wrap); wrap.scrollIntoView({ block: "end" });
+    const card = wrap.querySelector(".plan-card");
+    card.querySelector(".plan-why").textContent = (reason === "paywall" ? "That turn needs a plan. " : "")
+      + "One subscription unlocks every Crowe Logic surface: the operator here and on the desktop, the rooms and named agents, and the CLI. It opens in your browser; the plan goes on your Crowe ID.";
+    const priceEl = card.querySelector(".plan-price");
+    try {
+      const cat = await billing.catalog();
+      const pro = ((cat && cat.ladder) || []).find((i) => i.slug === "pro");
+      if (pro && pro.amount) {
+        priceEl.textContent = money(pro.amount, pro.interval);
+        card.querySelector(".plan-feats").innerHTML = (pro.features || []).slice(0, 6).map((f) => `<li>${esc(f)}</li>`).join("");
+      } else priceEl.textContent = "price at checkout";
+    } catch { priceEl.textContent = "price at checkout"; }
+    const go = card.querySelector(".plan-go");
+    go.addEventListener("click", async () => {
+      go.disabled = true; go.textContent = "Opening your browser";
+      const r = await billing.checkout("pro");
+      if (r && r.ok) { card.querySelector(".plan-note").textContent = "Finish in your browser. This phone picks up the plan when you come back."; go.textContent = "Opened in your browser"; return; }
+      go.disabled = false; go.textContent = "Upgrade on crowelogic.com";
+      card.querySelector(".plan-note").textContent = (r && r.error) || "Checkout is not answering. Try again in a moment.";
+    });
+    card.querySelector(".plan-later").addEventListener("click", () => wrap.remove());
+  }
+  // A See plans button under each plan notice the renderer writes.
+  if (transcript && billing) new MutationObserver(async (records) => {
+    const added = records.flatMap((r) => [...r.addedNodes]);
+    if (!added.some((n) => n instanceof HTMLElement && (n.matches(".notice.plan") || n.querySelector(".notice.plan")))) return;
+    if (!(await buyHere())) return;
+    for (const n of added) {
+      if (!(n instanceof HTMLElement)) continue;
+      const notices = n.matches && n.matches(".notice.plan") ? [n] : [...(n.querySelectorAll ? n.querySelectorAll(".notice.plan") : [])];
+      for (const el of notices) {
+        if (el.dataset.upgrade) continue; el.dataset.upgrade = "1";
+        const b = document.createElement("button"); b.type = "button"; b.className = "ghost sm m-plan-up"; b.textContent = "See plans";
+        b.addEventListener("click", () => planCard("paywall"));
+        el.appendChild(document.createTextNode(" ")); el.appendChild(b);
+      }
+    }
+  }).observe(transcript, { childList: true, subtree: true });
+
+  const planSection = document.createElement("section");
+  planSection.className = "key-manager m-plan";
+  planSection.innerHTML = '<div class="settings-section-head"><div><b>Your plan</b><span id="m-plan-line">Reading your plan.</span></div></div><button id="m-plan-up" class="ghost sm" type="button" hidden>See plans</button>';
+  async function paintPlan(p) {
+    if (!billing) return;
+    try { p = p || await billing.plan(); } catch { p = null; }
+    const line = planSection.querySelector("#m-plan-line"), btn = planSection.querySelector("#m-plan-up");
+    if (!p || !p.email) { line.textContent = "Sign in with your Crowe ID to see your plan."; btn.hidden = true; return; }
+    if (!p.known) { line.textContent = "Your plan is managed on your Crowe ID."; btn.hidden = true; return; }
+    const name = PLAN_NAMES[String(p.tier || "free").toLowerCase()] || p.tier || "Free";
+    line.textContent = p.paid ? `${name}. Manage it from your account page.`
+      : p.buyHere ? "Free. Pro unlocks every CroweLM tier and the frontier engines." : `${name}.`;
+    btn.hidden = Boolean(p.paid) || !p.buyHere;
+  }
+  planSection.querySelector("#m-plan-up").addEventListener("click", () => { setPane("chat"); planCard("settings"); });
+  window.addEventListener("crowe:plan", (e) => {
+    paintPlan(null);
+    const d = e && e.detail;
+    if (d && d.paid) { const c = transcript && transcript.querySelector(".plan-card"); if (c) c.querySelector(".plan-note").textContent = `Your Crowe ID is on ${PLAN_NAMES[String(d.tier).toLowerCase()] || d.tier}. Thank you.`; }
+  });
+  paintPlan(null);
+
   const accountSection = document.createElement("section");
   accountSection.className = "key-manager m-account";
   accountSection.innerHTML = [
@@ -1139,6 +1234,7 @@
     '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
   ].join("");
   if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+  if (accountSection.parentNode) accountSection.parentNode.insertBefore(planSection, accountSection);
 
   /* Founding Growers. A hundred seats for the growers backing the app in its
      first year; the roster is public at GET /api/public/founders and lists the
@@ -1478,6 +1574,9 @@
     if (s.reason) card.appendChild(el("p", "m-approve-reason", s.reason));
     if (s.detail) card.appendChild(el("pre", "m-approve-detail", s.detail));
     if (s.question) card.appendChild(el("p", "m-approve-q", s.question));
+    const content = el("div", "m-approve-content");
+    while (card.firstChild) content.appendChild(card.firstChild);
+    card.appendChild(content);
     const row = el("div", "m-approve-actions");
     const no = el("button", "ghost m-approve-no", "Not now");
     no.type = "button";
@@ -1487,18 +1586,28 @@
     card.appendChild(row);
     wrap.appendChild(card);
     let settled = false;
+    let cancelHold = () => {};
     // aria-modal alone does not stop VoiceOver's rotor or a hardware keyboard
     // reaching the page behind; inert does.
     const benched = Array.from(body.children).filter((n) => n !== wrap && !n.inert);
     const done = (v) => {
       if (settled) return;
       settled = true;
+      cancelHold();
+      window.removeEventListener("blur", cancelHold);
       approveOpen.delete(done);
       wrap.classList.add("leaving");
-      benched.forEach((n) => { n.inert = false; });
-      setTimeout(() => { wrap.remove(); try { prior && prior.focus && prior.focus(); } catch { /* gone */ } }, 160);
       document.removeEventListener("keydown", onKey, true);
-      resolve(v);
+      setTimeout(() => {
+        wrap.remove();
+        benched.forEach((n) => { n.inert = false; });
+        try { prior && prior.focus && prior.focus(); } catch { /* gone */ }
+        resolve(v);
+        // Queued approvals open before navigation is restored.
+        setTimeout(() => {
+          if (!document.querySelector(".m-approve")) body.classList.remove("approval-open");
+        }, 0);
+      }, 160);
     };
     approveOpen.add(done);
     const onKey = (e) => {
@@ -1512,8 +1621,13 @@
       const HOLD = 650;
       let timer = null;
       const cancel = () => { clearTimeout(timer); timer = null; yes.classList.remove("holding"); };
+      cancelHold = cancel;
+      window.addEventListener("blur", cancelHold);
+      yes.addEventListener("blur", cancel);
       yes.addEventListener("pointerdown", (e) => {
+        if (settled || e.button !== 0 || e.isPrimary === false) return;
         e.preventDefault();
+        cancel();
         yes.classList.add("holding");
         timer = setTimeout(() => { timer = null; done(true); }, HOLD);
       });
@@ -1523,6 +1637,7 @@
     } else {
       yes.addEventListener("click", () => done(true));
     }
+    body.classList.add("approval-open");
     body.appendChild(wrap);
     benched.forEach((n) => { n.inert = true; });
     requestAnimationFrame(() => { wrap.classList.add("open"); no.focus(); });

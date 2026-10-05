@@ -81,7 +81,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
     console: { error: (...a) => consoleLog.push(a.map(String).join(" ")), log: () => {}, warn: () => {} },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    navigator: { clipboard: { writeText: () => Promise.resolve() }, language: "en-US", languages: ["en-US"] },
     performance: { now: () => 0 },
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
@@ -947,6 +947,65 @@ function methodPaths(surface) {
     assert(!result.done, "an unauthenticated turn reported success");
   });
 
+  await check("checkout opens Stripe only on the US App Store storefront, and plan says so before any button is drawn", async () => {
+    // Epic v. Apple lets a US-storefront iOS app link out to buy on the web.
+    // The storefront is StoreKit's (CroweStore), never the locale: every case
+    // here runs with an en-US locale, so a GBR storefront refusing proves the
+    // locale is not what decides. No plugin, no storefront, a throwing plugin,
+    // Android, signed out, or a checkout URL that is not Stripe's all refuse
+    // without opening anything.
+    const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+    const token = jwt({ email: "grower@example.com", crowe_tier: "free", exp: Math.floor(Date.now() / 1000) + 3600 });
+    const run = async ({ platform = "ios", store = "USA", signedIn = true, url = "https://checkout.stripe.com/c/pay/cs_test_1" } = {}) => {
+      const opened = [], posted = [];
+      const prefs = new Map();
+      const plugins = {
+        Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
+        Browser: { open: async ({ url: u }) => { opened.push(u); }, addListener: () => ({ remove() {} }) },
+      };
+      if (store === "throws") plugins.CroweStore = { storefront: async () => { throw new Error("storekit down"); } };
+      else if (store !== null) plugins.CroweStore = { storefront: async () => ({ countryCode: store }) };
+      const cap = { getPlatform: () => platform, isNativePlatform: () => true, Plugins: plugins };
+      const fetchImpl = async (u, init = {}) => {
+        if (!String(u).includes("crowe-checkout")) throw new TypeError("unexpected fetch " + u);
+        posted.push({ url: String(u), body: init.body ? JSON.parse(init.body) : null });
+        return new Response(JSON.stringify({ url }), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const bridge = loadMobileSurface(fetchImpl, cap);
+      if (signedIn) await bridge.setConfig({ token });
+      const plan = await bridge.billing.plan();
+      const r = await bridge.billing.checkout("pro");
+      return { r, plan, opened, posted };
+    };
+
+    let t = await run();
+    assert(t.plan.buyHere === true, `plan did not offer a purchase on the US storefront: ${JSON.stringify(t.plan)}`);
+    assert(t.r.ok && t.r.opened && !t.r.url, `US iOS did not open: ${JSON.stringify(t.r)}`);
+    assert(t.opened.length === 1 && t.opened[0].startsWith("https://checkout.stripe.com/"), `opened ${JSON.stringify(t.opened)}`);
+    assert(t.posted[0].body.slug === "pro" && t.posted[0].body.email === "grower@example.com", `posted ${JSON.stringify(t.posted)}`);
+
+    for (const [label, opts] of [
+      ["GBR storefront on an en-US phone", { store: "GBR" }],
+      ["no storefront", { store: "" }],
+      ["no CroweStore plugin", { store: null }],
+      ["StoreKit error", { store: "throws" }],
+      ["US Android", { platform: "android" }],
+    ]) {
+      t = await run(opts);
+      assert(t.plan.buyHere === false, `${label}: plan offered a purchase: ${JSON.stringify(t.plan)}`);
+      assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `${label} was not refused before any request: ${JSON.stringify(t)}`);
+    }
+    t = await run({ signedIn: false });
+    assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `signed out was not refused: ${JSON.stringify(t)}`);
+    t = await run({ url: "https://pay.crowelogic.com/c/pay/cs_live_1" });
+    assert(t.r.ok && t.opened[0] === "https://pay.crowelogic.com/c/pay/cs_live_1", `the live custom checkout domain was refused: ${JSON.stringify(t)}`);
+    for (const url of ["https://stripe.com.evil.example/pay", "https://pay.crowelogic.com.evil.example/c/pay", "http://pay.crowelogic.com/c/pay"]) {
+      t = await run({ url });
+      assert(!t.r.ok && t.opened.length === 0, `an off-Stripe URL was opened: ${url} ${JSON.stringify(t)}`);
+    }
+    return "USA opens Stripe; GBR, none, no plugin, StoreKit error, Android, signed-out, off-Stripe refuse";
+  });
+
   // ─── Routing parity with the harness ─────────────────────────────────────────
 
   console.log("routing");
@@ -1197,7 +1256,7 @@ function methodPaths(surface) {
     ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
     vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
     const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
-    return { classes, props, listeners, select };
+    return { classes, props, listeners, select, items, notify: () => observers.forEach((o) => o.fn([])) };
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1226,6 +1285,24 @@ function methodPaths(surface) {
     assert(!overlap, "two setCurrent calls were in flight at once");
     assert(seen[seen.length - 1] === "playground", `native bar ended on ${seen[seen.length - 1]}, not playground`);
     return `calls: ${seen.join(" -> ")}`;
+  });
+
+  await check("approval hides native tabs, blocks taps, and preserves keyboard hiding", async () => {
+    let hidden = null, taps = 0;
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async (s) => { hidden = s.hidden; }, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    h.items[1].click = () => { taps++; };
+    await sleep(20);
+    h.classes.add("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "approval left the native tabs visible");
+    h.listeners.tabSelected({ id: "chat" }); await sleep(20);
+    assert(taps === 0, "native tab navigated behind approval");
+    h.classes.add("kb-open"); h.classes.delete("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "dismissal exposed tabs over the keyboard");
+    h.classes.delete("kb-open"); h.notify(); await sleep(20);
+    assert(hidden === false, "tabs did not return after dismissal");
+    return "approval and keyboard visibility compose; modal taps ignored";
   });
 
   await check("native bar geometry changes move the web spacer", async () => {

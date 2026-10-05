@@ -54,7 +54,7 @@
       await chrome.setCurrent({ id: now || "" });
       current = now;
     }
-    const wantHidden = body.classList.contains("kb-open");
+    const wantHidden = body.classList.contains("kb-open") || body.classList.contains("approval-open");
     if (wantHidden !== hidden) { await chrome.setHidden({ hidden: wantHidden }); hidden = wantHidden; }
   }
 
@@ -81,7 +81,7 @@
 
   chrome.addListener("tabSelected", ({ id }) => {
     const tab = tabs.querySelector(`.m-tab[data-id="${CSS.escape(id)}"]`);
-    if (tab) tab.click();
+    if (tab && !body.classList.contains("approval-open")) tab.click();
     // The web tab may decline (or land on a different pane); the native bar was
     // already moved by the tap, so forget what it shows and re-assert the DOM.
     current = undefined;

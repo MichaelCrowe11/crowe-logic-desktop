@@ -166,25 +166,31 @@ check("the phone build strips the plan tag rather than 404ing on it", () => {
   return "stripped";
 });
 
-check("the phone refuses to sell, and says why", () => {
-  // Not a gap to be filled later: selling digital content in-app is the store's
-  // own purchase API, and the catalog Worker's CORS allowlist does not name
-  // capacitor://localhost. Both refusals must stay stated rather than becoming
-  // calls that fail silently.
+check("the phone sells only where the storefront allows it, and says why everywhere else", () => {
+  // Since 2026-10-04 the phone links out to Stripe on the United States App
+  // Store storefront (Epic v. Apple, guideline 3.1.1 as amended) and nowhere
+  // else. Three things keep that honest. The storefront is StoreKit's, read
+  // through CroweStore, never the locale. The UI draws no upgrade button, card
+  // or web price unless billing.plan() answers buyHere, because showing the way
+  // out is itself steering where the carve-out does not apply. And the refusal
+  // still names NO outside address: since 751c75b App Review has read
+  // "prices at crowelogic.com" as steering, and a refused storefront is
+  // exactly where that rule still holds.
   const billing = mobileBridge.slice(mobileBridge.indexOf("    billing: {"));
   assert(/billing: \{/.test(mobileBridge), "mobile must expose billing for bridge parity");
-  assert(/catalog: async \(\) => \(\{ error:/.test(billing), "mobile catalog must be a stated refusal, not a fetch the browser will block");
-  assert(/checkout: async \(\) => \(\{[\s\S]{0,80}ok: false/.test(billing), "mobile checkout must refuse rather than send a buyer to Stripe from in-app");
-  // Since 751c75b the refusals name NO outside address. App Review reads
-  // "prices at crowelogic.com" as steering to a purchase outside the store
-  // (guideline 3.1.1), so the phone says only that plans are not sold here and
-  // that the plan on the Crowe ID reaches the phone on its next sign-in. This
-  // check used to demand the address; a test that demands what review forbids
-  // is a test that must lose, and it lost quietly while CI was billing-locked.
-  assert(!/crowelogic\.com/.test(billing), "the phone's billing refusals must not point at an outside price list (App Review 3.1.1)");
-  assert(/not sold in the phone app/.test(billing) && /next sign-in/.test(billing), "the checkout refusal must say plans are not sold here and how a plan reaches the phone");
+  assert(/plugin\("CroweStore"\)/.test(mobileBridge) && /=== "USA"/.test(mobileBridge), "the purchase gate must read the StoreKit storefront through CroweStore");
+  assert(!/Intl\.Locale|navigator\.languages?/.test(mobileBridge.slice(mobileBridge.indexOf("async function externalPurchaseAllowed"), mobileBridge.indexOf("let checkoutOpenedAt"))),
+    "the purchase gate must not read the locale; an en-US phone can buy from any storefront");
+  assert(/buyHere: await externalPurchaseAllowed\(\)/.test(billing), "plan() must say whether a purchase may be offered before the UI draws one");
+  assert(/if \(!\(await externalPurchaseAllowed\(\)\)\)/.test(billing), "checkout must re-check the storefront before opening anything");
+  const refusal = (billing.match(/Plans are not sold in the phone app[^"]*"/) || [""])[0];
+  assert(refusal && /next sign-in/.test(refusal) && !/crowelogic\.com/.test(refusal), "the refusal must say plans are not sold here and how a plan reaches the phone, with no outside address");
+  assert(/stripe\\\.com\$/.test(billing), "checkout must refuse a URL that is not Stripe's");
+  const ui = read("mobile/src/mobile-ui.js");
+  assert(/!\(await buyHere\(\)\)\) return/.test(ui) && /btn\.hidden = Boolean\(p\.paid\) \|\| !p\.buyHere/.test(ui),
+    "the phone UI must draw no card, See plans button or Settings upgrade where buyHere is false");
   assert(/plan: async/.test(billing) && /refresh: async/.test(billing), "plan and refresh are the token's own claim and must be real on the phone");
-  return "2 refused, 2 real";
+  return "storefront-gated sale, gated UI, address-free refusal";
 });
 
 check("the auth events run one way each", () => {

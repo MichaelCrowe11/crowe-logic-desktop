@@ -728,13 +728,17 @@ body.mobile #m-tabs .m-tab { opacity: 1; }
 .m-approve.open { opacity: 1; }
 .m-approve.leaving { opacity: 0; }
 .m-approve-card {
-  width: 100%; max-height: 82dvh; overflow: auto;
-  padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
+  width: 100%; max-height: min(82dvh, calc(100dvh - env(safe-area-inset-top) - var(--kb, 0px) - 16px));
+  box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   background: var(--raised); border-top: 1px solid var(--line-strong);
   border-radius: 18px 18px 0 0; box-shadow: 0 -12px 40px rgba(0,0,0,.28);
   transform: translateY(24px); transition: transform 260ms var(--ease);
 }
 .m-approve.open .m-approve-card { transform: none; }
+.m-approve-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+body.mobile.approval-open .m-tabs { visibility: hidden; pointer-events: none; }
+.m-approve-chips .m-chip { min-width: 0; max-width: 100%; overflow-wrap: anywhere; line-height: 1.35; }
 .m-approve-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .m-chip {
   font: 600 11px/1 var(--body); letter-spacing: .03em; padding: 6px 9px;
@@ -751,8 +755,9 @@ body.mobile #m-tabs .m-tab { opacity: 1; }
   background: var(--term-bg); color: var(--term-fg); border-radius: var(--r-lg);
   user-select: text; -webkit-user-select: text;
 }
-.m-approve-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; }
-.m-approve-actions button { min-height: 50px; font-size: 16px; border-radius: 12px; }
+.m-approve-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; flex-shrink: 0;
+  padding-top: 12px; border-top: 1px solid var(--line); background: var(--raised); }
+.m-approve-actions button { min-width: 0; min-height: 50px; padding: 10px 8px; font-size: 16px; border-radius: 8px; white-space: normal; overflow-wrap: anywhere; }
 .m-approve-yes {
   position: relative; overflow: hidden; border: 0; font-weight: 600;
   background: var(--gold); color: var(--on-gold); touch-action: none;
