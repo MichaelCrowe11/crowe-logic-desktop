@@ -518,7 +518,22 @@
        read and cleared here on launch and on every return to the foreground,
        then handed to the UI as a crowe:intent event. Two readers race on a cold
        start (this one and the appStateChange below), so the read is a take. */
-    Promise.resolve(App.addListener("appStateChange", (st) => { if (st && st.isActive) takePendingIntent(); })).catch(() => {});
+    Promise.resolve(App.addListener("appStateChange", (st) => {
+      if (!(st && st.isActive)) return;
+      takePendingIntent();
+      /* Back from Stripe. The webhook on the control plane stamps the tier on the
+         account when payment lands; a refreshed token carries it. Once per
+         opened checkout, and only within an hour of opening it, so an app that
+         merely changed windows does not hit the token endpoint every time. */
+      if (checkoutOpenedAt && Date.now() - checkoutOpenedAt < 3600e3) {
+        checkoutOpenedAt = 0;
+        refreshToken().then(() => {
+          const u = currentUser();
+          const tier = u ? String(u.tier || "") : "";
+          try { window.dispatchEvent(new CustomEvent("crowe:plan", { detail: { tier, paid: PAID_TIERS.includes(tier.toLowerCase()) } })); } catch { /* no window */ }
+        }).catch(() => {});
+      }
+    })).catch(() => {});
     ready.then(() => takePendingIntent()).catch(() => {});
     if (App.getLaunchUrl) {
       Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
@@ -569,6 +584,29 @@
   // scripts/test-plan.js compares all three: a shorter list here would tell a
   // paying account it is free.
   const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
+  // The estate's one ladder. Same Worker as main.js and web-bridge.js.
+  const CHECKOUT_URL = "https://crowe-checkout.yellow-block-3adc.workers.dev";
+  /* Whether this install may send a buyer out to the web. The United States
+     App Store storefront may, since the May 2025 Epic v. Apple order; no other
+     storefront is claimed here, and Android is not, because Play's billing
+     rules are Google's own and a wrong answer is a rejection or a pulled
+     listing. The storefront comes from StoreKit through CroweStore, never from
+     the locale: an en-US phone can buy from any storefront. No plugin, no
+     storefront, or an error all answer no, so a doubtful install refuses
+     rather than sells. The UI asks this before it draws any upgrade button or
+     web price, not only on tap. */
+  async function externalPurchaseAllowed() {
+    if (!(CAP && CAP.getPlatform && CAP.getPlatform() === "ios")) return false;
+    const store = plugin("CroweStore");
+    if (!store || !store.storefront) return false;
+    try {
+      const r = await store.storefront();
+      return String((r && r.countryCode) || "").toUpperCase() === "USA";
+    } catch { return false; }
+  }
+  // Set when Stripe was opened in the browser; the next return to the
+  // foreground refreshes the token so a paid tier shows without a sign-out.
+  let checkoutOpenedAt = 0;
   function currentUser() {
     if (!config.token) return null;
     const p = decodeJwt(config.token);
@@ -2076,43 +2114,70 @@
       },
     },
 
-    /* The member's own plan, and why the phone cannot sell it.
+    /* The member's own plan, and the way up.
 
        Parity with the desktop bridge (scripts/test-mobile-bridge.js requires
-       every desktop method to exist here), but two of the four are stated
-       refusals rather than working calls, for two separate and both real
-       reasons:
+       every desktop method to exist here). plan and refresh are the token's
+       own claim. catalog reads the crowe-checkout Worker's ladder, the ONLY
+       source of a price this build shows; the Worker's allow-list carries the
+       phone's origin (app.crowelogic.com) since 2026-10-04, as the crowe-ai
+       Worker does.
 
-         · catalog — the checkout Worker answers with an Access-Control-Allow-
-           Origin allowlist naming crowelogic.com, not a wildcard. A fetch from
-           capacitor://localhost is refused by the browser after the request has
-           already been made. The desktop gets away with it by fetching from the
-           main process, where CORS does not apply, and the web is on the listed
-           origin. The phone is neither, so asking would fail silently and the
-           card would show "price at checkout" forever.
-
-         · checkout — selling a subscription to digital content inside an iOS or
-           Android app is the store's business, through its own purchase API.
-           Sending the buyer out to Stripe from in-app is the thing both review
-           teams reject for. `license.billing` above is a different case and
-           stays: managing a subscription that already exists is account
-           management, which both stores permit.
-
-       plan and refresh are the token's own claim, so they are real here. That
-       means the phone can say what tier this Crowe ID is on, and pick up a tier
-       bought elsewhere on the next refresh, which is the useful half. */
+       checkout opens Stripe in the system browser, not in the webview. Since
+       May 2025 an iOS app on the United States storefront may link out to buy
+       on the web without a commission or a mandated sheet (Epic v. Apple,
+       guideline 3.1.1 as amended); elsewhere, and on Android where Play's
+       rules differ, selling a digital subscription is the store's business
+       through its own purchase API, and the method refuses the way it did
+       before. The storefront is the one StoreKit reports (CroweStore), which
+       is what the US carve-out turns on; plan() carries it as buyHere so the
+       UI draws no upgrade button or web price where a sale may not happen.
+       The tier arrives on the next token refresh, which the foreground
+       listener forces when the app comes back after a checkout was opened. */
     billing: {
       plan: async () => {
         await ready;
         const u = currentUser();
         const tier = u ? String(u.tier || "") : "";
-        return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) };
+        // buyHere: whether this install may show a web upgrade at all.
+        return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()), buyHere: await externalPurchaseAllowed() };
       },
-      catalog: async () => ({ error: "The plan list is not available in the phone app." }),
-      checkout: async () => ({
-        ok: false,
-        error: "Plans are not sold in the phone app. The plan on your Crowe ID reaches this phone on its next sign-in.",
-      }),
+      catalog: async () => {
+        let r;
+        try { r = await fetch(`${CHECKOUT_URL}/v1/catalog`, { headers: { accept: "application/json" } }); }
+        catch { return { error: "The plan list is not answering" }; }
+        if (!r.ok) return { error: `The plan list answered ${r.status}` };
+        const cat = await r.json().catch(() => null);
+        if (!cat || !Array.isArray(cat.ladder)) return { error: "The plan list is unreadable" };
+        return { ladder: cat.ladder };
+      },
+      checkout: async (slug) => {
+        await ready;
+        const u = currentUser();
+        if (!u || !u.email) return { ok: false, error: "Sign in with your Crowe ID first; the plan goes on that account." };
+        if (!(await externalPurchaseAllowed())) {
+          return { ok: false, error: "Plans are not sold in the phone app in your region. The plan on your Crowe ID reaches this phone on its next sign-in." };
+        }
+        const want = String(slug || "pro").toLowerCase();
+        if (!/^[a-z0-9-]{1,32}$/.test(want)) return { ok: false, error: "That plan is not one this app can open." };
+        let r;
+        try {
+          r = await fetch(`${CHECKOUT_URL}/v1/checkout`, {
+            method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ slug: want, email: u.email }),
+          });
+        } catch (e) { return { ok: false, error: "Checkout is not answering. Try again in a moment." }; }
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.url) return { ok: false, error: d.error || `Checkout answered ${r.status}` };
+        let url; try { url = new URL(d.url); } catch { return { ok: false, error: "Checkout returned an unreadable URL" }; }
+        if (url.protocol !== "https:" || !/(^|\.)stripe\.com$/.test(url.hostname)) return { ok: false, error: "Checkout returned a URL that is not Stripe's" };
+        checkoutOpenedAt = Date.now();
+        const Browser = plugin("Browser");
+        if (Browser) await Browser.open({ url: url.href }).catch(() => {});
+        else window.open(url.href, "_blank", "noopener");
+        // The caller must not navigate the webview to it; opened is the result.
+        return { ok: true, opened: true };
+      },
       refresh: async () => {
         await ready;
         const t = await refreshToken();

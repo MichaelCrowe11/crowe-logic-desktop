@@ -109,6 +109,34 @@ const PRELUDE = `
 
 const tests = [
   {
+    /* The web upgrade is drawn only where billing.plan() says buyHere (the US
+       App Store storefront). Elsewhere a free account sees its tier and
+       nothing to tap: no Settings button, no See plans under a plan notice,
+       no card, since showing a way out to buy is itself steering (3.1.1). */
+    name: "upgrade affordances appear only where the storefront allows a web purchase",
+    body: `const b = window.crowe.billing, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      b.catalog = async () => ({ ladder: [{ slug: "pro", amount: 9900, interval: "month", features: ["Every tier"] }] });
+      const free = (buyHere) => async () => ({ email: "g@example.com", tier: "free", known: true, paid: false, buyHere });
+      const notice = () => { const n = document.createElement("div"); n.className = "notice plan"; n.textContent = "Free plan";
+        document.getElementById("transcript").appendChild(n); return n; };
+      const look = async (buyHere) => {
+        b.plan = free(buyHere); window.dispatchEvent(new CustomEvent("crowe:plan", { detail: {} }));
+        const n = notice(); await sleep(80);
+        const r = { button: !document.getElementById("m-plan-up").hidden, line: document.getElementById("m-plan-line").textContent,
+                    seePlans: Boolean(n.querySelector(".m-plan-up")) };
+        n.querySelector(".m-plan-up") && n.querySelector(".m-plan-up").click(); await sleep(80);
+        const card = document.querySelector("#transcript .plan-card");
+        r.card = Boolean(card); r.price = card ? card.querySelector(".plan-price").textContent : "";
+        if (card) card.closest(".msg").remove(); n.remove();
+        return r;
+      };
+      const e = await look(false), u = await look(true);
+      return { elseButton: e.button, elseLine: e.line, elseSeePlans: e.seePlans, elseCard: e.card,
+               usButton: u.button, usSeePlans: u.seePlans, usCard: u.card, usPrice: u.price };`,
+    expect: { elseButton: false, elseLine: "Free.", elseSeePlans: false, elseCard: false,
+              usButton: true, usSeePlans: true, usCard: true, usPrice: "$99 a month" },
+  },
+  {
     name: "the bridge is installed and the phone chrome is applied",
     body: `return { bridge: typeof window.crowe, mobile: document.body.classList.contains("mobile"),
                     pane: document.body.dataset.pane, tabBar: __shown("#m-tabs") };`,

@@ -10,5 +10,6 @@ class CroweBridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(CroweVault())
         bridge?.registerPluginInstance(CroweVoice())
         bridge?.registerPluginInstance(CroweChrome())
+        bridge?.registerPluginInstance(CroweStore())
     }
 }

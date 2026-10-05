@@ -81,7 +81,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
     console: { error: (...a) => consoleLog.push(a.map(String).join(" ")), log: () => {}, warn: () => {} },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    navigator: { clipboard: { writeText: () => Promise.resolve() }, language: "en-US", languages: ["en-US"] },
     performance: { now: () => 0 },
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
@@ -945,6 +945,61 @@ function methodPaths(surface) {
     const error = seen.find((e) => e.type === "error");
     assert(error && /signed in/i.test(error.text), `the error event was ${JSON.stringify(error)}`);
     assert(!result.done, "an unauthenticated turn reported success");
+  });
+
+  await check("checkout opens Stripe only on the US App Store storefront, and plan says so before any button is drawn", async () => {
+    // Epic v. Apple lets a US-storefront iOS app link out to buy on the web.
+    // The storefront is StoreKit's (CroweStore), never the locale: every case
+    // here runs with an en-US locale, so a GBR storefront refusing proves the
+    // locale is not what decides. No plugin, no storefront, a throwing plugin,
+    // Android, signed out, or a checkout URL that is not Stripe's all refuse
+    // without opening anything.
+    const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+    const token = jwt({ email: "grower@example.com", crowe_tier: "free", exp: Math.floor(Date.now() / 1000) + 3600 });
+    const run = async ({ platform = "ios", store = "USA", signedIn = true, url = "https://checkout.stripe.com/c/pay/cs_test_1" } = {}) => {
+      const opened = [], posted = [];
+      const prefs = new Map();
+      const plugins = {
+        Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
+        Browser: { open: async ({ url: u }) => { opened.push(u); }, addListener: () => ({ remove() {} }) },
+      };
+      if (store === "throws") plugins.CroweStore = { storefront: async () => { throw new Error("storekit down"); } };
+      else if (store !== null) plugins.CroweStore = { storefront: async () => ({ countryCode: store }) };
+      const cap = { getPlatform: () => platform, isNativePlatform: () => true, Plugins: plugins };
+      const fetchImpl = async (u, init = {}) => {
+        if (!String(u).includes("crowe-checkout")) throw new TypeError("unexpected fetch " + u);
+        posted.push({ url: String(u), body: init.body ? JSON.parse(init.body) : null });
+        return new Response(JSON.stringify({ url }), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const bridge = loadMobileSurface(fetchImpl, cap);
+      if (signedIn) await bridge.setConfig({ token });
+      const plan = await bridge.billing.plan();
+      const r = await bridge.billing.checkout("pro");
+      return { r, plan, opened, posted };
+    };
+
+    let t = await run();
+    assert(t.plan.buyHere === true, `plan did not offer a purchase on the US storefront: ${JSON.stringify(t.plan)}`);
+    assert(t.r.ok && t.r.opened && !t.r.url, `US iOS did not open: ${JSON.stringify(t.r)}`);
+    assert(t.opened.length === 1 && t.opened[0].startsWith("https://checkout.stripe.com/"), `opened ${JSON.stringify(t.opened)}`);
+    assert(t.posted[0].body.slug === "pro" && t.posted[0].body.email === "grower@example.com", `posted ${JSON.stringify(t.posted)}`);
+
+    for (const [label, opts] of [
+      ["GBR storefront on an en-US phone", { store: "GBR" }],
+      ["no storefront", { store: "" }],
+      ["no CroweStore plugin", { store: null }],
+      ["StoreKit error", { store: "throws" }],
+      ["US Android", { platform: "android" }],
+    ]) {
+      t = await run(opts);
+      assert(t.plan.buyHere === false, `${label}: plan offered a purchase: ${JSON.stringify(t.plan)}`);
+      assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `${label} was not refused before any request: ${JSON.stringify(t)}`);
+    }
+    t = await run({ signedIn: false });
+    assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `signed out was not refused: ${JSON.stringify(t)}`);
+    t = await run({ url: "https://stripe.com.evil.example/pay" });
+    assert(!t.r.ok && t.opened.length === 0, `an off-Stripe URL was opened: ${JSON.stringify(t)}`);
+    return "USA opens Stripe; GBR, none, no plugin, StoreKit error, Android, signed-out, off-Stripe refuse";
   });
 
   // ─── Routing parity with the harness ─────────────────────────────────────────
