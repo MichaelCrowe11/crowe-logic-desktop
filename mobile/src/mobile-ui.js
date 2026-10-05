@@ -1574,6 +1574,9 @@
     if (s.reason) card.appendChild(el("p", "m-approve-reason", s.reason));
     if (s.detail) card.appendChild(el("pre", "m-approve-detail", s.detail));
     if (s.question) card.appendChild(el("p", "m-approve-q", s.question));
+    const content = el("div", "m-approve-content");
+    while (card.firstChild) content.appendChild(card.firstChild);
+    card.appendChild(content);
     const row = el("div", "m-approve-actions");
     const no = el("button", "ghost m-approve-no", "Not now");
     no.type = "button";
@@ -1583,18 +1586,28 @@
     card.appendChild(row);
     wrap.appendChild(card);
     let settled = false;
+    let cancelHold = () => {};
     // aria-modal alone does not stop VoiceOver's rotor or a hardware keyboard
     // reaching the page behind; inert does.
     const benched = Array.from(body.children).filter((n) => n !== wrap && !n.inert);
     const done = (v) => {
       if (settled) return;
       settled = true;
+      cancelHold();
+      window.removeEventListener("blur", cancelHold);
       approveOpen.delete(done);
       wrap.classList.add("leaving");
-      benched.forEach((n) => { n.inert = false; });
-      setTimeout(() => { wrap.remove(); try { prior && prior.focus && prior.focus(); } catch { /* gone */ } }, 160);
       document.removeEventListener("keydown", onKey, true);
-      resolve(v);
+      setTimeout(() => {
+        wrap.remove();
+        benched.forEach((n) => { n.inert = false; });
+        try { prior && prior.focus && prior.focus(); } catch { /* gone */ }
+        resolve(v);
+        // Queued approvals open before navigation is restored.
+        setTimeout(() => {
+          if (!document.querySelector(".m-approve")) body.classList.remove("approval-open");
+        }, 0);
+      }, 160);
     };
     approveOpen.add(done);
     const onKey = (e) => {
@@ -1608,8 +1621,13 @@
       const HOLD = 650;
       let timer = null;
       const cancel = () => { clearTimeout(timer); timer = null; yes.classList.remove("holding"); };
+      cancelHold = cancel;
+      window.addEventListener("blur", cancelHold);
+      yes.addEventListener("blur", cancel);
       yes.addEventListener("pointerdown", (e) => {
+        if (settled || e.button !== 0 || e.isPrimary === false) return;
         e.preventDefault();
+        cancel();
         yes.classList.add("holding");
         timer = setTimeout(() => { timer = null; done(true); }, HOLD);
       });
@@ -1619,6 +1637,7 @@
     } else {
       yes.addEventListener("click", () => done(true));
     }
+    body.classList.add("approval-open");
     body.appendChild(wrap);
     benched.forEach((n) => { n.inert = true; });
     requestAnimationFrame(() => { wrap.classList.add("open"); no.focus(); });

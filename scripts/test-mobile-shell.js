@@ -483,6 +483,24 @@ const tests = [
               hold: "Hold to run command", focused: "Not now", pwned: false, declined: false, accessible: true, left: 0 },
   },
   {
+    name: "long approval keeps actions visible and navigation hidden through dismissal",
+    body: `const answer = window.__croweApprove({ danger: true, title: "Run this on a-long-computer-name?",
+        detail: "a long harmless command description ".repeat(100), machine: "https://a-very-long-machine-name.tail1234.ts.net", tier: "execute", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 300));
+      const sheet = document.querySelector(".m-approve");
+      const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+      const content = sheet.querySelector(".m-approve-content");
+      const blocked = document.body.classList.contains("approval-open");
+      const visible = footer.top >= 0 && footer.bottom <= innerHeight && footer.width <= innerWidth;
+      const scrollable = getComputedStyle(content).overflowY === "auto";
+      sheet.querySelector(".m-approve-no").click();
+      const blockedDuringExit = document.body.classList.contains("approval-open");
+      const result = await answer;
+      await new Promise((r) => setTimeout(r, 30));
+      return { blocked, visible, scrollable, blockedDuringExit, result, restored: !document.body.classList.contains("approval-open") };`,
+    expect: { blocked: true, visible: true, scrollable: true, blockedDuringExit: true, result: false, restored: true },
+  },
+  {
     /* Two questions at once queue rather than stack; the page behind is inert
        while one is up; and stopping the turn answers the open one and the
        waiting one "no", so a stopped turn never hangs on a sheet. */

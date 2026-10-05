@@ -1252,7 +1252,7 @@ function methodPaths(surface) {
     ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
     vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
     const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
-    return { classes, props, listeners, select };
+    return { classes, props, listeners, select, items, notify: () => observers.forEach((o) => o.fn([])) };
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1281,6 +1281,24 @@ function methodPaths(surface) {
     assert(!overlap, "two setCurrent calls were in flight at once");
     assert(seen[seen.length - 1] === "playground", `native bar ended on ${seen[seen.length - 1]}, not playground`);
     return `calls: ${seen.join(" -> ")}`;
+  });
+
+  await check("approval hides native tabs, blocks taps, and preserves keyboard hiding", async () => {
+    let hidden = null, taps = 0;
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async (s) => { hidden = s.hidden; }, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    h.items[1].click = () => { taps++; };
+    await sleep(20);
+    h.classes.add("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "approval left the native tabs visible");
+    h.listeners.tabSelected({ id: "chat" }); await sleep(20);
+    assert(taps === 0, "native tab navigated behind approval");
+    h.classes.add("kb-open"); h.classes.delete("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "dismissal exposed tabs over the keyboard");
+    h.classes.delete("kb-open"); h.notify(); await sleep(20);
+    assert(hidden === false, "tabs did not return after dismissal");
+    return "approval and keyboard visibility compose; modal taps ignored";
   });
 
   await check("native bar geometry changes move the web spacer", async () => {
