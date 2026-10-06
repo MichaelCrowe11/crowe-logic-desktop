@@ -1513,6 +1513,13 @@ ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(sanitizeAge
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
 const ptyProcs = new Map();
+const { TerminalSessions } = require("./terminal-sessions");
+const { DraftBridge } = require("./draft-bridge");
+const terminalSessions = new TerminalSessions();
+const draftBridge = new DraftBridge(terminalSessions);
+require("./managed-draft-window").installManagedDraftWindows(terminalSessions, registerIpcHandler);
+terminalSessions.on("control", state => { try { mainWindow?.webContents.send("crowe:companion:event", { type: "terminal-control", ...state }); } catch {} });
+terminalSessions.on("fault", state => console.error("Terminal mirror:", state.error));
 /* The shell is the one capability the autonomy menu names out loud: two of its
    four tiers say "no shell" in the label the user picked. Nothing enforced it -
    every tier opened a full login shell - so the promise was decoration, and the
@@ -1551,9 +1558,9 @@ function shellCommand() {
   if (process.platform === "win32") return { file: "powershell.exe", args: [] };
   return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
 }
-function spawnShell(cols, rows) {
+function spawnShell(cols, rows, sessionEnv = {}) {
   const { file, args } = shellCommand();
-  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env };
+  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: { ...process.env, ...sessionEnv } };
   try { return pty.spawn(file, args, opts); }
   catch (err) {
     if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
@@ -1566,21 +1573,27 @@ function spawnShell(cols, rows) {
     return pty.spawn(file, args, opts);
   }
 }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
+ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 24, kind = "terminal" } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
   if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `the shell is off in "${loadConfig().autonomy || "edit"}" operating mode. Switch to Execute to open an agent terminal` };
   if (ptyProcs.has(id)) return { ok: true, id };
   let proc;
-  try { proc = spawnShell(cols, rows); }
+  try {
+    await draftBridge.start();
+    const editorScript = path.join(__dirname, "bin", "crowe-session-editor.py").replace(/app\.asar([/\\])/, "app.asar.unpacked$1");
+    proc = terminalSessions.create(id, s => spawnShell(cols, rows, {
+      ...draftBridge.env(s), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || `python3 ${JSON.stringify(editorScript)}`,
+    }), { cols, rows, cwd: CWD, label: id }).proc;
+  }
   catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
   ptyProcs.set(id, proc);
   proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
   return { ok: true, id };
 });
-ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { const proc = ptyProcs.get(id); if (proc) proc.write(data || ""); });
-ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { const proc = ptyProcs.get(id); if (proc) { try { proc.resize(cols, rows); } catch {} } });
-ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { const proc = ptyProcs.get(id); if (proc) { try { proc.kill(); } catch {} ptyProcs.delete(id); } return { ok: true }; });
+ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { try { terminalSessions.localInput(id, data || ""); } catch {} });
+ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { try { terminalSessions.localResize(id, cols, rows); } catch {} });
+ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { terminalSessions.close(id); ptyProcs.delete(id); return { ok: true }; });
 ipcMain.handle("crowe:operator:status", () => ({
   app: "running", agents: agentRuns.size,
   agentIds: [...agentRuns.keys()], terminals: ptyProcs.size, terminalIds: [...ptyProcs.keys()],
@@ -2484,6 +2497,7 @@ function companionInstance() {
     companion = new Companion({
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
       privateDir: app.getPath("userData"),
+      sessions: terminalSessions,
       // Electron's own blocker: "prevent-app-suspension" keeps the system from
       // idling out while still letting the display sleep, which is what a
       // machine being driven from a phone wants.
@@ -2731,6 +2745,8 @@ app.whenReady().then(async () => {
 // when a preview was running; null means there is nothing to wait for. The
 // scripts that call this by hand before app.exit ignore the return value.
 function shutdownNativeResources() {
+  draftBridge.stop();
+  terminalSessions.closeAll();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
   // Cloud browsers are ended the same way: best effort, bounded by the

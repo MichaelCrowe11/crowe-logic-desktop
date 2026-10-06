@@ -190,7 +190,9 @@ check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checko
 // the renderer never catches. The spawn sits inside try/catch and answers
 // { ok: false, error }; the dev-only mode-bit repair never touches a packaged
 // bundle, which the code signature seals.
-check(/try \{ proc = spawnShell\(cols, rows\); \}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed spawn into { ok: false, error }");
+check(/try \{\s*await draftBridge\.start\(\);[\s\S]{0,650}proc = terminalSessions\.create\([\s\S]{0,650}\}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed managed spawn into { ok: false, error }");
+const managedDraft = fs.readFileSync(path.join(root, "managed-draft-window.js"), "utf8");
+check(/windows\.get\(event\.sender\.id\)/.test(managedDraft) && /event\.senderFrame !== event\.sender\.mainFrame/.test(managedDraft) && /event\.senderFrame\.url !== pathToFileURL\(page\)\.href/.test(managedDraft), "shared draft IPC must verify its own window and exact main-frame document");
 check(/if \(app\.isPackaged \|\| process\.platform === "win32" \|\| !\/posix_spawnp\/i\.test/.test(main), "the spawn-helper mode-bit repair must be dev-only");
 check(!/pty\.spawn\([^\n]*\n[^\n]*ptyProcs\.set/.test(main), "no bare pty.spawn may feed ptyProcs outside spawnShell");
 // The terminal is the operator's login shell (their PATH, even from a Finder

@@ -29,6 +29,11 @@ const stamp = dev ? String(Date.now()) : version;
 // Files copied verbatim: [from, to]. The renderer's own sources come first
 // because everything else exists to serve them.
 const COPY = [
+  ["node_modules/@xterm/xterm/lib/xterm.js", "xterm.js"],
+  ["node_modules/@xterm/xterm/css/xterm.css", "xterm.css"],
+  ["node_modules/@xterm/addon-fit/lib/addon-fit.js", "addon-fit.js"],
+  ["mobile/src/phone-mirror.js", "phone-mirror.js"],
+  ["mobile/src/phone-mirror.css", "phone-mirror.css"],
   ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
   ["renderer/look.css", "look.css"],
@@ -70,6 +75,7 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
+  "phone-mirror.js", "phone-mirror.css", "xterm.js", "xterm.css", "addon-fit.js",
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "look.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
   "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
@@ -131,27 +137,24 @@ function buildIndex() {
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);
 
-  // xterm ships from node_modules, which is not part of the app bundle, and the
-  // pane it drives has no PTY behind it on a phone anyway. The bridge installs a
-  // stand-in window.Terminal so initTerm() still runs and the pane explains
-  // itself instead of throwing.
+  // Bundle xterm for the authenticated mirror of the desktop-owned PTY.
   must(html, '<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />', "the xterm stylesheet");
-  html = html.replace('  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />\n', "");
-  for (const tag of ['<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>',
-                     '<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>']) {
+  html = html.replace('../node_modules/@xterm/xterm/css/xterm.css', 'xterm.css');
+  for (const [tag, file] of [['<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>', 'xterm.js'],
+                     ['<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>', 'addon-fit.js']]) {
     must(html, tag, "an xterm script tag");
-    html = html.replace(`  ${tag}\n`, "");
+    html = html.replace(tag, `<script src="${file}"></script>`);
   }
 
   must(html, '<link rel="stylesheet" href="styles.css" />', "the stylesheet link");
   html = html.replace('<link rel="stylesheet" href="styles.css" />',
-    '<link rel="stylesheet" href="styles.css" />\n  <link rel="stylesheet" href="mobile.css" />');
+    '<link rel="stylesheet" href="styles.css" />\n  <link rel="stylesheet" href="mobile.css" />\n  <link rel="stylesheet" href="phone-mirror.css" />');
 
   // The bridge has to be installed before any renderer script reads
   // window.crowe, and mark-geometry.js is the first of them.
   must(html, '<script src="mark-geometry.js"></script>', "the mark-geometry script tag");
   html = html.replace('<script src="mark-geometry.js"></script>',
-    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
+    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="phone-mirror.js"></script>\n  <script src="mark-geometry.js"></script>');
 
   // The phone chrome mirrors controls the renderer wires up on load, so it goes
   // after renderer.js rather than before it.

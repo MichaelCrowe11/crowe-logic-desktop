@@ -219,7 +219,8 @@ class Companion {
      safe to bind unconditionally — it is not reachable from another machine at
      all — and port 0 lets the OS pick a free one so a test never collides with
      a companion the user has actually started. */
-  constructor({ tokenFile, privateDir = null, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true } = {}) {
+  constructor({ tokenFile, privateDir = null, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true, sessions = null } = {}) {
+    this.sessions = sessions;
     this.tokenFile = tokenFile;
     // The app's own folder (sign-in, config, this file) is never a phone's to
     // touch: config names where the bearer token goes.
@@ -309,6 +310,7 @@ class Companion {
     const at = devices.findIndex((d) => d.id === id);
     if (at < 0) return { error: "no such device" };
     const [gone] = devices.splice(at, 1);
+    this.sessions?.revoke(gone.id);
     this.saveDevices();
     this.onEvent({ type: "device-revoked", id: gone.id, name: gone.name });
     return { ok: true, name: gone.name };
@@ -336,6 +338,7 @@ class Companion {
 
   // Kept for the case the device list cannot answer: revoke everything at once.
   rotateToken() {
+    this.sessions?.revoke();
     this.devices = [];
     this.saveDevices();
     try { fs.unlinkSync(this.tokenFile); } catch { /* already gone */ }
@@ -436,6 +439,7 @@ class Companion {
   }
 
   async stop() {
+    this.sessions?.revoke();
     if (!this.server) return this.status();
     await new Promise((r) => this.server.close(r));
     this.server = null;
@@ -450,7 +454,7 @@ class Companion {
 
   send(res, code, body) {
     const text = JSON.stringify(body);
-    res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text) });
+    res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store" });
     res.end(text);
   }
 
@@ -477,6 +481,12 @@ class Companion {
     let body;
     try { body = await readJson(req); }
     catch (e) { return this.send(res, 400, { detail: String(e.message || e) }); }
+    // A device may be revoked while a slow request body is still arriving.
+    // Check again before any route can read or change the host.
+    if (!this.deviceFor(auth.replace(/^Bearer\s+/i, ""))) {
+      this.audit({ kind: "denied", deviceId: device.id, path: url.pathname, reason: "device revoked" });
+      return this.send(res, 401, { detail: "Device revoked." });
+    }
 
     try {
       // The phone's own receipts: what this device ran, read, wrote or was
@@ -489,6 +499,36 @@ class Companion {
           .slice(0, limit)
           .map(({ at, kind, command, path: p, exit, bytes, reason, detail }) => ({ at, kind, command, path: p, exit, bytes, reason, detail }));
         return this.send(res, 200, { device: device.name, entries: mine });
+      }
+      if (this.sessions && (url.pathname.startsWith("/sessions/") || url.pathname.startsWith("/draft/"))) {
+        const route = url.pathname;
+        const sessions = this.sessions;
+        if (route === "/sessions/list") return this.send(res, 200, { protocol: 1, deviceId: device.id, sessions: sessions.list() });
+        const s = sessions.get(body.sessionId, body.generation);
+        if (route === "/sessions/poll") {
+          const result = await sessions.poll(s.id, body.generation, body.after);
+          if (!this.deviceFor(auth.replace(/^Bearer\s+/i, ""))) return this.send(res, 401, { detail: "Device revoked." });
+          if (!this.tierAllows("run")) sessions.revoke(device.id);
+          return this.send(res, 200, { ...result, controller: sessions.meta(s).controller });
+        }
+        if (!body.generation || body.generation !== s.generation) return this.send(res, 409, { detail: "Select the current session before changing it." });
+        if (route === "/draft/get") return this.send(res, 200, sessions.draft(s.id, body.draftId));
+        const writingDraft = ["/draft/save", "/draft/return"].includes(route);
+        if (!this.tierAllows(writingDraft ? "write" : "run")) {
+          sessions.revoke(device.id);
+          return this.send(res, 403, { detail: writingDraft ? "The desktop must allow edits to change a draft." : "The desktop must be in Execute mode for phone control." });
+        }
+        let result;
+        if (route === "/sessions/control") result = sessions.acquire(s.id, s.generation, device);
+        else if (route === "/sessions/renew") result = sessions.renew(s.id, s.generation, device, body.lease);
+        else if (route === "/sessions/release") { sessions.controlled(s.id, s.generation, device, body.lease); result = sessions.reclaim(s.id); }
+        else if (route === "/sessions/input") result = sessions.input(s.id, s.generation, device, body.lease, body.inputId, body.data);
+        else if (route === "/sessions/resize") { sessions.controlled(s.id, s.generation, device, body.lease); await sessions.resize(s.id, body.cols, body.rows); result = sessions.meta(s); }
+        else if (writingDraft) result = sessions.changeDraft(s.id, body.draftId, { baseRevision: body.baseRevision, text: body.text,
+          operationId: `${device.id}-${body.operationId}`, action: route === "/draft/save" ? "save" : "return" });
+        else return this.send(res, 404, { detail: "Unknown session operation." });
+        this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: s.id });
+        return this.send(res, 200, result);
       }
       if (url.pathname === "/run") {
         if (!this.tierAllows("run")) {
@@ -518,7 +558,7 @@ class Companion {
     } catch (e) {
       this.audit({ kind: e.status === 403 ? "denied" : "error", device: device.name, deviceId: device.id, path: url.pathname,
                    ...(e.status === 403 ? { reason: "path guard" } : {}), detail: String(e.message || e).slice(0, 200) });
-      return this.send(res, e.status || 400, { detail: String(e.message || e) });
+      return this.send(res, e.status || 400, { detail: String(e.message || e), current: e.current });
     }
     return this.send(res, 404, { detail: `no such route: ${url.pathname}` });
   }

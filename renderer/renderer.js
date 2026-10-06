@@ -1167,8 +1167,12 @@ async function addPanel(type, seed={}) {
   savePanelState(); applyStackVisibility(); renderDockTabs(); return p;
 }
 async function mountTerminal(p, body, systemTerminal=false) {
+  if (window.crowePhoneMirror) {
+    window.crowePhoneMirror.mount(body);
+    return;
+  }
   const tools=document.createElement("div"); tools.className="terminal-tools";
-  tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><span class="terminal-state">starting</span>';
+  tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><button class="term-reclaim ghost sm" hidden>Take control</button><span class="terminal-state">starting</span>';
   const host=document.createElement("div"); host.className="terminal-host"; body.append(tools,host);
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:termTheme()});
   const f=new FitAddon.FitAddon(); t.loadAddon(f); t.open(host); try{f.fit()}catch{}
@@ -1188,6 +1192,10 @@ async function mountTerminal(p, body, systemTerminal=false) {
      agent panel's console is a plain shell too; nothing is typed into any
      terminal for you. Commands go in when the operator wants them. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
+  tools.querySelector(".term-reclaim").onclick=()=>{window.crowe.pty.input(p.id,"");t.focus()};
+  const offControl=window.crowe.companion?.onEvent(e=>{if(e.type==="terminal-control"&&e.id===p.id){state.textContent=e.controller?`Controlled by ${e.controller.name}`:"running";tools.querySelector(".term-reclaim").hidden=!e.controller}});
+  const controlCleanup=new MutationObserver(()=>{if(!body.isConnected){offControl?.();controlCleanup.disconnect()}});
+  controlCleanup.observe(panelDeck,{childList:true});
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
   tools.querySelector(".term-copy").onclick=()=>navigator.clipboard.writeText(t.getSelection()||"");

@@ -96,6 +96,9 @@ jobs:
           node scripts/test-first-run.js
           node scripts/test-activity.js
 
+      - name: Run terminal mirror and draft contracts
+        run: node --test scripts/test-terminal-sessions.js scripts/test-phone-drafts.js scripts/test-draft-editor.js
+
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
       # spends, who reviews whom, what the budget halts - are worth holding at
@@ -178,6 +181,9 @@ jobs:
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-mobile-shell.js
+
+      - name: Run shared draft and real terminal roundtrip
+        run: xvfb-run -a node_modules/.bin/electron scripts/test-phone-mirror-ui.js
 
       # Install-time space profiles, both shapes `npm test` covers: a build that
       # declares nothing, and one narrowed to chat and projects.

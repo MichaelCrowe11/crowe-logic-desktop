@@ -269,7 +269,10 @@
   new MutationObserver(() => { if (body.dataset.pane === "home" && $("m-home-mode")) $("m-home-mode").outerHTML = homeMode(); })
     .observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   async function renderHome() {
-    const paired = body.classList.contains("m-paired");
+    // The native vault can finish after the initial pane is selected. Read
+    // the ready config instead of capturing the not-yet-synced CSS class.
+    const cfg = await window.crowe.getConfig().catch(() => null);
+    const paired = Boolean(cfg?.remote?.configured);
     const sessions = window.crowe?.sessions?.list ? await window.crowe.sessions.list().catch(() => []) : [];
     const hour = new Date().getHours();
     const greeting = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -290,14 +293,24 @@
       `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
       `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
       paired ? homeMode() : '',
+      paired ? '<button type="button" class="primary m-h-cta" id="m-home-mirror">Shared terminal and drafts</button>' : '',
       `<button type="button" class="${paired ? "ghost" : "primary"} m-h-cta" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button>`,
-      '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Every command, read and write is listed here afterwards. This is not screen sharing or an interactive terminal: commands can time out and long output can be shortened.</p></details>',
+      '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Open Shared terminal to watch a desktop session, take control, or edit its Control+G draft. The desktop app must stay running. Drafts return to the prompt for you to submit. File tools and commands have activity receipts; terminal keystrokes and draft contents are not logged.</p></details>',
       '</div></section>',
       paired ? '<section class="m-h-group" id="m-activity" aria-live="polite"><h2>Activity on your computer</h2><p class="m-home-empty">Checking&hellip;</p></section>' : '',
       sessions.length ? '<section class="m-h-group"><h2 class="m-h-label">Recent</h2><div class="m-h-card m-h-list">' + sessions.slice(0, 4).map((x) => `<button type="button" class="m-sess" data-session="${esc(x.id)}"><span>${esc(x.name || x.title || "Untitled")}</span><i class="m-chev" aria-hidden="true"></i></button>`).join("") + '</div></section>' : '',
       '</div>',
     ].join('');
     $("m-home-pair").addEventListener("click", () => { $("settings-btn").click(); remoteSection.scrollIntoView({ block: "center" }); });
+    $("m-home-mirror")?.addEventListener("click", () => {
+      __tapTab("Machine");
+      setTimeout(async () => {
+        if (typeof addPanel !== "function") return;
+        const existing = document.querySelector('.phone-mirror')?.closest('.workspace-panel');
+        if (existing && typeof focusPanel === "function") focusPanel(existing.dataset.id);
+        else await addPanel("terminal", { title: "Shared terminal" });
+      }, 0);
+    });
     $("m-home-chat").addEventListener("click", () => { __tapTab("Chat"); const i = $("input"); if (i) i.focus(); });
     $("m-home-pg").addEventListener("click", () => __tapTab("Playground"));
     homePane.querySelectorAll("[data-session]").forEach((b) => b.addEventListener("click", async () => {

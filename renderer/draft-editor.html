@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crowe Logic · CLI draft</title>
+  <link rel="stylesheet" href="draft-editor.css">
+  <script src="draft-editor.js" defer></script>
+</head>
+<body>
+  <header>
+    <img src="../assets/wordmark-dark.svg" alt="Crowe Logic" width="156" height="32">
+    <span class="context">CLI draft</span>
+    <div class="actions">
+      <button id="save" disabled>Save</button>
+      <button id="done" class="primary" disabled>Save and return <kbd>⌘↵</kbd></button>
+    </div>
+  </header>
+  <main>
+    <div class="document-bar"><span id="name">Opening draft</span><span id="saved">Loading</span></div>
+    <textarea id="draft" aria-label="CLI draft" spellcheck="false" disabled></textarea>
+  </main>
+  <footer>
+    <span id="status" role="status">Changes return to your CLI. Press Enter there to send.</span>
+    <span id="position">Ln 1, Col 1</span>
+  </footer>
+</body>
+</html>

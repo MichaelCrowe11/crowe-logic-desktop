@@ -109,6 +109,52 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "Look switches to Instrument and restores the Editorial theme",
+    body: `const oldLook = localStorage.getItem("crowe-look");
+      const oldTheme = localStorage.getItem("crowe-theme");
+      applyLook("editorial"); applyTheme(false);
+      const field = document.getElementById("cfg-look");
+      field.value = "instrument"; field.dispatchEvent(new Event("change"));
+      const instrument = document.body.dataset.look === "instrument" && document.body.classList.contains("dark");
+      const remembered = localStorage.getItem("crowe-theme") === "light" && localStorage.getItem("crowe-look") === "instrument";
+      field.value = "editorial"; field.dispatchEvent(new Event("change"));
+      const restored = document.body.dataset.look === "editorial" && !document.body.classList.contains("dark");
+      const lastStylesheet = [...document.querySelectorAll('link[rel="stylesheet"]')].at(-1).getAttribute("href").split("?")[0];
+      localStorage.setItem("crowe-theme", oldTheme || "dark"); applyLook(oldLook || "editorial");
+      if (oldLook === null) localStorage.removeItem("crowe-look");
+      if (oldTheme === null) localStorage.removeItem("crowe-theme");
+      return { instrument, remembered, restored, lastStylesheet };`,
+    expect: { instrument: true, remembered: true, restored: true, lastStylesheet: "look.css" },
+  },
+  {
+    name: "Home reads loaded pairing, opens the shared terminal and reuses it",
+    body: `const getConfig = window.crowe.getConfig;
+      window.crowe.getConfig = async () => ({ ...await getConfig(), remote: { configured: true } });
+      let result;
+      try {
+        __pair(true); await __settle();
+        // Reproduce native cold start: saved pairing is ready, the CSS
+        // pairing class has not caught up when Home first renders.
+        document.body.classList.remove("m-paired"); __tap("Home"); await __settle();
+        const button = document.getElementById("m-home-mirror");
+        const available = !!button && button.checkVisibility();
+        if (!button) throw new Error("Shared terminal entry is missing from Home");
+        __pair(true); await __settle();
+        button.click(); await __settle();
+        const first = document.querySelectorAll(".phone-mirror").length;
+        const visible = document.querySelector(".phone-mirror")?.checkVisibility();
+        const pane = document.body.dataset.pane;
+        __tap("Home"); await __settle(); document.getElementById("m-home-mirror").click(); await __settle();
+        const second = document.querySelectorAll(".phone-mirror").length;
+        result = { available, visible, pane, reused: first === second };
+      } finally {
+        for (const m of document.querySelectorAll(".phone-mirror")) closePanel(m.closest(".workspace-panel").dataset.id);
+        window.crowe.getConfig = getConfig; __pair(false); await __settle(); __tap("Home"); await __settle();
+      }
+      return result;`,
+    expect: { available: true, visible: true, pane: "workspace", reused: true },
+  },
+  {
     /* The web upgrade is drawn only where billing.plan() says buyHere (the US
        App Store storefront). Elsewhere a free account sees its tier and
        nothing to tap: no Settings button, no See plans under a plan notice,
@@ -641,10 +687,10 @@ const tests = [
               sshBare: "ssh", sshCommand: null, ordinary: null, pathed: "vim" },
   },
   {
-    name: "the terminal pane explains itself instead of loading xterm",
-    body: `return { stub: typeof window.Terminal, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
+    name: "the phone bundles xterm for remote sessions while local PTYs stay unavailable",
+    body: `return { terminal: typeof window.Terminal, mirror: typeof window.crowePhoneMirror?.mount, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
                     ptyAvailable: (await window.crowe.getConfig()).ptyAvailable };`,
-    expect: { stub: "function", xterm: false, ptyAvailable: false },
+    expect: { terminal: "function", mirror: "function", xterm: true, ptyAvailable: false },
   },
   {
     /* This used to require the opening copy to talk about the farm, which was
@@ -791,7 +837,7 @@ const tests = [
       await __settle(500);
       const out = { paneShown: __shown("#m-home-pane"),
         pairing: Boolean(document.querySelector("#m-home-pair")),
-        limits: /not screen sharing/.test(document.querySelector("#m-home-pane").textContent),
+        limits: /desktop app must stay running/.test(document.querySelector("#m-home-pane").textContent),
         noGrowHeadline: !/Your grow, today/.test(document.querySelector("#m-home-pane").textContent) };
       document.getElementById("m-home-chat").click();
       await __settle();

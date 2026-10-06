@@ -189,7 +189,7 @@
   }
   async function nativePost(url, headers, body) {
     if (!CapHttp) return null;
-    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text" });
+    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text", connectTimeout: 5000, readTimeout: /\/(sessions|draft)\//.test(url) ? 10000 : 650000 });
     const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
     return { ok: res.status >= 200 && res.status < 300, status: res.status, text };
   }
@@ -415,11 +415,24 @@
     if (!r) return { error: "the remote call needs the installed app" };
     let data = null;
     try { data = JSON.parse(r.text || "null"); } catch { /* not json — reported below */ }
-    if (r.status === 401) return { error: "the machine rejected this phone's token" };
-    if (r.status === 404 && path !== "/health") return { error: `the machine has no ${path} endpoint` };
-    if (!r.ok) return { error: (data && data.detail) || `${timeoutNote || "remote call"} failed (HTTP ${r.status})` };
+    if (r.status === 401) return { error: "the machine rejected this phone's token", status: 401 };
+    if (r.status === 404 && path !== "/health") return { error: `the machine has no ${path} endpoint. Update the desktop companion to use shared terminals.`, status: 404 };
+    if (!r.ok) return { error: (data && data.detail) || `${timeoutNote || "remote call"} failed (HTTP ${r.status})`, current: data?.current, status: r.status };
     return { ok: true, data };
   }
+
+  // The phone mirror uses the same paired native HTTP transport. Read-only
+  // observation never grants input; both phone and host enforce write tiers.
+  window.croweMirrorTransport = {
+    async call(route, body = {}) {
+      await ready;
+      if (!/^\/(sessions\/(list|poll|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
+      if (/^\/sessions\/(control|renew|input|resize)$/.test(route) && config.autonomy !== "execute") return { error: "Choose Execute mode on this phone to control a terminal." };
+      if (/^\/draft\/(save|return)$/.test(route) && !["edit", "execute"].includes(config.autonomy)) return { error: "Choose Edit or Execute mode to change a draft." };
+      return remoteCall(route, body, "session connection");
+    },
+    storage: store,
+  };
 
   /* Pairing by link, which is how a person who is not the author of this app
      will ever do it. Typing a tailnet address and a 48-character token on a
