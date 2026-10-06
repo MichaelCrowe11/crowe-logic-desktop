@@ -1202,6 +1202,7 @@
     pty: {
       start: escalate("The terminal", { ok: false }),
       input: () => {},
+      reclaim: () => {},
       resize: () => {},
       close: async () => ({ ok: true }),
       onData: () => () => {},
