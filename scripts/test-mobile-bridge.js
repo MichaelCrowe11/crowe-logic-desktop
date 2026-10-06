@@ -1306,17 +1306,20 @@ function methodPaths(surface) {
     const body = { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
       style: { setProperty: (k, v) => { props[k] = v; } }, appendChild() {} };
     const listeners = {};
+    const sheet = { open: false, classList: { contains: (c) => c === "modal" } };
     plugin.addListener = (ev, fn) => { listeners[ev] = fn; return Promise.resolve({ remove() {} }); };
     const ctx = {
       window: {}, setTimeout, CSS: { escape: (s) => s },
-      document: { getElementById: (id) => (id === "m-tabs" ? tabs : null), createElement: () => ({ style: {} }), body },
+      document: { getElementById: (id) => (id === "m-tabs" ? tabs : null), createElement: () => ({ style: {} }), body,
+        querySelector: (s) => (s === ".modal:not(.hidden)" && sheet.open ? sheet : null) },
       getComputedStyle: () => ({ color: "rgb(160, 120, 40)" }),
       MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} },
     };
     ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
     vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
     const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
-    return { classes, props, listeners, select, items, notify: () => observers.forEach((o) => o.fn([])) };
+    const toggleSheet = (open) => { sheet.open = open; observers.forEach((o) => o.fn([{ target: sheet }])); };
+    return { classes, props, listeners, select, items, toggleSheet, notify: () => observers.forEach((o) => o.fn([])) };
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1363,6 +1366,20 @@ function methodPaths(surface) {
     h.classes.delete("kb-open"); h.notify(); await sleep(20);
     assert(hidden === false, "tabs did not return after dismissal");
     return "approval and keyboard visibility compose; modal taps ignored";
+  });
+
+  await check("an open sheet (Settings) hides the native tabs so its buttons are not under them", async () => {
+    let hidden = null;
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async (s) => { hidden = s.hidden; }, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    assert(hidden === false, `tabs start hidden=${hidden}`);
+    h.toggleSheet(true); await sleep(20);
+    assert(hidden === true, "Settings left the native tabs over its action row");
+    h.toggleSheet(false); await sleep(20);
+    assert(hidden === false, "tabs did not return after Settings closed");
+    return "sheet open -> hidden, closed -> shown";
   });
 
   await check("native bar geometry changes move the web spacer", async () => {

@@ -37,6 +37,7 @@
   // Until the native bar has drawn once, the web bar is the navigation. A
   // failure after that hands the job back to it rather than leaving a spacer
   // over nothing.
+  const sheetOpen = () => !!document.querySelector(".modal:not(.hidden)");
   const fallBack = () => { shape = ""; current = null; body.classList.remove("native-tabs"); };
 
   async function syncOnce() {
@@ -54,7 +55,7 @@
       await chrome.setCurrent({ id: now || "" });
       current = now;
     }
-    const wantHidden = body.classList.contains("kb-open") || body.classList.contains("approval-open");
+    const wantHidden = body.classList.contains("kb-open") || body.classList.contains("approval-open") || sheetOpen();
     if (wantHidden !== hidden) { await chrome.setHidden({ hidden: wantHidden }); hidden = wantHidden; }
   }
 
@@ -93,6 +94,11 @@
 
   // The keyboard is the toolbar while it is up, as it is for the web bar.
   new MutationObserver(sync).observe(body, { attributes: true, attributeFilter: ["class"] });
+  // UIKit draws over the web view, so an open sheet (Settings, Founding
+  // Growers) had its bottom buttons under the bar. The bar steps aside while
+  // one is up. Only class changes on a .modal itself are worth a sync.
+  new MutationObserver((list) => { if (list.some((m) => m.target.classList && m.target.classList.contains("modal"))) sync(); })
+    .observe(body, { subtree: true, attributes: true, attributeFilter: ["class"] });
   new MutationObserver(sync).observe(tabs, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-current"] });
   // Theme changes move the brass, which is part of the shape.
   if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(sync, 0));
