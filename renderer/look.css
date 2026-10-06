@@ -1,0 +1,106 @@
+/* The look layer. Loaded last on the desktop and the phone (after styles.css,
+   mobile.css and council.css), so it only ever refines what is already drawn.
+   It changes tokens and the finish of a few surfaces; it never moves layout,
+   so nothing a hit-test or the shell checks measure can shift under it.
+
+   Two looks, picked in Settings and set on <body data-look> before first paint
+   by theme-bootstrap.js:
+   - editorial (the default): the bone, ink and brass system, with depth,
+     press and focus finished more carefully. Follows the light/dark toggle.
+   - instrument: dark glass. Deeper ink, translucent panels over a faint brass
+     aura, and brass light on the things that carry authority (the primary
+     action, focus, an open gate). Always dark.
+
+   Radii stay inside the directive's 3 to 8px. Motion stands down under
+   prefers-reduced-motion, and the glass stands down under
+   prefers-reduced-transparency, exactly as the mobile material does. */
+
+/* ── Both looks ── */
+body[data-look] {
+  --dur: 160ms; --dur-slow: 240ms;
+  --press: scale(.98);
+  font-feature-settings: "cv11", "ss01";
+  text-rendering: optimizeLegibility;
+}
+body[data-look] h1, body[data-look] h2, body[data-look] h3 { font-variation-settings: "opsz" 72; letter-spacing: -0.01em; }
+body[data-look] .badge, body[data-look] .composer-caption, body[data-look] td { font-variant-numeric: tabular-nums; }
+::selection { background: var(--selection); }
+
+/* Buttons answer a press with a small give rather than a jump. */
+body[data-look] button.primary, body[data-look] button.ghost, body[data-look] #send {
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), color var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
+}
+body[data-look] button.primary:active, body[data-look] button.ghost:active, body[data-look] #send:active { transform: var(--press); }
+body[data-look] button.primary { box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 2px rgba(0,0,0,0.18); }
+
+/* One focus language everywhere: the ring plus a soft halo, as the composer
+   already draws it. */
+body[data-look] .modal-card input:focus, body[data-look] .modal-card textarea:focus,
+body[data-look] .modal-card select:focus { box-shadow: 0 0 0 3px var(--focus-halo); }
+body[data-look] .modal-card input, body[data-look] .modal-card textarea, body[data-look] .modal-card select {
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+/* Sheets and cards are lit from above, so they sit on the page, not in it. */
+body[data-look] .modal-card { box-shadow: inset 0 1px 0 var(--hair-top), var(--z3); }
+body[data-look] .modal { backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+
+/* Thin scrollbars in the system's own greys (the desktop; iOS draws its own). */
+body[data-look] * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+/* ── Instrument: dark glass ── */
+body[data-look="instrument"] {
+  --cream: #0b0b0c; --panel: rgba(22,22,24,0.72); --raised: #1a1a1c;
+  --glass: rgba(24,24,26,0.78); --glass-edge: rgba(255,255,255,0.08);
+  --line: rgba(255,255,255,0.07); --line-strong: rgba(255,255,255,0.13);
+  --hair-top: rgba(255,255,255,0.11);
+  --muted: #8f897f;
+  --aura: radial-gradient(1200px 520px at 50% -180px, rgba(208,180,113,0.10), transparent 70%),
+          radial-gradient(800px 400px at 100% 110%, rgba(208,180,113,0.05), transparent 70%);
+  --glow: 0 0 0 1px rgba(208,180,113,0.35), 0 6px 24px -8px rgba(208,180,113,0.45);
+  --z2: 0 6px 20px -10px rgba(0,0,0,0.7), inset 0 1px 0 var(--hair-top);
+  --z3: 0 18px 44px -18px rgba(0,0,0,0.8), inset 0 1px 0 var(--hair-top);
+  --overlay: rgba(4,4,5,0.62);
+  background: var(--aura), var(--cream);
+}
+/* The phone's material follows the instrument's ink rather than its own grey. */
+body.mobile[data-look="instrument"] {
+  --m-glass: rgba(14,14,16,0.72);
+  --m-spec: rgba(255,255,255,0.14);
+  --m-rim: rgba(208,180,113,0.10);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body[data-look="instrument"] #bar, body[data-look="instrument"] #sidebar,
+  body[data-look="instrument"] #composer, body[data-look="instrument"] .modal-card,
+  body[data-look="instrument"] .palette-card {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+    backdrop-filter: blur(22px) saturate(160%);
+  }
+}
+body[data-look="instrument"] .modal-card, body[data-look="instrument"] .palette-card {
+  border-color: var(--glass-edge); border-top-color: rgba(255,255,255,0.14);
+}
+body[data-look="instrument"] .composer-frame { background: rgba(26,26,28,0.85); }
+body[data-look="instrument"] .composer-frame:focus-within { box-shadow: 0 0 0 3px var(--focus-halo), var(--glow); }
+
+/* Brass light marks authority: the primary action, and a gate waiting on the
+   operator. Nothing decorative wears it. */
+body[data-look="instrument"] button.primary, body[data-look="instrument"] #send { box-shadow: var(--glow); }
+body[data-look="instrument"] button.primary:hover, body[data-look="instrument"] #send:hover { background: var(--gold-soft); }
+body[data-look="instrument"] .gatecard { box-shadow: var(--glow), var(--z2); }
+body[data-look="instrument"] .m-approve-card { border-top-color: rgba(208,180,113,0.45);
+  box-shadow: 0 -1px 0 rgba(208,180,113,0.25), 0 -16px 48px -8px rgba(208,180,113,0.22), 0 -12px 40px rgba(0,0,0,.5); }
+
+@media (prefers-reduced-transparency: reduce) {
+  body[data-look="instrument"] { --panel: #161618; --glass: #18181a; }
+  body[data-look="instrument"] #bar, body[data-look="instrument"] #sidebar,
+  body[data-look="instrument"] #composer, body[data-look="instrument"] .modal-card,
+  body[data-look="instrument"] .palette-card { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  body[data-look] .modal { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body[data-look] { --press: none; }
+}

@@ -44,6 +44,13 @@ const darkRaw = Object.assign({}, ...blocksOf("body.dark").map(tokensIn));
 if (!Object.keys(rootRaw).length || !Object.keys(darkRaw).length) throw new Error("styles.css: token blocks not found");
 const light = resolve({ ...rootRaw });
 const dark = resolve({ ...rootRaw, ...darkRaw });
+// The Instrument look (look.css) rides on the dark tokens, so it is measured
+// as dark plus its own block. Its panels are translucent; flatten() lays them
+// on the base, which is what sits behind them before the aura.
+const lookCss = fs.readFileSync(path.join(__dirname, "..", "renderer", "look.css"), "utf8");
+const instrumentBlock = lookCss.match(/\nbody\[data-look="instrument"\]\s*\{([^}]*)\}/);
+if (!instrumentBlock) throw new Error("look.css: instrument token block not found");
+const instrument = resolve({ ...rootRaw, ...darkRaw, ...tokensIn(instrumentBlock[1]) });
 
 function parse(color) {
   if (!color) return null;
@@ -119,7 +126,7 @@ const NON_TEXT = [
 
 let failures = 0;
 
-for (const [themeName, set] of [["light", light], ["dark", dark]]) {
+for (const [themeName, set] of [["light", light], ["dark", dark], ["instrument", instrument]]) {
   console.log(`\n${themeName}`);
   const base = parse(set["--cream"]).slice(0, 3);
 

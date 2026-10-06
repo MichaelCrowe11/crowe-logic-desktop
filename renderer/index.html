@@ -17,6 +17,8 @@
        above. -->
   <script src="adopted-styles.js"></script>
   <link rel="stylesheet" href="council.css" />
+  <!-- Last, so it only refines: the look picked in Settings (look.css). -->
+  <link rel="stylesheet" href="look.css" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -429,6 +431,14 @@
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
       <p id="cfg-mcp-live" class="hint"></p>
+      <!-- The look. At the foot of the card for the reason everything above
+           Spaces stays put, and applied as it changes, like the theme button. -->
+      <label>Look
+        <select id="cfg-look">
+          <option value="editorial">Editorial, light or dark</option>
+          <option value="instrument">Instrument, dark glass</option>
+        </select>
+      </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>

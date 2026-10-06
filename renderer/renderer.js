@@ -3129,17 +3129,43 @@ function termTheme() {
 }
 
 function applyTheme(dark) {
+  // Instrument is a dark look, so asking for light hands back to Editorial.
+  if (!dark && document.body.dataset.look === "instrument") applyLook("editorial", { keepTheme: true });
   document.body.classList.toggle("dark", dark);
   const themeLabel = $("theme-btn").querySelector(".side-foot-label");
   if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
-  try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+  // Instrument forces dark; that is not the operator choosing dark for Editorial.
+  if (document.body.dataset.look !== "instrument") { try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {} }
   const theme = termTheme();
   terminalPanels.forEach((t) => { try { t.term.options.theme = theme; } catch {} });
   if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
 $("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
+// The look (look.css): Editorial follows the theme, Instrument is dark glass.
+// Stored apart from the theme so leaving Instrument restores the last theme.
+function applyLook(look, { keepTheme = false } = {}) {
+  look = look === "instrument" ? "instrument" : "editorial";
+  document.body.dataset.look = look;
+  try { localStorage.setItem("crowe-look", look); } catch {}
+  if ($("cfg-look")) $("cfg-look").value = look;
+  if (keepTheme) return;
+  let stored = "dark";
+  try { stored = localStorage.getItem("crowe-theme") || "dark"; } catch {}
+  const dark = look === "instrument" || stored !== "light";
+  document.body.classList.toggle("dark", dark);
+  const theme = termTheme();
+  terminalPanels.forEach((t) => { try { t.term.options.theme = theme; } catch {} });
+  if (window.CroweMark) CroweMark.reseed();
+  const themeLabel = $("theme-btn").querySelector(".side-foot-label");
+  if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
+}
+if ($("cfg-look")) $("cfg-look").addEventListener("change", (e) => applyLook(e.target.value));
+
 // Dark console is the canonical app surface; light remains one click away.
-try { applyTheme(localStorage.getItem("crowe-theme") !== "light"); } catch { applyTheme(true); }
+try {
+  applyLook(localStorage.getItem("crowe-look"), { keepTheme: true });
+  applyTheme(document.body.dataset.look === "instrument" || localStorage.getItem("crowe-theme") !== "light");
+} catch { applyTheme(true); }
 
 // ── Sidebar collapse ──
 // Terminals are sized to their container, so the deck has to be refitted once

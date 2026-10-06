@@ -31,6 +31,7 @@ const stamp = dev ? String(Date.now()) : version;
 const COPY = [
   ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
+  ["renderer/look.css", "look.css"],
   ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
   ["renderer/adopted-styles.js", "adopted-styles.js"],
   ["renderer/mark-geometry.js", "mark-geometry.js"],
@@ -70,7 +71,7 @@ const COPY = [
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
-  "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
+  "styles.css", "look.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
   "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
 ];
 
