@@ -2534,10 +2534,11 @@ function companionInstance() {
 }
 ipcMain.handle("crowe:companion:status", () => companionInstance().status());
 ipcMain.handle("crowe:companion:start", async () => {
-  try { return await companionInstance().start(); }
+  try { const r = await companionInstance().start(); if (!r?.error) saveConfig({ companionOn: true }); return r; }
   catch (e) { return { error: String(e.message || e) }; }
 });
-ipcMain.handle("crowe:companion:stop", () => companionInstance().stop());
+ipcMain.handle("crowe:companion:stop", () => { saveConfig({ companionOn: false }); return companionInstance().stop(); });
+ipcMain.handle("crowe:companion:setTerminal", (_e, { id, on } = {}) => companionInstance().setTerminal(id, on));
 ipcMain.handle("crowe:companion:devices", () => companionInstance().deviceList());
 ipcMain.handle("crowe:companion:addDevice", (_e, { name } = {}) => {
   const c = companionInstance();
@@ -2739,6 +2740,14 @@ app.whenReady().then(async () => {
   if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
+  // A companion the operator started stays started across relaunches until
+  // they press Stop: a paired phone should not find its machine gone because
+  // the app updated. A profile from before this setting, with devices already
+  // paired, counts as started.
+  try {
+    const on = loadConfig().companionOn;
+    if (on === true || (on === undefined && companionInstance().deviceList().length)) companionInstance().start().catch(() => {});
+  } catch {}
   // Rooms with routines speak first; the scheduler is what lets them.
   startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively

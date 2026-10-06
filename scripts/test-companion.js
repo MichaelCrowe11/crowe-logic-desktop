@@ -293,22 +293,27 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     return "run and write refused with the tier named";
   });
 
-  await check("a phone opens its own shell, holds it, and only it can close it", async () => {
+  await check("terminal access is a per-device grant; a granted phone opens its own shell, holds it, and only it can close it", async () => {
     // A stand-in process: the ownership rules are the companion's, not the PTY's.
     const { TerminalSessions } = require("../terminal-sessions");
     const sessions = new TerminalSessions();
     const fakeProc = () => ({ onData() {}, onExit() {}, write() {}, resize() {}, kill() {} });
-    let tier = true;
     const opener = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions,
-      tierAllows: () => tier, hostName: () => "Studio Mac",
+      tierAllows: () => false, hostName: () => "Studio Mac",
       openShell: async ({ cols, rows, device }) => sessions.create(`phone-${device.id.slice(0, 4)}`, fakeProc, { cols, rows, label: `${device.name} shell`, openedBy: device }) });
     const s = await opener.start();
-    const phone = opener.addDevice("iPhone"), ipad = opener.addDevice("iPad");
+    const phone = opener.addDevice("iPhone", { terminal: true }), ipad = opener.addDevice("iPad", { terminal: true }), watch = opener.addDevice("Watch");
     const hit = async (route, body, token) => {
       const r = await fetch(`http://127.0.0.1:${s.port}${route}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       return { status: r.status, body: await r.json() };
     };
     try {
+      // Ungranted: told why, shown nothing, refused everything else. The
+      // agent's tier (refusing all, above) does not enter into it.
+      const bare = await hit("/sessions/list", {}, watch.token);
+      assert(bare.body.terminal === false && bare.body.canOpen === false && bare.body.sessions.length === 0 && bare.body.device === "Watch", `ungranted list: ${JSON.stringify(bare.body)}`);
+      const barred = await hit("/sessions/open", {}, watch.token);
+      assert(barred.status === 403 && barred.body.needsGrant === true && /Terminal access is off/.test(barred.body.detail), `ungranted open: ${barred.status}`);
       const listed = await hit("/sessions/list", {}, phone.token);
       assert(listed.body.canOpen === true && listed.body.host === "Studio Mac", `list did not offer a shell: ${JSON.stringify(listed.body)}`);
       const opened = await hit("/sessions/open", { cols: 9999, rows: 40 }, phone.token);
@@ -323,15 +328,41 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
       assert(stranger.status === 403 && sessions.sessions.has(opened.body.id), `another device closed the shell (${stranger.status})`);
       const closed = await hit("/sessions/close", ref, phone.token);
       assert(closed.status === 200 && !sessions.sessions.has(opened.body.id), `the owner could not close it (${closed.status})`);
-      tier = false;
-      const refused = await hit("/sessions/open", {}, phone.token);
-      assert(refused.status === 403 && /Execute/.test(refused.body.detail) && sessions.sessions.size === 0, `opened outside Execute (${refused.status})`);
-      tier = true;
+      await hit("/sessions/open", {}, phone.token);
+      opener.setTerminal(phone.id, false);
+      assert(sessions.sessions.size === 0, "withdrawing terminal access left the phone's shell running");
+      const after = await hit("/sessions/open", {}, phone.token);
+      assert(after.status === 403 && after.body.needsGrant, `opened after the grant was withdrawn (${after.status})`);
+      assert(opener.deviceList().find(d => d.id === phone.id).terminal === false, "device list does not show the withdrawn grant");
+      opener.setTerminal(phone.id, true);
       await hit("/sessions/open", {}, phone.token);
       opener.revokeDevice(phone.id);
       assert(sessions.sessions.size === 0, "revoking the phone left its shell running");
-      return "opened at phone size, owner-only close, tier and revoke enforced";
+      return "ungranted refused, granted opens at phone size, owner-only close, withdraw and revoke close shells";
     } finally { sessions.closeAll(); await opener.stop(); }
+  });
+
+  await check("a held poll returns as soon as output lands", async () => {
+    const { TerminalSessions } = require("../terminal-sessions");
+    const sessions = new TerminalSessions();
+    let emit = null;
+    const proc = () => ({ onData(fn) { emit = fn; }, onExit() {}, write() {}, resize() {}, kill() {} });
+    const holder = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions });
+    const s = await holder.start();
+    const dev = holder.addDevice("Poller", { terminal: true });
+    const made = sessions.create("held", proc, {});
+    try {
+      const poll = (after, wait) => fetch(`http://127.0.0.1:${s.port}/sessions/poll`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${dev.token}` },
+        body: JSON.stringify({ sessionId: "held", generation: made.generation, after, wait }) }).then(r => r.json());
+      const first = await poll(-1, 0);
+      const started = Date.now();
+      const held = poll(first.seq, 6000);
+      setTimeout(() => emit("held-output\r\n"), 300);
+      const got = await held; const took = Date.now() - started;
+      assert(got.events.some(e => /held-output/.test(e.data || "")), `no output in the held poll: ${JSON.stringify(got.events)}`);
+      assert(took < 2000, `held poll took ${took}ms, not woken by output`);
+      return `woke in ${took}ms`;
+    } finally { sessions.closeAll(); await holder.stop(); }
   });
 
   fs.rmSync(dir, { recursive: true, force: true });

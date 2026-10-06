@@ -15,9 +15,10 @@ const { FakePty } = require("./mirror-fixtures");
 async function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crowe-mirror-test-"));
   const manager = new TerminalSessions(); const proc = new FakePty(); const session = manager.create("test", () => proc);
-  let allowed = true;
-  const companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, tierAllows: () => allowed });
-  await companion.start(); const phone = companion.addDevice("Test phone");
+  // The agent's tier refuses everything: the terminal answers to the
+  // device's own grant, not to it.
+  const companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, tierAllows: () => false });
+  await companion.start(); const phone = companion.addDevice("Test phone", { terminal: true });
   const bridge = new DraftBridge(manager); await bridge.start();
   t.after(async () => { bridge.stop(); manager.closeAll(); await companion.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   const post = async (route, body = {}, token = phone.token) => {
@@ -25,10 +26,10 @@ async function setup(t) {
       body: JSON.stringify({ sessionId: session.id, generation: session.generation, ...body }) });
     return { status: r.status, body: await r.json() };
   };
-  return { dir, manager, proc, session, companion, phone, bridge, post, deny: () => { allowed = false; } };
+  return { dir, manager, proc, session, companion, phone, bridge, post, deny: () => companion.setTerminal(phone.id, false) };
 }
 
-test("live HTTP mirror requires pairing and rechecks tiers and revoked devices", async t => {
+test("live HTTP mirror requires pairing and rechecks the terminal grant and revoked devices", async t => {
   const f = await setup(t);
   assert.equal((await f.post("/sessions/list", {}, "bad")).status, 401);
   const listed = await f.post("/sessions/list"); assert.equal(listed.body.sessions.length, 1);
@@ -44,7 +45,7 @@ test("live HTTP mirror requires pairing and rechecks tiers and revoked devices",
 
 test("revoking an active controller removes its lease and leaves other devices paired", async t => {
   const f = await setup(t);
-  const other = f.companion.addDevice("Second test phone");
+  const other = f.companion.addDevice("Second test phone", { terminal: true });
   const lease = (await f.post("/sessions/control")).body.controller.lease;
   assert.equal(f.session.controller.deviceId, f.phone.id);
   f.companion.revokeDevice(f.phone.id);

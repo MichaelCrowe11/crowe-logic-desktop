@@ -23,7 +23,7 @@ app.whenReady().then(async () => {
     const s = manager.create("integration", state => pty.spawn("/bin/zsh", ["-f"], { cols: 80, rows: 24, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cwd: dir, label: "Mirror integration" });
     let opened = 0;
     const openShell = async ({ cols, rows, device }) => manager.create(`phone-${++opened}`, state => pty.spawn("/bin/zsh", ["-f"], { cols, rows, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cols, rows, cwd: dir, label: `${device.name} shell`, openedBy: device });
-    companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, openShell, hostName: () => "Test Mac" }); await companion.start(); const phone = companion.addDevice("UI test phone");
+    companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, openShell, hostName: () => "Test Mac" }); await companion.start(); const phone = companion.addDevice("UI test phone", { terminal: true });
     win = new BrowserWindow({ width: 390, height: 844, show: false, webPreferences: { preload: path.join(__dirname, "phone-mirror-test-preload.js"), contextIsolation: true, sandbox: true, backgroundThrottling: false } });
     ipcMain.handle("mirror-test:request", async (event, route, body) => {
       if (event.sender !== win.webContents || !/^\/(sessions|draft)\//.test(route)) throw new Error("Invalid test request");
@@ -85,6 +85,11 @@ app.whenReady().then(async () => {
     await until(() => !manager.sessions.has("phone-1"), "own shell closed from the phone");
     await until(() => js('document.querySelector("[data-hosts]").hidden === false'), "back to sessions after close");
     console.log("ok New terminal opens a phone-sized shell with control, key bar, and owner close");
+    companion.setTerminal(phone.id, false);
+    await js('document.querySelector("[data-refresh]").click()');
+    await until(() => js('document.querySelector("[data-grant]").hidden === false && document.querySelector("[data-open]").disabled'), "grant notice when terminal access is off");
+    assert.match(await js('document.querySelector("[data-grant]").textContent'), /Terminal access is off for UI test phone\. On Test Mac/);
+    console.log("ok phone names the missing grant and where to give it");
     console.log(`PASS phone UI integration; screenshot ${path.join(dir, "phone-review.png")}`);
     okay = true;
   } catch (error) { console.error(error.stack); }

@@ -421,20 +421,15 @@
     return { ok: true, data };
   }
 
-  // The phone mirror uses the same paired native HTTP transport. Read-only
-  // observation never grants input; both phone and host enforce write tiers.
+  // The phone terminal uses the same paired native HTTP transport. It is a
+  // person typing, not the agent acting, so the agent's autonomy tier does not
+  // gate it: the desktop's per-device Terminal access grant does, host side.
   window.croweMirrorTransport = {
     async call(route, body = {}) {
       await ready;
       if (!/^\/(sessions\/(list|poll|open|close|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
-      if (/^\/sessions\/(open|control|renew|input|resize)$/.test(route) && config.autonomy !== "execute") return { error: "Choose Execute mode on this phone to control a terminal.", needsExecute: true };
-      if (/^\/draft\/(save|return)$/.test(route) && !["edit", "execute"].includes(config.autonomy)) return { error: "Choose Edit or Execute mode to change a draft." };
       return remoteCall(route, body, "session connection");
     },
-    // The terminal offers the switch to Execute in place, as one deliberate
-    // tap, rather than sending the operator to Settings to find it.
-    autonomy: () => config.autonomy || "edit",
-    async allowExecute() { await ready; await saveConfig({ autonomy: "execute" }); return config.autonomy === "execute"; },
     storage: store,
   };
 
@@ -2351,6 +2346,7 @@
       devices: async () => [],
       addDevice: async () => ({ error: "The desktop app mints device codes. This is the device that scans one." }),
       revokeDevice: async () => ({ error: "Revoke a device from the machine it was paired with." }),
+      setTerminal: async () => ({ error: "Grant terminal access on the machine this phone is paired with." }),
       audit: async () => [],
       pairSvg: async () => ({ error: "The desktop app draws the pairing code. This is the device that scans it." }),
       onEvent: () => noop(),

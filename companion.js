@@ -295,7 +295,7 @@ class Companion {
     } catch { /* in memory only; pairing still works until the app quits */ }
   }
 
-  addDevice(name) {
+  addDevice(name, { terminal = false } = {}) {
     const devices = this.loadDevices();
     const device = {
       id: crypto.randomUUID(),
@@ -303,6 +303,7 @@ class Companion {
       token: crypto.randomBytes(32).toString("hex"),
       created: Date.now(),
       lastSeen: null,
+      terminal: Boolean(terminal),
     };
     devices.push(device);
     this.saveDevices();
@@ -322,9 +323,27 @@ class Companion {
     return { ok: true, name: gone.name };
   }
 
+  /* Terminal access: whether this device may watch and drive this machine's
+     terminals and open shells of its own. It is the operator's grant at the
+     desk, one device at a time, and it is off until given; a device paired
+     before the grant existed does not gain it. It is separate from the
+     agent's autonomy tier, which governs what the agent may do, not what a
+     person at a paired phone may type. Withdrawing it ends the device's
+     control and closes the shells it opened. */
+  setTerminal(id, on) {
+    const device = this.loadDevices().find((d) => d.id === id);
+    if (!device) return { error: "no such device" };
+    device.terminal = Boolean(on);
+    if (!device.terminal) { this.sessions?.revoke(device.id); this.sessions?.closeOpenedBy?.(device.id); }
+    this.saveDevices();
+    this.audit({ kind: "grant", device: device.name, deviceId: device.id, path: "terminal", detail: device.terminal ? "on" : "off" });
+    this.onEvent({ type: "device-terminal", id: device.id, name: device.name, terminal: device.terminal });
+    return { ok: true, terminal: device.terminal };
+  }
+
   // Never the tokens. This is what the Settings pane lists.
   deviceList() {
-    return this.loadDevices().map(({ id, name, created, lastSeen }) => ({ id, name, created, lastSeen }));
+    return this.loadDevices().map(({ id, name, created, lastSeen, terminal }) => ({ id, name, created, lastSeen, terminal: Boolean(terminal) }));
   }
 
   // Constant-time against every device, and the loop does not stop early: a
@@ -511,17 +530,23 @@ class Companion {
       if (this.sessions && (url.pathname.startsWith("/sessions/") || url.pathname.startsWith("/draft/"))) {
         const route = url.pathname;
         const sessions = this.sessions;
-        if (route === "/sessions/list") return this.send(res, 200, { protocol: 2, deviceId: device.id, host: this.hostName?.() || this.name || null, canOpen: Boolean(this.openShell), sessions: sessions.list(device.id) });
+        const host = this.hostName?.() || this.name || null;
+        // The list answers every paired device, so a phone can say why it has
+        // no terminal: the host's name and whether access is granted, and the
+        // sessions only when it is.
+        if (route === "/sessions/list") return this.send(res, 200, { protocol: 3, deviceId: device.id, host, device: device.name,
+          terminal: Boolean(device.terminal), canOpen: Boolean(device.terminal && this.openShell), sessions: device.terminal ? sessions.list(device.id) : [] });
+        if (!device.terminal) {
+          sessions.revoke(device.id);
+          this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: route, reason: "terminal access off" });
+          return this.send(res, 403, { detail: `Terminal access is off for ${device.name}. Turn it on in Crowe Logic on ${host || "the computer"}: Settings, Phone.`, needsGrant: true });
+        }
         // A new shell for this phone, as the operator would open one at the
-        // desk: the same Execute rule, a receipt, and an announcement on the
-        // desktop so a shell started from a phone is never a silent one. The
-        // phone holds control from the first keystroke.
+        // desk: a receipt, and an announcement on the desktop so a shell
+        // started from a phone is never a silent one. The phone holds control
+        // from the first keystroke.
         if (route === "/sessions/open") {
           if (!this.openShell) return this.send(res, 404, { detail: "This desktop cannot open a shell for the phone. Update Crowe Logic on the computer." });
-          if (!this.tierAllows("run")) {
-            this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: route, reason: "autonomy tier" });
-            return this.send(res, 403, { detail: "The desktop must be in Execute mode to open a shell from the phone." });
-          }
           const cols = Number.isInteger(body.cols) ? Math.max(20, Math.min(300, body.cols)) : 80;
           const rows = Number.isInteger(body.rows) ? Math.max(5, Math.min(120, body.rows)) : 24;
           const opened = await this.openShell({ cols, rows, device });
@@ -532,18 +557,19 @@ class Companion {
         }
         const s = sessions.get(body.sessionId, body.generation);
         if (route === "/sessions/poll") {
+          // Held until output lands (up to `wait`), so typing echoes at the
+          // speed of the network rather than of a polling timer.
+          const wait = Math.max(0, Math.min(8000, Number(body.wait) || 0));
+          if (wait && body.generation === s.generation) await sessions.waitFor(s.id, body.after, wait);
           const result = await sessions.poll(s.id, body.generation, body.after);
-          if (!this.deviceFor(auth.replace(/^Bearer\s+/i, ""))) return this.send(res, 401, { detail: "Device revoked." });
-          if (!this.tierAllows("run")) sessions.revoke(device.id);
+          const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+          if (!still) return this.send(res, 401, { detail: "Device revoked." });
+          if (!still.terminal) return this.send(res, 403, { detail: `Terminal access is off for ${device.name}.`, needsGrant: true });
           return this.send(res, 200, { ...result, controller: sessions.meta(s).controller });
         }
         if (!body.generation || body.generation !== s.generation) return this.send(res, 409, { detail: "Select the current session before changing it." });
         if (route === "/draft/get") return this.send(res, 200, sessions.draft(s.id, body.draftId));
         const writingDraft = ["/draft/save", "/draft/return"].includes(route);
-        if (!this.tierAllows(writingDraft ? "write" : "run")) {
-          sessions.revoke(device.id);
-          return this.send(res, 403, { detail: writingDraft ? "The desktop must allow edits to change a draft." : "The desktop must be in Execute mode for phone control." });
-        }
         let result;
         if (route === "/sessions/control") result = sessions.acquire(s.id, s.generation, device);
         else if (route === "/sessions/renew") result = sessions.renew(s.id, s.generation, device, body.lease);

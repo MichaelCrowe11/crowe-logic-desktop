@@ -16,12 +16,12 @@
   const FONT_KEY = "mirror-font-size";
   function mount(body) {
     const root = document.createElement("section"); root.className = "phone-mirror"; root.dataset.screenName = "hosts";
-    root.innerHTML = `<div class="mirror-execute" data-execute hidden><p>Typing into a shell needs Execute mode on this phone.</p><button type="button" data-allow-execute>Allow Execute</button></div>
-      <div class="mirror-hosts" data-hosts>
+    root.innerHTML = `<div class="mirror-hosts" data-hosts>
         <div class="mirror-heading"><strong>Terminal</strong><button type="button" class="mirror-icon" data-refresh aria-label="Refresh">Refresh</button></div>
         <div class="mirror-host" data-host-card>
           <div class="mirror-host-row"><i class="mirror-dot" data-host-dot aria-hidden="true"></i><div class="mirror-host-text"><b data-host-name>Your computer</b><span class="mirror-status" data-status role="status" aria-live="polite">Connecting to your paired machine</span></div></div>
           <button type="button" class="primary mirror-open" data-open disabled>New terminal</button>
+          <p class="mirror-grant" data-grant hidden></p>
         </div>
         <h2 class="mirror-label">Sessions</h2>
         <div class="mirror-sessions" data-session-list role="list"><p class="mirror-empty">No terminals open yet.</p></div>
@@ -71,7 +71,17 @@
     const payload = () => ({ sessionId: selected?.id, generation: selected?.generation });
     const own = () => selected?.origin === "phone" && selected?.mine;
     function status(text) { $("[data-status]").textContent = text; if (root.dataset.screenName === "term") $("[data-owner]").textContent = text; }
-    function needsExecute(result) { if (result?.needsExecute) { $("[data-execute]").hidden = false; return true; } return false; }
+    // Terminal access is granted on the computer, so the phone can only say
+    // where: it names this phone as the computer knows it.
+    let deviceName = "this phone", hostLabel = "the computer";
+    function needsGrant(result) {
+      if (!result?.needsGrant) return false;
+      showGrant(false); return true;
+    }
+    function showGrant(on) {
+      $("[data-grant]").hidden = on;
+      $("[data-grant]").textContent = `Terminal access is off for ${deviceName}. On ${hostLabel}, open Crowe Logic, then Settings, Phone, and tick Terminal beside ${deviceName}.`;
+    }
 
     // ── Sizing ──
     // A phone shell is fitted to the screen; the desktop's terminals keep the
@@ -156,14 +166,16 @@
       $("[data-host-dot]").classList.toggle("on", !result.error);
       if (result.error) { connected = false; lease = null; canOpen = false; status(result.error); controls(); renderList(); return; }
       deviceId = result.data.deviceId; listTime = Date.now(); canOpen = Boolean(result.data.canOpen);
-      if (result.data.host) $("[data-host-name]").textContent = result.data.host;
+      if (result.data.host) { $("[data-host-name]").textContent = result.data.host; hostLabel = result.data.host; }
+      if (result.data.device) deviceName = result.data.device;
+      // Older desktops send no grant field; they gate on their own terms.
+      showGrant(result.data.terminal !== false);
       sessions = result.data.sessions.map(s => ({ ...s, mine: Boolean(s.mine) || mineIds.has(s.id) }));
       if (selected && !sessions.some(s => s.id === selected.id && s.generation === selected.generation)) {
         persist(); epoch++; selected = null; connected = false; lease = null; draft = null; terminal.reset();
         if (root.dataset.screenName === "term") screen("hosts");
         status("The session ended. Your local draft is preserved.");
-      } else if (!selected) status(canOpen ? "Connected. Open a terminal or pick a session." : sessions.length ? "Pick a session to watch or take over." : "Open a terminal in Crowe Logic on your computer, then refresh.");
-      $("[data-execute]").hidden = transport.autonomy?.() === "execute" || transport.autonomy === undefined;
+      } else if (!selected) status(result.data.terminal === false ? "Paired. Terminal access is off." : canOpen ? "Connected. Open a terminal or pick a session." : sessions.length ? "Pick a session to watch or take over." : "Open a terminal in Crowe Logic on your computer, then refresh.");
       controls(); renderList();
     }
 
@@ -186,7 +198,7 @@
       try {
         const result = await transport.call("/sessions/control", request);
         if (disposed || epoch !== currentEpoch) return;
-        if (result.error) { needsExecute(result); status(result.error); return; }
+        if (result.error) { needsGrant(result); status(result.error); return; }
         lease = result.data.controller?.deviceId === deviceId ? result.data.controller.lease : null;
         if (lease !== null) terminal.focus();
       } finally { if (epoch === currentEpoch) { controlBusy = false; controls(); poll(); } }
@@ -199,7 +211,7 @@
         screen("term"); view("terminal"); const size = fitted(); screen("hosts");
         const result = await transport.call("/sessions/open", size);
         if (disposed) return;
-        if (result.error) { needsExecute(result); status(result.error); return; }
+        if (result.error) { needsGrant(result); status(result.error); return; }
         const meta = result.data; mineIds.add(meta.id);
         await refresh();
         select({ ...meta, mine: true });
@@ -230,7 +242,9 @@
       if (!selected) { if (Date.now() - listTime > 5000) await refresh(); return; }
       polling = true; const currentEpoch = epoch;
       try {
-        const result = await transport.call("/sessions/poll", { ...payload(), after: seq });
+        // Held on the desktop until output lands, so a keystroke echoes in a
+        // round trip. The first poll of a session returns at once.
+        const result = await transport.call("/sessions/poll", { ...payload(), after: seq, wait: connected && seq >= 0 ? 4000 : 0 });
         if (disposed || epoch !== currentEpoch) return;
         if (result.error) { connected = false; lease = null; status(result.error); controls(); if (result.status === 410) await refresh(); return; }
         const value = result.data;
@@ -258,7 +272,10 @@
         controls();
         fitOwn();
       } catch (error) { connected = false; lease = null; status(error.message); controls(); }
-      finally { polling = false; }
+      finally {
+        polling = false;
+        if (!disposed && selected && connected && epoch === currentEpoch && !document.hidden) setTimeout(poll, 0);
+      }
     }
     async function saveDraft(returning) {
       if (!draft || busy || !connected || conflict) return;
@@ -308,9 +325,6 @@
       if (selected && lease !== null) transport.call("/sessions/release", { ...payload(), lease }).catch(() => {});
       epoch++; selected = null; lease = null; connected = false; heldBy = null; draft = null; terminal.reset();
       screen("hosts"); refresh();
-    };
-    $("[data-allow-execute]").onclick = async () => {
-      if (await transport.allowExecute?.()) { $("[data-execute]").hidden = true; window.setAutonomyBadge?.("execute"); status("Execute mode is on for this phone."); }
     };
     $("[data-control]").onclick = async () => {
       if (!selected || controlBusy) return;

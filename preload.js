@@ -175,6 +175,7 @@ contextBridge.exposeInMainWorld("crowe", {
     devices: () => ipcRenderer.invoke("crowe:companion:devices"),
     addDevice: (name) => ipcRenderer.invoke("crowe:companion:addDevice", { name }),
     revokeDevice: (id) => ipcRenderer.invoke("crowe:companion:revokeDevice", { id }),
+    setTerminal: (id, on) => ipcRenderer.invoke("crowe:companion:setTerminal", { id, on }),
     audit: (limit) => ipcRenderer.invoke("crowe:companion:audit", { limit }),
     pairSvg: () => ipcRenderer.invoke("crowe:companion:pairSvg"),
     onEvent: (cb) => { const h = (_e, e) => cb(e); ipcRenderer.on("crowe:companion:event", h); return () => ipcRenderer.removeListener("crowe:companion:event", h); },

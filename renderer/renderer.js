@@ -2472,6 +2472,7 @@ async function renderCompanion(){
         const seen = d.lastSeen ? new Date(d.lastSeen).toLocaleString() : "never used";
         return `<div class="key-provider companion-device">
           <div class="companion-device-copy"><b>${esc(d.name)}</b><br><span class="said companion-last-used">last used ${esc(seen)}</span></div>
+          <label class="companion-terminal" title="Lets this device watch and type in this computer's terminals and open shells of its own. It can run any command as you."><input type="checkbox" class="companion-terminal-grant" data-id="${d.id}"${d.terminal ? " checked" : ""}> Terminal</label>
           <button class="ghost sm companion-revoke" data-id="${d.id}">Revoke</button></div>`;
       }).join(""));
     }
@@ -2506,6 +2507,14 @@ async function renderCompanion(){
     const host = $("companion-qr");
     if (host && r && r.svg) host.innerHTML = r.svg;
   };
+  body.querySelectorAll(".companion-terminal-grant").forEach((box) => {
+    box.onchange = async () => {
+      const name = (box.closest(".key-provider")?.querySelector("b") || {}).textContent || "this device";
+      if (box.checked && !confirm(`Give ${name} terminal access?\n\nIt can open shells on this computer and type in its terminals, running any command as you. Turn it off here at any time.`)) { box.checked = false; return; }
+      const r = await window.crowe.companion.setTerminal(box.dataset.id, box.checked);
+      if (r && r.error) { alert(r.error); box.checked = !box.checked; }
+    };
+  });
   body.querySelectorAll(".companion-revoke").forEach((b) => {
     b.onclick = async () => {
       const row = b.closest(".key-provider");

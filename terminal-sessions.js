@@ -49,6 +49,20 @@ class TerminalSessions extends EventEmitter {
     const item = { ...event, seq: ++s.seq }; const bytes = size(JSON.stringify(item));
     s.history.push({ item, bytes }); s.bytes += bytes;
     while (s.bytes > this.historyBytes && s.history.length) s.bytes -= s.history.shift().bytes;
+    this.emit("record", s.id);
+  }
+  // Holds a poll until there is something past `after`, control changes, or
+  // the session ends, so a phone sees output as it lands instead of on the
+  // next tick of a timer.
+  waitFor(id, after, ms) {
+    const s = this.sessions.get(id);
+    if (!s || !Number.isInteger(after) || s.seq > after || ms <= 0) return Promise.resolve();
+    return new Promise(resolve => {
+      const wake = (e) => { if (e === id || e?.id === id || e?.sessionId === id || e?.session?.id === id) done(); };
+      const done = () => { clearTimeout(timer); for (const t of ["record", "control", "removed", "draft-change", "draft-open"]) this.off(t, wake); resolve(); };
+      const timer = setTimeout(done, ms);
+      for (const t of ["record", "control", "removed", "draft-change", "draft-open"]) this.on(t, wake);
+    });
   }
   get(id, generation) {
     const s = this.sessions.get(id);

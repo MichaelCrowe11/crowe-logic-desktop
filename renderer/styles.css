@@ -1879,6 +1879,7 @@ button.primary:active, .rc-open:active, .room-send:active {
 .companion-section { margin-top: 12px; }
 .companion-device { display: flex; align-items: center; gap: 10px; }
 .companion-device-copy { flex: 1; }
+.companion-terminal { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
 .companion-last-used, .companion-empty { opacity: .7; }
 .companion-audit { max-height: 180px; overflow: auto; font-family: var(--mono); font-size: 12px; }
 .signin-prompt-action { margin-top: 8px; }
