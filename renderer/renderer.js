@@ -541,6 +541,7 @@ function fillToolResult(ev) {
 }
 function addEditProposal(body, ev) {
   const card = document.createElement("div"); card.className = "editcard";
+  card.dataset.editId = String(ev.id);
   const rows = ev.diff.map((d) => `<div class="dl ${d.t === '+' ? 'add' : d.t === '-' ? 'del' : 'ctx'}">${esc((d.t === ' ' ? '  ' : d.t + ' ') + d.s)}</div>`).join("");
   card.innerHTML = `<div class="ec-head"><span class="ec-title">Proposed edit</span><span class="ec-path">${esc(ev.path)}</span></div>
     <div class="ec-diff">${rows}</div>
@@ -590,6 +591,42 @@ function addApproval(body, ev) {
     const k = e.key.toLowerCase();
     if (k === "a") done(true); else if (k === "r") done(false);
   });
+}
+/* The phone is a second place to answer the same authority gate. The relay says
+   which answer landed first; main tells the card, and the card says where the
+   answer came from instead of leaving two surfaces disagreeing. These three are
+   driven by one app-wide listener (below), not the per-turn ones, because the
+   card can belong to a chat turn, a room seat, a workflow node or the repo lane. */
+function gateCardFor(ev) {
+  if (ev.type === "edit_relayed" || ev.type === "edit_resolved") return document.querySelector(`.editcard[data-edit-id="${cssId(ev.id)}"]`);
+  return document.querySelector(`.gatecard[data-approval-id="${cssId(ev.id)}"]`);
+}
+function noteRelayed(card) {
+  if (!card || card.querySelector(".gc-relayed")) return;
+  const n = document.createElement("div"); n.className = "gc-relayed";
+  n.textContent = "Also sent to your phone";
+  card.appendChild(n);
+}
+function resolveGateCard(card, ev) {
+  if (!card) return;
+  const ok = Boolean(ev.approved);
+  const edit = ev.type === "edit_resolved";
+  const text = ev.via === "phone" ? (ok ? "Approved on your phone" : "Denied on your phone")
+    : ev.via === "stopped" ? "stopped, so it was rejected"
+    : ok ? (edit ? "applied" : "allowed once") : "denied";
+  card.dataset.decided = "1";
+  card.classList.remove("applied", "rejected");
+  card.classList.add(ok ? "applied" : "rejected");
+  let actions = card.querySelector(".ec-actions");
+  if (!actions) { actions = document.createElement("div"); actions.className = "ec-actions"; card.appendChild(actions); }
+  actions.textContent = "";
+  const st = document.createElement("span"); st.className = "ec-status"; st.textContent = text;
+  actions.appendChild(st);
+}
+function handleGateEvent(ev) {
+  if (!ev) return;
+  if (ev.type === "approval_relayed" || ev.type === "edit_relayed") noteRelayed(gateCardFor(ev));
+  else if (ev.type === "approval_resolved" || ev.type === "edit_resolved") resolveGateCard(gateCardFor(ev), ev);
 }
 function expireApproval(id) {
   const card = document.querySelector(`.gatecard[data-approval-id="${id}"]`);
@@ -2893,6 +2930,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-approvals").value = c.approvals || "high-risk";
   if ($("cfg-pace")) $("cfg-pace").value = c.textPace || TEXT_PACE;
   $("cfg-verifier").checked = c.verifier !== false;
+  if ($("cfg-phone-gates")) $("cfg-phone-gates").checked = c.phoneGates !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-mcp").value = c.mcpServers && Object.keys(c.mcpServers).length ? JSON.stringify(c.mcpServers, null, 2) : "";
   const live = (c.mcp || []).map((s) => `${s.name} (${s.tools} tools)`).join(", ");
@@ -2961,6 +2999,7 @@ $("cfg-save").addEventListener("click", async () => {
   const budget = Number($("cfg-budget").value);
   const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked,
     approvals: $("cfg-approvals").value, verifier: $("cfg-verifier").checked,
+    ...($("cfg-phone-gates") ? { phoneGates: $("cfg-phone-gates").checked } : {}),
     turnBudgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 2 };
   if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   if ($("cfg-repos-root") && $("cfg-repos-root").value.trim()) patch.reposRoot = $("cfg-repos-root").value.trim();
@@ -4983,6 +5022,7 @@ function followAgent(ev) {
   switchPane(pane);
   if (pane === "git" && target.path && ev.type !== "tool_call") showDiff({ path: target.path, staged: false });
 }
+window.crowe.agent.onEvent((ev) => { try { handleGateEvent(ev); } catch {} });
 window.crowe.agent.onEvent((ev) => { try { followAgent(ev); } catch (e) { appendOutput("activity view: " + (e && e.message)); } });
 
 window.crowe.agent.onEvent((ev) => {

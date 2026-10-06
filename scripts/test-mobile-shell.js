@@ -501,6 +501,81 @@ const tests = [
     expect: { blocked: true, visible: true, scrollable: true, blockedDuringExit: true, result: false, restored: true },
   },
   {
+    /* Authority gates relayed from the person's computer: the Home card lists
+       them, a tap opens the approval sheet, a 300-line diff scrolls inside the
+       content area with Deny and Approve still on screen, diff lines colour by
+       their first character without ever being parsed as markup, and Approve
+       echoes the evidence hash that was shown. */
+    name: "an authority gate with a long diff opens in the sheet with its actions visible, and approve echoes the evidence hash",
+    body: `window.__tap("Home"); await window.__settle(200);
+      const realGates = window.crowe.gates, realStatus = window.crowe.auth.status;
+      const diff = ["@@ line 1 @@"].concat(Array.from({ length: 300 }, (_, i) => (i % 3 ? "+" : "-") + "line " + i + (i === 4 ? " <img src=x onerror=window.__pwned=1>" : ""))).join("\\n");
+      const gate = { id: "g_TEST", status: "pending", machine: "Michael's MacBook Pro", mission: "Fix the flaky upload test", kind: "edit",
+        title: "Edit src/upload.js", detail: "src/upload.js  (+200 -100)", why: "changes a file in your workspace", risk: "review",
+        evidence: { path: "src/upload.js", diff }, evidence_hash: "hash-shown-to-the-person", expires_at: Date.now() + 600000 };
+      let decided = null, gates = [gate];
+      window.crowe.auth.status = async () => ({ user: { email: "m@example.com" } });
+      window.crowe.gates = { list: async () => ({ ok: true, status: 200, gates, signedIn: true }),
+        decide: async (id, d, h) => { decided = { id, d, h }; return { ok: true, status: 200, gate: { ...gate, status: "approved" } }; } };
+      window.__croweGates.stop();
+      await window.__croweGates.poll();
+      const card = document.getElementById("m-gates");
+      const home = { count: card.querySelector(".m-gate-n") && card.querySelector(".m-gate-n").textContent,
+        row: card.querySelector(".m-gate-row b") && card.querySelector(".m-gate-row b").textContent,
+        meta: card.querySelector(".m-gate-meta").textContent.replace(/ · [0-9:]+ left$/, "") };
+      card.querySelector(".m-gate-row").click();
+      await window.__settle(300);
+      const sheet = document.querySelector(".m-approve");
+      const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+      const content = sheet.querySelector(".m-approve-content");
+      const spans = [...sheet.querySelectorAll(".m-approve-diff .m-dl")];
+      const shown = { chips: [...sheet.querySelectorAll(".m-chip")].map((c) => c.textContent).join(" | "),
+        mission: sheet.querySelector(".m-approve-mission").textContent, evidence: sheet.querySelector(".m-approve-evidence").textContent,
+        lines: spans.length, adds: spans.filter((n) => n.classList.contains("add")).length, dels: spans.filter((n) => n.classList.contains("del")).length,
+        hunks: spans.filter((n) => n.classList.contains("hunk")).length, imgs: sheet.querySelectorAll("img").length,
+        scrollable: getComputedStyle(content).overflowY === "auto" && content.scrollHeight > content.clientHeight,
+        actionsVisible: footer.top >= 0 && footer.bottom <= innerHeight && footer.width <= innerWidth,
+        buttons: [...sheet.querySelectorAll(".m-approve-actions button")].map((b) => b.textContent).join("|"),
+        expiry: /^Expires in /.test(sheet.querySelector(".m-approve-expiry").textContent) };
+      sheet.querySelector(".m-approve-yes").click();
+      await window.__settle(300);
+      gates = [];
+      await window.__settle(100);
+      await window.__croweGates.poll();
+      const empty = document.getElementById("m-gates").textContent;
+      window.crowe.gates = realGates; window.crowe.auth.status = realStatus;
+      window.__croweGates.stop();
+      return { home: JSON.stringify(home), shown: JSON.stringify(shown), pwned: Boolean(window.__pwned), decided: JSON.stringify(decided), empty: /No gates waiting. Runs on your computer will ask here./.test(empty),
+        left: document.querySelectorAll(".m-approve").length };`,
+    expect: { home: JSON.stringify({ count: "1", row: "Edit src/upload.js", meta: "Michael's MacBook Pro · Fix the flaky upload test" }),
+      shown: JSON.stringify({ chips: "Authority gate | Michael's MacBook Pro", mission: "Mission Fix the flaky upload test", evidence: "Evidencepathsrc/upload.js",
+        lines: 301, adds: 200, dels: 100, hunks: 1, imgs: 0, scrollable: true, actionsVisible: true, buttons: "Not now|Deny|Approve", expiry: true }),
+      pwned: false, decided: JSON.stringify({ id: "g_TEST", d: "approve", h: "hash-shown-to-the-person" }), empty: true, left: 0 },
+  },
+  {
+    /* The answers a stale or raced gate can come back with are said in plain
+       words, and a strict gate asks to be held rather than tapped. */
+    name: "a strict gate is held to approve, and a 409 from the relay reads as answered on the computer",
+    body: `window.__tap("Home"); await window.__settle(200);
+      const realGates = window.crowe.gates, realStatus = window.crowe.auth.status;
+      const gate = { id: "g_STRICT", status: "pending", machine: "Studio", kind: "run", title: "Run a command", detail: "rm -rf build", why: "deletes files",
+        risk: "strict", evidence: { command: "rm -rf build", cwd: "/work" }, evidence_hash: "h2", expires_at: Date.now() + 600000 };
+      window.crowe.auth.status = async () => ({ user: { email: "m@example.com" } });
+      window.crowe.gates = { list: async () => ({ ok: true, status: 200, gates: [gate], signedIn: true }),
+        decide: async () => ({ ok: false, status: 409, error: "already_decided", gate: { ...gate, status: "denied", decided_via: "desktop" } }) };
+      window.__croweGates.stop(); await window.__croweGates.poll();
+      document.querySelector("#m-gates .m-gate-row").click(); await window.__settle(300);
+      const sheet = document.querySelector(".m-approve");
+      const hold = sheet.querySelector(".m-approve-yes").textContent;
+      const ev = sheet.querySelector(".m-approve-evidence").textContent;
+      sheet.querySelector(".m-approve-yes").click();      // keyboard/VoiceOver activation approves without the hold
+      await window.__settle(300);
+      const note = document.querySelector("#m-gates .m-gate-note").textContent;
+      window.crowe.gates = realGates; window.crowe.auth.status = realStatus; window.__croweGates.stop();
+      return { hold, ev, note };`,
+    expect: { hold: "Hold to approve", ev: "Evidencecwd/work", note: "Already answered on your computer" },
+  },
+  {
     /* Two questions at once queue rather than stack; the page behind is inert
        while one is up; and stopping the turn answers the open one and the
        waiting one "no", so a stopped turn never hangs on a sheet. */

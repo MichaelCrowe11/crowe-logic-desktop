@@ -743,6 +743,44 @@
     } catch { return { status: 0, data: null }; }
   }
 
+  /* Authority gates: questions a run on the person's computer is asking, relayed
+     through gates.crowelogic.com (contract v1). The bearer is the Crowe ID access
+     token, so this phone and that computer see the same gates only when they are
+     signed in as the same person. Native HTTP first, so CORS never stands in the
+     way, with one 401 refresh like licensedFetch. Nothing here throws: a relay
+     that cannot be reached is {ok:false, status:0}, and the Home card says so. */
+  const GATES_DEFAULT = "https://gates.crowelogic.com";
+  function gatesBase() {
+    try {
+      const u = new URL(String(config.gatesUrl || "").trim());
+      const loopback = /^(127\.0\.0\.1|localhost)$/.test(u.hostname);
+      if (u.protocol === "https:" || (u.protocol === "http:" && loopback)) return u.origin + u.pathname.replace(/\/+$/, "");
+    } catch { /* default */ }
+    return GATES_DEFAULT;
+  }
+  async function gatesCall(method, route, payload) {
+    await ready;
+    if (!config.token) return { status: 401, data: null };
+    const call = async () => {
+      const url = `${gatesBase()}${route}`;
+      const headers = { Authorization: `Bearer ${config.token}` };
+      const data = payload ? JSON.stringify(payload) : undefined;
+      if (data) headers["Content-Type"] = "application/json";
+      if (CapHttp) {
+        const r = await CapHttp.request({ url, method, headers, data, responseType: "text" });
+        return { status: r.status, text: typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "") };
+      }
+      const r = await fetch(url, { method, headers, body: data });
+      return { status: r.status, text: await r.text() };
+    };
+    try {
+      let res = await call();
+      if (res.status === 401 && await refreshToken()) res = await call();
+      let data = null; try { data = res.text ? JSON.parse(res.text) : null; } catch { data = null; }
+      return { status: res.status, data };
+    } catch { return { status: 0, data: null }; }
+  }
+
   async function licenseStatus() {
     await ready;
     if (!currentUser()) return { authenticated: false, workspaces: [], selectedWorkspaceId: "" };
@@ -2187,6 +2225,27 @@
         const u = currentUser();
         const tier = u ? String(u.tier || "") : "";
         return { ok: Boolean(t), plan: { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) } };
+      },
+    },
+
+    /* Authority gates from the person's computer. decide() echoes back the
+       evidence_hash of the gate the person was shown; the relay refuses an
+       approval for anything else. Outcomes: ok (this answer won), 409 (already
+       answered, `gate` says how), 410 (expired). */
+    gates: {
+      list: async () => {
+        const r = await gatesCall("GET", "/v1/gates?status=pending");
+        const gates = r.status === 200 && r.data && Array.isArray(r.data.gates) ? r.data.gates : [];
+        return { ok: r.status === 200, status: r.status, gates, signedIn: r.status !== 401 };
+      },
+      decide: async (id, decision, evidence_hash) => {
+        const d = decision === "approve" ? "approve" : "deny";
+        const body = { decision: d, via: "phone" };
+        if (evidence_hash) body.evidence_hash = String(evidence_hash);
+        const r = await gatesCall("POST", `/v1/gates/${encodeURIComponent(String(id))}/decision`, body);
+        const data = r.data || {};
+        if (r.status === 200) return { ok: true, status: 200, gate: data.gate || data };
+        return { ok: false, status: r.status, error: data.error || (r.status ? "" : "unreachable"), gate: data.gate || null };
       },
     },
 

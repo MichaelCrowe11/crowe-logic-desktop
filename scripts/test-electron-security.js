@@ -213,6 +213,9 @@ check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
 check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "the renderer must not be able to write a bearer token through set-config");
+// The phone authority gate: the renderer may switch it, but never point it. The relay URL receives the Crowe ID bearer.
+check(sanitizeConfigPatch({ phoneGates: false }).phoneGates === false && sanitizeConfigPatch({ phoneGates: true }).phoneGates === true, "the renderer must be able to switch the phone authority gate");
+check(!Object.hasOwn(sanitizeConfigPatch({ gatesUrl: "https://gates.example.com" }), "gatesUrl") && !Object.hasOwn(sanitizeConfigPatch({ phoneGates: "yes" }), "phoneGates"), "the renderer must not set the relay URL, and phoneGates must be a boolean");
 // Crowe Browser: the renderer may set the service URL, which must be https
 // (loopback http for a local fake). The key is not config: it goes to the
 // encrypted store through crowe:keys:set under its own id, outside the model

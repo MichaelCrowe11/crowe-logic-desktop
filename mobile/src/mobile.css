@@ -908,3 +908,32 @@ body.mobile .m-pg-chips button { text-align: left; min-height: 48px; padding: 12
 body.mobile .m-pg-chips button:active { transform: scale(.98); background: var(--accent-wash); }
 body.mobile .m-pg-body { font: 400 16px/1.5 var(--body); color: var(--ink); overflow-wrap: anywhere; }
 body.mobile .m-pg-img { display: block; width: 100%; border-radius: 12px; }
+
+
+/* ─── Authority gates: Home card and the gate sheet ─────────────────────────── */
+.m-gate-head { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 8px; }
+.m-gate-k { font-family: var(--mono); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.m-gate-n { font-family: var(--serif, inherit); font-size: 1.25rem; color: var(--gold-deep); }
+.m-gate-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; padding: 10px 0; background: none; border: 0; border-top: 1px solid var(--line); color: inherit; font: inherit; }
+.m-gate-row.strict b { color: var(--err-fg); }
+.m-gate-meta { font-size: var(--fs-sm); color: var(--muted); overflow-wrap: anywhere; }
+.m-gate-note { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--muted); }
+.m-gate-note.warn { color: var(--err-fg); }
+.m-chip-gate { background: var(--gold-deep); color: var(--cream); }
+.m-approve-mission { margin: 0 0 8px; font-size: var(--fs-body); overflow-wrap: anywhere; }
+.m-approve-mission b { font-family: var(--mono); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.m-approve-evidence { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.m-approve-evidence-k { display: block; font-family: var(--mono); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
+.m-ev-row { display: flex; flex-direction: column; gap: 1px; padding: 3px 0; }
+.m-ev-k { font-size: var(--fs-sm); color: var(--muted); }
+.m-ev-v { font-family: var(--mono); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.m-approve-diff { margin: 8px 0; padding: 8px 0; font-family: var(--mono); font-size: 12px; line-height: 1.4; border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; white-space: pre; }
+.m-approve-diff .m-dl { display: block; padding: 0 10px; }
+.m-approve-diff .m-dl.add { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.m-approve-diff .m-dl.del { background: color-mix(in srgb, var(--err-fg) 14%, transparent); color: var(--err-fg); }
+.m-approve-diff .m-dl.hunk { color: var(--muted); }
+.m-approve-expiry { margin: 6px 0 0; font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); }
+.m-approve-actions:has(.m-approve-deny) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr); }
+
+/* The computer's switch for sending gates to the phone; the phone has nothing to switch. */
+body.mobile label.chk:has(#cfg-phone-gates) { display: none; }

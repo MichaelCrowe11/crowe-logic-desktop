@@ -159,7 +159,7 @@ function methodPaths(surface) {
     // desktop to grow here either — it already has the engine this is standing
     // in for.
     const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "remote.activity", "mobile.openExternal", "auth.deleteAccount",
-      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
+      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note", "gates.list", "gates.decide"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -784,6 +784,66 @@ function methodPaths(surface) {
     await down.getConfig();
     assert((await loadMobileSurface.lastWindow.crowePhone.publicJson("/api/public/founders")) === null, "a dead network did not answer null");
     return "1 fetch for 2 reads; 404 and no network read as null";
+  });
+
+  await check("gates.list and gates.decide speak the relay contract with the Crowe ID bearer, refresh once on 401, and report 409/410/unreachable plainly", async () => {
+    const seen = [];
+    let mode = "ok", gate = { id: "g_1", status: "pending", title: "Run a command", evidence_hash: "h1" };
+    const answer = (status, body) => ({ status, ok: status < 300, text: async () => JSON.stringify(body), json: async () => body });
+    const relay = async (url, init = {}) => {
+      const u = String(url);
+      if (u.includes("/protocol/openid-connect/token")) return answer(200, { access_token: "fresh", refresh_token: "r2" });
+      if (!u.startsWith("http://127.0.0.1:8788")) throw new TypeError("unexpected fetch " + u);
+      seen.push({ url: u, method: init.method, auth: init.headers && init.headers.Authorization, body: init.body ? JSON.parse(init.body) : null });
+      if (mode === "down") throw new TypeError("Load failed");
+      if (init.headers.Authorization === "Bearer stale") return answer(401, { error: "unauthorized" });
+      if (u.endsWith("/v1/gates?status=pending")) return answer(200, { gates: [gate] });
+      if (u.endsWith("/decision")) {
+        if (mode === "409") return answer(409, { error: "already_decided", gate: { ...gate, status: "denied", decided_via: "desktop" } });
+        if (mode === "410") return answer(410, { error: "expired", gate: { ...gate, status: "expired" } });
+        return answer(200, { gate: { ...gate, status: "approved", decided_via: "phone" } });
+      }
+      return answer(404, {});
+    };
+    // Signed out: no request leaves the phone, and the list says so.
+    let bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788" });
+    let r = await bridge.gates.list();
+    assert(r.ok === false && r.signedIn === false && r.gates.length === 0 && seen.length === 0, `signed-out list: ${JSON.stringify(r)} after ${seen.length} request(s)`);
+    // Signed in.
+    bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788", token: "good", refreshToken: "r1" });
+    r = await bridge.gates.list();
+    assert(r.ok && r.signedIn && r.gates.length === 1 && r.gates[0].id === "g_1", `list: ${JSON.stringify(r)}`);
+    assert(seen[0].auth === "Bearer good" && seen[0].method === "GET", `list request: ${JSON.stringify(seen[0])}`);
+    let d = await bridge.gates.decide("g_1", "approve", "h1");
+    const sent = seen[seen.length - 1];
+    assert(d.ok && d.gate.status === "approved", `decide: ${JSON.stringify(d)}`);
+    assert(sent.url.endsWith("/v1/gates/g_1/decision") && sent.method === "POST" && sent.body.decision === "approve" && sent.body.via === "phone" && sent.body.evidence_hash === "h1", `decision request: ${JSON.stringify(sent)}`);
+    d = await bridge.gates.decide("g_1", "anything-else", "");
+    assert(seen[seen.length - 1].body.decision === "deny" && !("evidence_hash" in seen[seen.length - 1].body), "an unknown decision must read as deny, with no empty hash");
+    mode = "409"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 409 && d.error === "already_decided" && d.gate.decided_via === "desktop", `409: ${JSON.stringify(d)}`);
+    mode = "410"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 410 && d.error === "expired", `410: ${JSON.stringify(d)}`);
+    mode = "down"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 0 && d.error === "unreachable", `unreachable decide: ${JSON.stringify(d)}`);
+    r = await bridge.gates.list();
+    assert(r.ok === false && r.signedIn === true && r.gates.length === 0, `unreachable list must not read as signed out: ${JSON.stringify(r)}`);
+    // A stale token refreshes once and the retry carries the fresh one.
+    mode = "ok"; seen.length = 0;
+    bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788", token: "stale", refreshToken: "r1" });
+    r = await bridge.gates.list();
+    assert(r.ok && seen.length === 2 && seen[0].auth === "Bearer stale" && seen[1].auth === "Bearer fresh", `refresh path: ${JSON.stringify(seen)}`);
+    // A relay URL that is not https or loopback never receives the bearer.
+    seen.length = 0;
+    bridge = loadMobileSurface(async (url) => { seen.push(String(url)); throw new TypeError("offline"); });
+    await bridge.setConfig({ gatesUrl: "http://evil.example.com", token: "good" });
+    await bridge.gates.list();
+    const gateCalls = seen.filter((u) => u.includes("/v1/gates"));
+    assert(gateCalls.length === 1 && gateCalls[0].startsWith("https://gates.crowelogic.com/"), `a plaintext relay URL was used: ${JSON.stringify(seen)}`);
+    return "bearer, refresh, 409, 410, unreachable, signed-out, and URL guard";
   });
 
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {

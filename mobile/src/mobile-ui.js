@@ -286,6 +286,7 @@
       TASKS.map(([t, sub, task, icon]) => `<button type="button" class="m-h-tile" data-task="${esc(task)}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><b>${t}</b><span>${sub}</span></button>`).join(""),
       '<button type="button" class="m-h-tile m-h-tile-pg" id="m-home-pg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/></svg><b>Try a model</b><span>Compare models side by side</span></button>',
       '</section>',
+      '<section class="m-h-group" id="m-gates" aria-label="Authority gates" aria-live="polite"></section>',
       `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
       `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
       paired ? homeMode() : '',
@@ -304,6 +305,8 @@
       __tapTab("Chat");
     }));
     if (paired) renderActivity();
+    renderGates();
+    startGates(true);
     homePane.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => {
       __tapTab("Chat");
       const input = $("input");
@@ -1567,12 +1570,33 @@
       if (s.tier) chips.appendChild(el("span", "m-chip tier-" + s.tier, s.tier.charAt(0).toUpperCase() + s.tier.slice(1) + " tier"));
       card.appendChild(chips);
     }
+    if (s.kicker && card.firstChild === null) { const chips = el("div", "m-approve-chips"); card.appendChild(chips); }
+    if (s.kicker) card.firstChild.insertBefore(el("span", "m-chip m-chip-gate", s.kicker), card.firstChild.firstChild);
     const title = el("h2", "m-approve-title", s.title || "Allow this?");
     title.id = "m-approve-title";
     wrap.setAttribute("aria-labelledby", title.id);
     card.appendChild(title);
+    if (s.mission) { const m = el("p", "m-approve-mission"); m.append(el("b", null, "Mission "), document.createTextNode(s.mission)); card.appendChild(m); }
     if (s.reason) card.appendChild(el("p", "m-approve-reason", s.reason));
     if (s.detail) card.appendChild(el("pre", "m-approve-detail", s.detail));
+    if (Array.isArray(s.evidence) && s.evidence.length) {
+      const ev = el("div", "m-approve-evidence");
+      ev.appendChild(el("span", "m-approve-evidence-k", "Evidence"));
+      for (const [k, v] of s.evidence) { const row = el("div", "m-ev-row"); row.append(el("span", "m-ev-k", k), el("code", "m-ev-v", v)); ev.appendChild(row); }
+      card.appendChild(ev);
+    }
+    /* A diff arrives as unified text from the computer. Each line is its own
+       span, coloured by its first character, and all of it is textContent. */
+    if (s.diff) {
+      const pre = el("pre", "m-approve-diff");
+      for (const line of String(s.diff).split("\n")) {
+        const c = line[0];
+        pre.appendChild(el("span", "m-dl " + (c === "+" ? "add" : c === "-" ? "del" : line.startsWith("@@") ? "hunk" : "ctx"), line + "\n"));
+      }
+      card.appendChild(pre);
+    }
+    let expiryEl = null;
+    if (s.expiresAt) { expiryEl = el("p", "m-approve-expiry", ""); card.appendChild(expiryEl); }
     if (s.question) card.appendChild(el("p", "m-approve-q", s.question));
     const content = el("div", "m-approve-content");
     while (card.firstChild) content.appendChild(card.firstChild);
@@ -1580,9 +1604,13 @@
     const row = el("div", "m-approve-actions");
     const no = el("button", "ghost m-approve-no", "Not now");
     no.type = "button";
+    const deny = s.deny ? el("button", "ghost m-approve-deny", s.deny) : null;
+    if (deny) deny.type = "button";
     const yes = el("button", "m-approve-yes", s.danger ? `Hold to ${String(s.confirm || "approve").toLowerCase()}` : (s.confirm || "Allow"));
     yes.type = "button";
-    row.append(no, yes);
+    row.append(no);
+    if (deny) row.append(deny);
+    row.append(yes);
     card.appendChild(row);
     wrap.appendChild(card);
     let settled = false;
@@ -1593,6 +1621,7 @@
     const done = (v) => {
       if (settled) return;
       settled = true;
+      if (tick) clearInterval(tick);
       cancelHold();
       window.removeEventListener("blur", cancelHold);
       approveOpen.delete(done);
@@ -1610,6 +1639,19 @@
       }, 160);
     };
     approveOpen.add(done);
+    if (deny) deny.addEventListener("click", () => done("deny"));
+    /* The countdown, and a way for the caller to close the sheet from outside:
+       a gate answered on the computer, or expired, must not stay answerable. */
+    let tick = null;
+    if (expiryEl) {
+      const paint = () => {
+        const left = Math.max(0, Math.round((s.expiresAt - Date.now()) / 1000));
+        expiryEl.textContent = left > 0 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Expired";
+        if (left <= 0) { clearInterval(tick); if (s.onExpire) s.onExpire(); done(false); }
+      };
+      tick = setInterval(paint, 1000); setTimeout(paint, 0);
+    }
+    if (s.onOpen) s.onOpen((v) => done(v === undefined ? false : v));
     const onKey = (e) => {
       if (e.key === "Escape") { e.preventDefault(); done(false); }
       else if (e.key === "Tab") { e.preventDefault(); (document.activeElement === no ? yes : no).focus(); }
@@ -1642,6 +1684,128 @@
     benched.forEach((n) => { n.inert = true; });
     requestAnimationFrame(() => { wrap.classList.add("open"); no.focus(); });
   });
+
+
+  /* ─── Authority gates ─────────────────────────────────────────────────────
+     A run on the person's computer that reaches something it should not take
+     alone asks, and the same question lands here through the gate relay. The
+     Home card lists what is waiting; a tap opens the approval sheet with the
+     machine, the mission, the exact command or diff, and the time left. An
+     approval echoes the evidence hash the person was shown, so the relay can
+     refuse it if the gate changed underneath.
+     Polling is every 4 s and only while the app is in the foreground and the
+     person is signed in: it stops when the app is backgrounded and resumes the
+     moment it returns. There is no remote push in this version, so a gate that
+     arrives while the app is closed waits (until it expires) for the next open. */
+  const GATES_POLL_MS = 4000;
+  let gatesState = { gates: [], signedIn: true, error: "", note: "", loaded: false };
+  let gatesTimer = null, gatesBusy = false, gatesFg = true, openGate = null;
+  const gatesWanted = () => gatesFg && !document.hidden && Boolean(window.crowe && window.crowe.gates);
+  function gateLeft(g) {
+    const left = Math.max(0, Math.round((Number(g.expires_at) - Date.now()) / 1000));
+    return left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left` : "expired";
+  }
+  function renderGates() {
+    const host = $("m-gates");
+    if (!host) return;
+    const st = gatesState;
+    host.textContent = "";
+    const h = document.createElement("h2"); h.className = "m-h-label"; h.textContent = "Authority gates";
+    host.appendChild(h);
+    const card = document.createElement("div"); card.className = "m-h-card";
+    const line = (cls, text) => { const p = document.createElement("p"); p.className = cls; p.textContent = text; return p; };
+    if (!st.signedIn) card.appendChild(line("m-home-empty", "Sign in with Crowe ID to receive authority gates from your computer."));
+    else if (!st.loaded) card.appendChild(line("m-home-empty", "Checking…"));
+    else {
+      if (st.gates.length) {
+        const head = document.createElement("div"); head.className = "m-gate-head";
+        const k = document.createElement("span"); k.className = "m-gate-k"; k.textContent = "Waiting on you";
+        const n = document.createElement("b"); n.className = "m-gate-n"; n.textContent = String(st.gates.length);
+        head.append(k, n); card.appendChild(head);
+        for (const g of st.gates) {
+          const row = document.createElement("button"); row.type = "button"; row.className = "m-gate-row" + (g.risk === "strict" ? " strict" : "");
+          row.dataset.gate = g.id;
+          const t = document.createElement("b"); t.textContent = g.title || "An action needs your authorization";
+          const meta = document.createElement("span"); meta.className = "m-gate-meta";
+          meta.textContent = [g.machine, g.mission, gateLeft(g)].filter(Boolean).join(" · ");
+          row.append(t, meta);
+          row.addEventListener("click", () => openGateSheet(g.id));
+          card.appendChild(row);
+        }
+      } else card.appendChild(line("m-home-empty", "No gates waiting. Runs on your computer will ask here."));
+      if (st.error) card.appendChild(line("m-gate-note warn", "Could not reach the gate relay. Your computer still asks you there."));
+    }
+    if (st.note) card.appendChild(line("m-gate-note", st.note));
+    host.appendChild(card);
+  }
+  async function pollGates() {
+    if (gatesBusy || !gatesWanted()) return;
+    gatesBusy = true;
+    try {
+      const status = window.crowe.auth && window.crowe.auth.status ? await window.crowe.auth.status().catch(() => null) : null;
+      if (!status || !status.user) {
+        gatesState = { ...gatesState, gates: [], signedIn: false, loaded: true, error: "" };
+        stopGates(); renderGates(); return;
+      }
+      const r = await window.crowe.gates.list();
+      if (r.ok) gatesState = { ...gatesState, gates: r.gates, signedIn: true, loaded: true, error: "" };
+      else if (r.signedIn === false) { gatesState = { ...gatesState, gates: [], signedIn: false, loaded: true, error: "" }; stopGates(); }
+      else gatesState = { ...gatesState, signedIn: true, loaded: true, error: "unreachable" };
+      renderGates();
+      // The sheet is for a pending gate. If this one was answered on the computer, close it.
+      if (r.ok && openGate && !r.gates.some((g) => g.id === openGate.id)) openGate.close("elsewhere");
+    } finally { gatesBusy = false; }
+  }
+  function startGates(immediate) {
+    if (!gatesWanted()) return;
+    if (!gatesTimer) gatesTimer = setInterval(pollGates, GATES_POLL_MS);
+    if (immediate) pollGates();
+  }
+  function stopGates() { if (gatesTimer) clearInterval(gatesTimer); gatesTimer = null; }
+  window.__croweGates = { poll: pollGates, start: startGates, stop: stopGates, state: () => gatesState, open: (id) => openGateSheet(id), polling: () => Boolean(gatesTimer) };
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopGates(); else if (gatesFg) startGates(true); });
+  if (App) Promise.resolve(App.addListener("appStateChange", (st) => {
+    gatesFg = Boolean(st && st.isActive);
+    if (gatesFg) startGates(true); else stopGates();
+  })).catch(() => {});
+  setTimeout(() => startGates(true), 800);
+
+  async function openGateSheet(id) {
+    const g = gatesState.gates.find((x) => x.id === id);
+    if (!g || openGate) return;
+    const ev = g.evidence || {};
+    const rows = [];
+    if (ev.command && ev.command !== g.detail) rows.push(["command", ev.command]);
+    if (ev.cwd) rows.push(["cwd", ev.cwd]);
+    if (ev.path) rows.push(["path", ev.path]);
+    if (ev.args && typeof ev.args === "object") rows.push(["args", JSON.stringify(ev.args)]);
+    let dismiss = null, reason = "";
+    openGate = { id: g.id, close: (why) => { reason = why; if (dismiss) dismiss(false); } };
+    const answer = await window.__croweApprove({
+      kicker: "Authority gate", title: g.title || "An action needs your authorization",
+      machine: g.machine, mission: g.mission, reason: g.why ? `This ${g.why}.` : "", detail: g.detail,
+      evidence: rows, diff: ev.diff, expiresAt: Number(g.expires_at) || 0,
+      danger: g.risk === "strict", confirm: "Approve", deny: "Deny",
+      onOpen: (d) => { dismiss = d; }, onExpire: () => { reason = "expired"; },
+    });
+    openGate = null;
+    let note = "";
+    if (reason === "elsewhere") note = "Already answered on your computer";
+    else if (reason === "expired") note = "Expired";
+    else if (answer === true || answer === "deny") {
+      const r = await window.crowe.gates.decide(g.id, answer === true ? "approve" : "deny", g.evidence_hash);
+      if (r.ok) note = answer === true ? "Approved. The run continues on your computer." : "Denied.";
+      else if (r.status === 409 && r.error === "evidence_mismatch") note = "This gate changed on your computer. Open it again to review the new evidence.";
+      else if (r.status === 409) note = r.gate && (r.gate.decided_via === "desktop" || r.gate.decided_via === "cli") ? "Already answered on your computer" : "Already answered";
+      else if (r.status === 410) note = "Expired";
+      else if (r.status === 401) note = "Signed out. Sign in with Crowe ID to answer gates.";
+      else note = "Could not reach the gate relay. Nothing was sent. Your computer still asks you there.";
+    }
+    gatesState = { ...gatesState, note };
+    renderGates();
+    pollGates();
+    if (note) setTimeout(() => { if (gatesState.note === note) { gatesState = { ...gatesState, note: "" }; renderGates(); } }, 8000);
+  }
 
   // The document itself must not scroll or rubber-band; every scroll on this
   // app belongs to a pane inside it.

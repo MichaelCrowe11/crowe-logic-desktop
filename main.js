@@ -14,6 +14,7 @@ const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
 const Repos = require("./repos");
 const Browser = require("./browser-client");
+const Gates = require("./gates-client");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
   hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
@@ -81,6 +82,11 @@ const DEFAULTS = {
   recentWorkspaces: [],
   // Where a GitHub repository lands when cloned from the sidebar: <root>/<owner>/<name>.
   reposRoot: Repos.defaultReposRoot(),
+  // Send authority gates to the signed-in person's phone as well as asking here.
+  // On by default; it only does anything while signed in with Crowe ID. The relay
+  // URL is `gatesUrl` (hand-edited in config.json, deliberately not settable from
+  // the renderer, since the Crowe ID bearer is sent to it).
+  phoneGates: true,
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
 const PLANE_MODES = new Set(["off", "local", "remote"]);
@@ -187,6 +193,7 @@ function loadConfig() {
     // recognises must land on the safe end, not on whatever `||` reaches first.
     if (!APPROVAL_MODES.has(cfg.approvals)) cfg.approvals = DEFAULTS.approvals;
     if (typeof cfg.verifier !== "boolean") cfg.verifier = DEFAULTS.verifier;
+    if (typeof cfg.phoneGates !== "boolean") cfg.phoneGates = DEFAULTS.phoneGates;
     const budget = Number(cfg.turnBudgetUsd);
     cfg.turnBudgetUsd = Number.isFinite(budget) && budget >= 0 ? budget : DEFAULTS.turnBudgetUsd;
     const tokenCap = Number(cfg.turnTokenCap);
@@ -999,7 +1006,57 @@ function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.hom
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
 let editSeq = 0; const pendingEdits = new Map();
-ipcMain.handle("crowe:edit:decide", (_e, { id, approved }) => { const r = pendingEdits.get(id); if (r) { r(approved); pendingEdits.delete(id); } });
+/* Authority gates on the phone. When the person is signed in with Crowe ID and
+   has not turned it off, every approval card and edit review is also sent to the
+   gate relay (gates-client.js), so the same question can be answered from the
+   phone. Whichever answer reaches the relay first wins, and this process obeys
+   the relay's verdict. A relay that is down changes nothing: the local card works
+   exactly as it always has. */
+function gatesClient() {
+  const cfg = loadConfig();
+  if (cfg.phoneGates === false || !cfg.token) return null;
+  return Gates.createGatesClient({ baseUrl: cfg.gatesUrl, getToken: () => loadConfig().token, refreshToken });
+}
+let computerNameCache = null;
+function machineName() {
+  if (computerNameCache) return computerNameCache;
+  let named = "";
+  if (process.platform === "darwin") { try { named = require("child_process").execFileSync("scutil", ["--get", "ComputerName"], { timeout: 1000 }).toString().trim(); } catch { /* hostname will do */ } }
+  computerNameCache = Gates.friendlyMachineName(os.hostname(), named);
+  return computerNameCache;
+}
+// What the operator was asked to do, per agent: the last user message of the running turn.
+const agentMissions = new Map();
+function missionText(messages) {
+  const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
+  if (!last) return "";
+  const c = last.content;
+  const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (p && typeof p.text === "string" ? p.text : "")).join(" ") : "";
+  return text.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+const sendAgentEvent = (ev) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", ev); };
+ipcMain.handle("crowe:edit:decide", async (_e, { id, approved }) => {
+  const r = pendingEdits.get(id);
+  if (!r || r.deciding) return;
+  if (!r.relay) { pendingEdits.delete(id); r(approved); return; }
+  r.deciding = true;
+  const o = await r.relay.localDecision(approved);
+  if (!pendingEdits.has(id)) return;
+  pendingEdits.delete(id);
+  if (o.via && o.via !== "desktop") sendAgentEvent({ type: "edit_resolved", id, approved: o.approved, via: o.via });
+  if (o.via === "phone") journalWrite({ event_type: o.approved ? "EDIT_APPROVED_REMOTE" : "EDIT_DENIED_REMOTE", tool_id: "edit", output_summary: `${o.approved ? "approved" : "denied"} on the phone while the desktop card was open` });
+  r(o.approved);
+});
+// A stopped run has no use for a half-answered edit: release it as rejected and
+// withdraw the phone's copy, so nobody approves an edit nothing is waiting for.
+function rejectPendingEdits() {
+  for (const [id, r] of [...pendingEdits]) {
+    pendingEdits.delete(id);
+    if (r.relay) r.relay.cancel("stopped on the computer");
+    sendAgentEvent({ type: "edit_resolved", id, approved: false, via: "stopped" });
+    r(false);
+  }
+}
 function lineDiff(oldStr, newStr) {
   const a = oldStr.split("\n"), b = newStr.split("\n");
   const n = a.length, m = b.length, lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -1020,8 +1077,25 @@ async function proposeEdit(filePath, newContent) {
   let oldContent = ""; try { oldContent = fs.readFileSync(abs, "utf8"); } catch {}
   if (loadConfig().autoApprove) { fs.writeFileSync(abs, newContent); return `wrote ${filePath} (${newContent.length} bytes, auto-approved)`; }
   const id = ++editSeq;
-  if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "edit_proposal", id, path: filePath, diff: lineDiff(oldContent, newContent) });
-  const approved = await new Promise((res) => pendingEdits.set(id, res));
+  const diff = lineDiff(oldContent, newContent);
+  if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "edit_proposal", id, path: filePath, diff });
+  const approved = await new Promise((res) => {
+    const client = gatesClient();
+    if (client) {
+      res.relay = client.session(Gates.fieldsForEdit(filePath, diff, { machine: machineName(), mission: agentMissions.get("main") }), {
+        expiryStaysLocal: true,
+        onCreated: () => sendAgentEvent({ type: "edit_relayed", id }),
+        onRemote: (o) => {
+          if (!pendingEdits.has(id)) return;
+          pendingEdits.delete(id);
+          sendAgentEvent({ type: "edit_resolved", id, approved: o.approved, via: o.via || "phone" });
+          journalWrite({ event_type: o.approved ? "EDIT_APPROVED_REMOTE" : "EDIT_DENIED_REMOTE", tool_id: "edit", output_summary: `${o.approved ? "approved" : "denied"} on the phone` });
+          res(o.approved);
+        },
+      });
+    }
+    pendingEdits.set(id, res);
+  });
   if (approved) { fs.writeFileSync(abs, newContent); return `applied edit to ${filePath}`; }
   return `the user REJECTED the edit to ${filePath}; do not reapply it unless they ask`;
 }
@@ -1036,9 +1110,20 @@ async function proposeEdit(filePath, newContent) {
    worse outcome than a turn that stopped and said why. */
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 let approvalSeq = 0; const pendingApprovals = new Map();
-ipcMain.handle("crowe:approval:decide", (_e, { id, approved }) => {
+ipcMain.handle("crowe:approval:decide", async (_e, { id, approved }) => {
   const r = pendingApprovals.get(id);
-  if (r) { pendingApprovals.delete(id); r({ approved: Boolean(approved) }); }
+  if (!r || r.deciding) return { ok: true };
+  if (!r.relay) { pendingApprovals.delete(id); r({ approved: Boolean(approved) }); return { ok: true }; }
+  /* Relayed: post the click as a decision and obey the verdict. The phone may
+     have answered first, in which case that answer stands and the card says so. */
+  r.deciding = true;
+  const o = await r.relay.localDecision(approved);
+  if (!pendingApprovals.has(id)) return { ok: true };
+  if (o.via && o.via !== "desktop" && !o.expired) {
+    sendAgentEvent({ type: "approval_resolved", id, agentId: r.agentId, approved: o.approved, allowed: o.approved, via: o.via });
+    if (o.via === "phone") r.journalRemote(o);
+  }
+  r({ approved: o.approved, expired: Boolean(o.expired) || undefined, via: o.via || "desktop" });
   return { ok: true };
 });
 // Stopping a run has to release whatever it was waiting on. A Stop that leaves
@@ -1049,7 +1134,7 @@ function denyPendingApprovals(agentId) {
     if (agentId && done.agentId && done.agentId !== agentId) continue;
     pendingApprovals.delete(id);
     if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId: done.agentId || "main" });
-    done({ approved: false });
+    done({ approved: false }, "stopped on the computer");
   }
 }
 function requestApproval(req) {
@@ -1072,12 +1157,34 @@ function requestApproval(req) {
   });
   journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });
   return new Promise((resolve) => {
-    const done = (v) => { pendingApprovals.delete(id); clearTimeout(timer); resolve(v); };
+    const client = gatesClient();
+    const relay = client ? client.session(Gates.fieldsForApproval(req, { machine: machineName(), mission: agentMissions.get(agentId), cwd: CWD, ttlS: APPROVAL_TIMEOUT_MS / 1000 }), {
+      onCreated: () => sendAgentEvent({ type: "approval_relayed", id, agentId }),
+      onRemote: (o) => {
+        if (!pendingApprovals.has(id)) return;
+        // Expired or withdrawn on the relay is the same as unanswered here.
+        if (o.expired || o.cancelled || o.via !== "phone") {
+          sendAgentEvent({ type: "approval_expired", id, agentId });
+          return done({ approved: false, expired: true });
+        }
+        sendAgentEvent({ type: "approval_resolved", id, agentId, approved: o.approved, allowed: o.approved, via: "phone" });
+        done.journalRemote(o);
+        done({ approved: o.approved, via: "phone" });
+      },
+    }) : null;
+    const done = (v, cancelReason) => {
+      pendingApprovals.delete(id); clearTimeout(timer);
+      if (relay) { if (cancelReason) relay.cancel(cancelReason); else relay.close(); }
+      resolve(v);
+    };
     const timer = setTimeout(() => {
+      if (done.deciding) return;
       if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId });
-      done({ approved: false, expired: true });
+      done({ approved: false, expired: true }, "no answer in time");
     }, APPROVAL_TIMEOUT_MS);
     done.agentId = agentId;
+    done.relay = relay;
+    done.journalRemote = (o) => journalWrite({ event_type: o.approved ? "APPROVAL_GRANTED_REMOTE" : "APPROVAL_DENIED_REMOTE", tool_id: req.kind, input_hash: req.hash, output_summary: `${o.approved ? "approved" : "denied"} on the phone: ${req.why}` });
     pendingApprovals.set(id, done);
   });
 }
@@ -1309,6 +1416,7 @@ ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   const run = agentRuns.get(id);
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
   denyPendingApprovals(id);
+  rejectPendingEdits();
   if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
@@ -1319,6 +1427,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
     try { if (run.controller) run.controller.abort(); } catch {}
   }
   denyPendingApprovals();
+  rejectPendingEdits();
   browserSessions.dropWhere(isSeatId).catch(() => {});
   return { ok: true, stopped: agentRuns.size };
 });
@@ -1331,6 +1440,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
   }
   const run = { aborted: false, controller: null };
   agentRuns.set(id, run);
+  agentMissions.set(id, missionText(messages));
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
     const cfg = loadConfig();
@@ -1395,6 +1505,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
     return { done: true, text: turn.text || "" };
   } finally {
     agentRuns.delete(id);
+    agentMissions.delete(id);
   }
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(sanitizeAgentMessages(messages), null));
@@ -1480,6 +1591,7 @@ ipcMain.handle("crowe:operator:stop-all", () => {
   councilHost.stopAll();
   for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
   denyPendingApprovals();
+  rejectPendingEdits();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   return { ok: true };
 });
@@ -1784,6 +1896,7 @@ ipcMain.handle("crowe:get-config", () => {
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
+    phoneGates: c.phoneGates !== false,
     reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
     ...browserConfigView(c),

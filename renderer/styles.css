@@ -893,6 +893,7 @@ body.dark .gatecard.risk-review { border-color: var(--gold); }
 .gatecard .ec-title { color: var(--err-fg); }
 .gatecard.risk-review .ec-title { color: var(--gold-deep); }
 body.dark .gatecard.risk-review .ec-title { color: var(--gold); }
+.gc-relayed { padding: 6px 11px; font-family: var(--mono); font-size: var(--fs-sm); color: var(--muted); border-top: 1px solid var(--line); }
 .gc-why { padding: 9px 11px; font-size: var(--fs-body); border-bottom: 1px solid var(--line); }
 .gatecard .ec-diff { padding: 8px 11px; white-space: pre-wrap; word-break: break-all; }
 /* The button that authorizes an irreversible act must not look like Send.
