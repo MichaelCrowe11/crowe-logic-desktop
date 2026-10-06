@@ -1192,7 +1192,7 @@ async function mountTerminal(p, body, systemTerminal=false) {
      agent panel's console is a plain shell too; nothing is typed into any
      terminal for you. Commands go in when the operator wants them. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
-  tools.querySelector(".term-reclaim").onclick=()=>{window.crowe.pty.input(p.id,"");t.focus()};
+  tools.querySelector(".term-reclaim").onclick=()=>{window.crowe.pty.reclaim?.(p.id);t.focus()};
   const offControl=window.crowe.companion?.onEvent(e=>{if(e.type==="terminal-control"&&e.id===p.id){state.textContent=e.controller?`Controlled by ${e.controller.name}`:"running";tools.querySelector(".term-reclaim").hidden=!e.controller}});
   const controlCleanup=new MutationObserver(()=>{if(!body.isConnected){offControl?.();controlCleanup.disconnect()}});
   controlCleanup.observe(panelDeck,{childList:true});

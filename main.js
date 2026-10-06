@@ -1592,6 +1592,8 @@ ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 2
   return { ok: true, id };
 });
 ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { try { terminalSessions.localInput(id, data || ""); } catch {} });
+// Taking a terminal back from a phone types nothing; it only ends the lease.
+ipcMain.on("crowe:pty:reclaim", (_e, { id = "main" } = {}) => { try { terminalSessions.reclaim(id); } catch {} });
 ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { try { terminalSessions.localResize(id, cols, rows); } catch {} });
 ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { terminalSessions.close(id); ptyProcs.delete(id); return { ok: true }; });
 ipcMain.handle("crowe:operator:status", () => ({

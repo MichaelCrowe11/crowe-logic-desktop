@@ -2360,7 +2360,7 @@
 
     pty: {
       start: () => ({ error: NO_SHELL() }),
-      input: () => {}, resize: () => {},
+      input: () => {}, reclaim: () => {}, resize: () => {},
       close: () => ({ ok: true }),
       onData: noop,
     },
