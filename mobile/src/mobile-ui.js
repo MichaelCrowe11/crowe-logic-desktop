@@ -1085,6 +1085,12 @@
         if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
       } else if (typeof send === "function") { send(d.text); }
       else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
+    } else if (d.kind === "log-block" && !cultivationOn()) {
+      // No Cultivation on this build, so no form to open: the note waits in
+      // Chat's composer instead of vanishing.
+      __tapTab("Chat");
+      const inp = $("input");
+      if (inp && d.text) { inp.value = d.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
     } else if (d.kind === "log-block") {
       __tapTab("Cultivation");
       const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');

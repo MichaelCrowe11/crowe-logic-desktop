@@ -1360,10 +1360,8 @@ const harnessCtx = {
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
   // The document printer above. The harness never requires electron itself.
   printToPdf,
-  // The Runbook lives in the renderer's store, so authoring is an event, not a
-  // write from here: the renderer saves it and surfaces the canvas. Stamped
-  // "main" because chat is the only surface that offers the tool.
-  authorWorkflow: (wf) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "workflow_authored", workflow: wf, agentId: "main" }); },
+  // No authorWorkflow: the Missions canvas it wrote into is gone, and the
+  // harness offers compose_workflow only to a build that attaches one.
   getCatalog: () => catalogCache.models,
   // The token's tier claim, read the way the gateway reads it: absent means
   // free, not unknown. Null only when nobody is signed in, so the harness

@@ -45,12 +45,14 @@ body.mobile #bar {
 
 /* Anything that describes a workspace this device does not have. */
 body.mobile .ws-sep, body.mobile #ws-path, body.mobile .cwd,
-body.mobile #hud-branch, body.mobile #glass-launcher,
+body.mobile #hud-branch,
 body.mobile .dock-tab[data-pane="git"], body.mobile .dock-tab[data-pane="files"],
-body.mobile #panel-add-term, body.mobile #panel-add-system, body.mobile #panel-add-agent,
+body.mobile #panel-add-term, body.mobile #panel-add-system,
 /* The browser panel too, for 1.0: an in-app browser is "unrestricted web access" to App Review
    (a 17+ rating) and the panel only ever drew page headers on a phone. */
 body.mobile #panel-add-browser,
+/* With those three gone, Add to panel has nothing a phone can open, so its button goes too. */
+body.mobile #dock-add,
 body.mobile .m-desktop-only { display: none !important; }
 
 /* Execute is the tier that runs commands, and it was hidden here outright

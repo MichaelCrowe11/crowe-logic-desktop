@@ -350,7 +350,11 @@ const tests = [
               backPane: "agent", backCurrent: "Chat" },
   },
   {
-    name: "the workspace opens on Operator Control, not a terminal that cannot start",
+    // Operator Control used to be the phone's default panel. It was removed, and
+    // the phone has no shell, so the deck starts empty rather than falling back
+    // to a terminal that cannot start, and Add to panel (nothing in it a phone
+    // can open) is not offered.
+    name: "the workspace opens empty, not on a terminal that cannot start",
     body: `__pair(true); await __settle(50);
       __tap("Machine");
       await __settle();
@@ -358,11 +362,12 @@ const tests = [
       // the title is its value, not its text.
       const titles = [...document.querySelectorAll("#panel-deck .workspace-panel")]
         .map((p) => (p.querySelector(".panel-title") || {}).value || "").join(",");
+      const add = __shown("#dock-add");
       __tap("Chat");
       await __settle();
       __pair(false); await __settle(50);
-      return { titles, terminals: /Terminal/.test(titles) };`,
-    expect: { titles: "Operator Control", terminals: false },
+      return { titles, terminals: /Terminal/.test(titles), add };`,
+    expect: { titles: "", terminals: false, add: false },
   },
   {
     name: "a tap in the drawer closes it on the way to where it goes",
@@ -396,7 +401,7 @@ const tests = [
       const dock = { gitTab: __shown('.dock-tab[data-pane="git"]'),
                      filesTab: __shown('.dock-tab[data-pane="files"]'),
                      outputTab: __shown('.dock-tab[data-pane="output"]'),
-                     cliAgent: __shown("#glass-launcher") };
+                     launcher: Boolean(document.getElementById("glass-launcher")) };
       __tap("Chat");
       await __settle();
       // Same for Settings: inside a closed modal everything is invisible, and
@@ -413,7 +418,7 @@ const tests = [
     // The trues are the control: they prove this check can still see a row
     // that is meant to be there, rather than reporting everything as hidden.
     expect: { execTier: false, editTier: true, gitTab: false, filesTab: false, outputTab: true,
-              cliAgent: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: false, advanced: true },
+              launcher: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: false, advanced: true },
   },
   {
     /* The case above proves Execute is hidden with nothing paired. This proves
