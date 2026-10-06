@@ -16,12 +16,14 @@
   <title>Crowe Logic</title>
   <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1791247406465" />
+  <link rel="stylesheet" href="styles.css?v=1791294332902" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
   <script src="adopted-styles.js"></script>
   <link rel="stylesheet" href="council.css" />
+  <!-- Last, so it only refines: the look picked in Settings (look.css). -->
+  <link rel="stylesheet" href="look.css" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -85,7 +87,7 @@
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
           Projects
         </button>
-        <button class="seg-btn" data-space="cultivation">
+        <button class="seg-btn hidden" data-space="cultivation">
           <!-- A cap fruiting from a substrate block, not a bare mushroom. One cap
                on one stem is the universal mushroom pictogram, so it read as an
                umbrella and said nothing about this space in particular; the block
@@ -304,9 +306,6 @@
           <button id="dock-add" class="dock-icon" title="Add to panel" aria-label="Add to panel">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button id="glass-launcher" class="dock-icon agent-launch" type="button" title="Open a Crowe Logic CLI agent in the workspace" aria-label="Open Crowe Logic agent in workspace">
-            <span class="cl-mark" aria-hidden="true"></span>
-          </button>
           <div class="spacer"></div>
           <span id="cwd" class="cwd"></span>
           <button id="dock-menu" class="dock-icon" title="Layout and saved views" aria-label="Layout and saved views">
@@ -434,6 +433,14 @@
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
       <p id="cfg-mcp-live" class="hint"></p>
+      <!-- The look. At the foot of the card for the reason everything above
+           Spaces stays put, and applied as it changes, like the theme button. -->
+      <label>Look
+        <select id="cfg-look">
+          <option value="editorial">Editorial, light or dark</option>
+          <option value="instrument">Instrument, dark glass</option>
+        </select>
+      </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>
@@ -446,33 +453,12 @@
         <button id="panel-add-term" class="pal-row" title="New terminal panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
           <span>Terminal</span></button>
-        <button id="panel-add-agent" class="pal-row" title="New Crowe Logic agent with a plain shell console">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 4.2v2.4M12 17.4v2.4M4.2 12h2.4M17.4 12h2.4M6.5 6.5l1.7 1.7M15.8 15.8l1.7 1.7M17.5 6.5l-1.7 1.7M8.2 15.8l-1.7 1.7"/></svg>
-          <span>Crowe Logic agent</span></button>
         <button id="panel-add-system" class="pal-row" title="Open the isolated CroweLM system terminal">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.6"/><path d="M7 20h10M12 17v3M7 9l2.5 2L7 13"/></svg>
           <span>System terminal</span></button>
         <button id="panel-add-browser" class="pal-row" title="New browser panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
           <span>Browser</span></button>
-        <button id="panel-add-operator" class="pal-row" title="Operator control panel">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
-          <span>Operator control</span></button>
-        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent missions">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
-          <span>Missions</span></button>
-        <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
-          <span>Agent fleet</span></button>
-        <button id="panel-add-room" class="pal-row" title="Open a room: several named agents and you in one thread">
-          <!-- Three seats around a table, which is what a room is. Not three
-               avatars: at 16px a cluster of heads is a smudge, and the shape
-               that survives is the arrangement. -->
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4.4" r="1.7"/><circle cx="5.2" cy="16.4" r="1.7"/><circle cx="18.8" cy="16.4" r="1.7"/></svg>
-          <span>Room</span></button>
-        <button id="panel-add-workbench" class="pal-row" title="Compose, compare, and save agent runs">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
-          <span>Workbench</span></button>
       </div>
     </div>
   </div>
@@ -489,14 +475,14 @@
   <script src="council.js"></script>
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
-  <script src="preview-shim.js?v=1791247406465"></script>
-  <script src="mark-geometry.js?v=1791247406465"></script>
-  <script src="mark.js?v=1791247406465"></script>
-  <script src="messages.js?v=1791247406465"></script>
-  <script src="marks.js?v=1791247406465"></script>
-  <script src="first-run.js?v=1791247406465"></script>
-  <script src="activity.js?v=1791247406465"></script>
-<script src="renderer.js?v=1791247406465"></script>
+  <script src="preview-shim.js?v=1791294332902"></script>
+  <script src="mark-geometry.js?v=1791294332902"></script>
+  <script src="mark.js?v=1791294332902"></script>
+  <script src="messages.js?v=1791294332902"></script>
+  <script src="marks.js?v=1791294332902"></script>
+  <script src="first-run.js?v=1791294332902"></script>
+  <script src="activity.js?v=1791294332902"></script>
+<script src="renderer.js?v=1791294332902"></script>
   <script src="plan.js"></script>
 </body>
 </html>

@@ -2607,14 +2607,9 @@
     },
 
     operator: {
-      /* Every non-array key here is printed verbatim as a tile label in the
-         Operator Control panel — mountOperator() iterates the object rather
-         than owning a schema. On the desktop those keys are the machine's own
-         vocabulary (cwd, mcpServers) about a machine the user configured. On a
-         phone they were noise: three counters pinned to zero and an empty tile
-         labelled "cwd". So the phone reports in its own words, and only what
-         has a value here: the run state, the paired machine, and the tier.
-         agentIds/terminalIds stay for the "Active" lists the panel also reads. */
+      /* No panel reads this any more (Operator Control was removed); it stays
+         so the bridge keeps the desktop preload's shape, and stopAll is still
+         the one call that halts every run on the phone. */
       status: () => {
         const host = remoteBase().replace(/^https?:\/\//, "").replace(/:\d+$/, "");
         return {
@@ -2638,16 +2633,16 @@
 
      The workspace deck defaults to a terminal — reasonable on a workstation,
      and on a phone it opened the Panels tab onto a dead pane whose toolbar
-     offered to restart a shell that had never started. Operator Control is
-     what a phone actually wants there: what is running, and the button that
-     stops it.
+     offered to restart a shell that had never started. So the phone's deck
+     starts empty, and holds what the phone opens into it (a cloud browser,
+     a conversation).
 
      The rail defaults to open, which on a phone is a drawer across the app.
      Collapsing it here rather than from mobile-ui means it is never painted
      open and then shut in front of the user. */
   try {
     if (!localStorage.getItem("crowe-workspace-panels")) {
-      localStorage.setItem("crowe-workspace-panels", JSON.stringify({ layout: "stack", panels: [{ type: "operator" }] }));
+      localStorage.setItem("crowe-workspace-panels", JSON.stringify({ layout: "stack", panels: [] }));
     }
     if (!localStorage.getItem("crowe-sidebar")) localStorage.setItem("crowe-sidebar", "collapsed");
   } catch { /* a webview with storage disabled still boots, just without the defaults */ }
