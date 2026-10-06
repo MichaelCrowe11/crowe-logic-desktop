@@ -15,14 +15,17 @@ class TerminalSessions extends EventEmitter {
   constructor({ historyBytes = 256 * 1024, now = Date.now } = {}) {
     super(); this.sessions = new Map(); this.historyBytes = historyBytes; this.now = now;
   }
-  create(id, spawn, { cols = 80, rows = 24, cwd = "", label = id } = {}) {
+  create(id, spawn, { cols = 80, rows = 24, cwd = "", label = id, openedBy = null } = {}) {
     dimensions(cols, rows);
     if (this.sessions.has(id)) return this.get(id);
     if (this.sessions.size >= 24) throw fail("Close a terminal before opening another.", 429);
     const screen = new Terminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
     const serializer = new SerializeAddon(); screen.loadAddon(serializer);
     const s = { id, generation: crypto.randomUUID(), secret: crypto.randomBytes(32).toString("hex"), cols, rows, cwd, label,
-      screen, serializer, seq: 0, history: [], bytes: 0, queued: 0, chain: Promise.resolve(), controller: null, lease: 0, inputs: new Map(), draft: null };
+      screen, serializer, seq: 0, history: [], bytes: 0, queued: 0, chain: Promise.resolve(), controller: null, lease: 0, inputs: new Map(), draft: null,
+      // A shell a phone opened belongs to that phone: it may close it, and
+      // nothing else on the phone may. Desktop terminals carry null.
+      openedBy: openedBy ? { deviceId: openedBy.id, name: openedBy.name } : null };
     this.sessions.set(id, s);
     try { s.proc = spawn(s); } catch (error) { this.sessions.delete(id); screen.dispose(); throw error; }
     s.proc.onData(data => {
@@ -52,13 +55,14 @@ class TerminalSessions extends EventEmitter {
     if (!s || (generation && generation !== s.generation)) throw fail("The terminal session ended. Select a current session.", 410);
     return s;
   }
-  meta(s) {
+  meta(s, viewer = null) {
     if (s.controller && s.controller.expires <= this.now()) this.reclaim(s.id);
     return { id: s.id, generation: s.generation, label: s.label, cwd: s.cwd, cols: s.cols, rows: s.rows,
+      origin: s.openedBy ? "phone" : "desktop", openedBy: s.openedBy ? s.openedBy.name : null, mine: Boolean(viewer && s.openedBy?.deviceId === viewer),
       controller: s.controller ? { deviceId: s.controller.deviceId, name: s.controller.name, lease: s.lease } : null,
       draft: s.draft ? { id: s.draft.id, revision: s.draft.revision, status: s.draft.status } : null };
   }
-  list() { return [...this.sessions.values()].map(s => this.meta(s)); }
+  list(viewer = null) { return [...this.sessions.values()].map(s => this.meta(s, viewer)); }
   async poll(id, generation, after) {
     const s = this.get(id);
     // The barrier serializes resize and output before snapshotting; data that
@@ -154,6 +158,18 @@ class TerminalSessions extends EventEmitter {
     const s = this.sessions.get(id); if (!s || s.generation !== generation) return;
     s.closed = true; this.sessions.delete(id);
     s.screen.dispose(); this.emit("removed", { id, generation });
+  }
+  // The phone may end only a shell it opened itself; a desktop terminal stays
+  // the desktop's to close.
+  closeOwned(id, generation, device) {
+    const s = this.get(id, generation);
+    if (!s.openedBy || s.openedBy.deviceId !== device.id) throw fail("Only the phone that opened this shell can close it.", 403);
+    this.close(id); return { closed: id };
+  }
+  // A phone that is unpaired, or a companion that stops, leaves no one who
+  // could reach its shells, so they end with it.
+  closeOpenedBy(deviceId) {
+    for (const s of [...this.sessions.values()]) if (s.openedBy && (!deviceId || s.openedBy.deviceId === deviceId)) this.close(s.id);
   }
   close(id) { const s = this.sessions.get(id); if (s) { try { s.proc.kill(); } finally { this.remove(id, s.generation); } } }
   closeAll() { for (const id of [...this.sessions.keys()]) this.close(id); }

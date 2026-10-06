@@ -2498,6 +2498,21 @@ function companionInstance() {
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
       privateDir: app.getPath("userData"),
       sessions: terminalSessions,
+      hostName: () => machineName(),
+      // A shell the phone opens is an ordinary login shell in the workspace
+      // folder, with the same draft bridge as a desktop terminal, so Control+G
+      // in the CLI works from the phone too.
+      openShell: async ({ cols, rows, device }) => {
+        if (!pty) throw Object.assign(new Error("This build has no terminal."), { status: 503 });
+        await draftBridge.start();
+        const id = `phone-${crypto.randomUUID().slice(0, 8)}`;
+        const editorScript = path.join(__dirname, "bin", "crowe-session-editor.py").replace(/app\.asar([/\\])/, "app.asar.unpacked$1");
+        const s = terminalSessions.create(id, st => spawnShell(cols, rows, {
+          ...draftBridge.env(st), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || `python3 ${JSON.stringify(editorScript)}`,
+        }), { cols, rows, cwd: CWD, label: `${device.name} shell`, openedBy: device });
+        journalWrite({ event_type: "PHONE_SHELL_OPENED", tool_id: "terminal", output_summary: `${device.name} opened a shell in ${CWD}` });
+        return s;
+      },
       // Electron's own blocker: "prevent-app-suspension" keeps the system from
       // idling out while still letting the display sleep, which is what a
       // machine being driven from a phone wants.

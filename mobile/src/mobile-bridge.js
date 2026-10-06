@@ -426,11 +426,15 @@
   window.croweMirrorTransport = {
     async call(route, body = {}) {
       await ready;
-      if (!/^\/(sessions\/(list|poll|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
-      if (/^\/sessions\/(control|renew|input|resize)$/.test(route) && config.autonomy !== "execute") return { error: "Choose Execute mode on this phone to control a terminal." };
+      if (!/^\/(sessions\/(list|poll|open|close|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
+      if (/^\/sessions\/(open|control|renew|input|resize)$/.test(route) && config.autonomy !== "execute") return { error: "Choose Execute mode on this phone to control a terminal.", needsExecute: true };
       if (/^\/draft\/(save|return)$/.test(route) && !["edit", "execute"].includes(config.autonomy)) return { error: "Choose Edit or Execute mode to change a draft." };
       return remoteCall(route, body, "session connection");
     },
+    // The terminal offers the switch to Execute in place, as one deliberate
+    // tap, rather than sending the operator to Settings to find it.
+    autonomy: () => config.autonomy || "edit",
+    async allowExecute() { await ready; await saveConfig({ autonomy: "execute" }); return config.autonomy === "execute"; },
     storage: store,
   };
 

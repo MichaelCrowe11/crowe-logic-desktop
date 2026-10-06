@@ -293,6 +293,47 @@ function assert(cond, message) { if (!cond) throw new Error(message); }
     return "run and write refused with the tier named";
   });
 
+  await check("a phone opens its own shell, holds it, and only it can close it", async () => {
+    // A stand-in process: the ownership rules are the companion's, not the PTY's.
+    const { TerminalSessions } = require("../terminal-sessions");
+    const sessions = new TerminalSessions();
+    const fakeProc = () => ({ onData() {}, onExit() {}, write() {}, resize() {}, kill() {} });
+    let tier = true;
+    const opener = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions,
+      tierAllows: () => tier, hostName: () => "Studio Mac",
+      openShell: async ({ cols, rows, device }) => sessions.create(`phone-${device.id.slice(0, 4)}`, fakeProc, { cols, rows, label: `${device.name} shell`, openedBy: device }) });
+    const s = await opener.start();
+    const phone = opener.addDevice("iPhone"), ipad = opener.addDevice("iPad");
+    const hit = async (route, body, token) => {
+      const r = await fetch(`http://127.0.0.1:${s.port}${route}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+    try {
+      const listed = await hit("/sessions/list", {}, phone.token);
+      assert(listed.body.canOpen === true && listed.body.host === "Studio Mac", `list did not offer a shell: ${JSON.stringify(listed.body)}`);
+      const opened = await hit("/sessions/open", { cols: 9999, rows: 40 }, phone.token);
+      assert(opened.status === 200, `open returned ${opened.status}: ${JSON.stringify(opened.body)}`);
+      assert(opened.body.cols === 300 && opened.body.rows === 40, `size not clamped: ${opened.body.cols}x${opened.body.rows}`);
+      assert(opened.body.origin === "phone" && opened.body.mine === true, "the shell is not marked as the phone's own");
+      assert(opened.body.controller?.deviceId === phone.id, "the opening phone does not hold control");
+      const seen = (await hit("/sessions/list", {}, ipad.token)).body.sessions.find(x => x.id === opened.body.id);
+      assert(seen && seen.mine === false && seen.openedBy === "iPhone", `another device sees it as its own: ${JSON.stringify(seen)}`);
+      const ref = { sessionId: opened.body.id, generation: opened.body.generation };
+      const stranger = await hit("/sessions/close", ref, ipad.token);
+      assert(stranger.status === 403 && sessions.sessions.has(opened.body.id), `another device closed the shell (${stranger.status})`);
+      const closed = await hit("/sessions/close", ref, phone.token);
+      assert(closed.status === 200 && !sessions.sessions.has(opened.body.id), `the owner could not close it (${closed.status})`);
+      tier = false;
+      const refused = await hit("/sessions/open", {}, phone.token);
+      assert(refused.status === 403 && /Execute/.test(refused.body.detail) && sessions.sessions.size === 0, `opened outside Execute (${refused.status})`);
+      tier = true;
+      await hit("/sessions/open", {}, phone.token);
+      opener.revokeDevice(phone.id);
+      assert(sessions.sessions.size === 0, "revoking the phone left its shell running");
+      return "opened at phone size, owner-only close, tier and revoke enforced";
+    } finally { sessions.closeAll(); await opener.stop(); }
+  });
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(failures ? `\n${failures} check(s) failed` : "\nall companion checks passed");
   process.exit(failures ? 1 : 0);

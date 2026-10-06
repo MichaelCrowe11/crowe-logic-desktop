@@ -21,7 +21,9 @@ app.whenReady().then(async () => {
   try {
     manager = new TerminalSessions(); bridge = new DraftBridge(manager); await bridge.start(); installManagedDraftWindows(manager);
     const s = manager.create("integration", state => pty.spawn("/bin/zsh", ["-f"], { cols: 80, rows: 24, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cwd: dir, label: "Mirror integration" });
-    companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager }); await companion.start(); const phone = companion.addDevice("UI test phone");
+    let opened = 0;
+    const openShell = async ({ cols, rows, device }) => manager.create(`phone-${++opened}`, state => pty.spawn("/bin/zsh", ["-f"], { cols, rows, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cols, rows, cwd: dir, label: `${device.name} shell`, openedBy: device });
+    companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, openShell, hostName: () => "Test Mac" }); await companion.start(); const phone = companion.addDevice("UI test phone");
     win = new BrowserWindow({ width: 390, height: 844, show: false, webPreferences: { preload: path.join(__dirname, "phone-mirror-test-preload.js"), contextIsolation: true, sandbox: true, backgroundThrottling: false } });
     ipcMain.handle("mirror-test:request", async (event, route, body) => {
       if (event.sender !== win.webContents || !/^\/(sessions|draft)\//.test(route)) throw new Error("Invalid test request");
@@ -31,8 +33,10 @@ app.whenReady().then(async () => {
     await win.loadFile(path.join(__dirname, "fixtures/phone-mirror.html"));
     const js = source => win.webContents.executeJavaScript(source, true);
     await js('void window.crowePhoneMirror.mount(document.getElementById("phone"))');
-    await until(() => js('document.querySelector("[data-sessions]").options.length > 1'), "session list");
-    await js('document.querySelector("[data-sessions]").value="integration"; document.querySelector("[data-sessions]").dispatchEvent(new Event("change"))');
+    await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "session list");
+    assert.equal(await js('document.querySelector("[data-host-name]").textContent'), "Test Mac");
+    await js('document.querySelector("[data-session-row=integration]").click()');
+    assert.equal(await js('document.querySelector("[data-term]").hidden'), false, "tapping a session does not open the terminal screen");
     manager.localInput(s.id, "printf 'PHONE_MIRROR_NATIVE_OK\\n'\r");
     await until(() => js('document.querySelector(".xterm-screen").innerText.includes("PHONE_MIRROR_NATIVE_OK")'), "real PTY output on phone");
     console.log("ok real PTY appears in phone terminal");
@@ -60,6 +64,27 @@ app.whenReady().then(async () => {
     console.log("ok native editor and phone share draft; exact multiline return; native editor closes");
     const overflow = await js('document.querySelector(".phone-mirror").scrollWidth > document.querySelector(".phone-mirror").clientWidth');
     assert.equal(overflow, false, "phone content overflows horizontally");
+    // New terminal: a shell of the phone's own, sized to the phone, held from
+    // the start, with the key bar up and only its owner able to close it.
+    await js('document.querySelector("[data-back]").click()');
+    await until(() => js('document.querySelector("[data-open]").disabled === false'), "New terminal offered");
+    await delay(150);
+    const hosts_shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-hosts.png"), hosts_shot.toPNG());
+    await js('document.querySelector("[data-open]").click()');
+    await until(() => manager.sessions.has("phone-1") && manager.sessions.get("phone-1").controller !== null, "phone shell opened and held");
+    const own = manager.sessions.get("phone-1");
+    assert.ok(own.cols < 80 && own.cols >= 20, `phone shell is not sized to the phone: ${own.cols} columns`);
+    await until(() => js('document.querySelector("[data-keys]").hidden === false && document.querySelector("[data-close]").hidden === false'), "key bar and close for own shell");
+    await js('document.querySelector("[data-ctrl]").click()');
+    assert.equal(await js('document.querySelector("[data-ctrl]").getAttribute("aria-pressed")'), "true");
+    manager.localInput(own.id, "printf 'PHONE_OWN_SHELL_OK\\n'\r");
+    await until(() => js('document.querySelector(".xterm-screen").innerText.includes("PHONE_OWN_SHELL_OK")'), "own shell output");
+    await delay(150);
+    const own_shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-shell.png"), own_shot.toPNG());
+    await js('document.querySelector("[data-close]").click()');
+    await until(() => !manager.sessions.has("phone-1"), "own shell closed from the phone");
+    await until(() => js('document.querySelector("[data-hosts]").hidden === false'), "back to sessions after close");
+    console.log("ok New terminal opens a phone-sized shell with control, key bar, and owner close");
     console.log(`PASS phone UI integration; screenshot ${path.join(dir, "phone-review.png")}`);
     okay = true;
   } catch (error) { console.error(error.stack); }

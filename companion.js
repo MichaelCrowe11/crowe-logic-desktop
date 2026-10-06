@@ -219,8 +219,13 @@ class Companion {
      safe to bind unconditionally — it is not reachable from another machine at
      all — and port 0 lets the OS pick a free one so a test never collides with
      a companion the user has actually started. */
-  constructor({ tokenFile, privateDir = null, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true, sessions = null } = {}) {
+  constructor({ tokenFile, privateDir = null, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true, sessions = null, openShell = null, hostName = null } = {}) {
     this.sessions = sessions;
+    // Starts a shell for a phone on this machine: ({ cols, rows, device }) =>
+    // session. Without it the phone can watch and drive desktop terminals but
+    // not open its own.
+    this.openShell = openShell;
+    this.hostName = hostName;
     this.tokenFile = tokenFile;
     // The app's own folder (sign-in, config, this file) is never a phone's to
     // touch: config names where the bearer token goes.
@@ -311,6 +316,7 @@ class Companion {
     if (at < 0) return { error: "no such device" };
     const [gone] = devices.splice(at, 1);
     this.sessions?.revoke(gone.id);
+    this.sessions?.closeOpenedBy?.(gone.id);
     this.saveDevices();
     this.onEvent({ type: "device-revoked", id: gone.id, name: gone.name });
     return { ok: true, name: gone.name };
@@ -339,6 +345,7 @@ class Companion {
   // Kept for the case the device list cannot answer: revoke everything at once.
   rotateToken() {
     this.sessions?.revoke();
+    this.sessions?.closeOpenedBy?.();
     this.devices = [];
     this.saveDevices();
     try { fs.unlinkSync(this.tokenFile); } catch { /* already gone */ }
@@ -440,6 +447,7 @@ class Companion {
 
   async stop() {
     this.sessions?.revoke();
+    this.sessions?.closeOpenedBy?.();
     if (!this.server) return this.status();
     await new Promise((r) => this.server.close(r));
     this.server = null;
@@ -503,7 +511,25 @@ class Companion {
       if (this.sessions && (url.pathname.startsWith("/sessions/") || url.pathname.startsWith("/draft/"))) {
         const route = url.pathname;
         const sessions = this.sessions;
-        if (route === "/sessions/list") return this.send(res, 200, { protocol: 1, deviceId: device.id, sessions: sessions.list() });
+        if (route === "/sessions/list") return this.send(res, 200, { protocol: 2, deviceId: device.id, host: this.hostName?.() || this.name || null, canOpen: Boolean(this.openShell), sessions: sessions.list(device.id) });
+        // A new shell for this phone, as the operator would open one at the
+        // desk: the same Execute rule, a receipt, and an announcement on the
+        // desktop so a shell started from a phone is never a silent one. The
+        // phone holds control from the first keystroke.
+        if (route === "/sessions/open") {
+          if (!this.openShell) return this.send(res, 404, { detail: "This desktop cannot open a shell for the phone. Update Crowe Logic on the computer." });
+          if (!this.tierAllows("run")) {
+            this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: route, reason: "autonomy tier" });
+            return this.send(res, 403, { detail: "The desktop must be in Execute mode to open a shell from the phone." });
+          }
+          const cols = Number.isInteger(body.cols) ? Math.max(20, Math.min(300, body.cols)) : 80;
+          const rows = Number.isInteger(body.rows) ? Math.max(5, Math.min(120, body.rows)) : 24;
+          const opened = await this.openShell({ cols, rows, device });
+          const meta = sessions.acquire(opened.id, opened.generation, device);
+          this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: opened.id });
+          this.onEvent({ type: "phone-shell", id: opened.id, name: device.name, open: true });
+          return this.send(res, 200, { ...meta, mine: true });
+        }
         const s = sessions.get(body.sessionId, body.generation);
         if (route === "/sessions/poll") {
           const result = await sessions.poll(s.id, body.generation, body.after);
@@ -522,6 +548,7 @@ class Companion {
         if (route === "/sessions/control") result = sessions.acquire(s.id, s.generation, device);
         else if (route === "/sessions/renew") result = sessions.renew(s.id, s.generation, device, body.lease);
         else if (route === "/sessions/release") { sessions.controlled(s.id, s.generation, device, body.lease); result = sessions.reclaim(s.id); }
+        else if (route === "/sessions/close") { result = sessions.closeOwned(s.id, s.generation, device); this.onEvent({ type: "phone-shell", id: s.id, name: device.name, open: false }); }
         else if (route === "/sessions/input") result = sessions.input(s.id, s.generation, device, body.lease, body.inputId, body.data);
         else if (route === "/sessions/resize") { sessions.controlled(s.id, s.generation, device, body.lease); await sessions.resize(s.id, body.cols, body.rows); result = sessions.meta(s); }
         else if (writingDraft) result = sessions.changeDraft(s.id, body.draftId, { baseRevision: body.baseRevision, text: body.text,
