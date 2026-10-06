@@ -463,12 +463,14 @@ app.on("web-contents-created", (_event, contents) => {
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
 const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
 const CROWE_ID_CLIENT = "crowe-cli";
+// The crowe CLI's own sign-in store. The desktop may seed itself from it but never
+// writes or deletes it: removing it signs the CLI out, and the authority gate needs
+// the CLI and this app signed in as the same person at the same time.
 const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
 function persistTokens(d) {
   saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
 function migrateLegacyAuth() {
   const cfg = loadConfig();
@@ -480,7 +482,6 @@ function migrateLegacyAuth() {
   const token = legacy.access_token || oldConfig.token || "";
   const refreshToken = legacy.refresh_token || oldConfig.refreshToken || "";
   if (token || refreshToken) saveConfig({ token, refreshToken });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
 function currentUser() {
   const c = loadConfig(); if (!c.token) return null;
@@ -556,7 +557,7 @@ function signIn() {
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => {
-  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  saveConfig({ token: "", refreshToken: "" });  // the CLI keeps its own sign-in; `crowe logout` ends it
   // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
   browserSessions.endAll().catch(() => {});
   return { ok: true };
