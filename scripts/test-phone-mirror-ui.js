@@ -22,9 +22,16 @@ app.whenReady().then(async () => {
   let okay = false;
   try {
     manager = new TerminalSessions(); bridge = new DraftBridge(manager); await bridge.start(); installManagedDraftWindows(manager);
-    const s = manager.create("integration", state => pty.spawn("/bin/zsh", ["-f"], { cols: 80, rows: 24, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cwd: dir, label: "Mirror integration" });
+    // Bash is present on both supported Unix test hosts. Do not depend on the
+    // operator's shell or startup files, or silently lose a fixture PTY on CI.
+    const shell = "/bin/bash"; fs.accessSync(shell, fs.constants.X_OK);
+    const spawnShell = state => pty.spawn(shell, ["--noprofile", "--norc", "-i"], {
+      cols: state.cols, rows: state.rows, cwd: dir,
+      env: { ...process.env, ...bridge.env(state), PS1: "crowe-test> ", TERM: "xterm-256color" },
+    });
+    const s = manager.create("integration", spawnShell, { cwd: dir, label: "Mirror integration" });
     let opened = 0;
-    const openShell = async ({ cols, rows, device }) => manager.create(`phone-${++opened}`, state => pty.spawn("/bin/zsh", ["-f"], { cols, rows, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cols, rows, cwd: dir, label: `${device.name} shell`, openedBy: device });
+    const openShell = async ({ cols, rows, device }) => manager.create(`phone-${++opened}`, spawnShell, { cols, rows, cwd: dir, label: `${device.name} shell`, openedBy: device });
     companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, openShell, hostName: () => "Test Mac" }); await companion.start(); const phone = companion.addDevice("UI test phone", { terminal: true });
     win = new BrowserWindow({ width: 390, height: 844, show: false, webPreferences: { preload: path.join(__dirname, "phone-mirror-test-preload.js"), contextIsolation: true, sandbox: true, backgroundThrottling: false } });
     let holdInput = null, holdClose = null;
@@ -49,7 +56,11 @@ app.whenReady().then(async () => {
       return { addListener: (n, f) => { on[n] = f; return { remove() { if (on[n] === f) delete on[n]; } }; }, requestPermissions: async () => ({ speechRecognition: "granted" }), available: async () => ({ available: true, sessionIds: true }),
         start: async (opts) => { sessionId = opts.sessionId; const id = sessionId; setTimeout(() => on.partialResults?.({ matches: ["Git status."], sessionId: id }), 30); }, stop: async () => { on.listeningState?.({ status: "stopped", sessionId }); } }; })() } }; void 0`);
     await js('void window.crowePhoneMirror.mount(document.getElementById("phone"))');
-    await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "session list");
+    try { await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "session list"); }
+    catch (error) {
+      const status = await js('document.querySelector("[data-status]")?.textContent');
+      throw new Error(`${error.message}; shell=${shell}; alive=${manager.sessions.has(s.id)}; status=${status}`);
+    }
     assert.equal(await js('document.querySelector("[data-host-name]").textContent'), "Test Mac");
     assert.equal(await js('document.querySelector("[data-session-row=integration]").getAttribute("role")'), null, "session controls retain button semantics");
     await js('document.querySelector("[data-session-row=integration]").focus(); document.querySelector("[data-refresh]").click()');
