@@ -62,8 +62,29 @@ app.whenReady().then(async () => {
     await until(() => js('document.querySelector("[data-draft]").disabled === false'), "phone draft attached");
     const text = "Review reconnect after phone lock.\nPreserve the exact second line: 東京.\n";
     await js(`document.querySelector('[data-draft]').value=${JSON.stringify(text)}; document.querySelector('[data-draft]').dispatchEvent(new Event('input')); document.querySelector('[data-review]').click()`);
-    await delay(150);
-    const shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-review.png"), shot.toPNG());
+    // Draft and review surfaces follow the selected look, unlike the terminal.
+    // Measure rendered labels so dark terminal tokens cannot wash out light paper.
+    for (const theme of ["light", "dark", "instrument"]) {
+      const measured = await js(`(() => {
+        document.body.classList.toggle("dark", ${JSON.stringify(theme)} !== "light");
+        document.body.dataset.look = ${JSON.stringify(theme === "instrument" ? "instrument" : "editorial")};
+        const rgba = value => value.match(/[\\d.]+/g).map(Number);
+        const luminance = color => color.slice(0, 3).map(v => { const s = v / 255; return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4; }).reduce((n, v, i) => n + v * [.2126, .7152, .0722][i], 0);
+        return [...document.querySelectorAll(".mirror-review-label,.mirror-save-state")].map(label => {
+          const bg = rgba(getComputedStyle(label.closest("section")).backgroundColor);
+          const raw = rgba(getComputedStyle(label).color), alpha = raw[3] ?? 1;
+          const fg = raw.slice(0, 3).map((v, i) => v * alpha + bg[i] * (1 - alpha));
+          const a = luminance(fg), b = luminance(bg);
+          return { text: label.textContent, contrast: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+        });
+      })()`);
+      for (const label of measured) assert.ok(label.contrast >= 4.5, `${theme} label ${JSON.stringify(label.text)} has ${label.contrast.toFixed(2)}:1 contrast`);
+      await delay(100);
+      const shot = await win.webContents.capturePage();
+      fs.writeFileSync(path.join(dir, theme === "light" ? "phone-review.png" : `phone-review-${theme}.png`), shot.toPNG());
+    }
+    await js('document.body.classList.remove("dark"); document.body.dataset.look="editorial"; void 0');
+    console.log("ok draft and review labels retain readable contrast in light, dark and Instrument");
     await js('document.querySelector("[data-return]").click()');
     await until(() => fs.readFileSync(filename, "utf8") === text, "exact draft return to helper file");
     assert.ok(desktop.isDestroyed());

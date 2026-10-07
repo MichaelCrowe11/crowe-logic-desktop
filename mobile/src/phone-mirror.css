@@ -55,6 +55,7 @@
 .phone-mirror .mirror-kb-show{margin:0 8px calc(8px + env(safe-area-inset-bottom));min-height:40px;background:var(--mt-raise);color:var(--mt-gold)}
 .mirror-term section[data-panel=draft],.mirror-term section[data-panel=review]{flex:1;min-height:0;overflow:auto;padding:12px;background:var(--cream);color:var(--ink)}
 .mirror-term section[data-panel=draft] button,.mirror-term section[data-panel=review] button{background:var(--panel,var(--cream));border-color:var(--line);color:var(--ink)}
+.mirror-term section[data-panel=draft] .mirror-save-state,.mirror-term section[data-panel=review] .mirror-save-state,.mirror-term section[data-panel=review] .mirror-review-label{color:var(--muted)}
 .mirror-draft-label{display:block;font-size:13px}
 .mirror-draft-label textarea{width:100%;box-sizing:border-box;min-height:200px;margin:12px 0;resize:vertical;padding:16px;background:var(--cream);color:var(--ink);border:1px solid var(--line);border-radius:8px;font:400 16px/1.6 Inter,sans-serif}
 .mirror-draft-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
