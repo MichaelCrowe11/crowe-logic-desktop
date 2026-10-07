@@ -10,6 +10,11 @@ const dimensions = (cols, rows) => {
   if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || cols > 300 || rows < 2 || rows > 120) throw fail("Invalid terminal dimensions.");
 };
 
+const localDimensions = (cols, rows) => {
+  const clamp = (n, fallback, max) => Math.max(2, Math.min(max, Number.isFinite(n) ? Math.floor(n) : fallback));
+  return [clamp(cols, 80, 300), clamp(rows, 24, 120)];
+};
+
 // Process ownership stays on the desktop. Poll clients only receive bounded,
 // sequenced output. A missing history range is replaced by a full VT snapshot.
 class TerminalSessions extends EventEmitter {
@@ -17,6 +22,7 @@ class TerminalSessions extends EventEmitter {
     super(); this.sessions = new Map(); this.historyBytes = historyBytes; this.now = now;
   }
   create(id, spawn, { cols = 80, rows = 24, cwd = "", label = id, openedBy = null } = {}) {
+    if (!openedBy) [cols, rows] = localDimensions(cols, rows);
     dimensions(cols, rows);
     if (this.sessions.has(id)) return this.get(id);
     if (this.sessions.size >= 24) throw fail("Close a terminal before opening another.", 429);
@@ -148,7 +154,7 @@ class TerminalSessions extends EventEmitter {
       this.record(s, { type: "resize", cols, rows });
     });
   }
-  localResize(id, cols, rows) { const s = this.get(id); if (!s.controller) return this.resize(id, cols, rows); }
+  localResize(id, cols, rows) { const s = this.get(id); if (!s.controller) return this.resize(id, ...localDimensions(cols, rows)); }
   openDraft(id, text) {
     const s = this.get(id);
     if (typeof text !== "string" || size(text) > 256 * 1024) throw fail("Draft exceeds 256 KiB.");

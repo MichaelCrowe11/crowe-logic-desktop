@@ -1189,7 +1189,10 @@ async function mountTerminal(p, body, systemTerminal=false) {
   const start=async()=>{
     const attempt=++entry.attempt;entry.attaching=true;entry.pending=[];state.textContent="starting";
     const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:p.engine?"engine":"terminal",generation:p.engine?p.generation:undefined}).catch(err=>({ok:false,error:err?.message||String(err)}));
-    if(terminalPanels.get(p.id)!==entry||entry.attempt!==attempt)return;
+    if(terminalPanels.get(p.id)!==entry||entry.attempt!==attempt){
+      if(r?.ok!==false&&r?.generation&&!terminalPanels.has(p.id))await window.crowe.pty.close(p.id,r.generation);
+      return;
+    }
     const ok=r&&r.ok!==false;state.textContent=ok?(r.engine?`${r.engine} is working here`:"running"):"no shell";
     if(ok){
       entry.generation=r.generation||p.generation;entry.seq=Number.isInteger(r.seq)?r.seq:-1;

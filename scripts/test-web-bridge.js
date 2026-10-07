@@ -667,8 +667,8 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     // inert there. Matched on the field name rather than the copy, so rewording
     // the offer does not fail this.
     const src = read("renderer/renderer.js");
-    const term = src.slice(src.indexOf("window.crowe.pty.start({id:p.id"));
-    assert(/remedy/.test(term.slice(0, 600)), "terminal panel does not print the remedy under the refusal");
+    const term = src.slice(src.indexOf("async function mountTerminal("), src.indexOf("function queueTerminalDisplay("));
+    assert(/remedy/.test(term), "terminal panel does not print the remedy under the refusal");
     const tree = src.slice(src.indexOf("async function loadTree("));
     assert(/remedy/.test(tree.slice(0, 1200)), "files tree does not offer the remedy");
     return "terminal and files";

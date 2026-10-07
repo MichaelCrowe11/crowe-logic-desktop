@@ -359,8 +359,8 @@ function methodPaths(surface) {
     assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
     assert(/\["neural", "phone"\]/.test(speak) && /VOICES = \["neural", "phone"\]/.test(ui), "the two sides must agree on the two voices");
     assert(/id !== "michael"/.test(speak) && !/value="michael"/.test(ui), "the retired cloned voice must never be offered or requested");
-    assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
-    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
+    assert(/preferred === "phone" \|\| !window\.croweCloud/.test(speak), "the phone's own voice must use the local fallback");
+    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\?\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
     return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
   });
 

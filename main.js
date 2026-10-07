@@ -1632,9 +1632,9 @@ ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 2
   let proc;
   try {
     await draftBridge.start();
-    const editorScript = path.join(__dirname, "bin", "crowe-session-editor.py").replace(/app\.asar([/\\])/, "app.asar.unpacked$1");
-    proc = terminalSessions.create(id, s => spawnShell(cols, rows, {
-      ...draftBridge.env(s), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || `python3 ${JSON.stringify(editorScript)}`,
+    const editor = require("./session-editor").editorCommand({ executable: process.execPath, appPath: __dirname, packaged: app.isPackaged });
+    proc = terminalSessions.create(id, s => spawnShell(s.cols, s.rows, {
+      ...draftBridge.env(s), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || editor,
     }), { cols, rows, cwd: CWD, label: id }).proc;
   }
   catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
@@ -1647,7 +1647,11 @@ ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { try { termin
 // Taking a terminal back from a phone types nothing; it only ends the lease.
 ipcMain.on("crowe:pty:reclaim", (_e, { id = "main" } = {}) => { try { terminalSessions.reclaim(id); } catch {} });
 ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { try { terminalSessions.localResize(id, cols, rows); } catch {} });
-ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { terminalSessions.close(id); ptyProcs.delete(id); return { ok: true }; });
+ipcMain.handle("crowe:pty:close", (_e, { id = "main", generation } = {}) => {
+  const session = terminalSessions.sessions.get(id);
+  if (generation && session?.generation !== generation) return { ok: true };
+  terminalSessions.close(id); ptyProcs.delete(id); return { ok: true };
+});
 ipcMain.handle("crowe:operator:status", () => ({
   app: "running", agents: agentRuns.size,
   agentIds: [...agentRuns.keys()], terminals: ptyProcs.size, terminalIds: [...ptyProcs.keys()],

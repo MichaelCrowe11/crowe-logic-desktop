@@ -137,6 +137,38 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "terminal refusal renders its Workspace remedy",
+    body: `const real=window.crowe.pty; let p;
+      window.crowe.pty={...real,start:async()=>({ok:false,error:"Use the Workspace",remedy:{label:"Open workspace",url:"https://workspace.example.test"}}),close:async()=>({ok:true})};
+      try { p=await addPanel("terminal"); await new Promise(r=>setTimeout(r,100));
+        const b=terminalPanels.get(p.id).term.buffer.active; let text="";
+        for(let i=0;i<b.length;i++)text+=b.getLine(i)?.translateToString(true)||"";
+        return {reason:text.includes("Use the Workspace"),remedy:text.includes("workspace.example.test")};
+      }finally{if(p)closePanel(p.id);window.crowe.pty=real;}`,
+    expect: {reason:true,remedy:true},
+  },
+  {
+    name: "closing a panel before start completes closes the late shell generation",
+    body: `const real=window.crowe.pty;let finish;const closed=[];
+      window.crowe.pty={...real,start:()=>new Promise(r=>{finish=r}),close:async(id,generation)=>{closed.push({id,generation});return {ok:true}}};
+      try {const opening=addPanel("terminal",{id:"late-terminal"});closePanel("late-terminal");
+        finish({ok:true,id:"late-terminal",generation:"late-generation"});await opening;
+        return {closed:closed.some(x=>x.generation==="late-generation"),orphan:terminalPanels.has("late-terminal")};
+      }finally{window.crowe.pty=real;}`,
+    expect:{closed:true,orphan:false},
+  },
+  {
+    name: "late terminal start does not close a replacement panel with the same id",
+    body: `const real=window.crowe.pty;let finish;let calls=0;const closed=[];
+      window.crowe.pty={...real,start:()=>++calls===1?new Promise(r=>{finish=r}):Promise.resolve({ok:true,id:"reused-terminal",generation:"new-generation"}),close:async(id,generation)=>{closed.push({id,generation});return {ok:true}}};
+      try {const opening=addPanel("terminal",{id:"reused-terminal"});closePanel("reused-terminal");
+        await addPanel("terminal",{id:"reused-terminal"});finish({ok:true,id:"reused-terminal",generation:"old-generation"});await opening;
+        return {extraClose:closed.some(x=>x.generation),generation:terminalPanels.get("reused-terminal").generation};
+      }finally{closePanel("reused-terminal");window.crowe.pty=real;}`,
+    expect:{extraClose:false,generation:"new-generation"},
+  },
+
+  {
     name: "engine panels attach the current generation and reconcile snapshot, live output and resize",
     body: `const real=window.crowe.pty;let requested;const id="engine-attach-regression",generation="current-generation";
       window.crowe.pty={...real,start:async opts=>{

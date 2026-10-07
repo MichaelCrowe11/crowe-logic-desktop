@@ -83,6 +83,7 @@ jobs:
           node mobile/scripts/sync-version.js --check
           node scripts/test-brand-copy.js
           node scripts/test-companion.js
+          node scripts/test-gates-client.js
           node scripts/test-qr.js
           node scripts/test-sense.js
           node scripts/test-channel-analytics.js
@@ -101,6 +102,7 @@ jobs:
           npm run test:phone-mirror
           npm run test:draft-editor
           node --test scripts/test-mobile-release.js
+          python3 scripts/test-ios-bundle.py
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
@@ -176,6 +178,9 @@ jobs:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-panels.js
 
+      - name: Verify bundled editor startup without a system interpreter
+        run: xvfb-run -a node --test scripts/test-session-editor-runtime.js
+
       # The phone shell, in a phone-sized window. Electron rather than a browser
       # driver so the mobile app costs the suite no dependency the desktop one
       # was not already paying for, and because the layout only switches on
@@ -184,6 +189,11 @@ jobs:
         env:
           ELECTRON_ENABLE_LOGGING: "1"
         run: xvfb-run -a npx electron scripts/test-mobile-shell.js
+
+      - name: Run mobile product and upgrade preservation checks
+        env:
+          CROWE_TEST_ARTIFACTS: /tmp/crowe-shots/mobile-product
+        run: xvfb-run -a node_modules/.bin/electron scripts/test-mobile-product.js
 
       - name: Run shared draft and real terminal roundtrip
         run: xvfb-run -a node_modules/.bin/electron scripts/test-phone-mirror-ui.js

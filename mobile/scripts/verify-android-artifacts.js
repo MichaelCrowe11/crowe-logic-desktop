@@ -21,6 +21,12 @@ function verifyMetadata(badging, version) {
   return { bundleId: pkg[1], version, build: code, targetSdk: 36 };
 }
 
+function verifyBundleMetadata(bundle, apk) {
+  assert.equal(bundle.bundleId, apk.bundleId, "AAB belongs to another application");
+  assert.equal(String(bundle.build), String(apk.build), "AAB build number is stale");
+  assert.equal(bundle.version, apk.version, "AAB version is stale");
+}
+
 function main() {
   const mobile = path.resolve(__dirname, "..");
   const version = require(path.join(mobile, "package.json")).version;
@@ -39,6 +45,10 @@ function main() {
   run("unzip", ["-t", aab]);
   const entries = run("unzip", ["-Z1", aab]);
   assert.match(entries, /^base\/manifest\/AndroidManifest\.xml$/m, "Bundle manifest is absent");
+  const bundletool = process.env.BUNDLETOOL_JAR;
+  assert.ok(bundletool && fs.existsSync(bundletool), "BUNDLETOOL_JAR must point to the verified bundletool jar");
+  const attribute = name => run("java", ["-jar", bundletool, "dump", "manifest", `--bundle=${aab}`, `--xpath=/manifest/@${name}`]).trim();
+  verifyBundleMetadata({ bundleId: attribute("package"), build: attribute("android:versionCode"), version: attribute("android:versionName") }, meta);
   if (!allowUnsigned) {
     run(path.join(buildTools, "apksigner"), ["verify", apk]);
     const signature = run("jarsigner", ["-J-Duser.language=en", "-verify", aab]);
@@ -49,4 +59,4 @@ function main() {
 if (require.main === module) {
   try { main(); } catch (error) { console.error("Android artifact verification failed:", error.message); process.exitCode = 1; }
 }
-module.exports = { verifyMetadata };
+module.exports = { verifyMetadata, verifyBundleMetadata };

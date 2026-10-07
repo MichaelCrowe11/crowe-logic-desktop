@@ -20,6 +20,9 @@
   wb.parentNode.insertBefore(pane, wb);
 
   let models = null, kind = "text", compare = false, busy = false, aborts = [];
+  const imageURLs = new Set();
+  const releaseImages = () => { for (const url of imageURLs) URL.revokeObjectURL(url); imageURLs.clear(); };
+  window.addEventListener("pagehide", () => { aborts.forEach(c => c.abort()); releaseImages(); });
   const pick = { a: "", b: "" };
   try { Object.assign(pick, JSON.parse(localStorage.getItem("crowe-playground") || "{}")); } catch { /* fresh */ }
   const remember = () => { try { localStorage.setItem("crowe-playground", JSON.stringify(pick)); } catch { /* storage refused */ } };
@@ -41,6 +44,7 @@
   const starters = () => `<section class="m-pg-try"><h2 class="m-h-label">Try one</h2><div class="m-pg-chips">${STARTERS[kind].map((t) => `<button type="button" data-starter="${esc(t)}">${esc(t)}</button>`).join("")}</div></section>`;
 
   function shell(note) {
+    releaseImages();
     pane.innerHTML = `<div class="m-home-inner m-pg">
       <header class="m-pg-head"><h1 class="m-pg-title">Playground</h1>
         <p class="m-pg-sub">Try the models behind Crowe Logic. Runs here are scratch work and are not saved to your chats.</p></header>
@@ -134,9 +138,12 @@
     const meta = el.querySelector(".m-pg-meta"), out = el.querySelector(".m-pg-body");
     const t0 = performance.now();
     meta.textContent = "Creating…";
+    const ctrl = new AbortController(); aborts.push(ctrl);
     try {
-      const r = await window.croweCloud.call("/v1/image", { method: "POST", body: JSON.stringify({ model, prompt }) });
-      const url = URL.createObjectURL(await r.blob());
+      const r = await window.croweCloud.call("/v1/image", { method: "POST", signal: ctrl.signal, body: JSON.stringify({ model, prompt }) });
+      const blob = await r.blob();
+      if (ctrl.signal.aborted || !el.isConnected) return;
+      const url = URL.createObjectURL(blob); imageURLs.add(url);
       out.innerHTML = `<img class="m-pg-img" src="${url}" alt="${esc(prompt.slice(0, 120))}">`;
       meta.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
     } catch (e) { meta.textContent = "Failed"; out.innerHTML = `<p class="m-pg-note">${esc(e.message)}</p>`; }
@@ -150,6 +157,7 @@
     document.getElementById("m-pg-input").blur();
     busy = true; aborts = []; haptic("light");
     btn.textContent = kind === "image" ? "Creating…" : "Stop";
+    releaseImages();
     const out = document.getElementById("m-pg-out"); out.innerHTML = "";
     const ids = kind === "text" && compare ? [pick.a, pick.b] : [pick.a];
     const cards = ids.map((id) => { const el = card(id); out.appendChild(el); return el; });

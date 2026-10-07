@@ -177,9 +177,16 @@ const tests = [
         return r;
       };
       const e = await look(false), u = await look(true);
-      return { elseButton: e.button, elseLine: e.line, elseSeePlans: e.seePlans, elseCard: e.card,
+      document.getElementById("settings").classList.remove("hidden");
+      document.getElementById("m-plan-up").click(); await sleep(100);
+      const settingsClosed = document.getElementById("settings").classList.contains("hidden");
+      const settingsCard = Boolean(document.querySelector("#transcript .plan-card"));
+      const settingsPane = document.body.dataset.pane;
+      document.querySelector("#transcript .plan-card")?.closest(".msg").remove();
+      __tap("Home"); await __settle();
+      return { settingsClosed, settingsCard, settingsPane, elseButton: e.button, elseLine: e.line, elseSeePlans: e.seePlans, elseCard: e.card,
                usButton: u.button, usSeePlans: u.seePlans, usCard: u.card, usPrice: u.price };`,
-    expect: { elseButton: false, elseLine: "Free.", elseSeePlans: false, elseCard: false,
+    expect: { settingsClosed: true, settingsCard: true, settingsPane: "agent", elseButton: false, elseLine: "Free.", elseSeePlans: false, elseCard: false,
               usButton: true, usSeePlans: true, usCard: true, usPrice: "$99 a month" },
   },
   {

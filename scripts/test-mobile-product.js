@@ -3,6 +3,7 @@ const { app, BrowserWindow } = require('electron');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const assert = require('assert/strict');
 const root = path.resolve(__dirname, '../mobile/www');
 let server;
@@ -20,7 +21,10 @@ app.whenReady().then(async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const win = new BrowserWindow({ width: 390, height: 844, useContentSize: true, show: false, webPreferences: { partition: 'product-reset-test' } });
     const url = `http://127.0.0.1:${server.address().port}/`;
-    const run = script => win.webContents.executeJavaScript(script);
+    const run = async script => {
+      try { return await win.webContents.executeJavaScript(script); }
+      catch (error) { throw new Error(`Renderer check failed: ${script}`, { cause: error }); }
+    };
     const wait = () => new Promise(resolve => setTimeout(resolve, 1800));
     await win.loadURL(url); await wait();
     await run(`localStorage.setItem('crowe-spaces', JSON.stringify(['chat','cultivation'])); localStorage.setItem('crowe-space','cultivation'); localStorage.setItem('crowe:grow:blocks',JSON.stringify([{id:'preserve-me',code:'DEMO'}]));`);
@@ -52,7 +56,11 @@ app.whenReady().then(async () => {
     console.log('PASS: pairing opens settings; farm space, sensor setup, and founders promotion are absent');
     // Paired: Home names the operating mode in plain words, follows a change,
     // never implies per-action approval, and the mode picker is on screen.
-    await run(`document.body.classList.add('m-paired'); document.body.dataset.tier = 'edit'; document.querySelector('#m-tabs [data-id="chat"]').click()`); await wait();
+    // Home reads the ready bridge config; a CSS class alone no longer pairs it.
+    // Stub only that read in this isolated renderer, without storing a token.
+    await run(`window.__productGetConfig = window.crowe.getConfig;
+      window.crowe.getConfig = async () => ({...await window.__productGetConfig(), remote: {configured: true}});
+      document.body.classList.add('m-paired'); document.body.dataset.tier = 'edit'; document.querySelector('#m-tabs [data-id="chat"]').click()`); await wait();
     assert.equal(await run(`document.getElementById('autonomy').checkVisibility()`), true, 'mode picker visible when paired');
     await run(`document.querySelector('#m-tabs [data-id="home"]').click()`); await wait();
     assert.match(await run(`document.getElementById('m-home-mode').textContent`), /Edit.*Commands need Execute/);
@@ -60,13 +68,15 @@ app.whenReady().then(async () => {
     const mode = await run(`document.getElementById('m-home-mode').textContent`);
     assert.match(mode, /Read.*Changes nothing/);
     assert.doesNotMatch(mode, /approve|each action|every action/i);
-    await run(`document.body.classList.remove('m-paired')`);
+    await run(`window.crowe.getConfig = window.__productGetConfig; delete window.__productGetConfig; document.body.classList.remove('m-paired')`);
     console.log('PASS: paired Home states the operating mode, follows changes, and the picker is visible');
+    const artifacts = process.env.CROWE_TEST_ARTIFACTS || fs.mkdtempSync(path.join(os.tmpdir(), 'crowe-mobile-product-'));
+    fs.mkdirSync(artifacts, { recursive: true });
     for (const width of [390, 430]) {
       win.setContentSize(width, 844); await wait();
       assert.equal(await run(`document.documentElement.scrollWidth <= innerWidth`), true);
       const image = await win.webContents.capturePage();
-      fs.writeFileSync(path.resolve(__dirname, `../mobile/scratch-1.1/product-home-${width}.png`), image.toPNG());
+      fs.writeFileSync(path.join(artifacts, `product-home-${width}.png`), image.toPNG());
     }
     console.log('PASS: phone widths fit without horizontal overflow; screenshots captured');
   } catch (error) { console.error(error); code = 1; }

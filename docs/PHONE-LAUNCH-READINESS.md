@@ -51,7 +51,9 @@ Primary references, checked October 6, 2026:
 ```sh
 npm run test:phone-mirror
 npm run test:draft-editor
+node --test scripts/test-session-editor-runtime.js
 node --test scripts/test-mobile-release.js
+python3 scripts/test-ios-bundle.py
 node scripts/test-gates-client.js
 node scripts/test-companion.js
 node scripts/test-mobile-bridge.js
@@ -63,6 +65,7 @@ node scripts/test-brand-copy.js
 node scripts/check-contrast.js
 node_modules/.bin/electron scripts/test-phone-mirror-ui.js
 node_modules/.bin/electron scripts/test-mobile-shell.js
+node_modules/.bin/electron scripts/test-mobile-product.js
 node_modules/.bin/electron scripts/test-panels.js
 ```
 
@@ -75,7 +78,10 @@ configuration, signatures, privacy-manifest presence and seven source-asset hash
 After distribution export, repeat it with `--distribution` to reject development,
 ad-hoc or enterprise provisioning. This check does not validate privacy claims.
 
-Android CI now checks APK metadata, bundle integrity and signatures. Unsigned
+Android CI now checks APK and AAB identity and versions, bundle integrity and signatures. Its
+bundle metadata reader is bundletool 1.18.3, verified against the release SHA-256.
+For local Android artifact verification, set `BUNDLETOOL_JAR` to that verified jar.
+Unsigned
 artifacts are explicitly labelled packaging-only. Partial signing credentials
 fail the build; `CROWE_REQUIRE_ANDROID_SIGNING=1` also rejects absent signing.
 
@@ -98,11 +104,40 @@ Local results for this source: terminal/backend **34/34**, panels **100/100**,
 mobile shell **43/43**, draft editor **5/5**, and gate-client fixtures **24/24**.
 Phone UI integration passed with isolated real PTYs, independent shells and draft
 switching. Release, packaging, security, version, brand and contrast checks passed.
-The live relay E2E was not rerun, and Android still requires CI and device testing.
+Those results describe the installed October 6 candidate. Later validation is
+recorded separately below.
+
+## PR review follow-up, October 7
+
+The follow-up fixes interrupted speech requests, Unicode paste byte limits,
+Settings plan navigation, late terminal-start cleanup, large desktop terminal
+dimensions and web look-layer delivery. Session audit records retain control
+changes without a record for every keystroke, renewal or resize. The shared draft
+editor now uses the application's bundled runtime and preserves file concurrency
+checks and line endings, without requiring system Python.
+
+The full `npm test` suite passed locally. Focused checks passed for panels
+**103/103**, mobile shell **43/43**, draft editor **10/10**, the real editor entry
+point **1/1**, and malformed iOS SDK metadata. The real-PTY phone fixture passed,
+including a large Unicode paste with a retained control lease. The updated iOS
+source compiled successfully with signing disabled; this is compile evidence,
+not a newly installed or distribution-signed build.
+
+The live relay E2E passed **8/8** with this branch's gate client and phone bridge
+and the isolated CLI gate worktree. It verified phone approval, denial, the first
+answer winning, edit evidence, cancellation, expiry and an unreachable relay.
+The clients used isolated test state; these checks do not establish physical
+phone pairing or device revocation. Driver receipts include source hashes.
+
+The October 6 Android workflow passed for `4d8f76a`. The updated workflow also
+verifies AAB metadata against the APK; check its result on the final PR commit.
+The iPhone still carries the earlier `fb2455d` application sources. Rebuild and
+install the reviewed sources before claiming these follow-up fixes on the phone.
+
+Follow-up evidence is stored in `~/crowe-evidence/2026-10-07-pr134-followup/`.
 
 ## Remaining distribution gates
 
-- Run the combined gate E2E against the relay with isolated test credentials.
 - Verify sign-in deep links on cold and warm launches, foreground/background
   recovery, native Settings sheets and terminal switching on the physical phone.
 - Verify the matching desktop companion with the actually paired device,

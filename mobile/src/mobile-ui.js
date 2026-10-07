@@ -1247,7 +1247,11 @@
       : p.buyHere ? "Free. Pro unlocks every CroweLM tier and the frontier engines." : `${name}.`;
     btn.hidden = Boolean(p.paid) || !p.buyHere;
   }
-  planSection.querySelector("#m-plan-up").addEventListener("click", () => { setPane("chat"); planCard("settings"); });
+  planSection.querySelector("#m-plan-up").addEventListener("click", () => {
+    $("settings")?.classList.add("hidden");
+    __tapTab("Chat");
+    planCard("settings");
+  });
   window.addEventListener("crowe:plan", (e) => {
     paintPlan(null);
     const d = e && e.detail;

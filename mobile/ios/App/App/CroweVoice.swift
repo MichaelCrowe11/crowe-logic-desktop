@@ -77,7 +77,7 @@ public class CroweVoice: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegat
         }
         DispatchQueue.main.async {
             if self.synth.isSpeaking { self.synth.stopSpeaking(at: .immediate) }
-            let language = AVSpeechSynthesisVoice.currentLanguageCode()
+            let language = call.getString("language") ?? AVSpeechSynthesisVoice.currentLanguageCode()
             let utterance = AVSpeechUtterance(string: text)
             // A requested voice is honoured only if it is one this plugin would offer.
             if let id = call.getString("voice"), let v = self.usable(language).first(where: { $0.identifier == id }) {

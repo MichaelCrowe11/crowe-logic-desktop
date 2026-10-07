@@ -616,7 +616,9 @@ class Companion {
         else if (writingDraft) result = sessions.changeDraft(s.id, body.draftId, { baseRevision: body.baseRevision, text: body.text,
           operationId: `${device.id}-${body.operationId}`, action: route === "/draft/save" ? "save" : "return" });
         else return this.send(res, 404, { detail: "Unknown session operation." });
-        this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: s.id });
+        if (!["/sessions/input", "/sessions/renew", "/sessions/resize"].includes(route)) {
+          this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: s.id });
+        }
         return this.send(res, 200, result);
       }
       if (url.pathname === "/run") {

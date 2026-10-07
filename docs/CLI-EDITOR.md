@@ -37,3 +37,9 @@ Logic name, branding and signing configuration. A local build is not a published
 or notarized release. The CLI's `~/.config/crowe/editors.json` contains its exact
 executable path. The CLI invokes `open -n -W -a <app> --args ...` on macOS and
 checks the receipt before reading the edited draft.
+
+Inside a managed desktop terminal, the default `CROWE_VISUAL_EDITOR` invokes this
+same application with `--session-draft`. The application supplies the runtime;
+no system Python or Node installation is required. The blocking helper talks only
+to the authenticated loopback draft broker, then returns the edited file after
+checking for concurrent changes. An explicit operator editor override still wins.

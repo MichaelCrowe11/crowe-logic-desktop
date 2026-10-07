@@ -6,6 +6,17 @@ const { FakePty } = require("./mirror-fixtures");
 const write = (t, value) => new Promise(resolve => t.write(value, resolve));
 const line = t => t.buffer.active.getLine(t.buffer.active.cursorY + t.buffer.active.baseY).translateToString(true);
 
+test("oversized desktop layouts are bounded while phone dimensions remain strict", async t => {
+  const manager = new TerminalSessions(); t.after(() => manager.closeAll());
+  let dimensions;
+  const s = manager.create("wide", state => { dimensions = [state.cols, state.rows]; return new FakePty(); }, { cols: 500, rows: 200 });
+  assert.deepEqual(dimensions, [300, 120]);
+  await manager.localResize(s.id, 800, 180);
+  assert.deepEqual([s.cols, s.rows], [300, 120]);
+  assert.throws(() => manager.resize(s.id, 800, 180), /Invalid terminal dimensions/);
+  assert.throws(() => manager.create("phone", () => new FakePty(), { cols: 500, rows: 200, openedBy: { id: "phone" } }), /Invalid terminal dimensions/);
+});
+
 test("snapshot and bounded replay reconstruct alternate screen, cursor and Unicode", async t => {
   const manager = new TerminalSessions({ historyBytes: 120 }); t.after(() => manager.closeAll());
   const proc = new FakePty(); const s = manager.create("console", () => proc);

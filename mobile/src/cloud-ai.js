@@ -16,11 +16,12 @@
   async function call(path, init = {}) {
     const tok = await bearer();
     if (!tok) { const e = new Error("Sign in to use this"); e.status = 401; throw e; }
+    init.signal?.throwIfAborted();
     const headers = { Authorization: `Bearer ${tok}`, ...(init.body ? { "Content-Type": "application/json" } : {}), ...(init.headers || {}) };
     const r = await fetch(BASE + path, { ...init, headers });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      const e = new Error(d.error || `The AI service answered ${r.status}`); e.status = r.status; throw e;
+      const e = new Error(d.error || `The speech and model service answered ${r.status}`); e.status = r.status; throw e;
     }
     return r;
   }

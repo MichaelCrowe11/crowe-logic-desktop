@@ -386,16 +386,27 @@
       } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
       finally { if (!disposed && epoch === currentEpoch) { busy = false; controls(); } }
     }
+    const inputBytes = text => new TextEncoder().encode(text).byteLength;
+    function inputPrefix(text) {
+      let prefix = "", bytes = 0;
+      for (const char of text) {
+        const count = inputBytes(char);
+        if (bytes + count > 16384) break;
+        prefix += char; bytes += count;
+      }
+      return prefix;
+    }
     function sendInput(data) {
       if (disposed || document.hidden || !root.isConnected || !root.getClientRects().length || activeView !== "terminal" || controlBusy || closing || !connected || lease === null) return;
-      if (queuedInput + data.length > 16384) { status("Input queue is full. Wait before typing again."); return; }
+      const bytes = inputBytes(data);
+      if (queuedInput + bytes > 16384) { status("Input queue is full. Wait before typing again."); return; }
       const request = { ...payload(), lease, inputId: uid(), data }; const currentEpoch = epoch;
-      queuedInput += data.length;
+      queuedInput += bytes;
       inputQueue = inputQueue.then(async () => {
         if (disposed || document.hidden || !root.getClientRects().length || activeView !== "terminal" || controlBusy || closing || !connected || epoch !== currentEpoch || lease !== request.lease) return;
         const result = await transport.call("/sessions/input", request);
         if (epoch === currentEpoch && result.error) { lease = null; status(`${result.error} Input was not retried.`); controls(); }
-      }).catch(error => { if (epoch === currentEpoch) { lease = null; status(error.message); controls(); } }).finally(() => { queuedInput -= data.length; });
+      }).catch(error => { if (epoch === currentEpoch) { lease = null; status(error.message); controls(); } }).finally(() => { queuedInput -= bytes; });
     }
     terminal.onData(data => { keys?.invalidateLine(); sendInput(data); });
     async function paste() {
@@ -405,7 +416,7 @@
         if (!disposed && !document.hidden && epoch === currentEpoch && lease === currentLease && currentLease !== null && activeView === "terminal" && text) {
           // Clipboard line breaks and escape characters must not execute a
           // command as a side effect of typing. Review a single line first.
-          const safe = text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, " ").slice(0, 16384);
+          const safe = inputPrefix(text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, " "));
           pasteReview = { text: safe, epoch: currentEpoch, lease: currentLease };
           $("[data-paste-text]").value = safe; $("[data-paste-review]").hidden = false;
           controls();

@@ -164,3 +164,15 @@ test("discarding a managed draft leaves the CLI original and exits successfully"
   assert.equal((await done)[0], 0); assert.equal(fs.readFileSync(filename, "utf8"), "original\r\n");
   assert.deepEqual(f.proc.inputs, []);
 });
+
+
+test("terminal audit keeps control changes without recording every key or heartbeat", async t => {
+  const f = await setup(t), audit = [];
+  f.companion.audit = entry => audit.push(entry);
+  const lease = (await f.post("/sessions/control")).body.controller.lease;
+  for (const route of ["/sessions/input", "/sessions/renew", "/sessions/resize"]) {
+    assert.equal((await f.post(route, { lease, inputId: crypto.randomUUID(), data: "x", cols: 80, rows: 24 })).status, 200);
+  }
+  assert.equal((await f.post("/sessions/release", { lease })).status, 200);
+  assert.deepEqual(audit.map(entry => entry.path), ["/sessions/control", "/sessions/release"]);
+});

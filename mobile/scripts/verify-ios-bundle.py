@@ -23,7 +23,8 @@ def verify(app, distribution=False):
     assert info['CFBundleIdentifier'] == 'com.crowelogic.mobile', 'Wrong app bundle'
     assert info['CFBundleShortVersionString'] == version, 'Stale app version'
     assert info['CFBundleVersion'] == build, 'Stale app build number'
-    assert int(re.search(r'iphoneos(\d+)', info['DTSDKName'])[1]) >= 26, 'iOS SDK is below the submission minimum'
+    sdk = re.fullmatch(r'iphoneos(\d+)(?:\.\d+)*', str(info.get('DTSDKName', '')))
+    assert sdk and int(sdk[1]) >= 26, 'Expected an iPhone device SDK at or above the submission minimum'
     scene = info['UIApplicationSceneManifest']
     assert scene['UIApplicationSupportsMultipleScenes'] is False
     config = scene['UISceneConfigurations']['UIWindowSceneSessionRoleApplication'][0]

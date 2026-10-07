@@ -133,7 +133,9 @@ function buildIndex() {
   if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
   const cloud = fs.readFileSync(path.join(__dirname, "..", "src", "cloud-ai.js"), "utf8").match(/const BASE = "(https:\/\/[^"]+)"/);
   if (!cloud) throw new Error("src/cloud-ai.js no longer declares the Worker BASE this CSP must allow");
-  html = html.replace(csp, `connect-src 'self' https://*.crowelogic.com ${cloud[1]};`);
+  const checkout = fs.readFileSync(path.join(__dirname, "..", "src", "mobile-bridge.js"), "utf8").match(/const CHECKOUT_URL = "(https:\/\/[^"]+)"/);
+  if (!checkout) throw new Error("mobile-bridge.js must declare the checkout URL allowed by the phone CSP");
+  html = html.replace(csp, `connect-src 'self' https://*.crowelogic.com ${new URL(cloud[1]).origin} ${new URL(checkout[1]).origin};`);
 
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);
