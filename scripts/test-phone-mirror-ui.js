@@ -17,6 +17,7 @@ app.setPath("userData", path.join(dir, "profile"));
 let win, manager, companion, bridge;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const until = async (fn, description) => { for (let i = 0; i < 80; i++) { if (await fn()) return; await delay(100); } throw new Error(`Timed out: ${description}`); };
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 app.whenReady().then(async () => {
   let okay = false;
   try {
@@ -26,13 +27,22 @@ app.whenReady().then(async () => {
     const openShell = async ({ cols, rows, device }) => manager.create(`phone-${++opened}`, state => pty.spawn("/bin/zsh", ["-f"], { cols, rows, cwd: dir, env: { ...process.env, ...bridge.env(state) } }), { cols, rows, cwd: dir, label: `${device.name} shell`, openedBy: device });
     companion = new Companion({ tokenFile: path.join(dir, "companion.token"), loopback: true, port: 0, sessions: manager, openShell, hostName: () => "Test Mac" }); await companion.start(); const phone = companion.addDevice("UI test phone", { terminal: true });
     win = new BrowserWindow({ width: 390, height: 844, show: false, webPreferences: { preload: path.join(__dirname, "phone-mirror-test-preload.js"), contextIsolation: true, sandbox: true, backgroundThrottling: false } });
+    let holdInput = null, holdClose = null;
+    const sentInput = [];
     ipcMain.handle("mirror-test:request", async (event, route, body) => {
       if (event.sender !== win.webContents || !/^\/(sessions|draft)\//.test(route)) throw new Error("Invalid test request");
+      if (route === "/sessions/input") { sentInput.push(body); if (holdInput) await holdInput.promise; }
+      if (route === "/sessions/close" && holdClose) await holdClose.promise;
       const r = await fetch(`http://127.0.0.1:${companion.port}${route}`, { method: "POST", headers: { Authorization: `Bearer ${phone.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await r.json(); return r.ok ? { ok: true, data } : { error: data.detail, current: data.current, status: r.status };
     });
     await win.loadFile(path.join(__dirname, "fixtures/phone-mirror.html"));
     const js = source => win.webContents.executeJavaScript(source, true);
+    const capture = async name => {
+      await js('document.fonts.ready.then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))');
+      win.webContents.invalidate(); await delay(150);
+      fs.writeFileSync(path.join(dir, name), (await win.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    };
     // The iPhone recogniser, stood in for: it hears one phrase, as prose.
     await js(`window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweSpeech: (() => { const on = {};
       let sessionId;
@@ -41,6 +51,10 @@ app.whenReady().then(async () => {
     await js('void window.crowePhoneMirror.mount(document.getElementById("phone"))');
     await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "session list");
     assert.equal(await js('document.querySelector("[data-host-name]").textContent'), "Test Mac");
+    assert.equal(await js('document.querySelector("[data-session-row=integration]").getAttribute("role")'), null, "session controls retain button semantics");
+    await js('document.querySelector("[data-session-row=integration]").focus(); document.querySelector("[data-refresh]").click()');
+    await delay(300);
+    assert.equal(await js('document.activeElement.dataset.sessionRow'), "integration", "background refresh steals focus");
     await js('document.querySelector("[data-session-row=integration]").click()');
     assert.equal(await js('document.querySelector("[data-term]").hidden'), false, "tapping a session does not open the terminal screen");
     manager.localInput(s.id, "printf 'PHONE_MIRROR_NATIVE_OK\\n'\r");
@@ -62,6 +76,8 @@ app.whenReady().then(async () => {
     await until(() => js('document.querySelector("[data-draft]").disabled === false'), "phone draft attached");
     const text = "Review reconnect after phone lock.\nPreserve the exact second line: 東京.\n";
     await js(`document.querySelector('[data-draft]').value=${JSON.stringify(text)}; document.querySelector('[data-draft]').dispatchEvent(new Event('input')); document.querySelector('[data-review]').click()`);
+    assert.equal(await js('document.querySelector(".phone-mirror").dataset.view'), "review");
+    assert.equal(await js('document.querySelector("[data-local-text]").textContent'), text);
     // Draft and review surfaces follow the selected look, unlike the terminal.
     // Measure rendered labels so dark terminal tokens cannot wash out light paper.
     for (const theme of ["light", "dark", "instrument"]) {
@@ -79,9 +95,7 @@ app.whenReady().then(async () => {
         });
       })()`);
       for (const label of measured) assert.ok(label.contrast >= 4.5, `${theme} label ${JSON.stringify(label.text)} has ${label.contrast.toFixed(2)}:1 contrast`);
-      await delay(100);
-      const shot = await win.webContents.capturePage();
-      fs.writeFileSync(path.join(dir, theme === "light" ? "phone-review.png" : `phone-review-${theme}.png`), shot.toPNG());
+      await capture(theme === "light" ? "phone-review.png" : `phone-review-${theme}.png`);
     }
     await js('document.body.classList.remove("dark"); document.body.dataset.look="editorial"; void 0');
     console.log("ok draft and review labels retain readable contrast in light, dark and Instrument");
@@ -96,13 +110,27 @@ app.whenReady().then(async () => {
     await js('document.querySelector("[data-back]").click()');
     await until(() => js('document.querySelector("[data-open]").disabled === false'), "New terminal offered");
     await delay(150);
-    const hosts_shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-hosts.png"), hosts_shot.toPNG());
+    await capture("phone-hosts.png");
     await js('document.querySelector("[data-open]").click()');
     await until(() => manager.sessions.has("phone-1") && manager.sessions.get("phone-1").controller !== null, "phone shell opened and held");
     const own = manager.sessions.get("phone-1");
     assert.ok(own.cols < 80 && own.cols >= 20, `phone shell is not sized to the phone: ${own.cols} columns`);
     await until(() => js('document.querySelector("[data-keys]").hidden === false && document.querySelector("[data-close]").hidden === false'), "Crowe keyboard and close for own shell");
     assert.equal(await js('document.querySelector(".xterm-helper-textarea").getAttribute("inputmode")'), "none", "the phone keyboard would rise over the Crowe keyboard");
+    for (const [width, height] of [[320, 568], [844, 390], [390, 844]]) {
+      win.setContentSize(width, height); await delay(180);
+      const geometry = await js(`(() => {
+        const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { width:r.width,height:r.height,bottom:r.bottom,left:r.left,right:r.right }; };
+        return { width:innerWidth,height:innerHeight, screen:box('[data-scroll]'), keyboard:box('[data-keys]'), lastKey:box('[data-kb-key="enter"]'), strip:box('.ck-strip'), toolbar:box('.mirror-toolbar'), overflow:document.querySelector('.phone-mirror').scrollWidth > innerWidth };
+      })()`);
+      assert.equal(geometry.overflow, false, `${width}x${height} overflows horizontally`);
+      assert.ok(geometry.screen.height >= 63, `${width}x${height} loses its terminal viewport`);
+      assert.ok(geometry.keyboard.bottom <= geometry.height + 1, `${width}x${height} loses the keyboard below the viewport`);
+      assert.ok(geometry.lastKey.bottom <= geometry.keyboard.bottom + 1, `${width}x${height} clips the Return key`);
+      assert.ok(geometry.strip.bottom <= geometry.keyboard.bottom + 1, `${width}x${height} clips command history`);
+      await capture(`phone-terminal-${width}x${height}.png`);
+    }
+    console.log("ok compact and landscape terminals keep the display, toolbar and keyboard inside the viewport");
     // Keys act on release, like the phone's own.
     const tap = key => js(`(() => { const b = document.querySelector('[data-kb-key="${key}"]'); const o = { bubbles: true, pointerId: 1, clientX: 0, clientY: 0 };
       b.dispatchEvent(new PointerEvent("pointerdown", o)); b.dispatchEvent(new PointerEvent("pointerup", o)); })()`);
@@ -122,6 +150,17 @@ app.whenReady().then(async () => {
     await delay(400);
     assert.doesNotMatch((await manager.screenText(own.id)).text, /not a git repository/, "the spoken command was run without return");
     await tap("intr");
+    await js(`Object.defineProperty(navigator, "clipboard", { configurable:true, value:{ readText:async()=>"echo clipboard\\r\\necho second\\u001b" } }); void 0`);
+    const pasteStart = sentInput.length;
+    await tap("paste");
+    await until(() => js('!document.querySelector("[data-paste-review]").hidden'), "clipboard review");
+    assert.equal(sentInput.length, pasteStart, "clipboard text was sent before review");
+    await js('document.querySelector("[data-paste-type]").click()');
+    await until(() => sentInput.length > pasteStart, "reviewed clipboard text typed");
+    assert.equal(sentInput.at(-1).data, "echo clipboard echo second ");
+    assert.doesNotMatch(sentInput.at(-1).data, /[\x00-\x1f\x7f-\x9f]/, "paste contains terminal control bytes");
+    await tap("intr");
+    console.log("ok clipboard review sends a single line only after confirmation, with no terminal control bytes");
     await tap("mic");
     await until(() => js('document.querySelector("[data-kb-heard]")?.textContent === "git status"'), "second dictation is reviewed");
     await tap("hide");
@@ -131,10 +170,36 @@ app.whenReady().then(async () => {
     assert.equal(await js('localStorage.getItem("crowe-term-history")'), null, "commands must not be persisted");
     console.log("ok Crowe keyboard types, remembers only in memory, arms Ctrl; reviewed mic text never presses return and hiding cancels it");
     await delay(150);
-    const own_shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-shell.png"), own_shot.toPNG());
+    await capture("phone-shell.png");
+    // A queued keystroke must not leave the phone after its pane disappears.
+    holdInput = deferred(); const heldInput = holdInput;
+    const beforeHide = sentInput.length;
+    await tap("a"); await until(() => sentInput.length === beforeHide + 1, "first delayed input");
+    await tap("b");
+    await js('document.getElementById("phone").style.display="none"; void 0');
+    await delay(100); holdInput = null; heldInput.resolve(); await delay(200);
+    assert.equal(sentInput.length, beforeHide + 1, "queued input continued after the pane was hidden");
+    await until(() => own.controller === null, "hidden pane hands back control");
+    await js('document.getElementById("phone").style.display=""; void 0');
+    await until(() => js('document.querySelector("[data-control]").disabled === false'), "visible pane reconnects");
+    await js('document.querySelector("[data-control]").click()');
+    await until(() => own.controller !== null, "take control again");
+    console.log("ok hiding a terminal releases control and drops unsent queued keystrokes");
+    // A late close response from this shell must not tear down a new selection.
+    holdClose = deferred(); const closing = holdClose;
     await js('document.querySelector("[data-close]").click()');
+    await until(() => js('document.querySelector("[data-close]").disabled'), "close acknowledged immediately");
+    await js('document.querySelector("[data-back]").click()');
+    await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "original session still listed");
+    await js('document.querySelector("[data-session-row=integration]").click()');
+    holdClose = null; closing.resolve();
     await until(() => !manager.sessions.has("phone-1"), "own shell closed from the phone");
+    await delay(150);
+    assert.equal(await js('document.querySelector("[data-title]").textContent'), "Mirror integration");
+    assert.equal(await js('document.querySelector("[data-term]").hidden'), false, "late close switched away from the new session");
+    await js('document.querySelector("[data-back]").click()');
     await until(() => js('document.querySelector("[data-hosts]").hidden === false'), "back to sessions after close");
+    console.log("ok a late close response leaves the newly selected terminal intact");
     console.log("ok New terminal opens a phone-sized shell with control, key bar, and owner close");
     // An engine's shell: listed first, watched live, taken over (the engine
     // waits) and handed back by leaving it.

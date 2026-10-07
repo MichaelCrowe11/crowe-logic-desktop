@@ -21,37 +21,38 @@
   function mount(body) {
     const root = document.createElement("section"); root.className = "phone-mirror"; root.dataset.screenName = "hosts";
     root.innerHTML = `<div class="mirror-hosts" data-hosts>
-        <div class="mirror-heading"><strong>Terminals</strong><button type="button" class="mirror-icon" data-refresh aria-label="Refresh">Refresh</button></div>
+        <div class="mirror-heading"><div><p class="mirror-eyebrow">Your workspace, with you</p><h1>Terminals</h1></div><button type="button" class="mirror-icon" data-refresh aria-label="Refresh sessions">Refresh</button></div>
         <div class="mirror-host" data-host-card>
           <div class="mirror-host-row"><i class="mirror-dot" data-host-dot aria-hidden="true"></i><div class="mirror-host-text"><b data-host-name>Your computer</b><span class="mirror-status" data-status role="status" aria-live="polite">Connecting to your paired machine</span></div></div>
-          <button type="button" class="primary mirror-open" data-open disabled>New terminal</button>
+          <button type="button" class="primary mirror-open" data-open disabled><span aria-hidden="true">+</span> New terminal</button>
           <p class="mirror-grant" data-grant hidden></p>
         </div>
-        <h2 class="mirror-label">Sessions</h2>
+        <div class="mirror-list-heading"><h2 class="mirror-label">Sessions</h2><span data-session-count class="mirror-count">0 open</span></div>
         <div class="mirror-sessions" data-session-list role="list"><p class="mirror-empty">No terminals open yet.</p></div>
+        <p class="mirror-footnote">Work stays on your computer. Open a session to follow along or take the keys.</p>
       </div>
       <div class="mirror-term" data-term hidden>
         <div class="mirror-bar">
           <button type="button" class="mirror-back" data-back aria-label="Back to sessions">Sessions</button>
-          <b class="mirror-title" data-title>Terminal</b>
-          <button type="button" class="mirror-icon" data-font="-1" aria-label="Smaller text">A&minus;</button>
-          <button type="button" class="mirror-icon" data-font="1" aria-label="Larger text">A+</button>
+          <div class="mirror-identity"><span class="mirror-eyebrow" data-context>Desktop session</span><b class="mirror-title" data-title>Terminal</b></div>
           <button type="button" class="mirror-icon" data-close hidden aria-label="Close this shell">Close</button>
         </div>
-        <div class="mirror-tabs" aria-label="Session views"><button type="button" data-view="terminal" aria-pressed="true">Terminal</button><button type="button" data-view="draft" aria-pressed="false">Draft</button><button type="button" data-view="review" aria-pressed="false">Review</button></div>
+        <div class="mirror-toolbar"><div class="mirror-tabs" role="group" aria-label="Session views"><button type="button" data-view="terminal" aria-pressed="true">Terminal</button><button type="button" data-view="draft" aria-pressed="false">Draft</button><button type="button" data-view="review" aria-pressed="false">Review</button></div><div class="mirror-text-size" role="group" aria-label="Terminal text size"><button type="button" class="mirror-icon" data-font="-1" aria-label="Smaller terminal text">A&minus;</button><button type="button" class="mirror-icon" data-font="1" aria-label="Larger terminal text">A+</button></div></div>
+        <div class="mirror-notice" data-notice hidden><span data-notice-text role="status" aria-live="polite"></span><button type="button" data-dismiss aria-label="Dismiss message">Dismiss</button></div>
         <section data-panel="terminal" class="mirror-terminal-panel">
           <div class="mirror-screen-scroll" data-scroll><div class="mirror-screen" data-screen></div></div>
           <div class="mirror-controls" data-control-row><span data-owner>Viewing only</span><button type="button" data-control disabled>Take control</button></div>
+          <section class="mirror-paste" data-paste-review hidden aria-label="Review clipboard text"><label>Review paste<textarea data-paste-text readonly aria-label="Clipboard text" rows="3"></textarea></label><p>Line breaks become spaces. Return stays yours.</p><div><button type="button" data-paste-cancel>Cancel</button><button type="button" data-paste-type>Type text</button></div></section>
           <div class="mirror-keys" data-keys hidden></div>
           <button type="button" class="mirror-kb-show" data-kb-show hidden>Crowe keyboard</button>
         </section>
-        <section data-panel="draft" hidden><label class="mirror-draft-label">CLI draft<textarea data-draft rows="8" disabled spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Shared CLI draft" placeholder="Open a draft with Control+G in the Crowe Logic CLI."></textarea></label>
-          <div class="mirror-save-state" data-save-state>No open draft</div>
+        <section data-panel="draft" class="mirror-editor" hidden><div class="mirror-editor-heading"><p class="mirror-eyebrow">Write with room to think</p><h2>Session draft</h2><p>Edit here, then return it to the waiting CLI prompt.</p></div><label class="mirror-draft-label">Draft text<textarea data-draft rows="8" disabled spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Shared CLI draft" placeholder="Open a draft with Control+G in the Crowe Logic CLI."></textarea></label>
+          <div class="mirror-draft-meta"><span class="mirror-save-state" data-save-state role="status" aria-live="polite">No open draft</span><span data-draft-count class="mirror-count">0 words</span></div>
           <div class="mirror-draft-actions"><button type="button" data-save disabled>Save to host</button><button type="button" data-review disabled>Review changes</button></div>
         </section>
-        <section data-panel="review" hidden><div class="mirror-review-label">Host revision</div><pre data-host-text></pre><div class="mirror-review-label">Your draft</div><pre data-local-text></pre>
+        <section data-panel="review" class="mirror-editor" hidden><div class="mirror-editor-heading"><p class="mirror-eyebrow">One last look</p><h2>Review your draft</h2><p>Compare with the host before returning to the session.</p></div><div class="mirror-review-card"><div class="mirror-review-label">Host revision</div><pre data-host-text></pre></div><div class="mirror-review-card is-local"><div class="mirror-review-label">Your draft</div><pre data-local-text></pre></div>
           <div data-conflict hidden><p>The host changed. Choose which text to keep before saving.</p><button type="button" data-use-host>Use host version</button><button type="button" data-keep-local>Keep my version</button></div>
-          <button type="button" data-return disabled>Save and return to session</button><p class="mirror-save-state">Returns to this session's waiting prompt. It does not submit it.</p>
+          <div class="mirror-review-actions"><button type="button" data-return disabled>Save and return to session</button><p class="mirror-save-state">Returns to this session's waiting prompt. It does not submit it.</p></div>
         </section>
       </div>`;
     body.append(root);
@@ -65,7 +66,8 @@
     let sessions = [], selected = null, epoch = 0, seq = -1, connected = false, lease = null, deviceId = null, disposed = false, canOpen = false;
     let draft = null, hostDraft = null, draftKey = null, conflict = false, dirty = false, busy = false, polling = false, opening = false;
     let listTime = 0, renewTime = 0, inputQueue = Promise.resolve(), queuedInput = 0, pendingSave = null, pendingReturn = null, controlBusy = false;
-    let persistQueue = Promise.resolve(), lastFit = "", heldBy = null;
+    let persistQueue = Promise.resolve(), lastFit = "", heldBy = null, closing = false, refreshing = false, pasteReview = null;
+    let activeView = "terminal", renderSignature = "";
     // Which keyboard types here: "crowe" (ours, drawn below the screen),
     // "system" (the phone's, by the globe key) or "hidden" (folded away).
     let keyboardMode = "crowe";
@@ -74,7 +76,9 @@
     const payload = () => ({ sessionId: selected?.id, generation: selected?.generation });
     const own = () => selected?.origin === "phone" && selected?.mine;
     const engine = () => selected?.origin === "engine";
-    function status(text) { $("[data-status]").textContent = text; if (root.dataset.screenName === "term") $("[data-owner]").textContent = text; }
+    function status(text) { $("[data-status]").textContent = text; if (root.dataset.screenName === "term") { $("[data-notice-text]").textContent = text; $("[data-notice]").hidden = false; } }
+    function clearNotice() { $("[data-notice]").hidden = true; }
+    function cancelPaste() { pasteReview = null; $("[data-paste-review]").hidden = true; $("[data-paste-text]").value = ""; }
     // Terminal access is granted on the computer, so the phone can only say
     // where: it names this phone as the computer knows it.
     let deviceName = "this phone", hostLabel = "the computer";
@@ -104,32 +108,42 @@
       return { cols, rows };
     }
     async function fitOwn() {
-      if (!own() || lease === null || !connected) return;
+      if (!own() || lease === null || !connected || activeView !== "terminal" || !root.getClientRects().length) return;
       const { cols, rows } = fitted(); const key = `${cols}x${rows}`;
       if (key === lastFit || (cols === terminal.cols && rows === terminal.rows)) { lastFit = key; return; }
       lastFit = key;
-      const result = await transport.call("/sessions/resize", { ...payload(), lease, cols, rows });
-      if (result.error) lastFit = "";
+      const request = { ...payload(), lease, cols, rows }, currentEpoch = epoch;
+      try {
+        const result = await transport.call("/sessions/resize", request);
+        if (!disposed && epoch === currentEpoch && result.error) lastFit = "";
+      } catch { if (!disposed && epoch === currentEpoch) lastFit = ""; }
     }
     function sizeScreen() {
       $("[data-screen]").style.width = own() ? "100%" : `${Math.ceil(terminal.cols * cell().w + 16)}px`;
     }
 
     function controls() {
+      if (!connected || lease === null || activeView !== "terminal") cancelPaste();
       terminal.options.disableStdin = !connected || lease === null;
       $("[data-control]").disabled = !connected || !selected || controlBusy;
       $("[data-control]").textContent = engine() ? (lease === null ? "Take over" : "Hand back") : lease === null ? "Take control" : "Release";
       $("[data-control]").hidden = own() && lease !== null;
       const typing = connected && lease !== null;
-      if (!typing || keyboardMode !== "crowe" || controlBusy) keys?.cancelSpeech();
-      $("[data-keys]").hidden = !typing || keyboardMode !== "crowe";
-      $("[data-kb-show]").hidden = !typing || keyboardMode === "crowe";
+      if (!typing || keyboardMode !== "crowe" || controlBusy || pasteReview) keys?.cancelSpeech();
+      $("[data-keys]").hidden = !typing || keyboardMode !== "crowe" || Boolean(pasteReview);
+      $("[data-kb-show]").hidden = !typing || keyboardMode === "crowe" || Boolean(pasteReview);
       // The phone's keyboard rises only when it was asked for by the globe key.
       terminal.textarea?.setAttribute("inputmode", keyboardMode === "system" ? "text" : "none");
       $("[data-close]").hidden = !own() && !engine();
+      $("[data-close]").disabled = !connected || closing;
       $("[data-close]").textContent = engine() ? "Stop" : "Close";
       $("[data-close]").setAttribute("aria-label", engine() ? "Stop this engine terminal" : "Close this shell");
       $("[data-open]").disabled = !canOpen || opening;
+      $("[data-open]").setAttribute("aria-busy", String(opening));
+      $("[data-refresh]").disabled = refreshing;
+      $("[data-refresh]").setAttribute("aria-busy", String(refreshing));
+      $("[data-font='-1']").disabled = fontSize <= 9;
+      $("[data-font='1']").disabled = fontSize >= 22;
       const editable = draft?.status === "editing";
       $("[data-draft]").disabled = !editable || busy;
       $("[data-save]").disabled = !editable || !connected || busy || conflict;
@@ -140,12 +154,17 @@
       $("[data-local-text]").textContent = $("[data-draft]").value;
       $("[data-save-state]").textContent = !editable ? "No open draft. Press Control+G in the Crowe Logic CLI." : conflict ? "Conflict · local text preserved" : dirty ? "Local changes · not saved to host" : `Revision ${draft.revision} · saved on host`;
       root.querySelector('[data-view="draft"]').classList.toggle("has-draft", editable);
+      const words = $("[data-draft]").value.trim().split(/\s+/u).filter(Boolean).length;
+      $("[data-draft-count]").textContent = `${words} ${words === 1 ? "word" : "words"}`;
+      $("[data-save-state]").dataset.state = conflict ? "conflict" : dirty ? "dirty" : "saved";
     }
     function view(name) {
+      activeView = name; root.dataset.view = name;
       if (name !== "terminal") keys?.cancelSpeech();
       root.querySelectorAll("[data-panel]").forEach(el => { el.hidden = el.dataset.panel !== name; });
       root.querySelectorAll("[data-view]").forEach(el => el.setAttribute("aria-pressed", String(el.dataset.view === name)));
       controls();
+      if (name === "terminal") { lastFit = ""; fitOwn(); }
     }
     function screen(name) {
       if (name !== "term") keys?.reset();
@@ -156,26 +175,36 @@
     function persist() {
       if (!draftKey || !draft) return;
       const key = draftKey, value = { text: $("[data-draft]").value, revision: draft.revision, dirty };
-      persistQueue = persistQueue.then(() => transport.storage.set(key, value)).then(ok => { if (!ok && key === draftKey) status("Local storage failed. Keep this editor open and copy your draft."); });
+      const failed = () => { if (!disposed && key === draftKey) status("Local storage failed. Keep this editor open and copy your draft."); };
+      persistQueue = persistQueue.then(() => transport.storage.set(key, value)).then(ok => { if (!ok) failed(); }).catch(failed);
     }
 
     // ── Host and session list ──
     function renderList() {
       const list = $("[data-session-list]");
-      if (!sessions.length) { list.innerHTML = `<p class="mirror-empty">${canOpen ? "No terminals open yet. Tap New terminal." : "Open a terminal in Crowe Logic on your computer, then refresh."}</p>`; return; }
+      $("[data-session-count]").textContent = `${sessions.length} open`;
+      const signature = JSON.stringify([sessions, deviceId, canOpen]);
+      if (signature === renderSignature) return;
+      renderSignature = signature;
+      const focused = document.activeElement?.dataset?.sessionRow;
+      if (!sessions.length) { list.innerHTML = `<div class="mirror-empty" role="listitem"><span class="mirror-empty-mark" aria-hidden="true">&gt;_</span><strong>Room for your next task</strong><p>${canOpen ? "Open a terminal above to start on your computer." : "Open a terminal in Crowe Logic on your computer, then refresh."}</p></div>`; return; }
       list.innerHTML = sessions.map(s => {
         const mine = s.origin === "phone" && s.mine;
         const isEngine = s.origin === "engine";
         const who = s.controller ? (s.controller.deviceId === deviceId ? "You have control" : `Controlled by ${esc(s.controller.name)}`)
           : isEngine ? `${esc(s.openedBy || "Engine")} ${s.busy ? "is running a command" : "is working here"}` : mine ? "This phone" : "On the desktop";
-        return `<button type="button" class="mirror-session${isEngine ? " is-engine" : ""}" role="listitem" data-session-row="${esc(s.id)}">
+        return `<div role="listitem"><button type="button" class="mirror-session${isEngine ? " is-engine" : ""}" data-session-row="${esc(s.id)}">
           <span class="mirror-session-glyph${isEngine && s.busy ? " live" : ""}" aria-hidden="true">${isEngine ? "&#9672;" : "&gt;_"}</span>
-          <span class="mirror-session-text"><b>${esc(s.label)}</b><small>${esc(s.cwd)} · ${who}</small></span><i class="m-chev" aria-hidden="true"></i></button>`;
+          <span class="mirror-session-text"><b>${esc(s.label)}</b><small class="mirror-session-path">${esc(s.cwd)}</small><span class="mirror-session-state${s.controller?.deviceId === deviceId ? " is-held" : ""}">${who}</span></span><span class="mirror-chevron" aria-hidden="true">&#8250;</span></button></div>`;
       }).join("");
       // Engines first: they are the shells that change while nobody watches.
       list.querySelectorAll("[data-session-row]").forEach(row => { row.onclick = () => select(sessions.find(s => s.id === row.dataset.sessionRow)); });
+      if (focused) [...list.querySelectorAll("[data-session-row]")].find(row => row.dataset.sessionRow === focused)?.focus({ preventScroll: true });
     }
     async function refresh() {
+      if (refreshing || disposed) return;
+      refreshing = true; controls();
+      try {
       const result = await transport.call("/sessions/list");
       if (disposed) return;
       $("[data-host-dot]").classList.toggle("on", !result.error);
@@ -193,16 +222,20 @@
         status("The session ended. Your local draft is preserved.");
       } else if (!selected) status(result.data.terminal === false ? "Paired. Terminal access is off." : canOpen ? "Connected. Open a terminal or pick a session." : sessions.length ? "Pick a session to watch or take over." : "Open a terminal in Crowe Logic on your computer, then refresh.");
       controls(); renderList();
+      } catch (error) { if (!disposed) { canOpen = false; connected = false; lease = null; status(error.message); } }
+      finally { refreshing = false; if (!disposed) controls(); }
     }
 
     function select(meta, { take = false } = {}) {
       if (!meta) return;
       persist();
       const release = selected && lease !== null && selected.id !== meta.id ? { ...payload(), lease } : null;
-      epoch++; seq = -1; lease = null; draft = hostDraft = null; draftKey = null; dirty = conflict = busy = controlBusy = false;
+      epoch++; seq = -1; lease = null; draft = hostDraft = null; draftKey = null; dirty = conflict = busy = controlBusy = closing = false;
+      clearNotice(); cancelPaste();
       pendingSave = pendingReturn = null; connected = false; lastFit = ""; heldBy = null; keys?.reset();
       selected = { id: meta.id, generation: meta.generation, origin: meta.origin, mine: meta.mine || mineIds.has(meta.id), label: meta.label, engineName: meta.openedBy };
       $("[data-title]").textContent = meta.label || "Terminal";
+      $("[data-context]").textContent = engine() ? `${meta.openedBy || "Engine"} session` : own() ? "This phone's terminal" : "Desktop session";
       terminal.reset(); $("[data-draft]").value = ""; screen("term"); view("terminal"); controls();
       if (release) transport.call("/sessions/release", release).catch(() => {});
       if (take || (own() && meta.controller === null)) takeControl(); else poll();
@@ -217,7 +250,8 @@
         if (result.error) { needsGrant(result); status(result.error); return; }
         lease = result.data.controller?.deviceId === deviceId ? result.data.controller.lease : null;
         if (lease !== null) focusKeys();
-      } finally { if (epoch === currentEpoch) { controlBusy = false; controls(); poll(); } }
+      } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
+      finally { if (!disposed && epoch === currentEpoch) { controlBusy = false; controls(); poll(); } }
     }
     async function openShell() {
       if (opening || !canOpen) return;
@@ -232,7 +266,8 @@
         await refresh();
         select({ ...meta, mine: true });
         lease = meta.controller?.lease ?? null; controls(); focusKeys();
-      } finally { opening = false; controls(); }
+      } catch (error) { if (!disposed) status(error.message); }
+      finally { opening = false; if (!disposed) controls(); }
     }
 
     async function readDraft(meta, currentEpoch) {
@@ -272,9 +307,11 @@
           terminal.reset(); terminal.resize(value.cols, value.rows);
           await new Promise(resolve => terminal.write(value.snapshot, resolve));
         } else for (const event of value.events) {
+          if (disposed || epoch !== currentEpoch || document.hidden) return;
           if (event.seq !== seq + 1) { seq = -1; return; }
           if (event.type === "resize") terminal.resize(event.cols, event.rows);
           else await new Promise(resolve => terminal.write(event.data, resolve));
+          if (disposed || epoch !== currentEpoch) return;
           seq = event.seq;
         }
         if (disposed || epoch !== currentEpoch) return;
@@ -289,7 +326,7 @@
         }
         controls();
         fitOwn();
-      } catch (error) { connected = false; lease = null; status(error.message); controls(); }
+      } catch (error) { if (!disposed && epoch === currentEpoch) { connected = false; lease = null; status(error.message); controls(); } }
       finally {
         polling = false;
         if (!disposed && selected && connected && epoch === currentEpoch && !document.hidden) setTimeout(poll, 0);
@@ -313,15 +350,16 @@
           if (result.error) { if (result.current) { hostDraft = result.current; conflict = true; } status(result.error); return; }
           draft = result.data; pendingReturn = null; status("Draft returned to the CLI. It has not been submitted."); view("terminal");
         } else status("Draft saved on the desktop.");
-      } finally { if (epoch === currentEpoch) { busy = false; controls(); } }
+      } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
+      finally { if (!disposed && epoch === currentEpoch) { busy = false; controls(); } }
     }
     function sendInput(data) {
-      if (disposed || document.hidden || !root.isConnected || !root.getClientRects().length || !connected || lease === null) return;
+      if (disposed || document.hidden || !root.isConnected || !root.getClientRects().length || activeView !== "terminal" || controlBusy || closing || !connected || lease === null) return;
       if (queuedInput + data.length > 16384) { status("Input queue is full. Wait before typing again."); return; }
       const request = { ...payload(), lease, inputId: uid(), data }; const currentEpoch = epoch;
       queuedInput += data.length;
       inputQueue = inputQueue.then(async () => {
-        if (!connected || epoch !== currentEpoch || lease !== request.lease) return;
+        if (disposed || document.hidden || !root.getClientRects().length || activeView !== "terminal" || controlBusy || closing || !connected || epoch !== currentEpoch || lease !== request.lease) return;
         const result = await transport.call("/sessions/input", request);
         if (epoch === currentEpoch && result.error) { lease = null; status(`${result.error} Input was not retried.`); controls(); }
       }).catch(error => { if (epoch === currentEpoch) { lease = null; status(error.message); controls(); } }).finally(() => { queuedInput -= data.length; });
@@ -331,7 +369,15 @@
       const currentEpoch = epoch, currentLease = lease;
       try {
         const text = await navigator.clipboard.readText();
-        if (!disposed && !document.hidden && epoch === currentEpoch && lease === currentLease && text) sendInput(text.slice(0, 16384));
+        if (!disposed && !document.hidden && epoch === currentEpoch && lease === currentLease && currentLease !== null && activeView === "terminal" && text) {
+          // Clipboard line breaks and escape characters must not execute a
+          // command as a side effect of typing. Review a single line first.
+          const safe = text.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, " ").slice(0, 16384);
+          pasteReview = { text: safe, epoch: currentEpoch, lease: currentLease };
+          $("[data-paste-text]").value = safe; $("[data-paste-review]").hidden = false;
+          controls();
+          $("[data-paste-cancel]").focus({ preventScroll: true });
+        }
       } catch { if (epoch === currentEpoch) status("Paste needs permission to read the clipboard."); }
     }
     const keys = window.croweKeyboard?.create($("[data-keys]"), {
@@ -344,13 +390,19 @@
     function focusKeys() { if (keyboardMode === "system") terminal.focus(); }
     $("[data-kb-show]").onclick = () => { keyboardMode = "crowe"; terminal.blur(); controls(); };
     $("[data-refresh]").onclick = refresh;
+    $("[data-dismiss]").onclick = clearNotice;
+    $("[data-paste-cancel]").onclick = () => { cancelPaste(); controls(); };
+    $("[data-paste-type]").onclick = () => {
+      const review = pasteReview; cancelPaste(); controls();
+      if (review && review.epoch === epoch && review.lease === lease) sendInput(review.text);
+    };
     $("[data-open]").onclick = openShell;
     // Leaving a session hands it back; the shell keeps running on the desktop
     // and its row stays in the list to return to.
     $("[data-back]").onclick = () => {
       persist();
       if (selected && lease !== null) transport.call("/sessions/release", { ...payload(), lease }).catch(() => {});
-      epoch++; selected = null; lease = null; connected = false; heldBy = null; draft = null; terminal.reset();
+      epoch++; selected = null; lease = null; connected = false; heldBy = null; draft = null; cancelPaste(); clearNotice(); terminal.reset();
       if (keyboardMode === "system") keyboardMode = "crowe";
       screen("hosts"); refresh();
     };
@@ -363,7 +415,8 @@
         const result = await transport.call("/sessions/release", request);
         if (disposed || epoch !== currentEpoch) return;
         if (result.error) status(result.error); else lease = null;
-      } finally { if (epoch === currentEpoch) { controlBusy = false; controls(); } }
+      } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
+      finally { if (!disposed && epoch === currentEpoch) { controlBusy = false; controls(); } }
     };
     // Tapping the screen of a session nobody else holds takes it, the way a
     // terminal app focuses on touch; the keyboard follows.
@@ -372,17 +425,23 @@
       else if (connected && !controlBusy && !heldBy && !engine()) takeControl();
     });
     $("[data-close]").onclick = async () => {
-      if (!own() && !engine()) return;
+      if (closing || !connected || (!own() && !engine())) return;
       if (engine() && !window.confirm(`Stop this terminal? ${selected.engineName || "The engine"} loses it and whatever runs in it ends.`)) return;
-      const result = await transport.call("/sessions/close", payload());
-      if (result.error) { status(result.error); return; }
-      mineIds.delete(selected.id); epoch++; selected = null; lease = null; connected = false; terminal.reset();
-      screen("hosts"); refresh();
+      const request = payload(), currentEpoch = epoch;
+      closing = true; controls();
+      try {
+        const result = await transport.call("/sessions/close", request);
+        if (disposed || epoch !== currentEpoch) return;
+        if (result.error) { status(result.error); return; }
+        mineIds.delete(request.sessionId); epoch++; selected = null; lease = null; connected = false; draft = null; cancelPaste(); terminal.reset();
+        screen("hosts"); refresh();
+      } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
+      finally { if (!disposed && (epoch === currentEpoch || !selected)) { closing = false; controls(); } }
     };
     root.querySelectorAll("[data-font]").forEach(button => { button.onclick = () => {
       fontSize = Math.max(9, Math.min(22, fontSize + Number(button.dataset.font)));
       terminal.options.fontSize = fontSize; try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch { /* fine */ }
-      lastFit = ""; sizeScreen(); fitOwn();
+      lastFit = ""; sizeScreen(); fitOwn(); controls();
     }; });
     root.querySelectorAll("[data-view]").forEach(button => { button.onclick = () => view(button.dataset.view); });
     $("[data-draft]").oninput = () => { dirty = true; pendingSave = pendingReturn = null; persist(); controls(); };
@@ -394,7 +453,7 @@
     // Back from the lock screen, the phone's own shell is taken again without
     // asking; a desktop terminal goes back to watching.
     const visibility = () => {
-      if (document.hidden) { persist(); lease = null; controls(); return; }
+      if (document.hidden) { suspend(); return; }
       seq = -1;
       if (own()) takeControl(); else poll();
     };
@@ -406,11 +465,17 @@
     const observer = new MutationObserver(() => {
       if (!root.isConnected) { dispose(); return; }
       const visible = Boolean(root.getClientRects().length);
-      if (rootVisible && !visible) keys?.cancelSpeech();
+      if (rootVisible && !visible) suspend();
+      else if (!rootVisible && visible && !document.hidden) { seq = -1; poll(); }
       rootVisible = visible;
     });
     observer.observe(body.parentNode, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style"] });
-    function dispose() { if (disposed) return; disposed = true; epoch++; persist(); clearInterval(timer); observer.disconnect(); keys?.destroy(); document.removeEventListener("visibilitychange", visibility); window.removeEventListener("resize", onResize); terminal.dispose(); }
+    function suspend() {
+      persist();
+      if (selected && lease !== null) transport.call("/sessions/release", { ...payload(), lease }).catch(() => {});
+      epoch++; seq = -1; lease = null; connected = false; controlBusy = busy = closing = false; cancelPaste(); keys?.cancelSpeech(); controls();
+    }
+    function dispose() { if (disposed) return; suspend(); disposed = true; clearInterval(timer); observer.disconnect(); keys?.destroy(); document.removeEventListener("visibilitychange", visibility); window.removeEventListener("resize", onResize); terminal.dispose(); }
     screen("hosts"); refresh(); controls();
     return { dispose, select: id => select(sessions.find(s => s.id === id)) };
   }
