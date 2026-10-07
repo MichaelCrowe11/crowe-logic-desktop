@@ -66,6 +66,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
     Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
     CROWE_GROW: require(path.join(root, "grow-schema.js")),
+    CroweBillingPortal: require(path.join(root, "renderer/billing-portal.js")),
     open: () => {},
   };
   const localStorage = {
@@ -1297,7 +1298,7 @@ function methodPaths(surface) {
   function nativeChromeHarness(plugin) {
     const vm = require("vm");
     const observers = [];
-    const classes = new Set(["mobile"]);
+    const classes = new Set(["mobile", "sidebar-collapsed"]);
     const props = {};
     const mk = (id, label, current) => ({ dataset: { id }, textContent: label, current,
       getAttribute: function (n) { return n === "aria-current" && this.current ? "true" : null; }, click() {} });
@@ -1322,6 +1323,59 @@ function methodPaths(surface) {
     return { classes, props, listeners, select, items, toggleSheet, notify: () => observers.forEach((o) => o.fn([])) };
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  await check("drawer footer is clear of native tabs and late native taps cannot close it", async () => {
+    let hidden = null, taps = 0;
+    const h = nativeChromeHarness({ setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async s => { hidden = s.hidden; }, haptic: async () => {} });
+    h.items[0].click = () => { taps++; };
+    await sleep(20);
+    h.classes.delete("sidebar-collapsed"); h.notify(); await sleep(20);
+    assert(hidden === true, "native Home tab covers the lower-left drawer footer");
+    h.listeners.tabSelected({ id: "home" }); await sleep(20);
+    assert(taps === 0, "a late native tap navigated under the drawer");
+    h.toggleSheet(true); h.classes.add("sidebar-collapsed"); h.notify(); await sleep(20);
+    assert(hidden === true, "opening Settings from the drawer exposed native tabs");
+    h.toggleSheet(false); await sleep(20);
+    assert(hidden === false, "native navigation did not return");
+  });
+
+  await check("billing uses the authenticated portal_url contract and rejects foreign hosts", async () => {
+    let address = "https://billing.stripe.com/p/session/test_fixture", opened = [], requests = 0;
+    const bridge = loadMobileSurface(async (url, init) => {
+      if (!String(url).includes("/api/billing/portal/self")) return new Response("{}");
+      requests++;
+      assert(init.method === "POST" && init.headers.Authorization === "Bearer fixture-token", "portal request lost its identity");
+      return new Response(JSON.stringify({ portal_url: address }), { status: 200 });
+    });
+    loadMobileSurface.lastWindow.open = url => opened.push(url);
+    await bridge.setConfig({ token: "fixture-token" });
+    assert((await bridge.license.billing()).ok && opened[0] === address, "valid backend portal did not open");
+    for (address of ["http://billing.stripe.com/p/session/x", "https://evil.example/p/session/x", "https://billing.stripe.com.evil.example/p/session/x", "https://user@billing.stripe.com/p/session/x"]) {
+      assert((await bridge.license.billing()).error, "untrusted portal accepted");
+    }
+    assert(opened.length === 1, "invalid portal opened a browser");
+    const before = requests;
+    assert((await bridge.license.billing({ emailVerification: true })).ok, "email verification portal failed");
+    assert(requests === before && opened[1] === require("../renderer/billing-portal").EMAIL_LOGIN, "email portal used untrusted or authenticated data");
+  });
+
+  await check("offline sign-out finishes and an older refresh cannot sign the phone back in", async () => {
+    let completeRefresh, started;
+    const began = new Promise(resolve => { started = resolve; });
+    const bridge = loadMobileSurface(async url => {
+      if (String(url).endsWith("/revoke")) return new Promise(() => {});
+      if (String(url).endsWith("/token")) { started(); return new Promise(resolve => { completeRefresh = resolve; }); }
+      return new Response("{}");
+    });
+    await bridge.setConfig({ token: "old", refreshToken: "fixture-refresh" });
+    const pending = bridge.billing.refresh(); await began;
+    const result = await Promise.race([bridge.auth.logout(), sleep(500).then(() => ({ timeout: true }))]);
+    assert(result.ok && !result.timeout, "sign-out waited for the network");
+    completeRefresh(new Response(JSON.stringify({ access_token: "resurrected", refresh_token: "rotated" })));
+    await pending;
+    assert(!(await bridge.getConfig()).hasToken && !(await bridge.auth.status()).user, "late refresh restored a signed-out account");
+  });
 
   await check("native tabs recover from a rejected setTabs and hand navigation back meanwhile", async () => {
     let calls = 0;

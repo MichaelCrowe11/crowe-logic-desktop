@@ -470,11 +470,11 @@ const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
 function persistTokens(d) {
-  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
+  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "", accountSignedOut: false });
 }
 function migrateLegacyAuth() {
   const cfg = loadConfig();
-  if (cfg.token || cfg.refreshToken) return;
+  if (cfg.accountSignedOut || cfg.token || cfg.refreshToken) return;
   let legacy = {};
   try { legacy = JSON.parse(fs.readFileSync(LEGACY_AUTH_JSON, "utf8")); } catch {}
   let oldConfig = {};
@@ -488,17 +488,24 @@ function currentUser() {
   const p = decodeJwt(c.token);
   return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "", tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
 }
+let authGeneration = 0, tokenRefresh = null;
 async function refreshToken() {
+  if (tokenRefresh) return tokenRefresh;
   const cfg = loadConfig();
   const refresh = cfg.refreshToken;
   if (!refresh) return null;
+  const generation = authGeneration;
+  const attempt = (async () => {
   try {
     const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
-    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(10000) });
     const d = await r.json();
-    if (d.access_token) { persistTokens(d); return d.access_token; }
+    if (d.access_token && generation === authGeneration && loadConfig().refreshToken === refresh) { persistTokens(d); return d.access_token; }
   } catch { /* noop */ }
   return null;
+  })();
+  tokenRefresh = attempt;
+  try { return await attempt; } finally { if (tokenRefresh === attempt) tokenRefresh = null; }
 }
 /* One sign-in at a time. The loopback listener holds its port for up to five
    minutes while the browser page waits, so a second click used to open a second
@@ -507,6 +514,7 @@ async function refreshToken() {
 let pendingSignIn = null;
 function signIn() {
   if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const generation = authGeneration;
   const pending = { promise: null, authUrl: "" };
   pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
@@ -529,6 +537,7 @@ function signIn() {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
         const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
         const d = await r.json();
+        if (generation !== authGeneration) return finish({ error: "Sign-in was cancelled by sign-out." });
         if (d.access_token) { persistTokens(d); return finish({ ok: true, user: currentUser() }); }
         return finish({ error: d.error_description || d.error || "token exchange failed" });
       } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
@@ -557,7 +566,15 @@ function signIn() {
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => {
-  saveConfig({ token: "", refreshToken: "" });  // the CLI keeps its own sign-in; `crowe logout` ends it
+  authGeneration++; tokenRefresh = null;
+  const refresh = loadConfig().refreshToken;
+  saveConfig({ token: "", refreshToken: "", accountSignedOut: true });  // the CLI keeps its own sign-in; `crowe logout` ends it
+  stopAccountRuns();
+  if (refresh) fetch(`${CROWE_ID}/protocol/openid-connect/revoke`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
   // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
   browserSessions.endAll().catch(() => {});
   return { ok: true };
@@ -604,13 +621,18 @@ ipcMain.handle("crowe:license:select", (_event, { workspaceId } = {}) => {
   saveConfig({ licenseWorkspaceId: workspaceId });
   return { ok: true, selectedWorkspaceId: workspaceId };
 });
-ipcMain.handle("crowe:license:billing", async () => {
+ipcMain.handle("crowe:license:billing", async (_event, options) => {
+  const generation = authGeneration;
   try {
+    if (options?.emailVerification === true) {
+      await shell.openExternal(require("./renderer/billing-portal").EMAIL_LOGIN);
+      return { ok: true, emailVerification: true };
+    }
     const result = await licensedFetch("/api/billing/portal/self", "POST");
-    if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
-    const portal = new URL(result.data.url);
-    if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
-    await shell.openExternal(portal.toString()); return { ok: true };
+    if (generation !== authGeneration) return { error: "Signed out before billing opened." };
+    const portal = require("./renderer/billing-portal").result(result);
+    if (portal.error) return portal;
+    await shell.openExternal(portal.url); return { ok: true };
   } catch { return { error: "Billing portal could not be reached" }; }
 });
 
@@ -1420,7 +1442,7 @@ ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
-ipcMain.handle("crowe:agent:stop-all", () => {
+function stopAccountRuns() {
   councilHost.stopAll();
   for (const run of agentRuns.values()) {
     run.aborted = true;
@@ -1431,7 +1453,8 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   browserSessions.dropWhere(isSeatId).catch(() => {});
   terminalSessions.closeEngineOwner();
   return { ok: true, stopped: agentRuns.size };
-});
+}
+ipcMain.handle("crowe:agent:stop-all", stopAccountRuns);
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
   messages = sanitizeAgentMessages(messages);
   if (!messages.length) return { done: false, error: "A turn needs a user message", text: "A turn needs a user message" };

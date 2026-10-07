@@ -159,7 +159,7 @@
     badge.title = "Account and settings";
     badge.addEventListener("click", (e) => {
       e.stopImmediatePropagation(); e.preventDefault();
-      const s = $("settings-btn"); if (s) s.click();
+      window.dispatchEvent(new CustomEvent("crowe:account"));
     }, true);
   }
 
@@ -1243,7 +1243,7 @@
     if (!p || !p.email) { line.textContent = "Sign in with your Crowe ID to see your plan."; btn.hidden = true; return; }
     if (!p.known) { line.textContent = "Your plan is managed on your Crowe ID."; btn.hidden = true; return; }
     const name = PLAN_NAMES[String(p.tier || "free").toLowerCase()] || p.tier || "Free";
-    line.textContent = p.paid ? `${name}. Manage it from your account page.`
+    line.textContent = p.paid ? `${name}. Use Manage billing above to review your subscription.`
       : p.buyHere ? "Free. Pro unlocks every CroweLM tier and the frontier engines." : `${name}.`;
     btn.hidden = Boolean(p.paid) || !p.buyHere;
   }

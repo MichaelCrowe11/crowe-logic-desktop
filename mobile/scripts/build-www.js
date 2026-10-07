@@ -37,6 +37,8 @@ const COPY = [
   ["mobile/src/phone-mirror.css", "phone-mirror.css"],
   ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
+  ["renderer/account.js", "account.js"],
+  ["renderer/billing-portal.js", "billing-portal.js"],
   ["renderer/look.css", "look.css"],
   ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
   ["renderer/adopted-styles.js", "adopted-styles.js"],
@@ -76,6 +78,7 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
+  "account.js", "billing-portal.js",
   "crowe-keyboard.js", "phone-mirror.js", "phone-mirror.css", "xterm.js", "xterm.css", "addon-fit.js",
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "look.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",

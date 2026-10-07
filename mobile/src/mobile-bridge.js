@@ -659,26 +659,29 @@
       return { error: String(e).slice(0, 200) };
     }
   }
-  let refreshing = null;
+  let refreshing = null, authGeneration = 0;
   async function refreshToken() {
     if (!config.refreshToken) return null;
     // One refresh in flight at a time. Two 401s landing together used to send
     // two refreshes, and the second one redeemed a rotated token that the first
     // had already spent — signing the user out mid-turn.
     if (refreshing) return refreshing;
-    refreshing = (async () => {
-      const d = await tokenRequest({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: config.refreshToken });
-      if (d && d.access_token) {
+    const generation = authGeneration, refresh = config.refreshToken;
+    const attempt = (async () => {
+      const d = await tokenRequest({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
+      if (d && d.access_token && generation === authGeneration && config.refreshToken === refresh) {
         await saveConfig({ token: d.access_token, refreshToken: d.refresh_token || config.refreshToken });
         return d.access_token;
       }
       return null;
     })();
-    try { return await refreshing; } finally { refreshing = null; }
+    refreshing = attempt;
+    try { return await attempt; } finally { if (refreshing === attempt) refreshing = null; }
   }
 
   async function signIn() {
     await ready;
+    const generation = authGeneration;
     const App = plugin("App"), Browser = plugin("Browser");
     if (!NATIVE || !App || !Browser) {
       return { error: "Sign-in needs the installed app. In a browser, paste a Crowe ID token in Settings." };
@@ -715,6 +718,7 @@
         if (!code) return finish({ error: params.get("error_description") || params.get("error") || "sign-in was cancelled" });
         const d = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: redirect,
                                        client_id: CROWE_ID_CLIENT, code_verifier: verifier });
+        if (generation !== authGeneration) return finish({ error: "Sign-in was cancelled by sign-out." });
         if (d && d.access_token) {
           await saveConfig({ token: d.access_token, refreshToken: d.refresh_token || "" });
           fetchCatalog();
@@ -739,11 +743,11 @@
       const url = `${base()}${route}`;
       const headers = { Authorization: `Bearer ${config.token}` };
       try {
-        const r = await fetch(url, { method, headers });
+        const r = await fetch(url, { method, headers, signal: AbortSignal.timeout(10000) });
         return { status: r.status, text: await r.text() };
       } catch (e) {
         if (!corsBlocked(e) || !CapHttp) throw e;
-        const r = await CapHttp.request({ url, method, headers, responseType: "text" });
+        const r = await CapHttp.request({ url, method, headers, responseType: "text", connectTimeout: 5000, readTimeout: 10000 });
         return { status: r.status, text: typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "") };
       }
     };
@@ -2013,6 +2017,7 @@
 
     agent: {
       run: async (messages, id = "main", options = {}) => {
+        const generation = authGeneration;
         if (options && options.licensed) {
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };
@@ -2020,9 +2025,11 @@
         // A call with no messages answers, it does not reject: an unhandled
         // rejection is a console error in the WebView and a crash in Node.
         if (!Array.isArray(messages)) return { done: false, error: "nothing to send", text: "" };
+        if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
         // Saved before the turn, so a phone that iOS kills mid-reply still has
         // the question when it comes back.
         if (id === "main") { try { await persistSession(messages); } catch { /* not worth failing a turn over */ } }
+        if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
         let result;
         try {
           result = await runAgent(messages.slice(), String(id || "main"), options || {});
@@ -2033,7 +2040,7 @@
           emit({ type: "final", note: "error", agentId: String(id || "main") });
           result = { done: false, error: text, text: "" };
         }
-        if (id === "main") { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
+        if (id === "main" && generation === authGeneration) { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
         return { done: Boolean(result.done), text: result.text || "", error: result.error };
       },
       // A question about a turn that has stopped is answered "no" for it.
@@ -2052,21 +2059,38 @@
          conversations and diagnostics go with it. The grower's own records stay —
          they are farm data, not account credentials. */
       logout: async () => {
+        await ready;
+        authGeneration++; refreshing = null;
         const refresh = config.refreshToken;
+        // Clear access before any network or storage wait. A late refresh or
+        // sign-in response must not resurrect this session.
+        config.token = ""; config.refreshToken = "";
+        config.remoteUrl = ""; config.remoteToken = ""; config.keys = {};
+        try { window.CroweLocalRooms?.stopAll(); } catch { /* clear account access even if a room cannot stop */ }
+        for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch {} }
+        dismissApprovals();
+        announceRemote();
+        await store.set("config", config);
         if (refresh) {
           const body = new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }).toString();
           const url = `${CROWE_ID}/protocol/openid-connect/revoke`;
           const headers = { "Content-Type": "application/x-www-form-urlencoded" };
-          try { if (CapHttp) await nativePost(url, headers, body); else await fetch(url, { method: "POST", headers, body }); }
-          catch { /* offline: the local copy is still forgotten below */ }
+          // Revocation is best effort. Offline sign-out must finish locally.
+          try {
+            const revoke = CapHttp
+              ? CapHttp.request({ url, method: "POST", headers, data: body, connectTimeout: 3000, readTimeout: 5000 })
+              : fetch(url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
+            Promise.resolve(revoke).catch(() => {});
+          } catch { /* a missing native network plugin must not prevent local sign-out */ }
         }
         for (const id of (await sessionIndex()).map((x) => x.id)) { try { await store.remove(`session:${id}`); } catch { /* gone */ } }
         try { await store.remove("sessions"); await store.remove("diag"); } catch { /* gone */ }
         diagBuf = null;
         currentSession = null;
         config.token = "";
-        await saveConfig({ refreshToken: "", remoteUrl: "", remoteToken: "", keys: {} });
+        const persisted = await store.set("config", config);
         announceRemote();
+        if (!persisted) return { error: "Access is stopped, but this device could not save sign-out. Keep the app open and try Sign out again." };
         return { ok: true };
       },
       /* App Store guideline 5.1.1(v): an account a person can create in the app
@@ -2152,15 +2176,19 @@
         await saveConfig({ licenseWorkspaceId: workspaceId });
         return { ok: true, selectedWorkspaceId: workspaceId };
       },
-      billing: async () => {
-        const result = await licensedFetch("/api/billing/portal/self", "POST");
-        if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
-        let portal; try { portal = new URL(result.data.url); } catch { return { error: "Billing portal returned an unreadable URL" }; }
-        if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
-        const Browser = plugin("Browser");
-        if (Browser) await Browser.open({ url: portal.toString() });
-        else window.open(portal.toString(), "_blank", "noopener");
-        return { ok: true };
+      billing: async (options) => {
+        const generation = authGeneration;
+        const emailVerification = options?.emailVerification === true;
+        const result = emailVerification ? null : await licensedFetch("/api/billing/portal/self", "POST");
+        if (generation !== authGeneration) return { error: "Signed out before billing opened." };
+        const portal = emailVerification ? { url: window.CroweBillingPortal.EMAIL_LOGIN } : window.CroweBillingPortal.result(result);
+        if (portal.error) return portal;
+        try {
+          const Browser = plugin("Browser");
+          if (Browser) await Browser.open({ url: portal.url });
+          else window.open(portal.url, "_blank", "noopener");
+          return { ok: true };
+        } catch { return { error: "The billing browser could not be opened. Try again." }; }
       },
     },
 

@@ -56,7 +56,7 @@
     <div class="spacer"></div>
     <span id="mcp-badge" class="badge alt hidden"></span>
     <button id="signin" class="ghost sm">Sign in with Crowe ID</button>
-    <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID. Click to sign out."></span>
+    <button id="userbadge" type="button" class="badge hidden" title="Account and billing"></button>
   </header>
 
   <div id="update-banner" class="hidden">
@@ -166,6 +166,7 @@
       </aside>
 
       <div class="side-foot">
+        <button id="account-nav" type="button" class="side-foot-btn" title="Account and billing">Account &amp; billing</button>
         <button id="rail-palette" class="side-foot-btn" title="Command palette (Cmd+K)">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
           Search
@@ -361,6 +362,19 @@
   <div id="settings" class="modal hidden">
     <div class="modal-card">
       <h2>Settings</h2>
+      <section id="account-settings" class="key-manager account-settings" aria-labelledby="account-heading">
+        <div class="settings-section-head"><div><b id="account-heading" tabindex="-1">Account &amp; billing</b><span id="account-email">Reading your account.</span></div></div>
+        <p id="account-plan" class="hint"></p>
+        <p class="hint">Manage your subscription, payment methods and invoices securely in Stripe. Any changes are confirmed there.</p>
+        <div class="account-actions">
+          <button id="account-signin" type="button" class="primary">Sign in with Crowe ID</button>
+          <button id="account-billing" type="button" class="primary" hidden>Manage billing</button>
+          <button id="account-email-billing" type="button" class="ghost" hidden>Verify billing by email</button>
+          <button id="account-refresh" type="button" class="ghost" hidden>Refresh plan</button>
+          <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
+        </div>
+        <p id="account-notice" class="hint" role="status" aria-live="polite"></p>
+      </section>
       <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
@@ -470,6 +484,7 @@
   <script src="council.js"></script>
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
+  <script src="billing-portal.js"></script>
   <script src="mark-geometry.js"></script>
   <script src="mark.js"></script>
   <script src="messages.js"></script>
@@ -477,6 +492,7 @@
   <script src="first-run.js"></script>
   <script src="activity.js"></script>
 <script src="renderer.js"></script>
+  <script src="account.js"></script>
   <script src="plan.js"></script>
 </body>
 </html>

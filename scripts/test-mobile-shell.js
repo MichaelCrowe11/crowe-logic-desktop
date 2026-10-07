@@ -225,6 +225,41 @@ const tests = [
     expect: { open: true, closed: true },
   },
   {
+    name: "Account and billing is reachable from the lower drawer with visible sign-out",
+    body: `const auth = window.crowe.auth.status;
+      window.crowe.auth.status = async () => ({user: {email: "operator@example.com", tier: "pro"}});
+      try {
+        if (!__drawerOpen()) document.getElementById("sidebar-toggle").click();
+        const nav = document.getElementById("account-nav"); nav.scrollIntoView({block: "center"}); await __settle();
+        const box = nav.getBoundingClientRect();
+        const target = document.elementFromPoint(box.left + box.width/2, box.top + box.height/2);
+        const hit = target === nav || nav.contains(target);
+        nav.click(); await __settle(300);
+        const reachable = __shown("#account-signout") && __box("#account-signout").bottom <= innerHeight;
+        return {hit, closed: !__drawerOpen(), reachable, billing: __shown("#account-billing"),
+          email: document.getElementById("account-email").textContent === "operator@example.com"};
+      } finally { window.crowe.auth.status = auth; document.getElementById("cfg-cancel").click(); }`,
+    expect: {hit: true, closed: true, reachable: true, billing: true, email: true},
+  },
+  {
+    name: "Account billing failure offers verified email access and refresh updates the plan",
+    body: `const c=window.crowe, auth=c.auth.status, billing=c.license.billing, refresh=c.billing.refresh;
+      let tier="pro", calls=[], refreshed=0;
+      c.auth.status=async()=>({user:{email:"member@example.com",tier}});
+      c.license.billing=async options=>{ calls.push(options); return options?.emailVerification ? {ok:true} : {error:"Service unavailable. Verify your billing email instead."}; };
+      c.billing.refresh=async()=>{refreshed++; tier="personal";return{ok:true}};
+      try {
+        document.getElementById("account-nav").click();await __settle(200);
+        document.getElementById("account-billing").click();await __settle(100);
+        const failure=/Verify your billing email/.test(document.getElementById("account-notice").textContent);
+        document.getElementById("account-email-billing").click();await __settle(100);
+        document.getElementById("account-refresh").click();await __settle(100);
+        return {failure,verified:calls[1]?.emailVerification===true, refreshed:refreshed>0,
+          plan:document.getElementById("account-plan").textContent.includes("personal")};
+      } finally {c.auth.status=auth;c.license.billing=billing;c.billing.refresh=refresh;document.getElementById("cfg-cancel").click();}`,
+    expect:{failure:true,verified:true,refreshed:true,plan:true},
+  },
+  {
     name: "nothing pushes the page sideways",
     // A horizontal body scroll on a phone reads as a broken layout rather than
     // as more content, so wide things scroll inside their own box or not at all.

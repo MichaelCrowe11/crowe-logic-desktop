@@ -1,7 +1,36 @@
-# Phone launch candidate, 0.26.16
+# Phone build, 0.26.17
 
-Prepared October 6, 2026. This branch is a development candidate. An installed
-development build and passing local checks do not authorize a store submission.
+Updated October 7, 2026. The operator authorized publication of the new phone
+build. TestFlight build 2617 carries the account and navigation fixes below.
+Upload, processing and distribution receipts belong in the release evidence;
+the version in source alone does not establish availability in TestFlight.
+
+## Account and navigation fixes
+
+The native tab bar now hides while the sidebar is open, keeping its lower-left
+controls reachable. It stays hidden when the sidebar opens a Settings sheet.
+Late native tab events cannot navigate underneath either overlay.
+
+**Account & billing** is reachable from the sidebar and account badge. It shows
+the Crowe ID and plan, with Manage billing, Verify billing by email, Refresh plan
+and Sign out. The portal handler accepts the gateway's actual `portal_url`
+contract and permits only trusted Stripe session URLs. The email fallback uses
+the verified public portal login without sending an account address or token.
+
+Sign-out clears phone access before network revocation, stops active runs, and
+ignores late sign-in and refresh responses. Desktop sign-out also survives a
+restart without reimporting the CLI's account; the CLI store is preserved.
+
+The live portal was read on October 7: invoices, payment methods and cancellation
+are enabled. Plan changes remain disabled. Stripe CLI authentication expired
+during price verification, so enabling plan changes still requires a working
+Stripe connection and verification of the exact live prices and entitlements.
+No subscription or portal configuration was changed by this release.
+
+The full local `npm test` suite passed, including panels **103/103** and mobile
+shell **46/46**. Follow-up desktop restart/refresh regression checks also passed.
+Fixture images cover the account controls and sidebar. Signed build, device and
+upload receipts are stored in `~/crowe-evidence/2026-10-07-account-billing-release/`.
 
 ## Multiple terminals
 
@@ -74,7 +103,7 @@ operator's installed desktop and preview sessions open.
 
 Before installation, run `python3 mobile/scripts/verify-ios-bundle.py /path/to/App.app`.
 It verifies identity, app and share-extension versions, SDK minimum, scene
-configuration, signatures, privacy-manifest presence and seven source-asset hashes.
+configuration, signatures, privacy-manifest presence and nine source-asset hashes.
 After distribution export, repeat it with `--distribution` to reject development,
 ad-hoc or enterprise provisioning. This check does not validate privacy claims.
 
@@ -85,7 +114,7 @@ Unsigned
 artifacts are explicitly labelled packaging-only. Partial signing credentials
 fail the build; `CROWE_REQUIRE_ANDROID_SIGNING=1` also rejects absent signing.
 
-## Verified candidate
+## Earlier installed candidate, October 6
 
 Source commit `fb2455d` produced iPhone build **0.26.16 (2616)**. After the phone
 was unlocked on October 6, 2026, a cold launch completed WebView navigation and
@@ -152,7 +181,8 @@ Follow-up evidence is stored in `~/crowe-evidence/2026-10-07-pr134-followup/`.
 - Review store metadata and screenshots against the final product surfaces after
   the separate surface-removal branch is merged.
 - Rebuild and verify distribution exports if the source changes after the tested
-  candidate. No upload, release or store submission is part of this local task.
+  candidate. TestFlight publication is authorized for 2617; public App Store
+  distribution still requires the remaining product and privacy review.
 - Run Android CI and a real Android device pass. Local source checks cannot stand
   in for an Android build.
 - Track the eight moderate development-only npm findings in electron-builder's

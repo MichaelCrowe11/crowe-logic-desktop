@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld("crowe", {
   },
   license: {
     status: () => ipcRenderer.invoke("crowe:license:status"),
-    billing: () => ipcRenderer.invoke("crowe:license:billing"),
+    billing: (options) => ipcRenderer.invoke("crowe:license:billing", { emailVerification: options?.emailVerification === true }),
     select: (workspaceId) => ipcRenderer.invoke("crowe:license:select", { workspaceId }),
   },
   /* The member's own plan and the one ladder. `license` above is the

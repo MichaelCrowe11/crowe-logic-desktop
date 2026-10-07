@@ -38,6 +38,8 @@
   // failure after that hands the job back to it rather than leaving a spacer
   // over nothing.
   const sheetOpen = () => !!document.querySelector(".modal:not(.hidden)");
+  const drawerOpen = () => !body.classList.contains("sidebar-collapsed");
+  const covered = () => body.classList.contains("kb-open") || body.classList.contains("approval-open") || sheetOpen() || drawerOpen();
   const fallBack = () => { shape = ""; current = null; body.classList.remove("native-tabs"); };
 
   async function syncOnce() {
@@ -55,7 +57,7 @@
       await chrome.setCurrent({ id: now || "" });
       current = now;
     }
-    const wantHidden = body.classList.contains("kb-open") || body.classList.contains("approval-open") || sheetOpen();
+    const wantHidden = covered();
     if (wantHidden !== hidden) { await chrome.setHidden({ hidden: wantHidden }); hidden = wantHidden; }
   }
 
@@ -82,7 +84,7 @@
 
   chrome.addListener("tabSelected", ({ id }) => {
     const tab = tabs.querySelector(`.m-tab[data-id="${CSS.escape(id)}"]`);
-    if (tab && !body.classList.contains("approval-open")) tab.click();
+    if (tab && !covered()) tab.click();
     // The web tab may decline (or land on a different pane); the native bar was
     // already moved by the tap, so forget what it shows and re-assert the DOM.
     current = undefined;

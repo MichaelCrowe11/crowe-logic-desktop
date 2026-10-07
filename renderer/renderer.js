@@ -4978,7 +4978,7 @@ function showSignInPrompt() {
   b.appendChild(btn); scrollBottom();
 }
 $("signin").addEventListener("click", doSignIn);
-$("userbadge").addEventListener("click", async () => { await window.crowe.auth.logout(); await refreshAuth(); });
+$("userbadge").addEventListener("click", () => window.dispatchEvent(new CustomEvent("crowe:account")));
 
 // ── First-run onboarding ──
 // Shown once, on a machine with no Crowe ID session and no onboarded flag.

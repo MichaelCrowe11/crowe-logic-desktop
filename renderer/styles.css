@@ -1433,6 +1433,10 @@ body.dark .thinking .th-elapsed { color: var(--gold); }
 /* Secure keys and the space picker */
 .key-manager { margin-top:14px; padding:12px; border:1px solid var(--line); border-radius:var(--r-lg); background:var(--raised); }
 .settings-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.account-actions button { min-height: 44px; }
+.account-settings { scroll-margin-top: 16px; }
+#account-email { overflow-wrap: anywhere; }
 .settings-section-head div { display:flex; flex-direction:column; gap:2px; }.settings-section-head span { color:var(--muted); font-size: var(--fs-cap); }
 .space-picker { display:flex; flex-wrap:wrap; gap:6px 18px; }
 .space-picker .chk { gap:7px; font-size: var(--fs-sm); }

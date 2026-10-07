@@ -1757,6 +1757,7 @@ const tests = [
       renderSpacePicker();
       const covered = [];
       for (const i of $("cfg-spaces").querySelectorAll("input")) {
+        i.scrollIntoView({ block: "center", behavior: "instant" });
         const b = i.getBoundingClientRect();
         if (document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) !== i) covered.push(i.dataset.space);
       }
