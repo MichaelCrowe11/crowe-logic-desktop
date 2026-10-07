@@ -25,7 +25,7 @@ function resolve(set) {
   for (const key of Object.keys(set)) {
     let value = set[key];
     for (let i = 0; i < 6 && value.includes("var("); i++) {
-      value = value.replace(/var\((--[\w-]+)\)/g, (m, name) => set[name] || m);
+      value = value.replace(/var\((--[\w-]+)(?:,\s*([^()]+))?\)/g, (m, name, fallback) => set[name] || fallback || m);
     }
     set[key] = value;
   }
@@ -153,6 +153,34 @@ for (const [themeName, set] of [["light", light], ["dark", dark], ["instrument",
 
   run(TEXT, 4.5, "text");
   run(NON_TEXT, 3, "non-text");
+}
+
+// The terminal keeps a dark surface even when the surrounding phone is light.
+// Measure its own tokens, including translucent secondary labels, in each theme.
+const phoneCss = fs.readFileSync(path.join(__dirname, "..", "mobile", "src", "phone-mirror.css"), "utf8");
+const phoneBlock = phoneCss.match(/\.phone-mirror\s*\{([^}]*)\}/);
+if (!phoneBlock) throw new Error("phone-mirror.css: token block not found");
+const phonePairs = [
+  ["--mt-ink", "--mt-bg", "terminal text"],
+  ["--mt-ink", "--mt-key", "letter keys"],
+  ["--mt-dim", "--mt-raise", "session details"],
+  ["--mt-dim", "--mt-key-fn", "function keys"],
+  ["--mt-dim", "--mt-key", "space bar"],
+  ["--mt-gold", "--mt-raise", "terminal actions"],
+  ["--mt-gold", "--mt-key", "microphone and control keys"],
+  ["--mt-stop", "--mt-bg", "stop label"],
+  ["--mt-live", "--mt-bg", "engine indicator"],
+  ["--mt-on-gold", "--mt-gold", "Return and insert labels"],
+];
+for (const [name, inherited] of [["light", light], ["dark", dark], ["instrument", instrument]]) {
+  const set = resolve({ ...inherited, ...tokensIn(phoneBlock[1]), "--mt-on-gold": "#14110c" });
+  console.log(`\nphone terminal (${name})`);
+  for (const [fgName, bgName, label] of phonePairs) {
+    const bgRaw = parse(set[bgName]), fgRaw = parse(set[fgName]);
+    const ratio = bgRaw && fgRaw ? contrast(flatten(fgRaw, flatten(bgRaw, parse(set["--mt-bg"]))), flatten(bgRaw, parse(set["--mt-bg"]))) : 0;
+    if (ratio < 4.5) failures++;
+    console.log(`  ${ratio >= 4.5 ? "ok  " : "FAIL"}  ${ratio.toFixed(2)}:1  ${label}`);
+  }
 }
 
 if (failures) {

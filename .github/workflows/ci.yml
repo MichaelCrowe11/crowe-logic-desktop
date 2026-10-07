@@ -96,8 +96,10 @@ jobs:
           node scripts/test-first-run.js
           node scripts/test-activity.js
 
-      - name: Run terminal mirror and draft contracts
-        run: node --test scripts/test-terminal-sessions.js scripts/test-phone-drafts.js scripts/test-draft-editor.js
+      - name: Run terminal mirror, speech, and draft contracts
+        run: |
+          npm run test:phone-mirror
+          npm run test:draft-editor
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who

@@ -1416,6 +1416,7 @@ ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
   denyPendingApprovals(id);
   rejectPendingEdits();
+  terminalSessions.closeEngineOwner(id);
   if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
@@ -1428,6 +1429,7 @@ ipcMain.handle("crowe:agent:stop-all", () => {
   denyPendingApprovals();
   rejectPendingEdits();
   browserSessions.dropWhere(isSeatId).catch(() => {});
+  terminalSessions.closeEngineOwner();
   return { ok: true, stopped: agentRuns.size };
 });
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
@@ -1437,6 +1439,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
   }
+  if (agentRuns.has(id)) return { done: false, error: "This engine seat is already working. Stop it before starting another turn.", text: "This engine seat is already working. Stop it before starting another turn." };
   const run = { aborted: false, controller: null };
   agentRuns.set(id, run);
   agentMissions.set(id, missionText(messages));
@@ -1472,7 +1475,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
         // already enforces, so it ends a turn with a reserve and a closing
         // call rather than as a second, blunter stop.
         // Rooms are readable from the person's own seat only; see roomsForHarness.
-        const ctx = { ...harnessCtx, rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        const ctx = { ...harnessCtx, terminals: engineTerminalsForRun(id, run), rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
         const r = await harness.runAgent(ctx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
           send,
@@ -1512,12 +1515,53 @@ ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(sanitizeAge
 // ─── PTY terminal ────────────────────────────────────────────────────────────
 const ptyProcs = new Map();
 const { TerminalSessions } = require("./terminal-sessions");
+const { EngineTerminalProcess } = require("./engine-terminal-process");
 const { DraftBridge } = require("./draft-bridge");
 const terminalSessions = new TerminalSessions();
 const draftBridge = new DraftBridge(terminalSessions);
 require("./managed-draft-window").installManagedDraftWindows(terminalSessions, registerIpcHandler);
 terminalSessions.on("control", state => { try { mainWindow?.webContents.send("crowe:companion:event", { type: "terminal-control", ...state }); } catch {} });
 terminalSessions.on("fault", state => console.error("Terminal mirror:", state.error));
+// Publish only committed screen records, so snapshots and live output share
+// one generation/sequence boundary (including resizes).
+terminalSessions.on("record", (_id, event) => broadcast("crowe:pty:data", event));
+ipcMain.handle("crowe:pty:list-engines", () => terminalSessions.list().filter(s => s.origin === "engine"));
+/* Engine terminals persist the display, not an interpreter's input buffer.
+   Each gated command starts a fresh process in the terminal's opening folder.
+   Operator keys reach only a running process. Up to six terminals per owner,
+   with concurrent owners sharing the total session cap. */
+const engineTerminals = {
+  open(owner, { label = "", cwd = CWD, engine = "" } = {}) {
+    if (!pty) throw new Error("This build has no terminal; use run_shell.");
+    if (terminalSessions.engineList(owner).length >= 6) throw new Error("This engine already has six terminals open. Close one with terminal_close first.");
+    const id = `engine-${crypto.randomUUID().slice(0, 8)}`;
+    const name = engine || (isSeatId(owner) ? "Room seat" : "Engine");
+    const s = terminalSessions.create(id, () => new EngineTerminalProcess({ pty, cwd, cols: 120, rows: 32,
+      env: { ...harness.safeShellEnv(), PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", EDITOR: "true", CROWE_ENGINE_TERMINAL: "1" },
+    }), { cols: 120, rows: 32, cwd, label: label || `${name} terminal`, openedBy: { id: owner, name, kind: "engine" } });
+    ptyProcs.set(id, s.proc);
+    s.proc.onExit(() => { ptyProcs.delete(id); broadcast("crowe:pty:exit", { id, generation: s.generation }); broadcast("crowe:terminal:engine", { type: "closed", id, generation: s.generation }); });
+    broadcast("crowe:terminal:engine", { type: "opened", ...terminalSessions.meta(s) });
+    journalWrite({ event_type: "ENGINE_TERMINAL_OPENED", tool_id: "terminal_open", output_summary: `${name} opened ${id} in ${cwd}` });
+    return terminalSessions.meta(s);
+  },
+  run: (owner, id, command, timeoutMs) => terminalSessions.exec(id, owner, command, { timeoutMs }),
+  send: (owner, id, data) => terminalSessions.engineInput(id, owner, data),
+  read: (owner, id) => { terminalSessions.engineSession(id, owner); return terminalSessions.screenText(id); },
+  list: (owner) => terminalSessions.engineList(owner),
+  close: (owner, id) => terminalSessions.engineClose(id, owner),
+};
+harnessCtx.terminals = engineTerminals;
+// Bind queued tool calls to the turn that requested them. Stop closes this
+// seat's terminals and prevents an approval resolving later from reopening one.
+function engineTerminalsForRun(owner, run) {
+  const current = () => { if (run.aborted || agentRuns.get(owner) !== run) throw new Error("This engine turn has stopped."); };
+  return Object.fromEntries(Object.entries(engineTerminals).map(([name, fn]) => [name, (...args) => {
+    current();
+    if (args[0] !== owner) throw new Error("This terminal belongs to another engine seat.");
+    return fn(...args);
+  }]));
+}
 /* The shell is the one capability the autonomy menu names out loud: two of its
    four tiers say "no shell" in the label the user picked. Nothing enforced it -
    every tier opened a full login shell - so the promise was decoration, and the
@@ -1556,9 +1600,9 @@ function shellCommand() {
   if (process.platform === "win32") return { file: "powershell.exe", args: [] };
   return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
 }
-function spawnShell(cols, rows, sessionEnv = {}) {
+function spawnShell(cols, rows, sessionEnv = {}, cwd = CWD) {
   const { file, args } = shellCommand();
-  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: { ...process.env, ...sessionEnv } };
+  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd, env: { ...process.env, ...sessionEnv } };
   try { return pty.spawn(file, args, opts); }
   catch (err) {
     if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
@@ -1571,10 +1615,20 @@ function spawnShell(cols, rows, sessionEnv = {}) {
     return pty.spawn(file, args, opts);
   }
 }
-ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 24, kind = "terminal" } = {}) => {
+ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 24, kind = "terminal", generation } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
+  const engineOnly = kind === "engine" || String(id).startsWith("engine-");
+  if (engineOnly) {
+    const live = terminalSessions.sessions.get(id);
+    if (!generation || live?.openedBy?.kind !== "engine" || live.generation !== generation) return { ok: false, ended: true, error: "This engine terminal ended." };
+    try { return await terminalSessions.attachment(id, generation); }
+    catch { return { ok: false, ended: true, error: "This engine terminal ended." }; }
+  }
   if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `the shell is off in "${loadConfig().autonomy || "edit"}" operating mode. Switch to Execute to open an agent terminal` };
-  if (ptyProcs.has(id)) return { ok: true, id };
+  if (ptyProcs.has(id)) {
+    try { return await terminalSessions.attachment(id); }
+    catch { return { ok: false, ended: true, error: "This terminal ended." }; }
+  }
   let proc;
   try {
     await draftBridge.start();
@@ -1585,9 +1639,9 @@ ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 2
   }
   catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
   ptyProcs.set(id, proc);
-  proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
-  return { ok: true, id };
+  try { return await terminalSessions.attachment(id); }
+  catch { return { ok: false, ended: true, error: "This terminal ended." }; }
 });
 ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { try { terminalSessions.localInput(id, data || ""); } catch {} });
 // Taking a terminal back from a phone types nothing; it only ends the lease.
@@ -2135,7 +2189,7 @@ function roomRunner(room) {
       let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
       let proposal = null;
       try {
-        const result = await harness.runAgent(harnessCtx, messages.slice(), {
+        const result = await harness.runAgent({ ...harnessCtx, terminals: engineTerminalsForRun(seatId, run) }, messages.slice(), {
           gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
           send: (ev) => {
             // Telemetry is captured for attribution as well as forwarded: the

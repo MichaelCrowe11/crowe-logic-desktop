@@ -711,6 +711,85 @@ const ROOMS_TOOLS = [
       before: { type: "number", description: "Page back: only messages with a sequence number below this." },
     } } } },
 ];
+/* Engines keep independent terminal displays and concurrent running jobs.
+   Each command starts in a fresh interpreter at the terminal's chosen folder:
+   operator keystrokes can never become a later engine command's input prefix.
+   Raw engine keys are deliberately unavailable; command approval cannot
+   authorize an unknown interactive program's interpretation of those bytes. */
+const TERMINAL_TOOLS = [
+  { type: "function", function: { name: "terminal_open",
+    description: "Open a terminal of your own on the operator's computer. Its display and running job persist, and the operator watches live. Each command uses a fresh interpreter in the starting folder; shell variables and directory changes do not persist between commands. Open several to work in parallel (a server in one, tests in another). Returns the terminal id.",
+    parameters: { type: "object", properties: {
+      label: { type: "string", description: "Short name the operator sees, such as \"dev server\" or \"tests\"." },
+      cwd: { type: "string", description: "Starting folder. Defaults to the workspace." },
+    } } } },
+  { type: "function", function: { name: "terminal_run",
+    description: "Run an approved command in a fresh interpreter in one of your terminals. Returns its exit code and output. A job still going at the timeout keeps running; use terminal_read to watch it or terminal_close to end the terminal. Only the operator can answer interactive prompts. Commands pass the same approval gate as run_shell. Include any needed cd or environment setup in each command.",
+    parameters: { type: "object", properties: {
+      id: { type: "string", description: "Terminal id from terminal_open." },
+      command: { type: "string" },
+      timeout_seconds: { type: "number", description: "How long to wait. Default 60, max 600." },
+    }, required: ["id", "command"] } } },
+  { type: "function", function: { name: "terminal_read",
+    description: "Read the screen of one of your terminals as text, as the operator sees it now. Use it to follow a running program or a full-screen one.",
+    parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } } },
+  { type: "function", function: { name: "terminal_list",
+    description: "List your open terminals with their label, folder, whether a command is still running, and whether the operator has taken one over.",
+    parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "terminal_close",
+    description: "Close one of your terminals and end whatever runs in it.",
+    parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } } },
+];
+// Retain dispatch for stale transcripts, but never offer or execute raw input.
+const TERMINAL_TOOL_NAMES = new Set([...TERMINAL_TOOLS.map((t) => t.function.name), "terminal_send"]);
+function terminalsOffered(ctx) {
+  const t = ctx && ctx.terminals;
+  return !!(t && typeof t.open === "function" && typeof t.run === "function");
+}
+async function terminalTool(ctx, state, name, args, tier) {
+  const t = ctx.terminals; const owner = state.agentId || "main";
+  const says = (e) => `error: ${String((e && e.message) || e).slice(0, 300)}`;
+  try {
+    if (name === "terminal_send") return "blocked: raw engine terminal input is disabled. Use terminal_run for a gated command; only the operator can send interactive input.";
+    if (name === "terminal_list") {
+      const list = t.list(owner);
+      if (!list.length) return "No terminals open. Open one with terminal_open.";
+      return list.map((s) => `${s.id} · ${s.label} · ${s.cwd}${s.busy ? " · running" : ""}${s.held ? " · the operator has it" : ""}`).join("\n");
+    }
+    if (name === "terminal_read") {
+      const r = await t.read(owner, String(args.id || ""));
+      return `${r.alternate ? "[full-screen program]\n" : ""}${r.text || "(blank screen)"}\n[cursor row ${r.cursor.y + 1}, column ${r.cursor.x + 1}]`;
+    }
+    // Opening, running and ending a process are acts, not read-only inspection.
+    if (tier !== "execute") return `blocked: terminals run commands, and the current mode is "${tier}". Ask the operator to switch to Execute.`;
+    if (state.isAborted?.()) return "blocked: this engine turn was stopped.";
+    if (name === "terminal_close") { await t.close(owner, String(args.id || "")); return `closed ${args.id}`; }
+    if (name === "terminal_open") {
+      const cwd = args.cwd ? resolvePath(ctx, args.cwd) : ctx.getCwd();
+      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) return `error: no such folder: ${cwd}`;
+      const s = t.open(owner, { label: String(args.label || "").slice(0, 60), cwd, engine: state.engineName || "" });
+      state.journal({ event_type: "TOOL_CALLED", tool_id: name, output_summary: `opened ${s.id} in ${cwd}` });
+      return `opened ${s.id} (${s.label}) in ${cwd}. Run commands with terminal_run id "${s.id}".`;
+    }
+    if (name === "terminal_run") {
+      const text = typeof args.command === "string" ? args.command : "";
+      if (!text.trim()) return "error: give a command to run.";
+      if (commandTouchesSecret(text)) return "blocked: this references a credentials or secrets path. The operator shell does not open those files.";
+      const risk = classifyCommand(text);
+      const gate = await gateAction(ctx, state, { risk: risk.risk, why: risk.why, kind: "run_shell", title: "Run a command in an engine terminal",
+        detail: text, hash: inputHash("run_shell", { command: text }) });
+      if (!gate.ok) return gate.text;
+      if (state.isAborted?.()) return "blocked: this engine turn was stopped.";
+      const timeoutMs = Math.min(600, Math.max(1, Number(args.timeout_seconds) || 60)) * 1000;
+      const r = await t.run(owner, String(args.id || ""), text, timeoutMs);
+      if (r.ended) return `the terminal closed while running. Output:\n${r.output}`;
+      if (r.timedOut) return `still running after ${timeoutMs / 1000}s (it keeps going in ${args.id}). Output so far:\n${r.output || "(none yet)"}\nUse terminal_read to follow it, or terminal_close to end this terminal. Interactive input belongs to the operator.`;
+      return `exit ${r.exitCode}\n${r.output || "(no output)"}`;
+    }
+  } catch (e) { return says(e); }
+  return `error: unknown terminal tool ${name}`;
+}
+
 function roomsOffered(ctx) {
   return !!(ctx && ctx.rooms && typeof ctx.rooms.list === "function" && typeof ctx.rooms.load === "function");
 }
@@ -778,7 +857,8 @@ function allTools(ctx, route, deps) {
   const post = mailOffered(ctx) ? [MAIL_TOOL] : [];
   const rooms = roomsOffered(ctx) ? ROOMS_TOOLS : [];
   const web = browserOffered(ctx) ? BROWSER_TOOLS : [];
-  return [...BUILTIN_TOOLS, ...grow, ...author, ...ask, ...post, ...rooms, ...web, ...ctx.mcpTools()];
+  const terms = terminalsOffered(ctx) ? TERMINAL_TOOLS : [];
+  return [...BUILTIN_TOOLS, ...grow, ...author, ...ask, ...post, ...rooms, ...web, ...terms, ...ctx.mcpTools()];
 }
 /* The verifier gets its own tool list, not a filtered view of the operator's: no
    MCP servers (unknown side effects), no writes, and a shell only where the tier
@@ -1370,6 +1450,7 @@ async function execTool(ctx, name, args, route, state) {
         return "blocked: the verifier does not change anything. Record what is wrong in your verdict and leave the fixing to the operator.";
       if (name === "share_preview") return "blocked: the verifier checks the work; it does not publish it.";
       if (BROWSER_TOOL_NAMES.has(name)) return "blocked: the verifier checks the workspace; it does not drive the cloud browser.";
+      if (TERMINAL_TOOL_NAMES.has(name)) return "blocked: the verifier uses run_shell where the tier allows it, not the engine terminals.";
       if (name === "run_shell" && classifyCommand(args.command).risk >= RISK.REVIEW)
         return "blocked: the verifier may run builds, tests, and inspection, not commands that reach past the working tree.";
     }
@@ -1479,6 +1560,10 @@ async function execTool(ctx, name, args, route, state) {
         if (e && e.outcome === "unknown") return `possibly sent to ${rcpts.join(", ")}: ${why} Do not send it again. Ask the user to check the Sent folder or the provider's logs before deciding.`;
         return `error: the message was not sent: ${why}`;
       }
+    }
+    if (TERMINAL_TOOL_NAMES.has(name)) {
+      if (!terminalsOffered(ctx)) return "error: terminals are not available in this build. Use run_shell.";
+      return await terminalTool(ctx, state, name, args || {}, tier);
     }
     if (name === "run_shell") {
       if (commandTouchesSecret(args.command)) return "blocked: this command references a credentials or secrets path. The operator shell does not open those files.";
@@ -1895,6 +1980,7 @@ function shownArgs(name, a) {
 }
 function mutationLabel(name, args, text) {
   if (name === "run_shell") return `run_shell ${String(args.command || "").slice(0, 120)}`;
+  if (name === "terminal_run") return `terminal_run ${args.id || ""} ${String(args.command || "").slice(0, 110)}`;
   if (name === "log_grow") return `log_grow ${args.type || ""}`;
   if (name === "export_document") return `export_document ${Doc.exportFileName(args.filename)}.${args.format || ""}`;
   if (name === "send_email") return `send_email ${[].concat((args && args.to) || []).join(", ")}`.slice(0, 120);
@@ -1906,6 +1992,9 @@ function mutationLabel(name, args, text) {
 function didMutate(ctx, name, args, text) {
   if (statusOf(text) !== "SUCCESS") return false;
   if (name === "run_shell") return !classifyCommand(args.command).readOnly && !/^cwd -> /.test(text);
+  if (name === "terminal_run") return !classifyCommand(args.command).readOnly && /^(exit|still running)/.test(text);
+  if (name === "terminal_open") return /^opened /.test(text);
+  if (name === "terminal_close") return /^closed /.test(text);
   if (name === "edit_file" || name === "write_file") return /^(applied edit|wrote )/.test(text);
   if (name === "log_grow") return /^(logged|corrected)/.test(text);
   if (name === "export_document") return /^saved /.test(text);
@@ -2340,6 +2429,7 @@ function newState(ctx, cfg, deps, route) {
   const state = {
     turnId,
     agentId: deps.agentId || "main",
+    isAborted: () => Boolean(deps.isAborted?.()),
     stage: "execute",
     meter: { in: 0, out: 0, ms: 0, cost: 0 },
     rateIn: Number(ctx.rateIn) || 0, rateOut: Number(ctx.rateOut) || 0,
@@ -2687,6 +2777,8 @@ async function runAgent(ctx, messages, deps) {
   // A room hands each seat a tier; the gate reads the lower of it and the app's autonomy.
   if (deps.tier) route.tierCap = deps.tier;
   const state = newState(ctx, cfg, deps, route);
+  // The engine's name on the terminals it opens, so the operator sees which model is at which keys.
+  state.engineName = route.model || "";
   // Said once, ahead of the route card, so the operator sees why this turn is
   // on the free model before the answer starts rather than after a 403.
   if (route.planLimited) {
@@ -2790,7 +2882,7 @@ module.exports = {
   runAgent, runBlock, routeTurn, classifyRole, catalogModelForRole, verifierModel, BRIDGE_ROLE_MODEL,
   planRank, tierToPlan, sessionPlan, freeModel, planBlocks, planGateOf, planNotice, FREE_MODEL, PLAN_GATE_RE,
   allTools, verifierTools, execTool, callTool, buildSystemPrompt, compactMessages, newState,
-  BUILTIN_TOOLS, VERDICT_TOOL, MAIL_TOOL, PROPOSE_TOOL, BROWSER_TOOLS, BROWSER_EXECUTE, browserOffered, formatSnapshot, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
+  BUILTIN_TOOLS, VERDICT_TOOL, MAIL_TOOL, PROPOSE_TOOL, BROWSER_TOOLS, TERMINAL_TOOLS, terminalsOffered, BROWSER_EXECUTE, browserOffered, formatSnapshot, normalizeProposal, isSecretPath, commandTouchesSecret, safeShellEnv, loginShellPath, findOnPath, pluginSpawnEnv, KNOWN_TOOL_DIRS, MAX_ROUNDS, VERIFY_MAX_ROUNDS, MAX_REPAIRS, TIER_LINES,
   RISK, RISK_NAMES, RISK_PATH_RE, SENSITIVE_PATH_RE, classifyCommand, parseBareCd, deliveryOf, gateAction, gatePath,
   inputHash, stableJson, statusOf, didMutate, turnBudget, turnTokenCap, overBudget, budgetReason,
   shouldVerify, normalizeVerdict, snapshotBefore, scanForSecrets, redactSecrets, shownArgs, escapesWorkspace,

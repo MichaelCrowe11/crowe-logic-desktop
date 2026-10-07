@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { TerminalSessions } = require("../terminal-sessions");
+const { EngineTerminalProcess } = require("../engine-terminal-process");
 const { Companion } = require("../companion");
 const { DraftBridge } = require("../draft-bridge");
 const { installManagedDraftWindows } = require("../managed-draft-window");
@@ -32,6 +33,11 @@ app.whenReady().then(async () => {
     });
     await win.loadFile(path.join(__dirname, "fixtures/phone-mirror.html"));
     const js = source => win.webContents.executeJavaScript(source, true);
+    // The iPhone recogniser, stood in for: it hears one phrase, as prose.
+    await js(`window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweSpeech: (() => { const on = {};
+      let sessionId;
+      return { addListener: (n, f) => { on[n] = f; return { remove() { if (on[n] === f) delete on[n]; } }; }, requestPermissions: async () => ({ speechRecognition: "granted" }), available: async () => ({ available: true, sessionIds: true }),
+        start: async (opts) => { sessionId = opts.sessionId; const id = sessionId; setTimeout(() => on.partialResults?.({ matches: ["Git status."], sessionId: id }), 30); }, stop: async () => { on.listeningState?.({ status: "stopped", sessionId }); } }; })() } }; void 0`);
     await js('void window.crowePhoneMirror.mount(document.getElementById("phone"))');
     await until(() => js('Boolean(document.querySelector("[data-session-row=integration]"))'), "session list");
     assert.equal(await js('document.querySelector("[data-host-name]").textContent'), "Test Mac");
@@ -74,17 +80,60 @@ app.whenReady().then(async () => {
     await until(() => manager.sessions.has("phone-1") && manager.sessions.get("phone-1").controller !== null, "phone shell opened and held");
     const own = manager.sessions.get("phone-1");
     assert.ok(own.cols < 80 && own.cols >= 20, `phone shell is not sized to the phone: ${own.cols} columns`);
-    await until(() => js('document.querySelector("[data-keys]").hidden === false && document.querySelector("[data-close]").hidden === false'), "key bar and close for own shell");
-    await js('document.querySelector("[data-ctrl]").click()');
-    assert.equal(await js('document.querySelector("[data-ctrl]").getAttribute("aria-pressed")'), "true");
-    manager.localInput(own.id, "printf 'PHONE_OWN_SHELL_OK\\n'\r");
-    await until(() => js('document.querySelector(".xterm-screen").innerText.includes("PHONE_OWN_SHELL_OK")'), "own shell output");
+    await until(() => js('document.querySelector("[data-keys]").hidden === false && document.querySelector("[data-close]").hidden === false'), "Crowe keyboard and close for own shell");
+    assert.equal(await js('document.querySelector(".xterm-helper-textarea").getAttribute("inputmode")'), "none", "the phone keyboard would rise over the Crowe keyboard");
+    // Keys act on release, like the phone's own.
+    const tap = key => js(`(() => { const b = document.querySelector('[data-kb-key="${key}"]'); const o = { bubbles: true, pointerId: 1, clientX: 0, clientY: 0 };
+      b.dispatchEvent(new PointerEvent("pointerdown", o)); b.dispatchEvent(new PointerEvent("pointerup", o)); })()`);
+    for (const ch of "echo kbok") await tap(ch === " " ? "space" : ch);
+    await tap("enter");
+    await until(async () => (await manager.screenText(own.id)).text.split("\n").filter(l => l.trim() === "kbok").length === 1, "typed on the Crowe keyboard and ran");
+    await until(() => js('[...document.querySelectorAll("[data-kb-chip]")].some(b => b.dataset.kbChip === "echo kbok")'), "the command is remembered in the strip");
+    await tap("ctrl");
+    assert.equal(await js('document.querySelector(\'[data-kb-key="ctrl"]\').getAttribute("aria-pressed")'), "true");
+    await tap("c");
+    assert.equal(await js('document.querySelector(\'[data-kb-key="ctrl"]\').getAttribute("aria-pressed")'), "false", "Ctrl stays armed after a key");
+    // The mic: what was heard shows for review and is typed without return.
+    await tap("mic");
+    await until(() => js('document.querySelector("[data-kb-heard]")?.textContent === "git status"'), "heard text shown for review, as a command");
+    await js('document.querySelector(\'[data-kb-voice="type"]\').click()');
+    await until(async () => / git status\s*$/m.test((await manager.screenText(own.id)).text), "spoken command typed into the shell");
+    await delay(400);
+    assert.doesNotMatch((await manager.screenText(own.id)).text, /not a git repository/, "the spoken command was run without return");
+    await tap("intr");
+    await tap("mic");
+    await until(() => js('document.querySelector("[data-kb-heard]")?.textContent === "git status"'), "second dictation is reviewed");
+    await tap("hide");
+    assert.equal(await js('Boolean(document.querySelector("[data-kb-heard]"))'), false, "hiding the keyboard discards dictation");
+    await until(() => js('window.__croweSpeechOwner === null'), "hidden keyboard releases recognizer");
+    await js('document.querySelector("[data-kb-show]").click()');
+    assert.equal(await js('localStorage.getItem("crowe-term-history")'), null, "commands must not be persisted");
+    console.log("ok Crowe keyboard types, remembers only in memory, arms Ctrl; reviewed mic text never presses return and hiding cancels it");
     await delay(150);
     const own_shot = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, "phone-shell.png"), own_shot.toPNG());
     await js('document.querySelector("[data-close]").click()');
     await until(() => !manager.sessions.has("phone-1"), "own shell closed from the phone");
     await until(() => js('document.querySelector("[data-hosts]").hidden === false'), "back to sessions after close");
     console.log("ok New terminal opens a phone-sized shell with control, key bar, and owner close");
+    // An engine's shell: listed first, watched live, taken over (the engine
+    // waits) and handed back by leaving it.
+    const eng = manager.create("engine-ui", () => new EngineTerminalProcess({ pty, cols: 100, rows: 30, cwd: dir, env: process.env }), { cols: 100, rows: 30, cwd: dir, label: "tests", openedBy: { id: "run:ui", name: "Test engine", kind: "engine" } });
+    await delay(300);
+    await js('document.querySelector("[data-refresh]").click()');
+    await until(() => js('document.querySelector("[data-session-list] .mirror-session")?.dataset.sessionRow === "engine-ui"'), "engine shell listed first");
+    assert.match(await js('document.querySelector("[data-session-row=engine-ui]").textContent'), /Test engine is working here/);
+    await js('document.querySelector("[data-session-row=engine-ui]").click()');
+    const ran = await manager.exec(eng.id, "run:ui", "printf 'ENGINE_LIVE_%s\\n' ok", { timeoutMs: 5000 });
+    assert.equal(ran.exitCode, 0); assert.match(ran.output, /ENGINE_LIVE_ok/);
+    await until(() => js('document.querySelector(".xterm-screen").innerText.includes("ENGINE_LIVE_ok")'), "engine work shows live on the phone");
+    assert.equal(await js('document.querySelector("[data-control]").textContent'), "Take over");
+    await js('document.querySelector("[data-control]").click()');
+    await until(() => js('document.querySelector("[data-control]").textContent === "Hand back"'), "phone took the engine shell");
+    await assert.rejects(manager.exec(eng.id, "run:ui", "true"), /UI test phone has taken this terminal/);
+    await js('document.querySelector("[data-back]").click()');
+    await until(() => eng.controller === null, "leaving hands the shell back");
+    assert.equal((await manager.exec(eng.id, "run:ui", "true", { timeoutMs: 5000 })).exitCode, 0);
+    console.log("ok engine shells are listed, watched live, taken over and handed back");
     companion.setTerminal(phone.id, false);
     await js('document.querySelector("[data-refresh]").click()');
     await until(() => js('document.querySelector("[data-grant]").hidden === false && document.querySelector("[data-open]").disabled'), "grant notice when terminal access is off");

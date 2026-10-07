@@ -2363,6 +2363,7 @@
       input: () => {}, reclaim: () => {}, resize: () => {},
       close: () => ({ ok: true }),
       onData: noop,
+      onEngine: noop,
     },
     fs: {
       list: () => ({ cwd: "", entries: [], error: NO_WORKSPACE() }),

@@ -2408,3 +2408,6 @@ button.primary:active, .rc-open:active, .room-send:active {
   .header-identity > .lockup { width: 64px; }
   .welcome > .brand-gate { width: 72px; height: 72px; margin-bottom: 14px; }
 }
+/* A terminal an engine opened for itself: a gold rule on the head, so the
+   operator can tell at a glance whose keys are on which shell. */
+.workspace-panel.engine-panel .panel-head{box-shadow:inset 3px 0 0 var(--gold,#c9a35a)}

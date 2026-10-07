@@ -1118,7 +1118,7 @@ const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
 // A cloud browser panel is not saved: its address carries a session token, and
 // the session does not outlive the app. It comes back from the card's Open.
-function panelState() { return { layout: $("panel-layout").value, panels: panels.filter((p) => p.type !== "cloud-browser").map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
+function panelState() { return { layout: $("panel-layout").value, panels: panels.filter((p) => p.type !== "cloud-browser" && !p.engine).map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
 function savePanelState() {
   try { localStorage.setItem("crowe-workspace-panels", JSON.stringify(panelState())); } catch {}
 }
@@ -1157,7 +1157,7 @@ async function addPanel(type, seed={}) {
   // Fleet, Operator Control, Workbench and the agent console were removed) is
   // dropped here without a word, so an old layout restores what it still can.
   if(!PANEL_TITLES[type]) return null;
-  const p = { id:seed.id || panelId(type), type, title:seed.title || PANEL_TITLES[type], url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "" };
+  const p = { id:seed.id || panelId(type), type, title:seed.title || PANEL_TITLES[type], url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "", engine:seed.engine || "", generation:seed.generation || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
   else if(type === "browser") mountBrowser(p, body);
@@ -1173,6 +1173,8 @@ async function mountTerminal(p, body, systemTerminal=false) {
   const tools=document.createElement("div"); tools.className="terminal-tools";
   tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><button class="term-reclaim ghost sm" hidden>Take control</button><span class="terminal-state">starting</span>';
   const host=document.createElement("div"); host.className="terminal-host"; body.append(tools,host);
+  // An engine's shell is the engine's to start; Restart would hand its id to a fresh one.
+  if(p.engine){tools.querySelector(".term-restart").hidden=true;body.closest(".workspace-panel")?.classList.add("engine-panel")}
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:termTheme()});
   const f=new FitAddon.FitAddon(); t.loadAddon(f); t.open(host); try{f.fit()}catch{}
   const state=tools.querySelector(".terminal-state");
@@ -1183,8 +1185,25 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"}).catch(err=>({ok:false,error:err?.message||String(err)}));const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
-  terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
+  const entry={term:t,fit:f,host,state,generation:p.generation,seq:-1,attaching:true,pending:[],stream:Promise.resolve(),attempt:0};
+  const start=async()=>{
+    const attempt=++entry.attempt;entry.attaching=true;entry.pending=[];state.textContent="starting";
+    const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:p.engine?"engine":"terminal",generation:p.engine?p.generation:undefined}).catch(err=>({ok:false,error:err?.message||String(err)}));
+    if(terminalPanels.get(p.id)!==entry||entry.attempt!==attempt)return;
+    const ok=r&&r.ok!==false;state.textContent=ok?(r.engine?`${r.engine} is working here`:"running"):"no shell";
+    if(ok){
+      entry.generation=r.generation||p.generation;entry.seq=Number.isInteger(r.seq)?r.seq:-1;
+      if(typeof r.snapshot==="string")queueTerminalDisplay(entry,()=>new Promise(resolve=>{
+        t.reset();if(Number.isInteger(r.cols)&&Number.isInteger(r.rows))t.resize(r.cols,r.rows);t.write(r.snapshot,resolve);
+      }));
+      entry.attaching=false;const pending=entry.pending;entry.pending=[];for(const event of pending)receiveTerminalRecord(event);
+      await entry.stream;
+    }else{
+      entry.attaching=false;entry.pending=[];t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);
+      if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`);
+    }
+  };
+  entry.start=start;terminalPanels.set(p.id,entry);await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
      one or not - and left no ordinary shell to run anything else from. The
@@ -1201,7 +1220,32 @@ async function mountTerminal(p, body, systemTerminal=false) {
   tools.querySelector(".term-export").onclick=()=>navigator.clipboard.writeText(t.buffer.active.getLine(0)?Array.from({length:t.buffer.active.length},(_,i)=>t.buffer.active.getLine(i)?.translateToString(true)||"").join("\n"):"");
   setTimeout(()=>fitTerminals(),40);
 }
-window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term.write(data)});
+// Attachment snapshots and live records share one sequence. Buffer records
+// while attaching, discard replayed/stale generations, and serialize resizes
+// with xterm writes so a resize is never rendered as undefined text.
+function queueTerminalDisplay(entry,run){
+  const attempt=entry.attempt;
+  entry.stream=entry.stream.then(()=>{if(entry.attempt===attempt&&entry.host.isConnected)return run()}).catch(()=>{entry.state.textContent="Terminal display interrupted"});
+}
+function receiveTerminalRecord(event){
+  const entry=terminalPanels.get(event?.id);if(!entry)return;
+  if(entry.attaching){entry.pending.push(event);return;}
+  if(event.generation&&event.generation!==entry.generation)return;
+  if(Number.isInteger(event.seq)){if(event.seq<=entry.seq)return;entry.seq=event.seq;}
+  if(event.type==="resize"&&Number.isInteger(event.cols)&&Number.isInteger(event.rows))queueTerminalDisplay(entry,()=>entry.term.resize(event.cols,event.rows));
+  else if(typeof event.data==="string")queueTerminalDisplay(entry,()=>new Promise(resolve=>entry.term.write(event.data,resolve)));
+}
+window.crowe.pty.onData(receiveTerminalRecord);
+/* An engine opened a terminal: it comes up as a panel beside the operator's,
+   live, labelled with the engine. Typing in it pauses the engine there; Close
+   ends it. Engine panels are not saved in the layout, since their shells do
+   not outlive the app. */
+function receiveEngineTerminal(e){
+  if(!e||!e.id)return;
+  if(e.type==="opened"&&!panels.some((p)=>p.id===e.id))return addPanel("terminal",{id:e.id,title:`${e.openedBy||"Engine"} · ${e.label}`,engine:e.openedBy||"Engine",generation:e.generation});
+  if(e.type==="closed"){const x=terminalPanels.get(e.id);if(x&&(!e.generation||e.generation===x.generation))x.state.textContent="ended";}
+}
+window.crowe.pty.onEngine?.(receiveEngineTerminal);
 function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 /* A bare host typed into the address bar gets https by default - except loopback,
    where that default is fatal: the TLS handshake against a plain-HTTP dev server

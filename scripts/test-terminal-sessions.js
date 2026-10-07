@@ -74,3 +74,75 @@ test("draft conflicts, dirty desktop protection and idempotent return preserve e
   const newer = manager.openDraft(s.id, "newer"); assert.notEqual(newer.id, draft.id);
   assert.throws(() => manager.changeDraft(s.id, draft.id, returning), /no longer attached/);
 });
+
+const { EngineTerminalProcess } = require("../engine-terminal-process");
+function commandProcess(answers) {
+  return new EngineTerminalProcess({ pty: { spawn(_shell, args) {
+    const child = new FakePty();
+    const [out, code, hang] = answers[args.at(-1)] || ["command not found", 127];
+    setTimeout(() => { child.emit("data", out); if (!hang) child.emit("exit", { exitCode: code }); }, 5);
+    return child;
+  } } });
+}
+
+test("engines run commands side by side, reject raw input, and respect operator holds", async t => {
+  let clock = 1000; const manager = new TerminalSessions({ now: () => clock }); t.after(() => manager.closeAll());
+  const answers = { "git status": ["\u001b[1mOn branch main\u001b[0m\r\nnothing to commit", 0], "npm test": ["1 failing", 1], "npm run dev": ["listening on 5173", 0, true] };
+  const a = manager.create("engine-a", () => commandProcess(answers), { openedBy: { id: "run:a", name: "Engine A", kind: "engine" } });
+  const b = manager.create("engine-b", () => commandProcess(answers), { openedBy: { id: "run:b", name: "Engine B", kind: "engine" } });
+  const [ra, rb] = await Promise.all([manager.exec(a.id, "run:a", "git status"), manager.exec(b.id, "run:b", "npm test")]);
+  assert.deepEqual([ra.exitCode, ra.output], [0, "On branch main\nnothing to commit"]);
+  assert.deepEqual([rb.exitCode, rb.output], [1, "1 failing"]);
+  assert.equal(manager.meta(a).origin, "engine");
+  assert.deepEqual(manager.engineList("run:a").map(s => s.id), ["engine-a"]);
+  assert.throws(() => manager.engineInput(a.id, "run:b", "ls\r"), /not one this engine opened/);
+  for (const data of ["echo hidden", "\r", "\u0003", "ls\n", 5]) {
+    assert.throws(() => manager.engineInput(a.id, "run:a", data), /Raw engine terminal input is disabled/);
+  }
+  const dev = await manager.exec(a.id, "run:a", "npm run dev", { timeoutMs: 600 });
+  assert.equal(dev.timedOut, true); assert.match(dev.output, /listening on 5173/);
+  await assert.rejects(manager.exec(a.id, "run:a", "ls"), /still running/);
+  manager.localInput(a.id, "x"); assert.equal(manager.meta(a).held, true);
+  assert.throws(() => manager.engineClose(a.id, "run:a"), /operator is typing/);
+  clock += 11000; manager.engineClose(a.id, "run:a");
+
+  manager.acquire(b.id, b.generation, { id: "phone", name: "iPhone" });
+  await assert.rejects(manager.exec(b.id, "run:b", "git status"), /iPhone has taken this terminal/);
+  assert.throws(() => manager.engineClose(b.id, "run:b"), /iPhone has taken this terminal/);
+  manager.reclaim(b.id);
+  assert.equal((await manager.exec(b.id, "run:b", "git status")).exitCode, 0);
+  assert.match((await manager.screenText(b.id)).text, /nothing to commit/);
+});
+
+test("companion shutdown closes only phone-origin terminals", t => {
+  const manager = new TerminalSessions(); t.after(() => manager.closeAll());
+  manager.create("desktop", () => new FakePty());
+  manager.create("phone", () => new FakePty(), { openedBy: { id: "phone", name: "Phone" } });
+  manager.create("engine", () => commandProcess({}), { openedBy: { id: "phone", name: "Engine", kind: "engine" } });
+  manager.closeOpenedBy("phone");
+  assert.deepEqual([...manager.sessions.keys()], ["desktop", "engine"]);
+  manager.closeOpenedBy();
+  assert.deepEqual([...manager.sessions.keys()], ["desktop", "engine"]);
+});
+
+test("Stop closes only that engine seat's terminals, including pending runs", async t => {
+  const manager = new TerminalSessions(); t.after(() => manager.closeAll());
+  for (const [id, owner] of [["a", "seat-a"], ["b", "seat-b"]]) {
+    manager.create(id, () => commandProcess({ wait: ["waiting", 0, true] }), { openedBy: { id: owner, kind: "engine" } });
+  }
+  manager.create("operator", () => new FakePty());
+  const pending = manager.exec("a", "seat-a", "wait");
+  manager.closeEngineOwner("seat-a");
+  assert.equal((await pending).ended, true);
+  assert.deepEqual([...manager.sessions.keys()], ["b", "operator"]);
+  manager.closeEngineOwner();
+  assert.deepEqual([...manager.sessions.keys()], ["operator"]);
+  assert.equal(manager.listenerCount("removed"), 0);
+});
+
+test("engine execution refuses an arbitrary interactive shell", async t => {
+  const manager = new TerminalSessions(); t.after(() => manager.closeAll());
+  const p = new FakePty(); manager.create("unsafe", () => p, { openedBy: { id: "engine", kind: "engine" } });
+  await assert.rejects(manager.exec("unsafe", "engine", "echo safe"), /no controlled command channel/);
+  assert.deepEqual(p.inputs, []);
+});

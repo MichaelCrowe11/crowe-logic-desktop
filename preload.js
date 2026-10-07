@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld("crowe", {
     resize: (size) => ipcRenderer.send("crowe:pty:resize", size),
     close: (id) => ipcRenderer.invoke("crowe:pty:close", { id }),
     onData: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
+    // A shell an engine opened for itself, so the window can show it live.
+    onEngine: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:terminal:engine", h); return () => ipcRenderer.removeListener("crowe:terminal:engine", h); },
   },
   fs: {
     list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir),

@@ -41,9 +41,9 @@ check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remai
 const harnessCtxSrc = (mainSrc.match(/\nconst harnessCtx = \{[\s\S]*?\n\};/) || [""])[0];
 check(harnessCtxSrc.length > 0, "harnessCtx must be findable for the rooms pin");
 check(!/^\s{2}rooms:/m.test(harnessCtxSrc), "harnessCtx must not carry the rooms hook");
-check(/const ctx = \{ \.\.\.harnessCtx, rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook");
+check(/const ctx = \{ \.\.\.harnessCtx, terminals: engineTerminalsForRun\(id, run\), rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook and turn-bound terminals");
 check((mainSrc.match(/rooms: roomsForHarness\(\)/g) || []).length === 1, "the rooms hook is handed out in exactly one place");
-check(/harness\.runAgent\(harnessCtx, messages\.slice\(\)/.test(mainSrc), "room seats must run on the bare harnessCtx");
+check(/harness\.runAgent\(\{ \.\.\.harnessCtx, terminals: engineTerminalsForRun\(seatId, run\) \}, messages\.slice\(\)/.test(mainSrc), "room seats receive only turn-bound terminals on the bare harnessCtx, not the rooms hook");
 check(/if \(!\/\^r-\[A-Za-z0-9_-\]\{1,80\}\$\/\.test\(String\(id \|\| ""\)\)\) return null;/.test(mainSrc), "the rooms hook must load only r- ids");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
@@ -254,7 +254,7 @@ const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "ut
 check(!/setAttribute\(["']allowpopups/.test(renderer), "the browser guest must not opt into popups");
 check(!/croweBrowser\.key\b/.test(renderer), "the renderer must never read the Crowe Browser key");
 check(/window\.crowe\.keys\.set\("croweBrowser", k\)/.test(renderer) && /window\.crowe\.keys\.remove\("croweBrowser"\)/.test(renderer) && !/patch\.croweBrowser = \{[^}]*\bkey\b/.test(renderer), "the renderer must save and remove the Crowe Browser key through the key store, never through set-config");
-check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser"\)/.test(renderer), "cloud browser panels, whose address carries a session token, must not be saved with the deck");
+check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser" && !p\.engine\)/.test(renderer), "cloud browser and transient engine panels must not be saved with the deck");
 check(!/\sstyle=["']/.test(renderer), "dynamic renderer markup must not contain inline style attributes");
 check(/liftMotionStyle/.test(renderer) && /croweAdoptStyle/.test(renderer), "the logotype's style block must be adopted, not inlined");
 check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not write style attributes, which the policy blocks");

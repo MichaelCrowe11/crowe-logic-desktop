@@ -137,6 +137,28 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "engine panels attach the current generation and reconcile snapshot, live output and resize",
+    body: `const real=window.crowe.pty;let requested;const id="engine-attach-regression",generation="current-generation";
+      window.crowe.pty={...real,start:async opts=>{
+        requested={kind:opts.kind,generation:opts.generation};
+        receiveTerminalRecord({id,generation,type:"output",seq:1,data:"snapshot "});
+        receiveTerminalRecord({id,generation,type:"output",seq:2,data:"live"});
+        return {ok:true,id,generation,seq:1,snapshot:"snapshot ",cols:80,rows:24,engine:"Test engine"};
+      },resize(){},close:async()=>({ok:true})};
+      try{
+        const p=await receiveEngineTerminal({type:"opened",id,generation,openedBy:"Test engine",label:"tests"});
+        const entry=terminalPanels.get(id);
+        receiveTerminalRecord({id,generation,type:"output",seq:2,data:"duplicate"});
+        receiveTerminalRecord({id,generation:"old-generation",type:"output",seq:3,data:"stale"});
+        receiveTerminalRecord({id,generation,type:"resize",seq:3,cols:55,rows:18});
+        await entry.stream;
+        const result={requestedKind:requested.kind,requestedGeneration:requested.generation,text:entry.term.buffer.active.getLine(0).translateToString(true),cols:entry.term.cols,rows:entry.term.rows,
+          restartHidden:entry.host.parentNode.querySelector(".term-restart").hidden,saved:panelState().panels.some(x=>x.id===id)};
+        return result;
+      }finally{const p=panels.find(x=>x.id===id);if(p)closePanel(p.id);window.crowe.pty=real;}`,
+    expect: { requestedKind: "engine", requestedGeneration: "current-generation", text: "snapshot live", cols: 55, rows: 18, restartHidden: true, saved: false },
+  },
+  {
     name: "the operator composer exposes state, guidance, and accessible controls",
     body: `const frame = document.querySelector(".composer-frame");
       input.value = "check this"; input.dispatchEvent(new Event("input"));

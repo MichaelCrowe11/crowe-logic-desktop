@@ -44,7 +44,7 @@
     "test:council:live": "CROWE_ALLOW_PLAINTEXT_AUTH=1 electron scripts/test-council-live.js",
     "test:council:browser": "electron scripts/test-council-browser.js",
     "test:draft-editor": "node --test scripts/test-draft-editor.js",
-    "test:phone-mirror": "node --test scripts/test-terminal-sessions.js scripts/test-phone-drafts.js"
+    "test:phone-mirror": "node --test scripts/test-terminal-sessions.js scripts/test-phone-drafts.js scripts/test-terminal-gate.js scripts/test-engine-terminals.js scripts/test-engine-terminal-process.js scripts/test-keyboard-speech.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -122,6 +122,7 @@
       "draft-document.js",
       "draft-preload.js",
       "terminal-sessions.js",
+      "engine-terminal-process.js",
       "draft-bridge.js",
       "managed-draft-window.js",
       "bin/crowe-session-editor.py"

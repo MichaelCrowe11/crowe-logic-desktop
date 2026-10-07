@@ -1206,6 +1206,7 @@
       resize: () => {},
       close: async () => ({ ok: true }),
       onData: () => () => {},
+      onEngine: () => () => {},
     },
     fs: {
       list: escalate("The file browser", { cwd: "", entries: [] }),

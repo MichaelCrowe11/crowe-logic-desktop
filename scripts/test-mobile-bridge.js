@@ -1398,7 +1398,9 @@ function methodPaths(surface) {
     assert(/willResignActiveNotification/.test(ios) && /appWillResignActive\(\) \{ teardown\(notify: true\) \}/.test(ios),
       "CroweSpeech keeps listening after the app leaves the foreground");
     const ui = read("mobile/src/mobile-ui.js");
-    assert(/perm\.speechRecognition !== "granted"/.test(ui), "the composer no longer stops on a denied permission");
+    const keyboard = read("mobile/src/crowe-keyboard.js");
+    assert(/window\.croweKeyboard\?\.captureSpeech/.test(ui) && /begin\(Speech, "composer"/.test(ui), "the composer must use the shared speech permission lifecycle");
+    assert(/perm\.speechRecognition !== "granted"/.test(keyboard), "shared dictation must stop on denied permission");
     return "iOS guarded";
   });
 

@@ -1120,32 +1120,40 @@
   const say = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
   if (dictBtn && dictInput && Speech && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     dictBtn.classList.remove("unavailable"); dictBtn.removeAttribute("aria-disabled"); dictBtn.title = "Dictate with microphone";
-    let listening = false, base = "";
+    let capture = null, revision = 0;
     const stopped = () => {
-      listening = false;
       dictBtn.classList.remove("active"); dictBtn.setAttribute("aria-pressed", "false");
       const st = $("composer-status");
       if (st && st.dataset.state === "listening") say("Ready");
     };
-    Promise.resolve(Speech.addListener("partialResults", (d) => {
-      const heard = d && Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
-      dictInput.value = (base + " " + heard).trim();
-      dictInput.dispatchEvent(new Event("input"));
-    })).catch(() => {});
-    Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
-    dictBtn.onclick = async () => {
-      if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
-      let perm = { speechRecognition: "denied" };
-      try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
-      if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }
-      let avail = { available: false };
-      try { avail = await Speech.available(); } catch { /* answered below */ }
-      if (!avail.available) { say("Dictation is not available on this phone right now", "error"); return; }
-      base = dictInput.value.trim(); listening = true;
+    const cancel = () => { revision++; const old = capture; capture = null; stopped(); if (old) void old.stop(); };
+    dictBtn.onclick = () => {
+      if (capture) { cancel(); return; }
+      const begin = window.croweKeyboard?.captureSpeech;
+      if (!begin) { say("Dictation is not available in this build", "error"); return; }
+      if (document.hidden) return;
+      const attempt = ++revision, base = dictInput.value.trim();
+      const current = () => attempt === revision && !document.hidden && dictInput.isConnected && dictInput.getClientRects().length;
+      const next = begin(Speech, "composer", {
+        partial: d => {
+          if (!current()) { cancel(); return; }
+          const heard = Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
+          dictInput.value = (base + " " + heard).trim();
+          dictInput.dispatchEvent(new Event("input"));
+        },
+        stopped: () => { if (attempt === revision) { capture = null; stopped(); } },
+        error: e => { if (attempt === revision) { capture = null; say("Dictation failed: " + String(e?.message || e).slice(0, 120), "error"); stopped(); } },
+      });
+      if (!next) { say("Finish the current dictation before starting another", "error"); return; }
+      capture = next;
       dictBtn.classList.add("active"); dictBtn.setAttribute("aria-pressed", "true"); say("Listening", "listening");
-      try { await Speech.start({ language: "en-US", partialResults: true }); }
-      catch (e) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); }
     };
+    document.addEventListener("visibilitychange", () => { if (document.hidden) cancel(); });
+    window.addEventListener("pagehide", cancel);
+    const speechVisibility = new MutationObserver(() => {
+      if (capture && (!dictInput.isConnected || !dictInput.getClientRects().length)) cancel();
+    });
+    speechVisibility.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style"] });
   } else if (dictBtn && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     // No native recogniser in this build: say so instead of lighting a button that fails.
     dictBtn.classList.add("unavailable"); dictBtn.setAttribute("aria-disabled", "true"); dictBtn.title = "Dictation is not available in this build";

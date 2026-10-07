@@ -32,6 +32,7 @@ const COPY = [
   ["node_modules/@xterm/xterm/lib/xterm.js", "xterm.js"],
   ["node_modules/@xterm/xterm/css/xterm.css", "xterm.css"],
   ["node_modules/@xterm/addon-fit/lib/addon-fit.js", "addon-fit.js"],
+  ["mobile/src/crowe-keyboard.js", "crowe-keyboard.js"],
   ["mobile/src/phone-mirror.js", "phone-mirror.js"],
   ["mobile/src/phone-mirror.css", "phone-mirror.css"],
   ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
@@ -75,7 +76,7 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
-  "phone-mirror.js", "phone-mirror.css", "xterm.js", "xterm.css", "addon-fit.js",
+  "crowe-keyboard.js", "phone-mirror.js", "phone-mirror.css", "xterm.js", "xterm.css", "addon-fit.js",
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
   "styles.css", "look.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
   "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
@@ -154,7 +155,7 @@ function buildIndex() {
   // window.crowe, and mark-geometry.js is the first of them.
   must(html, '<script src="mark-geometry.js"></script>', "the mark-geometry script tag");
   html = html.replace('<script src="mark-geometry.js"></script>',
-    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="phone-mirror.js"></script>\n  <script src="mark-geometry.js"></script>');
+    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="crowe-keyboard.js"></script>\n  <script src="phone-mirror.js"></script>\n  <script src="mark-geometry.js"></script>');
 
   // The phone chrome mirrors controls the renderer wires up on load, so it goes
   // after renderer.js rather than before it.
