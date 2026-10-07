@@ -1,7 +1,7 @@
-# Phone build, 0.26.17
+# Phone build, 0.26.18
 
 Updated October 7, 2026. The operator authorized publication of the new phone
-build. TestFlight build 2617 carries the account and navigation fixes below.
+build. TestFlight build 2618 carries the account and navigation fixes below.
 Upload, processing and distribution receipts belong in the release evidence;
 the version in source alone does not establish availability in TestFlight.
 
@@ -18,7 +18,8 @@ contract and permits only trusted Stripe session URLs. The email fallback uses
 the verified public portal login without sending an account address or token.
 
 Sign-out clears phone access before network revocation, stops active runs, and
-ignores late sign-in and refresh responses. Desktop sign-out also survives a
+ignores late sign-in and refresh responses. It requires clearing the Keychain
+and any stale Preferences fallback before reporting successful sign-out. Desktop sign-out also survives a
 restart without reimporting the CLI's account; the CLI store is preserved.
 
 The live portal was read on October 7: invoices, payment methods and cancellation
@@ -103,7 +104,7 @@ operator's installed desktop and preview sessions open.
 
 Before installation, run `python3 mobile/scripts/verify-ios-bundle.py /path/to/App.app`.
 It verifies identity, app and share-extension versions, SDK minimum, scene
-configuration, signatures, privacy-manifest presence and nine source-asset hashes.
+configuration, signatures, privacy-manifest presence and ten source-asset hashes.
 After distribution export, repeat it with `--distribution` to reject development,
 ad-hoc or enterprise provisioning. This check does not validate privacy claims.
 
@@ -181,7 +182,7 @@ Follow-up evidence is stored in `~/crowe-evidence/2026-10-07-pr134-followup/`.
 - Review store metadata and screenshots against the final product surfaces after
   the separate surface-removal branch is merged.
 - Rebuild and verify distribution exports if the source changes after the tested
-  candidate. TestFlight publication is authorized for 2617; public App Store
+  candidate. TestFlight publication is authorized for 2618; public App Store
   distribution still requires the remaining product and privacy review.
 - Run Android CI and a real Android device pass. Local source checks cannot stand
   in for an Android build.

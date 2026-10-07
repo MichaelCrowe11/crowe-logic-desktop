@@ -453,7 +453,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2617;
+				CURRENT_PROJECT_VERSION = 2618;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -461,7 +461,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.17;
+				MARKETING_VERSION = 0.26.18;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -477,7 +477,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2617;
+				CURRENT_PROJECT_VERSION = 2618;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -485,7 +485,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.26.17;
+				MARKETING_VERSION = 0.26.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -500,7 +500,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2617;
+				CURRENT_PROJECT_VERSION = 2618;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -510,7 +510,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.17;
+				MARKETING_VERSION = 0.26.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -526,7 +526,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CroweShare/CroweShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2617;
+				CURRENT_PROJECT_VERSION = 2618;
 				DEVELOPMENT_TEAM = 6QLMV9UCPP;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CroweShare/Info.plist;
@@ -536,7 +536,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.26.17;
+				MARKETING_VERSION = 0.26.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.crowelogic.mobile.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

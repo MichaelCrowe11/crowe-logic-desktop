@@ -326,11 +326,18 @@ function methodPaths(surface) {
     ({ vault, prefs } = load({ get: async () => ({ value: null }), set: async () => { throw new Error("keychain write failed: -34018"); }, remove: async () => {} }));
     await vault.set("config", JSON.stringify({ token: "new" }));
     assert(JSON.parse(prefs.get("config")).token === "new", "a refused Keychain write was lost");
+    let strictRefused = false;
+    try { await vault.set("config", JSON.stringify({ token: "", refreshToken: "" }), { strict: true }); }
+    catch { strictRefused = true; }
+    assert(strictRefused, "sign-out silently accepted a Preferences-only write while the Keychain refused");
     // 3. Healthy Keychain: the first read migrates Preferences into it and clears Preferences.
     const kc = new Map();
     ({ vault, prefs } = load({ get: async ({ key }) => ({ value: kc.has(key) ? kc.get(key) : null }), set: async ({ key, value }) => { kc.set(key, value); }, remove: async ({ key }) => { kc.delete(key); } }));
     const m = await vault.get("config");
     assert(m && JSON.parse(m).token === "t.o.k" && kc.has("config") && !prefs.has("config"), "a healthy Keychain did not take over the record on first read");
+    prefs.set("config", JSON.stringify({ token: "stale-fallback" }));
+    await vault.set("config", JSON.stringify({ token: "", refreshToken: "" }), { strict: true });
+    assert(!JSON.parse(kc.get("config")).token && !prefs.has("config"), "sign-out retained a credential in a backing store");
     return "refused read -> Preferences (kept); refused write -> Preferences; healthy -> migrated once";
   });
 
@@ -1375,6 +1382,21 @@ function methodPaths(surface) {
     completeRefresh(new Response(JSON.stringify({ access_token: "resurrected", refresh_token: "rotated" })));
     await pending;
     assert(!(await bridge.getConfig()).hasToken && !(await bridge.auth.status()).user, "late refresh restored a signed-out account");
+  });
+
+  await check("sign-out reports a secure-storage refusal instead of reloading into an old account", async () => {
+    const bridge = loadMobileSurface(async () => new Response("{}"));
+    await bridge.setConfig({ token: "fixture-access", refreshToken: "fixture-refresh" });
+    const win = loadMobileSurface.lastWindow;
+    let strictWrites = 0;
+    win.croweVault = { handles: key => key === "config", set: async (_key, _value, options) => {
+      assert(options?.strict === true, "sign-out did not require the actual secure store");
+      strictWrites++;
+      throw new Error("fixture storage refusal");
+    } };
+    const result = await bridge.auth.logout();
+    assert(result.error && !result.ok && strictWrites === 2, "secure storage failure was reported as success");
+    assert(!(await bridge.getConfig()).hasToken, "in-memory access remained active");
   });
 
   await check("native tabs recover from a rejected setTabs and hand navigation back meanwhile", async () => {

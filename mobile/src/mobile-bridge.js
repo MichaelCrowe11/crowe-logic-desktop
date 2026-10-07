@@ -70,10 +70,10 @@
         return raw ? JSON.parse(raw) : null;
       } catch { return null; }
     },
-    async set(key, value) {
+    async set(key, value, options) {
       const json = JSON.stringify(value);
       try {
-        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.set(key, json); return true; }
+        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.set(key, json, options); return true; }
         if (Preferences) await Preferences.set({ key, value: json });
         else localStorage.setItem("crowe:" + key, json);
         return true;
@@ -2070,7 +2070,7 @@
         for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch {} }
         dismissApprovals();
         announceRemote();
-        await store.set("config", config);
+        await store.set("config", config, { strict: true });
         if (refresh) {
           const body = new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }).toString();
           const url = `${CROWE_ID}/protocol/openid-connect/revoke`;
@@ -2088,7 +2088,7 @@
         diagBuf = null;
         currentSession = null;
         config.token = "";
-        const persisted = await store.set("config", config);
+        const persisted = await store.set("config", config, { strict: true });
         announceRemote();
         if (!persisted) return { error: "Access is stopped, but this device could not save sign-out. Keep the app open and try Sign out again." };
         return { ok: true };

@@ -45,7 +45,7 @@ def verify(app, distribution=False):
     sources = ['mobile/src/phone-mirror.js', 'mobile/src/phone-mirror.css',
                'mobile/src/crowe-keyboard.js', 'mobile/src/native-chrome.js',
                'mobile/src/mobile-bridge.js', 'renderer/look.css', 'renderer/theme-bootstrap.js',
-               'renderer/account.js', 'renderer/billing-portal.js']
+               'renderer/account.js', 'renderer/billing-portal.js', 'mobile/src/vault.js']
     for source in sources:
         original = (root / source).read_bytes()
         bundled = app / 'public' / Path(source).name
