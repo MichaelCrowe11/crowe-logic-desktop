@@ -37,7 +37,7 @@ npm test
 
 Green baseline on macOS as of 2026-08-05 is **exit 0**. Several steps in the chain
 run under `electron`, not `node`, so a headless box needs a display server for
-them. If something is red before you start, note it before you change anything , 
+them. If something is red before you start, note it before you change anything,
 attributing a pre-existing failure to your own diff wastes an afternoon.
 
 ## Version: one place, derived outward

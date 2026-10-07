@@ -79,20 +79,41 @@ Android CI now checks APK metadata, bundle integrity and signatures. Unsigned
 artifacts are explicitly labelled packaging-only. Partial signing credentials
 fail the build; `CROWE_REQUIRE_ANDROID_SIGNING=1` also rejects absent signing.
 
+## Verified candidate
+
+Source commit `fb2455d` produced iPhone build **0.26.16 (2616)**. After the phone
+was unlocked on October 6, 2026, a cold launch completed WebView navigation and
+received native App, StatusBar and custom CroweChrome bridge calls. No WebView
+failure, process termination or uncaught JavaScript error signal appeared during
+the 35-second observation. A subsequent activation and process inventory confirmed
+the app remained running. This verifies startup; physical phone interaction and
+paired-host checks below remain outstanding.
+
+The signed Debug app, Release archive and locally exported distribution IPA passed
+the iOS bundle verifier. The matching desktop diagnostic package passed isolated
+startup, runtime fuse, utility-process handshake and shutdown checks. It was not
+installed over an operator session. No store upload or public release occurred.
+
+Local results for this source: terminal/backend **34/34**, panels **100/100**,
+mobile shell **43/43**, draft editor **5/5**, and gate-client fixtures **24/24**.
+Phone UI integration passed with isolated real PTYs, independent shells and draft
+switching. Release, packaging, security, version, brand and contrast checks passed.
+The live relay E2E was not rerun, and Android still requires CI and device testing.
+
 ## Remaining distribution gates
 
 - Run the combined gate E2E against the relay with isolated test credentials.
 - Verify sign-in deep links on cold and warm launches, foreground/background
   recovery, native Settings sheets and terminal switching on the physical phone.
-- Build and test the matching desktop companion, including terminal revocation
-  on the actually paired device. Do not replace a running operator session.
+- Verify the matching desktop companion with the actually paired device,
+  including terminal revocation. Do not replace a running operator session.
 - Confirm gateway retention and reconcile the privacy manifest's currently empty
   collected-data declaration with App Store privacy answers. An empty declaration
   is not proof that no data is collected.
 - Review store metadata and screenshots against the final product surfaces after
   the separate surface-removal branch is merged.
-- Produce and verify signed distribution exports. No upload, release or store
-  submission is part of this local build task.
+- Rebuild and verify distribution exports if the source changes after the tested
+  candidate. No upload, release or store submission is part of this local task.
 - Run Android CI and a real Android device pass. Local source checks cannot stand
   in for an Android build.
 - Track the eight moderate development-only npm findings in electron-builder's
