@@ -1713,7 +1713,11 @@
     body.classList.add("approval-open");
     body.appendChild(wrap);
     benched.forEach((n) => { n.inert = true; });
-    requestAnimationFrame(() => { wrap.classList.add("open"); no.focus(); });
+    // Establish the entrance style without making authority controls wait for
+    // an animation frame, which a hidden or backgrounded window can suspend.
+    wrap.getBoundingClientRect();
+    wrap.classList.add("open");
+    no.focus({ preventScroll: true });
   });
 
 

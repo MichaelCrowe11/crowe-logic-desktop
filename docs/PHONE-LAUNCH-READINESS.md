@@ -117,7 +117,7 @@ editor now uses the application's bundled runtime and preserves file concurrency
 checks and line endings, without requiring system Python.
 
 The full `npm test` suite passed locally. Focused checks passed for panels
-**103/103**, mobile shell **43/43**, draft editor **10/10**, the real editor entry
+**103/103**, mobile shell **44/44**, draft editor **10/10**, the real editor entry
 point **1/1**, and malformed iOS SDK metadata. The real-PTY phone fixture passed,
 including a large Unicode paste with a retained control lease. The updated iOS
 source compiled successfully with signing disabled; this is compile evidence,
@@ -129,8 +129,12 @@ answer winning, edit evidence, cancellation, expiry and an unreachable relay.
 The clients used isolated test state; these checks do not establish physical
 phone pairing or device revocation. Driver receipts include source hashes.
 
-The October 6 Android workflow passed for `4d8f76a`. The updated workflow also
-verifies AAB metadata against the APK; check its result on the final PR commit.
+Linux CI exposed an approval sheet that waited for an animation frame before
+becoming visible and focusing Not now. The sheet now opens synchronously, with a
+regression that suspends animation frames and checks focus and reachable actions.
+
+The Android workflow passed for `ff0bd24`, including signed artifact verification
+and AAB metadata compared with the APK. Check its result on the final PR commit.
 The iPhone still carries the earlier `fb2455d` application sources. Rebuild and
 install the reviewed sources before claiming these follow-up fixes on the phone.
 

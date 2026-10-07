@@ -517,6 +517,26 @@ const tests = [
     expect: { before: true, out: true, paired: false, keys: false, sessions: 0 },
   },
   {
+    name: "approval is visible and defaults to refusal even when animation frames are suspended",
+    body: `const frame = window.requestAnimationFrame;
+      window.requestAnimationFrame = () => 0;
+      let answer;
+      try {
+        answer = window.__croweApprove({ title: "Review a command", detail: "harmless evidence ".repeat(300), confirm: "Allow" });
+        await __settle(50);
+        const sheet = document.querySelector(".m-approve");
+        const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+        return { open: sheet.classList.contains("open"),
+          focused: document.activeElement === sheet.querySelector(".m-approve-no"),
+          visible: footer.top >= 0 && footer.bottom <= innerHeight };
+      } finally {
+        window.requestAnimationFrame = frame;
+        window.__croweApproveDismiss();
+        await answer; await __settle(30);
+      }`,
+    expect: { open: true, focused: true, visible: true },
+  },
+  {
     /* The approval sheet is drawn from model output, so it must be inert text;
        "Not now" declines; assistive activation approves without a hold; and
        the machine and tier are named, since that is what is being approved. */
