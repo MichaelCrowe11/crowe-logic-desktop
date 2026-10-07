@@ -225,6 +225,10 @@ class Companion {
     // session. Without it the phone can watch and drive desktop terminals but
     // not open its own.
     this.openShell = openShell;
+    this.phoneShellSequence = 0;
+    this.phoneOpenOperations = new Map();
+    this.serviceEpoch = 0;
+    this.stopping = false;
     this.hostName = hostName;
     this.tokenFile = tokenFile;
     // The app's own folder (sign-in, config, this file) is never a phone's to
@@ -460,11 +464,14 @@ class Companion {
       try { this.awakeId = this.keepAwake.start("prevent-app-suspension"); }
       catch { this.awakeId = null; }      // not fatal: the phone still reaches it while awake
     }
+    this.stopping = false;
     this.onEvent({ type: "started", host, name: this.name, port: this.port, keepingAwake: this.awakeId !== null });
     return this.status();
   }
 
   async stop() {
+    this.stopping = true;
+    this.serviceEpoch++;
     this.sessions?.revoke();
     this.sessions?.closeOpenedBy?.();
     if (!this.server) return this.status();
@@ -546,14 +553,43 @@ class Companion {
         // started from a phone is never a silent one. The phone holds control
         // from the first keystroke.
         if (route === "/sessions/open") {
+          if (this.stopping) return this.send(res, 503, { detail: "The companion is stopping." });
+          const serviceEpoch = this.serviceEpoch;
           if (!this.openShell) return this.send(res, 404, { detail: "This desktop cannot open a shell for the phone. Update Crowe Logic on the computer." });
+          if (body.operationId !== undefined && (typeof body.operationId !== "string" || !/^[\w-]{8,100}$/.test(body.operationId))) return this.send(res, 400, { detail: "Invalid terminal open operation." });
           const cols = Number.isInteger(body.cols) ? Math.max(20, Math.min(300, body.cols)) : 80;
           const rows = Number.isInteger(body.rows) ? Math.max(5, Math.min(120, body.rows)) : 24;
-          const opened = await this.openShell({ cols, rows, device });
-          const meta = sessions.acquire(opened.id, opened.generation, device);
-          this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: opened.id });
-          this.onEvent({ type: "phone-shell", id: opened.id, name: device.name, open: true });
-          return this.send(res, 200, { ...meta, mine: true });
+          const key = body.operationId ? `${device.id}:${body.operationId}` : null;
+          for (const [id, entry] of this.phoneOpenOperations) if (entry.done && Date.now() - entry.at > 300000) this.phoneOpenOperations.delete(id);
+          if (key && !this.phoneOpenOperations.has(key) && this.phoneOpenOperations.size >= 256) return this.send(res, 429, { detail: "Wait before opening another terminal." });
+          let entry = key && this.phoneOpenOperations.get(key);
+          if (!entry) {
+            entry = { at: Date.now(), done: false };
+            entry.promise = (async () => {
+              const label = `Terminal ${++this.phoneShellSequence}`;
+              const opened = await this.openShell({ cols, rows, device, label });
+              if (this.stopping || this.serviceEpoch !== serviceEpoch) {
+                if (opened.openedBy?.deviceId === device.id && opened.openedBy?.kind === "device") sessions.close(opened.id);
+                throw Object.assign(new Error("The companion stopped while opening the shell."), { status: 503 });
+              }
+              const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+              if (!still || !still.terminal) {
+                if (opened.openedBy?.deviceId === device.id && opened.openedBy?.kind === "device") sessions.close(opened.id);
+                throw Object.assign(new Error("Terminal access was removed while opening the shell."), { status: still ? 403 : 401 });
+              }
+              opened.label = label;
+              const meta = sessions.acquire(opened.id, opened.generation, device);
+              this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: opened.id });
+              this.onEvent({ type: "phone-shell", id: opened.id, name: device.name, open: true });
+              return meta;
+            })().finally(() => { entry.done = true; });
+            if (key) this.phoneOpenOperations.set(key, entry);
+          }
+          const meta = await entry.promise;
+          const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+          if (!still || !still.terminal) return this.send(res, still ? 403 : 401, { detail: "Terminal access was removed." });
+          const current = sessions.get(meta.id, meta.generation);
+          return this.send(res, 200, { ...sessions.meta(current, device.id), mine: true });
         }
         const s = sessions.get(body.sessionId, body.generation);
         if (route === "/sessions/poll") {

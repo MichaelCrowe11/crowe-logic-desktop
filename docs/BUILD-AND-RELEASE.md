@@ -195,9 +195,14 @@ CROWE_ANDROID_KEY_ALIAS
 CROWE_ANDROID_KEY_PASSWORD
 ```
 
-With none of it present the release build goes **unsigned** rather than failing.
-That is deliberate: an unsigned release still catches a packaging regression, and
-Play refuses it long before anyone could mistake it for shippable.
+With none of it present the build produces unsigned packaging evidence. A partial
+signing configuration fails instead of silently falling back to unsigned output.
+Set `CROWE_REQUIRE_ANDROID_SIGNING=1` for a distribution build.
+
+`node mobile/scripts/verify-android-artifacts.js` checks APK identity, version,
+SDK targets, non-debuggable status, bundle integrity and both signatures. CI uses
+`--allow-unsigned` only for packaging jobs without a keystore and labels their
+artifacts `unsigned-packaging-only`. These are not distribution candidates.
 
 `.gitignore` keeps the keystore and any `.jks` out of history. The keystore is the
 one secret that, leaked, lets someone else ship an update to your users.

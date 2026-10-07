@@ -60,6 +60,38 @@ test("revoking an active controller removes its lease and leaves other devices p
   assert.notEqual(next.body.controller.lease, lease);
 });
 
+test("multiple phone shells stay independent and repeated opens create only one shell", async t => {
+  const f = await setup(t); let opened = 0;
+  f.companion.openShell = async ({ cols, rows, device, label }) => f.manager.create(`phone-${++opened}`, () => new FakePty(), { cols, rows, openedBy: device, label });
+  const operationId = crypto.randomUUID();
+  const [a, duplicate] = await Promise.all([f.post("/sessions/open", { operationId }), f.post("/sessions/open", { operationId })]);
+  assert.equal(a.status, 200); assert.equal(duplicate.body.id, a.body.id); assert.equal(opened, 1);
+  const b = await f.post("/sessions/open", { operationId: crypto.randomUUID() });
+  assert.notEqual(a.body.id, b.body.id); assert.notEqual(a.body.label, b.body.label);
+  for (const [session, text] of [[a.body, "first"], [b.body, "second"]]) {
+    assert.equal((await f.post("/sessions/input", { sessionId: session.id, generation: session.generation, lease: session.controller.lease, inputId: crypto.randomUUID(), data: text })).status, 200);
+    assert.deepEqual(f.manager.get(session.id).proc.inputs, [text]);
+  }
+  assert.equal((await f.post("/sessions/close", { sessionId: b.body.id, generation: b.body.generation })).status, 200);
+  assert.ok(f.manager.sessions.has(a.body.id)); assert.ok(!f.manager.sessions.has(b.body.id));
+  f.manager.reclaim(a.body.id);
+  const retried = await f.post("/sessions/open", { operationId });
+  assert.equal(retried.body.controller, null, "a retry resurrected a stale control lease");
+  assert.equal(opened, 2);
+});
+
+test("revocation during asynchronous shell creation closes that shell and returns no lease", async t => {
+  const f = await setup(t); let finish, began;
+  const started = new Promise(resolve => { began = resolve; });
+  const wait = new Promise(resolve => { finish = resolve; });
+  f.companion.openShell = async ({ device }) => { began(); await wait; return f.manager.create("late-phone", () => new FakePty(), { openedBy: device }); };
+  const response = f.post("/sessions/open", { operationId: crypto.randomUUID() });
+  await started; f.companion.revokeDevice(f.phone.id); finish();
+  assert.equal((await response).status, 401);
+  assert.equal(f.manager.sessions.has("late-phone"), false);
+  assert.equal(f.manager.sessions.has("test"), true, "revocation closed an unrelated terminal");
+});
+
 test("revocation while a request body arrives prevents a queued draft write", { timeout: 10000 }, async t => {
   const f = await setup(t);
   const draft = f.manager.openDraft(f.session.id, "original");
@@ -79,6 +111,20 @@ test("revocation while a request body arrives prevents a queued draft write", { 
   request.end(body.slice(1));
   assert.equal(await response, 401);
   assert.equal(f.manager.draft(f.session.id, draft.id).text, "original");
+});
+
+test("stopping the companion cannot leave a pending phone shell running", async t => {
+  const f = await setup(t); let finish, began;
+  const started = new Promise(resolve => { began = resolve; });
+  const wait = new Promise(resolve => { finish = resolve; });
+  f.companion.openShell = async ({ device }) => { began(); await wait; return f.manager.create("late-stop", () => new FakePty(), { openedBy: device }); };
+  const response = f.post("/sessions/open", { operationId: crypto.randomUUID() });
+  await started;
+  const stopped = f.companion.stop(); finish();
+  assert.equal((await response).status, 503);
+  await stopped;
+  assert.equal(f.manager.sessions.has("late-stop"), false);
+  assert.ok(f.manager.sessions.has("test"));
 });
 
 test("real CLI helper returns the phone's exact multiline draft without sending PTY input", { timeout: 15000 }, async t => {

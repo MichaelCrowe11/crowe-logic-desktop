@@ -33,8 +33,9 @@
       </div>
       <div class="mirror-term" data-term hidden>
         <div class="mirror-bar">
-          <button type="button" class="mirror-back" data-back aria-label="Back to sessions">Sessions</button>
-          <div class="mirror-identity"><span class="mirror-eyebrow" data-context>Desktop session</span><b class="mirror-title" data-title>Terminal</b></div>
+          <button type="button" class="mirror-back" data-back aria-label="Back to sessions"><span aria-hidden="true">&#8249;</span></button>
+          <div class="mirror-identity"><span class="mirror-eyebrow" data-context>Desktop session</span><b class="mirror-title mirror-sr-only" data-title>Terminal</b><select class="mirror-switch" data-session-switch aria-label="Switch terminal"></select></div>
+          <button type="button" class="mirror-icon mirror-new" data-new disabled aria-label="Open another terminal">+ New</button>
           <button type="button" class="mirror-icon" data-close hidden aria-label="Close this shell">Close</button>
         </div>
         <div class="mirror-toolbar"><div class="mirror-tabs" role="group" aria-label="Session views"><button type="button" data-view="terminal" aria-pressed="true">Terminal</button><button type="button" data-view="draft" aria-pressed="false">Draft</button><button type="button" data-view="review" aria-pressed="false">Review</button></div><div class="mirror-text-size" role="group" aria-label="Terminal text size"><button type="button" class="mirror-icon" data-font="-1" aria-label="Smaller terminal text">A&minus;</button><button type="button" class="mirror-icon" data-font="1" aria-label="Larger terminal text">A+</button></div></div>
@@ -67,7 +68,7 @@
     let draft = null, hostDraft = null, draftKey = null, conflict = false, dirty = false, busy = false, polling = false, opening = false;
     let listTime = 0, renewTime = 0, inputQueue = Promise.resolve(), queuedInput = 0, pendingSave = null, pendingReturn = null, controlBusy = false;
     let persistQueue = Promise.resolve(), lastFit = "", heldBy = null, closing = false, refreshing = false, pasteReview = null;
-    let activeView = "terminal", renderSignature = "";
+    let activeView = "terminal", renderSignature = "", switchSignature = "";
     // Which keyboard types here: "crowe" (ours, drawn below the screen),
     // "system" (the phone's, by the globe key) or "hidden" (folded away).
     let keyboardMode = "crowe";
@@ -140,6 +141,8 @@
       $("[data-close]").setAttribute("aria-label", engine() ? "Stop this engine terminal" : "Close this shell");
       $("[data-open]").disabled = !canOpen || opening;
       $("[data-open]").setAttribute("aria-busy", String(opening));
+      $("[data-new]").disabled = !canOpen || opening;
+      $("[data-new]").setAttribute("aria-busy", String(opening));
       $("[data-refresh]").disabled = refreshing;
       $("[data-refresh]").setAttribute("aria-busy", String(refreshing));
       $("[data-font='-1']").disabled = fontSize <= 9;
@@ -157,6 +160,23 @@
       const words = $("[data-draft]").value.trim().split(/\s+/u).filter(Boolean).length;
       $("[data-draft-count]").textContent = `${words} ${words === 1 ? "word" : "words"}`;
       $("[data-save-state]").dataset.state = conflict ? "conflict" : dirty ? "dirty" : "saved";
+      renderSwitcher();
+    }
+    function renderSwitcher() {
+      const choices = [...sessions];
+      if (selected && !choices.some(s => s.id === selected.id)) choices.push(selected);
+      const signature = JSON.stringify(choices.map(s => [s.id, s.generation, s.label]));
+      const picker = $("[data-session-switch]");
+      if (signature !== switchSignature) {
+        picker.innerHTML = choices.map((s, i) => {
+          const label = s.label || "Terminal";
+          const duplicate = choices.filter(other => (other.label || "Terminal") === label).length > 1;
+          return `<option value="${esc(s.id)}">${duplicate ? `${i + 1}. ` : ""}${esc(label)}</option>`;
+        }).join("");
+        switchSignature = signature;
+      }
+      picker.value = selected?.id || "";
+      picker.disabled = !selected || choices.length < 2;
     }
     function view(name) {
       activeView = name; root.dataset.view = name;
@@ -226,8 +246,9 @@
       finally { refreshing = false; if (!disposed) controls(); }
     }
 
-    function select(meta, { take = false } = {}) {
+    function select(meta, { take = false, autoTake = true } = {}) {
       if (!meta) return;
+      if (selected?.id === meta.id && selected.generation === meta.generation) return;
       persist();
       const release = selected && lease !== null && selected.id !== meta.id ? { ...payload(), lease } : null;
       epoch++; seq = -1; lease = null; draft = hostDraft = null; draftKey = null; dirty = conflict = busy = controlBusy = closing = false;
@@ -235,10 +256,10 @@
       pendingSave = pendingReturn = null; connected = false; lastFit = ""; heldBy = null; keys?.reset();
       selected = { id: meta.id, generation: meta.generation, origin: meta.origin, mine: meta.mine || mineIds.has(meta.id), label: meta.label, engineName: meta.openedBy };
       $("[data-title]").textContent = meta.label || "Terminal";
-      $("[data-context]").textContent = engine() ? `${meta.openedBy || "Engine"} session` : own() ? "This phone's terminal" : "Desktop session";
+      $("[data-context]").textContent = engine() ? `${meta.openedBy || "Engine"} session` : own() ? "Phone terminal" : "Desktop session";
       terminal.reset(); $("[data-draft]").value = ""; screen("term"); view("terminal"); controls();
       if (release) transport.call("/sessions/release", release).catch(() => {});
-      if (take || (own() && meta.controller === null)) takeControl(); else poll();
+      if (take || (autoTake && own() && (!meta.controller || meta.controller.deviceId === deviceId))) takeControl(); else poll();
     }
     async function takeControl() {
       if (!selected || controlBusy) return;
@@ -255,18 +276,25 @@
     }
     async function openShell() {
       if (opening || !canOpen) return;
+      const currentEpoch = epoch;
       opening = true; controls(); status("Opening a shell on your computer");
       try {
-        // Size it for the terminal screen the shell will live in.
-        screen("term"); view("terminal"); const size = fitted(); screen("hosts");
-        const result = await transport.call("/sessions/open", size);
-        if (disposed) return;
+        const wasHosts = !selected;
+        if (wasHosts) { screen("term"); view("terminal"); }
+        const size = fitted();
+        if (wasHosts) screen("hosts");
+        const result = await transport.call("/sessions/open", { ...size, operationId: uid() });
+        if (disposed || epoch !== currentEpoch || document.hidden || !root.getClientRects().length) {
+          if (result.data?.controller) transport.call("/sessions/release", { sessionId: result.data.id, generation: result.data.generation, lease: result.data.controller.lease }).catch(() => {});
+          return;
+        }
         if (result.error) { needsGrant(result); status(result.error); return; }
         const meta = result.data; mineIds.add(meta.id);
-        await refresh();
-        select({ ...meta, mine: true });
+        if (!sessions.some(s => s.id === meta.id)) sessions.push({ ...meta, mine: true });
+        select({ ...meta, mine: true }, { autoTake: false });
         lease = meta.controller?.lease ?? null; controls(); focusKeys();
-      } catch (error) { if (!disposed) status(error.message); }
+        await refresh();
+      } catch (error) { if (!disposed && epoch === currentEpoch) status(error.message); }
       finally { opening = false; if (!disposed) controls(); }
     }
 
@@ -278,6 +306,8 @@
       const host = result.data; hostDraft = host;
       if (draft?.id !== host.id) {
         draftKey = `mirror-draft:${selected.generation}:${host.id}`;
+        await persistQueue;
+        if (disposed || epoch !== currentEpoch) return;
         const local = await transport.storage.get(draftKey);
         if (disposed || epoch !== currentEpoch) return;
         draft = { ...host, revision: local?.dirty ? local.revision : host.revision };
@@ -326,6 +356,9 @@
         }
         controls();
         fitOwn();
+        // Keep the picker current when another desktop or engine opens a shell.
+        // Refresh after the long-poll settles, without replacing the active view.
+        if (Date.now() - listTime > 10000) await refresh();
       } catch (error) { if (!disposed && epoch === currentEpoch) { connected = false; lease = null; status(error.message); controls(); } }
       finally {
         polling = false;
@@ -397,6 +430,8 @@
       if (review && review.epoch === epoch && review.lease === lease) sendInput(review.text);
     };
     $("[data-open]").onclick = openShell;
+    $("[data-new]").onclick = openShell;
+    $("[data-session-switch]").onchange = event => select(sessions.find(s => s.id === event.target.value), { take: false });
     // Leaving a session hands it back; the shell keeps running on the desktop
     // and its row stays in the list to return to.
     $("[data-back]").onclick = () => {
@@ -427,6 +462,7 @@
     $("[data-close]").onclick = async () => {
       if (closing || !connected || (!own() && !engine())) return;
       if (engine() && !window.confirm(`Stop this terminal? ${selected.engineName || "The engine"} loses it and whatever runs in it ends.`)) return;
+      persist();
       const request = payload(), currentEpoch = epoch;
       closing = true; controls();
       try {

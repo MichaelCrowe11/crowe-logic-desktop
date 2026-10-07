@@ -100,6 +100,7 @@ jobs:
         run: |
           npm run test:phone-mirror
           npm run test:draft-editor
+          node --test scripts/test-mobile-release.js
 
       # Third, same reason again. Rooms is the one feature where a mistake costs
       # money per agent rather than once, so its rules - who is addressed, who
