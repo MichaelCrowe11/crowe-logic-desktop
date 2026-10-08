@@ -632,7 +632,7 @@ function methodPaths(surface) {
     return "refused in words, nothing sent";
   });
 
-  await check("the native fallback never asks the gateway to stream, and still reads a stream if handed one", async () => {
+  await check("the iOS native fallback permits a slow reply and reads a stream without requesting one", async () => {
     // Since control plane 0.2.17 the gateway honours stream:true. CapacitorHttp
     // hands back one finished body, so a fallback that forwards the fetch body
     // unchanged gets an event stream, fails to parse it as JSON, and shows the
@@ -640,13 +640,20 @@ function methodPaths(surface) {
     // reply on 2026-09-09 until it was fixed.
     const prefs = new Map();
     const seen = [];
-    const capacitor = { Plugins: {
+    const capacitor = { getPlatform: () => "ios", Plugins: {
       Preferences: {
         get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
         set: async ({ key, value }) => { prefs.set(key, value); },
         remove: async ({ key }) => { prefs.delete(key); },
       },
-      CapacitorHttp: { request: async (opts) => { seen.push(opts); return { status: 200, data:
+      CapacitorHttp: { request: async (opts) => {
+        seen.push(opts);
+        // Mirror URLRequest's timeout selection in the installed iOS plugin.
+        // A six-second model reply used to fail despite readTimeout=650000.
+        if (String(opts.url).includes("/api/gateway/chat") && (opts.connectTimeout ?? opts.readTimeout ?? 600000) < 6000) {
+          throw new Error("The request timed out.");
+        }
+        return { status: 200, data:
         'data: {"choices":[{"delta":{"content":"Whole "}}]}\ndata: {"choices":[{"delta":{"content":"answer."}}]}\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\ndata: [DONE]\n' }; } },
     } };
     const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
@@ -656,7 +663,7 @@ function methodPaths(surface) {
     assert(chat, "the fallback never reached the gateway");
     assert(chat.data && chat.data.stream === undefined, `the native body still asked to stream: ${JSON.stringify(chat.data.stream)}`);
     assert(result.done && result.text === "Whole answer.", `the fallback returned ${JSON.stringify(result)}`);
-    return "stream stripped from the native body; an SSE body is still read";
+    return "six-second reply survives the iOS request budget; native SSE body is read";
   });
 
   await check("reminders schedule through the system and come back in order; the camera roll keeps a verdict per lot", async () => {

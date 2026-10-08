@@ -189,7 +189,12 @@
   }
   async function nativePost(url, headers, body) {
     if (!CapHttp) return null;
-    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text", connectTimeout: 5000, readTimeout: /\/(sessions|draft)\//.test(url) ? 10000 : 650000 });
+    const readTimeout = /\/(sessions|draft)\//.test(url) ? 10000 : 650000;
+    // Capacitor iOS uses connectTimeout as URLRequest.timeoutInterval, even
+    // while waiting for the reply. Keep its timeout at the response budget;
+    // Android has separate connect and read limits.
+    const connectTimeout = PLATFORM === "ios" ? readTimeout : 5000;
+    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text", connectTimeout, readTimeout });
     const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
     return { ok: res.status >= 200 && res.status < 300, status: res.status, text };
   }

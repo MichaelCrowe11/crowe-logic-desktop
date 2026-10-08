@@ -1,7 +1,7 @@
-# Phone build, 0.26.18
+# Phone build, 0.26.19
 
 Updated October 7, 2026. The operator authorized publication of the new phone
-build. TestFlight build 2618 carries the account and navigation fixes below.
+build. Build 2619 adds the iOS inference fallback timeout fix to the account and navigation fixes below.
 Upload, processing and distribution receipts belong in the release evidence;
 the version in source alone does not establish availability in TestFlight.
 
@@ -22,11 +22,26 @@ ignores late sign-in and refresh responses. It requires clearing the Keychain
 and any stale Preferences fallback before reporting successful sign-out. Desktop sign-out also survives a
 restart without reimporting the CLI's account; the CLI store is preserved.
 
-The live portal was read on October 7: invoices, payment methods and cancellation
-are enabled. Plan changes remain disabled. Stripe CLI authentication expired
-during price verification, so enabling plan changes still requires a working
-Stripe connection and verification of the exact live prices and entitlements.
-No subscription or portal configuration was changed by this release.
+The backend rollout on October 7 enabled authenticated plan switching for
+eligible monthly USD BYOK, Personal, Pro, Team (quantity one), and Max subscriptions.
+Invoices, payment methods and period-end cancellation remain enabled. Immutable
+identity bindings and current paid-invoice checks protect entitlement changes.
+Legacy workspaces, alternate price families and Studio/Scale/Business remain
+outside this rollout. No customer payment was exercised for validation.
+
+## Model request repair
+
+The installed phone's diagnostics showed browser requests rejected by CORS,
+followed by native requests timing out after five seconds. The live backend now
+allows the exact iOS `capacitor://localhost` and Android `https://localhost`
+origins; untrusted origins remain denied and authentication remains required.
+Build 2619 also corrects the native fallback: Capacitor iOS uses `connectTimeout`
+as its URLRequest timeout, so it must receive the response budget. Android keeps
+separate connection and read limits. The regression test simulates a model reply
+that takes longer than five seconds.
+
+Live model, CORS, device and publication evidence is recorded in
+`~/crowe-evidence/2026-10-07-phone-model-repair/`.
 
 The full local `npm test` suite passed, including panels **103/103** and mobile
 shell **46/46**. Follow-up desktop restart/refresh regression checks also passed.
