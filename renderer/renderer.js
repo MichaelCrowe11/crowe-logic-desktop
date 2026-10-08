@@ -541,6 +541,7 @@ function fillToolResult(ev) {
 }
 function addEditProposal(body, ev) {
   const card = document.createElement("div"); card.className = "editcard";
+  card.dataset.editId = String(ev.id);
   const rows = ev.diff.map((d) => `<div class="dl ${d.t === '+' ? 'add' : d.t === '-' ? 'del' : 'ctx'}">${esc((d.t === ' ' ? '  ' : d.t + ' ') + d.s)}</div>`).join("");
   card.innerHTML = `<div class="ec-head"><span class="ec-title">Proposed edit</span><span class="ec-path">${esc(ev.path)}</span></div>
     <div class="ec-diff">${rows}</div>
@@ -590,6 +591,42 @@ function addApproval(body, ev) {
     const k = e.key.toLowerCase();
     if (k === "a") done(true); else if (k === "r") done(false);
   });
+}
+/* The phone is a second place to answer the same authority gate. The relay says
+   which answer landed first; main tells the card, and the card says where the
+   answer came from instead of leaving two surfaces disagreeing. These three are
+   driven by one app-wide listener (below), not the per-turn ones, because the
+   card can belong to a chat turn, a room seat, a workflow node or the repo lane. */
+function gateCardFor(ev) {
+  if (ev.type === "edit_relayed" || ev.type === "edit_resolved") return document.querySelector(`.editcard[data-edit-id="${cssId(ev.id)}"]`);
+  return document.querySelector(`.gatecard[data-approval-id="${cssId(ev.id)}"]`);
+}
+function noteRelayed(card) {
+  if (!card || card.querySelector(".gc-relayed")) return;
+  const n = document.createElement("div"); n.className = "gc-relayed";
+  n.textContent = "Also sent to your phone";
+  card.appendChild(n);
+}
+function resolveGateCard(card, ev) {
+  if (!card) return;
+  const ok = Boolean(ev.approved);
+  const edit = ev.type === "edit_resolved";
+  const text = ev.via === "phone" ? (ok ? "Approved on your phone" : "Denied on your phone")
+    : ev.via === "stopped" ? "stopped, so it was rejected"
+    : ok ? (edit ? "applied" : "allowed once") : "denied";
+  card.dataset.decided = "1";
+  card.classList.remove("applied", "rejected");
+  card.classList.add(ok ? "applied" : "rejected");
+  let actions = card.querySelector(".ec-actions");
+  if (!actions) { actions = document.createElement("div"); actions.className = "ec-actions"; card.appendChild(actions); }
+  actions.textContent = "";
+  const st = document.createElement("span"); st.className = "ec-status"; st.textContent = text;
+  actions.appendChild(st);
+}
+function handleGateEvent(ev) {
+  if (!ev) return;
+  if (ev.type === "approval_relayed" || ev.type === "edit_relayed") noteRelayed(gateCardFor(ev));
+  else if (ev.type === "approval_resolved" || ev.type === "edit_resolved") resolveGateCard(gateCardFor(ev), ev);
 }
 function expireApproval(id) {
   const card = document.querySelector(`.gatecard[data-approval-id="${id}"]`);
@@ -1081,16 +1118,16 @@ const terminalPanels = new Map();
 function panelId(type) { return `${type}-${Date.now().toString(36)}-${++panelSeq}`; }
 // A cloud browser panel is not saved: its address carries a session token, and
 // the session does not outlive the app. It comes back from the card's Open.
-function panelState() { return { layout: $("panel-layout").value, panels: panels.filter((p) => p.type !== "cloud-browser").map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
+function panelState() { return { layout: $("panel-layout").value, panels: panels.filter((p) => p.type !== "cloud-browser" && !p.engine).map((p) => ({ id:p.id, type:p.type, title:p.title, url:p.url, history:p.history || [], bookmarks:p.bookmarks || [], licensed:Boolean(p.licensed), workspaceId:p.workspaceId || "", roomId:p.roomId || "", side:Boolean(p.side) })) }; }
 function savePanelState() {
   try { localStorage.setItem("crowe-workspace-panels", JSON.stringify(panelState())); } catch {}
 }
 function savedLayouts(){try{return JSON.parse(localStorage.getItem("crowe-saved-layouts")||"{}")}catch{return {}}}
 function refreshSavedLayouts(){const select=$("layout-saved"),layouts=savedLayouts();select.innerHTML='<option value="">Saved layouts</option>'+Object.keys(layouts).map((n)=>`<option value="${esc(n)}">${esc(n)}</option>`).join("")}
-async function applyPanelState(st){for(const p of [...panels])closePanel(p.id);$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");applyStackVisibility();renderDockTabs();fitTerminals()}
+async function applyPanelState(st){for(const p of [...panels])closePanel(p.id);$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length&&!window.crowe?.mobile)await addPanel("terminal");applyStackVisibility();renderDockTabs();fitTerminals()}
 $("layout-save").onclick=()=>{const name=prompt("Layout name");if(!name||!name.trim())return;const layouts=savedLayouts();layouts[name.trim()]=panelState();localStorage.setItem("crowe-saved-layouts",JSON.stringify(layouts));refreshSavedLayouts()};
 $("layout-saved").onchange=async(e)=>{const st=savedLayouts()[e.target.value];if(st)await applyPanelState(st);e.target.value=""};
-$("layout-reset").onclick=()=>applyPanelState({layout:"stack",panels:[{type:"terminal"},{type:"browser",url:BROWSER_HOME},{type:"operator"}]});
+$("layout-reset").onclick=()=>applyPanelState({layout:"stack",panels:[{type:"terminal"},{type:"browser",url:BROWSER_HOME}]});
 refreshSavedLayouts();
 function panelShell(p) {
   const el = document.createElement("section"); el.className = "workspace-panel"; el.dataset.id = p.id; el.draggable = true;
@@ -1113,26 +1150,31 @@ function renderPanelOrder() { panels.forEach((p) => { const el=panelDeck.querySe
    panel that was a blank pane and then a login form for an app the person is
    already signed into. /foundry/ is the public page of our own that renders. */
 const BROWSER_HOME = "https://crowelogic.com/foundry/";
+const PANEL_TITLES={terminal:"Terminal",browser:"Browser",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
 async function addPanel(type, seed={}) {
   hideLegacy();
-  const titles={terminal:"Terminal",browser:"Browser",operator:"Operator Control",workflow:"Missions",agents:"Agent Fleet",agent:"Crowe Logic Agent",workbench:"Workbench",system:"CroweLM System Terminal",room:"Room","cloud-browser":"Cloud browser"};
-  const p = { id:seed.id || panelId(type), type, title:seed.title || titles[type] || "Panel", url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "" };
+  // A kind this version does not build (a layout saved before Missions, Agent
+  // Fleet, Operator Control, Workbench and the agent console were removed) is
+  // dropped here without a word, so an old layout restores what it still can.
+  if(!PANEL_TITLES[type]) return null;
+  const p = { id:seed.id || panelId(type), type, title:seed.title || PANEL_TITLES[type], url:seed.url || BROWSER_HOME, history:seed.history || [], bookmarks:seed.bookmarks || [], licensed:Boolean(seed.licensed), workspaceId:seed.workspaceId || "", sessionId:seed.sessionId || "", pageUrl:seed.pageUrl || "", engine:seed.engine || "", generation:seed.generation || "" };
   panels.push(p); activePanelId = p.id; const el=panelShell(p); panelDeck.appendChild(el); const body=el.querySelector(".panel-body");
   if(type === "terminal" || type === "system") await mountTerminal(p, body, type === "system");
-  else if(type === "agent") await mountWorkspaceAgent(p, body, seed);
   else if(type === "browser") mountBrowser(p, body);
   else if(type === "cloud-browser") mountCloudBrowser(p, body);
-  else if(type === "workflow") mountWorkflow(p, body);
-  else if(type === "agents") mountAgentFleet(p, body);
-  else if(type === "workbench") mountWorkbench(p, body);
-  else if(type === "room") mountRoom(p, body, seed);
-  else mountOperator(p, body);
+  else mountRoom(p, body, seed);
   savePanelState(); applyStackVisibility(); renderDockTabs(); return p;
 }
 async function mountTerminal(p, body, systemTerminal=false) {
+  if (window.crowePhoneMirror) {
+    window.crowePhoneMirror.mount(body);
+    return;
+  }
   const tools=document.createElement("div"); tools.className="terminal-tools";
-  tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><span class="terminal-state">starting</span>';
+  tools.innerHTML='<button class="term-restart ghost sm">Restart</button><button class="term-clear ghost sm">Clear</button><button class="term-copy ghost sm">Copy selection</button><button class="term-export ghost sm">Copy scrollback</button><button class="term-reclaim ghost sm" hidden>Take control</button><span class="terminal-state">starting</span>';
   const host=document.createElement("div"); host.className="terminal-host"; body.append(tools,host);
+  // An engine's shell is the engine's to start; Restart would hand its id to a fresh one.
+  if(p.engine){tools.querySelector(".term-restart").hidden=true;body.closest(".workspace-panel")?.classList.add("engine-panel")}
   const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12.5,cursorBlink:true,scrollback:5000,theme:termTheme()});
   const f=new FitAddon.FitAddon(); t.loadAddon(f); t.open(host); try{f.fit()}catch{}
   const state=tools.querySelector(".terminal-state");
@@ -1143,122 +1185,71 @@ async function mountTerminal(p, body, systemTerminal=false) {
      knows where one exists (the web build points at a Crowe Workspace) says so
      in the same reply, and the panel prints the offer under the reason. The
      desktop preload never sets `remedy`, so on Electron this line is inert. */
-  const start=async()=>{state.textContent="starting";const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"terminal"}).catch(err=>({ok:false,error:err?.message||String(err)}));const ok=r&&r.ok!==false;state.textContent=ok?"running":"no shell";if(!ok){t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`)}};
-  terminalPanels.set(p.id,{term:t,fit:f,host,state,start}); await start();
+  const entry={term:t,fit:f,host,state,generation:p.generation,seq:-1,attaching:true,pending:[],stream:Promise.resolve(),attempt:0};
+  const start=async()=>{
+    const attempt=++entry.attempt;entry.attaching=true;entry.pending=[];state.textContent="starting";
+    const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:p.engine?"engine":"terminal",generation:p.engine?p.generation:undefined}).catch(err=>({ok:false,error:err?.message||String(err)}));
+    if(terminalPanels.get(p.id)!==entry||entry.attempt!==attempt){
+      if(r?.ok!==false&&r?.generation&&!terminalPanels.has(p.id))await window.crowe.pty.close(p.id,r.generation);
+      return;
+    }
+    const ok=r&&r.ok!==false;state.textContent=ok?(r.engine?`${r.engine} is working here`:"running"):"no shell";
+    if(ok){
+      entry.generation=r.generation||p.generation;entry.seq=Number.isInteger(r.seq)?r.seq:-1;
+      if(typeof r.snapshot==="string")queueTerminalDisplay(entry,()=>new Promise(resolve=>{
+        t.reset();if(Number.isInteger(r.cols)&&Number.isInteger(r.rows))t.resize(r.cols,r.rows);t.write(r.snapshot,resolve);
+      }));
+      entry.attaching=false;const pending=entry.pending;entry.pending=[];for(const event of pending)receiveTerminalRecord(event);
+      await entry.stream;
+    }else{
+      entry.attaching=false;entry.pending=[];t.write(`\r\n  ${r?.error||"PTY unavailable."}\r\n`);
+      if(r?.remedy?.url)t.write(`  ${r.remedy.label||"Open in your Workspace"}: ${r.remedy.url}\r\n`);
+    }
+  };
+  entry.start=start;terminalPanels.set(p.id,entry);await start();
   /* Plain terminals stay plain shells. They used to auto-enter crowe-logic,
      which made every terminal a Crowe Logic CLI whether the operator wanted
      one or not - and left no ordinary shell to run anything else from. The
      agent panel's console is a plain shell too; nothing is typed into any
      terminal for you. Commands go in when the operator wants them. */
   t.onData((data)=>window.crowe.pty.input(p.id,data));
+  tools.querySelector(".term-reclaim").onclick=()=>{window.crowe.pty.reclaim?.(p.id);t.focus()};
+  const offControl=window.crowe.companion?.onEvent(e=>{if(e.type==="terminal-control"&&e.id===p.id){state.textContent=e.controller?`Controlled by ${e.controller.name}`:"running";tools.querySelector(".term-reclaim").hidden=!e.controller}});
+  const controlCleanup=new MutationObserver(()=>{if(!body.isConnected){offControl?.();controlCleanup.disconnect()}});
+  controlCleanup.observe(panelDeck,{childList:true});
   tools.querySelector(".term-restart").onclick=async()=>{await window.crowe.pty.close(p.id);t.reset();await start()};
   tools.querySelector(".term-clear").onclick=()=>t.clear();
   tools.querySelector(".term-copy").onclick=()=>navigator.clipboard.writeText(t.getSelection()||"");
   tools.querySelector(".term-export").onclick=()=>navigator.clipboard.writeText(t.buffer.active.getLine(0)?Array.from({length:t.buffer.active.length},(_,i)=>t.buffer.active.getLine(i)?.translateToString(true)||"").join("\n"):"");
   setTimeout(()=>fitTerminals(),40);
 }
-window.crowe.pty.onData(({id,data})=>{const x=terminalPanels.get(id);if(x)x.term.write(data)});
-function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
-async function mountWorkspaceAgent(p, body, seed={}) {
-  body.classList.add("workspace-agent-node");
-  body.innerHTML = `<div class="agent-operation-head"><div class="agent-logotype" role="img" aria-label="Crowe Logic"></div><div><small>AGENT</small><strong class="agent-operation-state">Booting runtime</strong></div><button type="button" class="agent-console-toggle ghost sm" aria-expanded="false">Console</button><span class="agent-operation-chip" data-state="booting">BOOTING</span></div><div class="agent-event-stream" aria-live="polite"></div><div class="agent-terminal-slot"></div><form class="agent-command-dock"><textarea rows="2" placeholder="Assign an objective to this agent..."></textarea><button type="submit" class="primary sm">Run</button><button type="button" class="agent-interrupt ghost sm">Interrupt</button></form>`;
-  const slot=body.querySelector(".agent-terminal-slot");
-  const cs=getComputedStyle(document.body),tok=n=>cs.getPropertyValue(n).trim();
-  const t=new Terminal({fontFamily:"JetBrains Mono, ui-monospace, Menlo, monospace",fontSize:12,cursorBlink:true,scrollback:5000,theme:{background:tok("--term-bg")||tok("--cream"),foreground:tok("--term-fg")||tok("--ink"),cursor:tok("--gold"),selectionBackground:tok("--accent-wash")||"rgba(184,137,58,.28)"}});
-  const f=new FitAddon.FitAddon();t.loadAddon(f);t.open(slot);try{f.fit()}catch{}
-  const status=body.querySelector(".agent-operation-state"),chip=body.querySelector(".agent-operation-chip"),events=body.querySelector(".agent-event-stream");
-  /* The panel head wears the logotype, same as the header and the thinking
-     indicator — one mark everywhere, and here the motion is doing work: turning
-     rotors mean the runtime is alive and reasoning, still ones mean it is
-     waiting on you. The <small> beside it reads "AGENT" rather than "CROWE
-     LOGIC AGENT" because the drawing already says the name and setting it
-     twice, once drawn and once in caps, just looks like nobody checked. It no
-     longer says "CLI": the console below is a plain shell and the objective
-     runs on the gateway agent, so there is no CLI in this panel to name.
-
-     This replaced a CroweMark whorl. Nothing is lost: the whorl's states were
-     idle / reasoning / failed, and only "reasoning" ever animated, which is
-     exactly the distinction is-thinking carries. */
-  const logotype = { svg: null, state: "idle" };
-  mountMotionLogotype(body.querySelector(".agent-logotype"), "").then((svg) => {
-    logotype.svg = svg;
-    if (svg) svg.classList.toggle("is-thinking", logotype.state === "reasoning");
-  });
-  const mark = {
-    setState(s) {
-      const prev = logotype.state;
-      logotype.state = s;
-      if (!logotype.svg) return;
-      logotype.svg.classList.toggle("is-thinking", s === "reasoning");
-      // Failure is a state the mark holds; settling is a beat it plays on the
-      // way out of reasoning into rest — the landing, after which the idle
-      // drift resumes on its own. Failure gets no landing: engines that ease
-      // gracefully to a stop are claiming the run went well.
-      logotype.svg.classList.toggle("is-failed", s === "failed");
-      if (prev === "reasoning" && s === "idle") {
-        logotype.svg.classList.add("is-settling");
-        setTimeout(() => { if (logotype.svg) logotype.svg.classList.remove("is-settling"); }, 700);
-      }
-    },
-    // A tool landed. One quick beat of the whole mark, distinct from the rotors
-    // so it reads as an event rather than as more of the same turning.
-    ping() {
-      const el = body.querySelector(".agent-logotype");
-      if (!el) return;
-      el.classList.remove("pinged");
-      void el.offsetWidth;   // restart the beat even if one is already running
-      el.classList.add("pinged");
-    },
-  };
-  const pingMark=()=>mark.ping();
-  /* One call moves the chip, its label and the mark together. They were
-     separate before, which let the chip keep reading ACTIVE in red after the
-     runtime had already failed. */
-  const CHIP={booting:"BOOTING",running:"ACTIVE",verified:"DONE",waiting:"PAUSED",failed:"OFFLINE",idle:"READY"};
-  const setState=(chipState,markState,label)=>{chip.dataset.state=chipState;chip.textContent=CHIP[chipState]||chipState.toUpperCase();mark.setState(markState);if(label)status.textContent=label};
-  const addEvent=(kind,text)=>{const row=document.createElement("div");row.className=`agent-event agent-event-${kind}`;row.innerHTML=`<span>${esc(kind)}</span><code>${esc(text)}</code>`;events.appendChild(row);events.scrollTop=events.scrollHeight};
-  /* The console is a plain shell. It used to type "crowe-logic" and Enter into
-     the PTY the moment it opened, so every agent panel was a CLI session whether
-     the operator wanted one or not - and the name did not match the binary this
-     package ships (`crowe`), so on a clean machine the first line of every
-     console was "command not found". Nothing is typed for you now; the shell
-     waits at its prompt for whatever the operator wants to run. The objective
-     runs on the gateway agent, not in this shell, so when the tier withholds
-     the shell the dock still works - a degraded panel, not a dead one. */
-  const start=async()=>{const r=await window.crowe.pty.start({id:p.id,cols:t.cols,rows:t.rows,kind:"agent"}).catch(err=>({ok:false,error:err?.message||String(err)}));if(r?.ok!==false){setState("idle","idle","Ready");addEvent("runtime","console shell ready")}else{setState("idle","idle","Gateway only - no shell at this tier");addEvent("runtime",r?.error||"shell unavailable");t.write(`\r\n  ${r?.error||"Shell unavailable."}\r\n`)}};
-  terminalPanels.set(p.id,{term:t,fit:f,host:slot,state:status,start});await start();
-  t.onData(data=>window.crowe.pty.input(p.id,data));
-  const form=body.querySelector(".agent-command-dock"),box=form.querySelector("textarea"),run=form.querySelector('button[type="submit"]');let running=false;
-  /* The dock runs the objective on the gateway agent, and only there. It used
-     to also type the objective into the PTY, so every task ran twice - two
-     bills, two sets of side effects on the same working tree. The terminal
-     below stays interactive for anything the operator wants to run by hand. */
-  form.onsubmit=async e=>{e.preventDefault();const task=box.value.trim();if(!task||running)return;running=true;setState("running","reasoning","Reasoning and executing");addEvent("input",task);box.value="";run.disabled=true;let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId!==p.id)return;if(ev.type==="tool_call"){status.textContent=`Running ${ev.name||"tool"}`;pingMark();addEvent("tool",ev.name||"tool")}else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))answer+=ev.text||"";else if(ev.type==="error")addEvent("error",ev.text||"failed")});try{const r=await window.crowe.agent.run([{role:"user",content:task}],p.id,{licensed:p.licensed,workspaceId:p.workspaceId});answer=answer||r?.text||"Completed";addEvent("verified",answer.slice(0,500));setState("verified","idle","Verified")}catch(err){addEvent("error",err.message||String(err));setState("failed","failed","Needs attention")}finally{off();running=false;run.disabled=false}};
-  /* Interrupt stops the agent run, not the terminal. It used to also send
-     Ctrl-C to the PTY, killing whatever the operator had running by hand for
-     a run that was never happening there. Ctrl-C in the terminal still works. */
-  body.querySelector(".agent-interrupt").onclick=()=>{window.crowe.agent.stop(p.id);setState("waiting","idle","Interrupted");addEvent("status","operator interrupted the agent run")};
-  /* The terminal is a manual console, not the engine. An objective typed into
-     the dock runs on the gateway agent and never touches this PTY, and the
-     event stream above is fed by agent.onEvent - so the panel already tells
-     the whole story of a run without the shell being on screen. It stays one
-     click away for anything the operator wants to run by hand.
-
-     Fitting is deferred to reveal because xterm measures a cell against the
-     live DOM: fit() on a display:none slot computes zero columns, and the PTY
-     told that width wraps every later line at the wrong place. */
-  const consoleBtn=body.querySelector(".agent-console-toggle");
-  const showConsole=(open)=>{
-    body.classList.toggle("console-open",open);
-    consoleBtn.setAttribute("aria-expanded",String(open));
-    localStorage.setItem("crowe-agent-console",open?"open":"closed");
-    if(open)requestAnimationFrame(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}});
-  };
-  consoleBtn.onclick=()=>showConsole(!body.classList.contains("console-open"));
-  showConsole(localStorage.getItem("crowe-agent-console")==="open");
-  new ResizeObserver(()=>{try{f.fit();window.crowe.pty.resize({id:p.id,cols:t.cols,rows:t.rows})}catch{}}).observe(slot);
+// Attachment snapshots and live records share one sequence. Buffer records
+// while attaching, discard replayed/stale generations, and serialize resizes
+// with xterm writes so a resize is never rendered as undefined text.
+function queueTerminalDisplay(entry,run){
+  const attempt=entry.attempt;
+  entry.stream=entry.stream.then(()=>{if(entry.attempt===attempt&&entry.host.isConnected)return run()}).catch(()=>{entry.state.textContent="Terminal display interrupted"});
 }
-
+function receiveTerminalRecord(event){
+  const entry=terminalPanels.get(event?.id);if(!entry)return;
+  if(entry.attaching){entry.pending.push(event);return;}
+  if(event.generation&&event.generation!==entry.generation)return;
+  if(Number.isInteger(event.seq)){if(event.seq<=entry.seq)return;entry.seq=event.seq;}
+  if(event.type==="resize"&&Number.isInteger(event.cols)&&Number.isInteger(event.rows))queueTerminalDisplay(entry,()=>entry.term.resize(event.cols,event.rows));
+  else if(typeof event.data==="string")queueTerminalDisplay(entry,()=>new Promise(resolve=>entry.term.write(event.data,resolve)));
+}
+window.crowe.pty.onData(receiveTerminalRecord);
+/* An engine opened a terminal: it comes up as a panel beside the operator's,
+   live, labelled with the engine. Typing in it pauses the engine there; Close
+   ends it. Engine panels are not saved in the layout, since their shells do
+   not outlive the app. */
+function receiveEngineTerminal(e){
+  if(!e||!e.id)return;
+  if(e.type==="opened"&&!panels.some((p)=>p.id===e.id))return addPanel("terminal",{id:e.id,title:`${e.openedBy||"Engine"} · ${e.label}`,engine:e.openedBy||"Engine",generation:e.generation});
+  if(e.type==="closed"){const x=terminalPanels.get(e.id);if(x&&(!e.generation||e.generation===x.generation))x.state.textContent="ended";}
+}
+window.crowe.pty.onEngine?.(receiveEngineTerminal);
+function fitTerminals(){for(const [id,x] of terminalPanels){try{x.fit.fit();window.crowe.pty.resize({id,cols:x.term.cols,rows:x.term.rows})}catch{}}}
 /* A bare host typed into the address bar gets https by default - except loopback,
    where that default is fatal: the TLS handshake against a plain-HTTP dev server
    fails before anything renders, so "localhost:8123" would never load. Real
@@ -1381,254 +1372,6 @@ function mountBrowserHandoff(p, body) {
   bar.querySelector(".bookmarks").onclick=()=>{showing=showing==="Saved"?"Recent":"Saved";render()};
   render();
 }
-const WORKFLOW_TEMPLATES=[
-  {name:"Service Call Recovery",nodes:[{name:"Call Intake",prompt:"Review the customer request, identify urgency, trade, location, and missing details."},{name:"Dispatch Planner",prompt:"Create the best booking and dispatch plan from this request."},{name:"Customer Follow-up",prompt:"Write a concise confirmation and next-step message for the customer."}]},
-  {name:"Customer Operations",nodes:[{name:"Account Review",prompt:"Summarize the customer account, open issues, and immediate risks."},{name:"Resolution Agent",prompt:"Propose the fastest complete resolution with clear owners."},{name:"Quality Check",prompt:"Audit the proposed resolution for omissions and customer impact."}]},
-];
-function workflowStore(){try{return JSON.parse(localStorage.getItem("crowe-agent-workflows")||"[]")}catch{return []}}
-function saveWorkflowStore(items){localStorage.setItem("crowe-agent-workflows",JSON.stringify(items))}
-/* The canvas is authored by the agents, not assembled by hand. The operator says
-   what the operation is; a full harness turn designs the nodes. This brief is
-   that turn's instructions, and it is explicit about the one constraint the
-   canvas imposes: nodes run in parallel and blind to each other, so a prompt
-   that says "using the previous agent's output" designs a workflow that cannot
-   exist here. */
-const COMPOSE_ASK=(want)=>`Design an agent workflow for this operation: ${want}\n\nReturn ONLY a JSON object, no prose before or after, shaped exactly like:\n{"name":"short workflow name","nodes":[{"name":"agent name","prompt":"complete standalone instructions for this agent"}]}\nUse 2 to 5 nodes. Each node is an independent agent that runs in parallel and cannot see the others, so every prompt must stand alone, carry its own context, and name its expected output.`;
-/* Lenient on the outside, strict on the inside. Models wrap JSON in prose and
-   code fences no matter how firmly the brief says not to, so the object is cut
-   from first "{" to last "}" - but a node without both a name and a prompt is
-   dropped, and a result with no usable nodes is a failure the surface reports,
-   never a half-drawn canvas. */
-function parseComposedWorkflow(text){
-  const s=String(text||""),a=s.indexOf("{"),b=s.lastIndexOf("}");
-  if(a<0||b<=a)return null;
-  try{
-    const d=JSON.parse(s.slice(a,b+1));
-    const nodes=(Array.isArray(d.nodes)?d.nodes:[])
-      .filter(n=>n&&typeof n.name==="string"&&typeof n.prompt==="string"&&n.name.trim()&&n.prompt.trim())
-      .slice(0,8).map(n=>({name:n.name.trim(),prompt:n.prompt.trim()}));
-    if(!nodes.length)return null;
-    return {name:(typeof d.name==="string"&&d.name.trim())||"Composed mission",nodes};
-  }catch{return null}
-}
-function mountWorkflow(p, body) {
-  body.classList.add("workflow-surface");
-  let workflows=workflowStore(), active=workflows[0]||{id:`wf-${Date.now().toString(36)}`,name:"New mission",nodes:[],runs:[]};
-  if(!workflows.length){workflows=[active];saveWorkflowStore(workflows)}
-  body.innerHTML='<aside class="workflow-sidebar"><div class="wf-side-head"><small>RUNBOOK</small><button class="wf-new ghost sm">New</button></div><div class="wf-list"></div><div class="wf-templates"><small>TEMPLATES</small></div></aside><main class="workflow-main"><header><div><input class="wf-name" aria-label="Mission name"><span class="wf-status">Draft</span></div><div class="wf-actions"><button class="wf-run primary sm">Run mission</button><button class="wf-abort danger sm hidden">Stop</button></div></header><div class="wf-compose"><input class="wf-compose-say" placeholder="Describe the operation. The Crowe agents design the mission" aria-label="Describe the operation to compose"><button class="wf-compose-go primary sm">Compose</button><small class="wf-compose-state"></small></div><div class="wf-canvas"></div><button class="wf-add ghost sm">Add an agent by hand</button><section class="wf-output"><div><b>Run output</b><button class="wf-copy ghost sm">Copy</button></div><pre>Select Run workflow to begin.</pre></section></main>';
-  let aborted=false;
-  const persist=()=>{const i=workflows.findIndex(x=>x.id===active.id);if(i<0)workflows.unshift(active);else workflows[i]=active;saveWorkflowStore(workflows)};
-  const renderList=()=>{body.querySelector(".wf-list").innerHTML=workflows.map(w=>`<button data-id="${esc(w.id)}" class="${w.id===active.id?"active":""}"><b>${esc(w.name)}</b><small>${w.nodes.length} agents · ${(w.runs||[]).length} runs</small></button>`).join("");body.querySelectorAll(".wf-list button").forEach(b=>b.onclick=()=>{active=workflows.find(w=>w.id===b.dataset.id);render()})};
-  const renderNodes=()=>{const canvas=body.querySelector(".wf-canvas");canvas.innerHTML=active.nodes.length?active.nodes.map((n,i)=>`<article class="wf-node" data-index="${i}"><div class="wf-node-top"><span>${String(i+1).padStart(2,"0")}</span><input class="wf-node-name" value="${esc(n.name)}" aria-label="Agent node name"><span class="wf-node-route"></span><button class="wf-node-remove ghost sm">Remove</button></div><textarea class="wf-node-prompt" rows="1" aria-label="Agent instructions">${esc(n.prompt)}</textarea><div class="wf-node-foot"><span class="wf-node-dot"></span><small class="wf-node-state">Ready</small></div><div class="wf-node-gate"></div></article>`).join(""):'<div class="wf-empty"><b>Say what the operation is</b><span>Describe it above and the Crowe agents design the mission, or add nodes by hand.</span></div>';
-    canvas.querySelectorAll(".wf-node").forEach(card=>{const i=+card.dataset.index;card.querySelector(".wf-node-name").onchange=e=>{active.nodes[i].name=e.target.value;persist();renderList()};const t=card.querySelector(".wf-node-prompt");t.onchange=e=>{active.nodes[i].prompt=e.target.value;persist()};
-      // The instructions are prose on a page, not a box in a form: the field
-      // grows to hold what the agents wrote, because clipped instructions read
-      // as a broken surface and hide exactly what the operator is approving.
-      const fit=()=>{t.style.height="auto";t.style.height=t.scrollHeight+"px"};t.oninput=fit;fit();
-      card.querySelector(".wf-node-remove").onclick=()=>{active.nodes.splice(i,1);persist();renderNodes()}});
-  };
-  const render=()=>{body.querySelector(".wf-name").value=active.name;renderList();renderNodes()};
-  body.querySelector(".wf-name").onchange=e=>{active.name=e.target.value||"Untitled mission";persist();renderList()};
-  body.querySelector(".wf-new").onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:"New mission",nodes:[],runs:[]};workflows.unshift(active);persist();render()};
-  WORKFLOW_TEMPLATES.forEach(t=>{const b=document.createElement("button");b.className="wf-template";b.innerHTML=`<b>${esc(t.name)}</b><small>${t.nodes.length} agents</small>`;b.onclick=()=>{active={id:`wf-${Date.now().toString(36)}`,name:t.name,nodes:t.nodes.map(n=>({...n})),runs:[]};workflows.unshift(active);persist();render()};body.querySelector(".wf-templates").appendChild(b)});
-  body.querySelector(".wf-add").onclick=()=>{active.nodes.push({name:`Crowe Agent ${active.nodes.length+1}`,prompt:"Describe this agent's responsibility and expected output."});persist();renderNodes();renderList()};
-  /* Composing is itself a harness turn - it routes, it can fail, and it answers
-     on its own agent id so the chat transcript never draws its events. What it
-     never does is guess: a reply that does not parse into nodes leaves the
-     canvas exactly as it was, with the failure named where the operator typed. */
-  const composeSay=body.querySelector(".wf-compose-say"),composeGo=body.querySelector(".wf-compose-go"),composeState=body.querySelector(".wf-compose-state");
-  const compose=async()=>{
-    const want=composeSay.value.trim();if(!want||composeGo.disabled)return;
-    const id=`${p.id}-compose`;
-    composeGo.disabled=true;composeState.textContent="Designing";
-    let text="",failure="";
-    const off=window.crowe.agent.onEvent(ev=>{
-      if(ev.agentId!==id)return;
-      if(ev.type==="route")composeState.textContent=`Designing · ${ev.expert||"operator"} · ${ev.model||""}`.trim();
-      else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))text+=(ev.text||"");
-      else if(ev.type==="error")failure=ev.text||"the gateway call failed";
-    });
-    try{
-      const r=await window.crowe.agent.run([{role:"user",content:COMPOSE_ASK(want)}],id,{licensed:p.licensed,workspaceId:p.workspaceId});
-      if(r&&r.error)failure=failure||r.error;
-      text=text||(r&&r.text)||"";
-    }catch(e){failure=failure||(e&&e.message)||String(e)}
-    finally{off()}
-    const drafted=!failure&&parseComposedWorkflow(text);
-    if(!drafted){composeState.textContent=`Failed · ${(failure||"the agent did not return a mission").slice(0,90)}`;composeGo.disabled=false;return}
-    active={id:`wf-${Date.now().toString(36)}`,name:drafted.name,nodes:drafted.nodes,runs:[]};
-    workflows.unshift(active);persist();render();
-    composeState.textContent=`Composed ${drafted.nodes.length} agents`;composeSay.value="";composeGo.disabled=false;
-  };
-  composeGo.onclick=compose;composeSay.onkeydown=e=>{if(e.key==="Enter")compose()};
-  const abort=body.querySelector(".wf-abort"),run=body.querySelector(".wf-run"),status=body.querySelector(".wf-status"),out=body.querySelector(".wf-output pre");
-  abort.onclick=()=>{aborted=true;active.nodes.forEach((_,i)=>window.crowe.agent.stop(`${p.id}-${i}`));status.textContent="Aborted"};
-  /* One node's run. Every node is a full harness turn, which means it routes to
-     an expert, calls tools, can be stopped at the approval gate, and can fail -
-     and the surface used to listen for exactly one of those things. Two
-     consequences, both of which read as "workflows do not work":
-
-     A node that touched the workspace raised an approval request nobody drew.
-     The only listener that rendered a gate card was the chat transcript's,
-     registered per chat turn, so the request went to no one and the node sat on
-     "Running" for the five-minute timeout before being denied by default.
-
-     And a node that failed reported "Completed.", because the fallback chain
-     ended in that string and `error` events were dropped on the floor. The dot
-     went green on a turn that had gone nowhere.
-
-     So the node now shows what the router chose, what the agent is doing, hosts
-     its own gate card, and says plainly when it failed. */
-  const runNode=async(n,i)=>{
-    const id=`${p.id}-${i}`;
-    const card=body.querySelector(`.wf-node[data-index="${i}"]`);
-    const dot=card&&card.querySelector(".wf-node-dot"),stateEl=card&&card.querySelector(".wf-node-state");
-    const routeEl=card&&card.querySelector(".wf-node-route"),gate=card&&card.querySelector(".wf-node-gate");
-    const say=t=>{if(stateEl)stateEl.textContent=t};
-    let text="",failure="",routed="",verdict=null,tools=0;
-    const off=window.crowe.agent.onEvent(ev=>{
-      if(ev.agentId!==id)return;
-      if(ev.type==="route"){routed=`${ev.expert||"operator"} · ${ev.model||""}`.trim();if(routeEl)routeEl.textContent=routed;say("Reasoning")}
-      else if(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed))text+=(ev.text||"");
-      else if(ev.type==="tool_call"){tools++;say(`Running ${ev.name||"tool"}`)}
-      else if(ev.type==="approval_request"){say("Waiting on your authorization");if(dot)dot.classList.add("waiting");if(gate)addApproval(gate,ev)}
-      else if(ev.type==="approval_expired"){expireApproval(ev.id);if(dot)dot.classList.remove("waiting")}
-      else if(ev.type==="retry")say(`Retrying (${ev.attempt}/${ev.of})`);
-      else if(ev.type==="verdict")verdict=ev;
-      else if(ev.type==="error")failure=ev.text||"the gateway call failed";
-      else if(ev.type==="stopped")failure="stopped";
-    });
-    try{
-      const r=await window.crowe.agent.run([{role:"user",content:n.prompt}],id,{licensed:p.licensed,workspaceId:p.workspaceId});
-      // The handler resolves with an error rather than throwing when a license
-      // or entitlement check refuses the run, so that shape counts as a failure.
-      if(r&&r.error)failure=failure||r.error;
-      text=text||(r&&r.text)||"";
-      if(!failure&&!text)failure="the agent returned nothing";
-    }catch(e){failure=failure||(e&&e.message)||String(e)}
-    finally{off()}
-    if(dot){dot.classList.remove("running","waiting");dot.classList.add(failure?"failed":"done")}
-    say(failure?`Failed · ${failure}`.slice(0,120):`Done · ${tools} tool call${tools===1?"":"s"}`);
-    return {name:n.name,routed,text,failure,verdict};
-  };
-  run.onclick=async()=>{if(!active.nodes.length)return;aborted=false;run.classList.add("hidden");abort.classList.remove("hidden");status.textContent="Running";out.textContent="Launching parallel agents...";
-    body.querySelectorAll(".wf-node-gate").forEach(g=>{g.innerHTML=""});
-    body.querySelectorAll(".wf-node-route").forEach(r=>{r.textContent=""});
-    body.querySelectorAll(".wf-node-dot").forEach(x=>{x.classList.remove("done","failed","waiting");x.classList.add("running")});
-    body.querySelectorAll(".wf-node-state").forEach(s=>{s.textContent="Queued"});
-    const results=await Promise.all(active.nodes.map(runNode));
-    const failed=results.filter(r=>r.failure).length;
-    const report=results.map(r=>{
-      const head=`## ${r.name}${r.routed?`\n\n_${r.routed}_`:""}`;
-      if(r.failure)return `${head}\n\n**Failed:** ${r.failure}`;
-      const receipt=r.verdict?`\n\n_Verification ${r.verdict.status}: ${r.verdict.summary||""}_`:"";
-      return `${head}\n\n${r.text}${receipt}`;
-    }).join("\n\n");
-    out.textContent=report;
-    // The run's own status has to say it, not just the dots: a run where two of
-    // three nodes failed is not a completed run.
-    const outcome=aborted?"Aborted":failed===results.length?"Failed":failed?`${failed} of ${results.length} failed`:"Completed";
-    active.runs.unshift({at:Date.now(),status:outcome.toLowerCase(),output:report});active.runs=active.runs.slice(0,20);persist();
-    status.textContent=outcome;run.classList.remove("hidden");abort.classList.add("hidden");renderList()};
-  body.querySelector(".wf-copy").onclick=e=>copyText(out.textContent,e.currentTarget);
-  /* Chat authors into the Runbook mid-conversation (workflow_authored below).
-     The store is the truth, so the panel re-reads it on that signal - fully
-     when idle, sidebar-only mid-run, because redrawing the canvas under a
-     running run would orphan the cards its events are landing on. */
-  body.addEventListener("crowe:workflows-changed",()=>{workflows=workflowStore();if(!abort.classList.contains("hidden")){renderList();return}active=workflows[0]||active;render()});
-  render();
-}
-/* The other half of the harness's compose_workflow tool: the agent authored a
-   workflow in chat, and this is where it lands. Saved first - the store is the
-   artifact - then shown: an open Runbook panel re-reads the store in place, and
-   if none is open the canvas opens itself, because an artifact the user has to
-   go hunting for reads as a tool call that did nothing. */
-function workflowAuthored(ev){
-  if(ev.type!=="workflow_authored"||!ev.workflow)return;
-  const wfs=workflowStore();
-  wfs.unshift({id:`wf-${Date.now().toString(36)}`,name:String(ev.workflow.name||"Composed mission"),nodes:(ev.workflow.nodes||[]).map(n=>({name:String(n.name||""),prompt:String(n.prompt||"")})),runs:[]});
-  saveWorkflowStore(wfs);
-  const p=panels.find(x=>x.type==="workflow");
-  if(!p){addPanel("workflow");return}
-  const bodyEl=panelDeck.querySelector(`[data-id="${p.id}"] .panel-body`);
-  if(bodyEl)bodyEl.dispatchEvent(new Event("crowe:workflows-changed"));
-}
-window.crowe.agent.onEvent(workflowAuthored);
-function mountAgentFleet(p, body) {
-  const agents=[
-    {name:"Call Intake",role:"Answers, qualifies, and captures every service request",prompt:"Act as a call-intake agent. Qualify this service request and identify the next action."},
-    {name:"Dispatch",role:"Books jobs and coordinates field schedules",prompt:"Act as a dispatch coordinator. Build a booking and dispatch plan for this request."},
-    {name:"Customer Success",role:"Handles follow-up, updates, and retention",prompt:"Act as a customer-success agent. Draft the right follow-up and retention action."},
-    {name:"Operations Analyst",role:"Finds missed revenue and operational leakage",prompt:"Act as an operations analyst. Identify revenue leakage, bottlenecks, and corrective actions."},
-  ];
-  body.classList.add("agent-fleet");body.innerHTML='<header class="fleet-hero"><div><small>CROWE AGENTS · CUSTOMER CONTROL PLANE</small><h2>Your licensed agent workforce</h2><p>Launch a terminal-backed specialist into the stackable workspace, combine agents in Missions, or manage the live service at croweagents.com.</p></div><button class="fleet-site primary">Open Crowe Agents</button></header><div class="fleet-license"><span class="health-dot"></span><div><b>Checking workspace license</b><small>Connecting identity, entitlements, and usage.</small></div><select class="fleet-workspace" aria-label="Licensed workspace"></select><button class="fleet-refresh ghost sm">Refresh</button><button class="fleet-billing ghost sm">Manage billing</button><span class="badge">Checking</span></div><div class="fleet-grid"></div>';
-  body.querySelector(".fleet-site").onclick=()=>navigate("https://croweagents.com");body.querySelector(".fleet-billing").onclick=async()=>{const r=await window.crowe.license.billing();if(r?.error)alert(r.error)};const grid=body.querySelector(".fleet-grid"),license=body.querySelector(".fleet-license"),workspaceSelect=body.querySelector(".fleet-workspace");let licensed=false,workspaceId="";
-  const renderLicense=async()=>{license.querySelector("b").textContent="Checking workspace license";const status=await window.crowe.license.status();workspaceSelect.innerHTML=(status.workspaces||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name||x.id)}</option>`).join("");workspaceId=status.selectedWorkspaceId||status.workspaces?.[0]?.id||"";workspaceSelect.value=workspaceId;const workspace=status.workspaces?.find(x=>x.id===workspaceId),allowed=Boolean(workspace?.agents?.allowed);licensed=allowed;workspaceSelect.disabled=!status.workspaces?.length;license.querySelector(".health-dot").classList.toggle("ok",allowed);license.querySelector("b").textContent=!status.authenticated?"Sign in to Crowe ID":allowed?`${workspace.name||workspace.id} license active`:status.error||"Agent license required";license.querySelector("small").textContent=allowed?`${workspace.plan_id||"Managed"} plan · ${workspace.usage?.agent_jobs||0} agent jobs this period`:"Licensed agents remain locked until an active workspace entitlement is found.";license.querySelector(".badge").textContent=allowed?"Licensed":"Locked";grid.querySelectorAll(".launch,.workflow").forEach(button=>button.disabled=!allowed)};
-  workspaceSelect.onchange=async()=>{await window.crowe.license.select(workspaceSelect.value);renderLicense()};body.querySelector(".fleet-refresh").onclick=renderLicense;
-  agents.forEach(a=>{const card=document.createElement("article");card.className="fleet-card";card.innerHTML=`<div class="fleet-avatar">${a.name.split(" ").map(x=>x[0]).join("")}</div><div class="fleet-state"><span></span>Licensed service</div><h3>${esc(a.name)}</h3><p>${esc(a.role)}</p><div><button class="launch primary sm" disabled>Launch agent</button><button class="workflow ghost sm" disabled>Add to workflow</button></div>`;card.querySelector(".launch").onclick=()=>{if(!licensed)return;addPanel("agent",{title:a.name,licensed:true,workspaceId,prompt:a.prompt})};card.querySelector(".workflow").onclick=()=>{if(licensed)addPanel("workflow",{title:`${a.name} Workflow`})};grid.appendChild(card)});renderLicense();
-}
-// Parallel synthesis: each branch answers the same task from a different angle,
-// then one synthesis pass merges the drafts into a single answer.
-const SYNTH_LENSES=[
-  {name:"Conventional",brief:"Take the most direct, conventional approach. Prioritize correctness and completeness."},
-  {name:"Contrarian",brief:"Take a contrarian angle: challenge the assumptions in the task and surface the risks and failure modes a conventional answer would miss."},
-  {name:"Pragmatic",brief:"Optimize for practical constraints: cost, time, and what can ship soonest. Be concrete about the tradeoffs you accept."},
-  {name:"First principles",brief:"Reason from first principles. Ignore convention and work forward from the underlying goal."},
-];
-function workbenchPresets(){try{return JSON.parse(localStorage.getItem("crowe-workbench-presets")||"[]")}catch{return []}}
-function workbenchHistory(){try{return JSON.parse(localStorage.getItem("crowe-workbench-history")||"[]")}catch{return []}}
-function mountWorkbench(p, body) {
-  body.classList.add("agent-workbench");
-  body.innerHTML='<aside class="awb-sidebar"><div class="awb-brand"><span class="cl-mark" aria-hidden="true"></span><div><small>AGENT LAB</small><b>Workbench</b></div></div><button class="awb-new primary sm">New run</button><div class="awb-presets"></div><div class="awb-history"></div></aside><main class="awb-main"><header><div><small>COMPOSE, TEST, SHIP</small><h2>Agent Workbench</h2></div><span class="awb-run-state">Ready</span></header><div class="awb-controls"><label>Agent<select class="awb-agent"><option>CroweLM Operator</option><option>Research Agent</option><option>Builder Agent</option><option>Operations Analyst</option></select></label><label>Mode<select class="awb-mode"><option value="single">Single run</option><option value="compare">Compare two agents</option><option value="parallel">Parallel synthesis</option></select></label><label>Context<input class="awb-context" placeholder="URLs, customer context, or constraints"></label></div><details class="awb-advanced"><summary>Run controls</summary><div><label>Temperature<input class="awb-temp" type="range" min="0" max="1" step="0.1" value="0.4"><output>0.4</output></label><label>Output format<select class="awb-format"><option>Markdown</option><option>JSON</option><option>Plain text</option></select></label><label class="awb-tools"><input type="checkbox" checked> Allow workspace tools</label><label class="awb-branch-field">Branches<select class="awb-branches"><option>2</option><option selected>3</option><option>4</option></select></label></div></details><div class="awb-attachments"><button class="awb-attach ghost sm">Attach files</button><span>No attachments</span><div></div></div><textarea class="awb-prompt" rows="7" placeholder="Describe the outcome, constraints, tools, and expected output..."></textarea><div class="awb-actions"><button class="awb-run primary">Run workbench</button><button class="awb-cancel danger hidden">Cancel run</button><button class="awb-save ghost">Save preset</button><button class="awb-copy ghost">Copy outputs</button><button class="awb-workflow ghost">Make workflow</button></div><div class="awb-meter"><span>0 tokens</span><span>$0.0000</span></div><section class="awb-results"></section></main>';
-  if (window.CroweMark) CroweMark.mount(body.querySelector(".awb-brand .cl-mark"), { state: "rest" });
-  const prompt=body.querySelector(".awb-prompt"),context=body.querySelector(".awb-context"),mode=body.querySelector(".awb-mode"),state=body.querySelector(".awb-run-state"),results=body.querySelector(".awb-results"),branches=body.querySelector(".awb-branches"),branchField=body.querySelector(".awb-branch-field"),runBtn=body.querySelector(".awb-run"),cancelBtn=body.querySelector(".awb-cancel");
-  let attachments=[],runIds=[],usage={tokens:0,cost:0},outputs=[],cancelled=false;
-  const branchCount=()=>Math.max(2,Math.min(4,+branches.value||3));
-  const shellSpecs=()=>mode.value==="parallel"
-    ?[{title:"Synthesis",sub:`merged from ${branchCount()} branches`,cls:"awb-synthesis"},...Array.from({length:branchCount()},(_,i)=>({title:`Branch ${i+1}`,sub:SYNTH_LENSES[i%SYNTH_LENSES.length].name}))]
-    :mode.value==="compare"?[{title:"Primary result",sub:"Agent A"},{title:"Comparison",sub:"Agent B"}]
-    :[{title:"Primary result",sub:"Agent A"}];
-  const renderShells=(placeholder="Results appear here.")=>{results.innerHTML=shellSpecs().map(s=>`<article class="${s.cls||""}"><header><b>${esc(s.title)}</b><span>${esc(s.sub)}</span></header><div class="awb-output">${esc(placeholder)}</div></article>`).join("");outputs=[...results.querySelectorAll(".awb-output")]};
-  const syncMode=()=>{branchField.classList.toggle("hidden",mode.value!=="parallel");renderShells()};
-  const cardTitle=x=>x.closest("article").querySelector("b").textContent;
-  const runAgent=async(id,content)=>{let answer="";const off=window.crowe.agent.onEvent(ev=>{if(ev.agentId===id&&(ev.type==="assistant_delta"||(ev.type==="assistant"&&!ev.streamed)))answer+=(ev.text||"")});try{const r=await window.crowe.agent.run([{role:"user",content}],id);return answer||(r&&r.text)||"Completed."}catch(e){return `Run failed: ${e.message||e}`}finally{off()}};
-  const renderLibrary=()=>{const list=workbenchPresets(),runs=workbenchHistory();body.querySelector(".awb-presets").innerHTML='<small>SAVED CONFIGURATIONS</small>'+list.map((x,i)=>`<button data-i="${i}"><b>${esc(x.name)}</b><span>${esc(x.mode)}</span></button>`).join("");body.querySelector(".awb-history").innerHTML='<small>RUN HISTORY</small>'+runs.slice(0,10).map((x,i)=>`<button data-i="${i}"><b>${esc(x.name)}</b><span>${new Date(x.at).toLocaleString()}</span></button>`).join("");body.querySelectorAll(".awb-presets button").forEach(b=>b.onclick=()=>{const x=list[+b.dataset.i];prompt.value=x.prompt;context.value=x.context;mode.value=x.mode;syncMode()});body.querySelectorAll(".awb-history button").forEach(b=>b.onclick=()=>{const x=runs[+b.dataset.i];prompt.value=x.prompt;mode.value=x.mode;if(x.branches)branches.value=String(x.branches);syncMode();x.outputs.forEach((v,i)=>{if(outputs[i])outputs[i].innerHTML=md(v)})})};
-  mode.onchange=syncMode;branches.onchange=syncMode;
-  body.querySelector(".awb-temp").oninput=e=>e.target.nextElementSibling.value=e.target.value;
-  body.querySelector(".awb-new").onclick=()=>{prompt.value="";context.value="";mode.value="single";attachments=[];body.querySelector(".awb-attachments span").textContent="No attachments";body.querySelector(".awb-attachments div").innerHTML="";syncMode()};
-  body.querySelector(".awb-attach").onclick=async()=>{attachments=await window.crowe.fs.pick();body.querySelector(".awb-attachments span").textContent=attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:"No attachments";body.querySelector(".awb-attachments div").innerHTML=attachments.map(x=>`<span title="${esc(x.path)}">${esc(x.name)}</span>`).join("")};
-  body.querySelector(".awb-save").onclick=()=>{const name=prompt.value.trim().split(/\s+/).slice(0,6).join(" ")||"Untitled preset",items=workbenchPresets();items.unshift({name,prompt:prompt.value,context:context.value,mode:mode.value});localStorage.setItem("crowe-workbench-presets",JSON.stringify(items.slice(0,30)));renderLibrary()};
-  body.querySelector(".awb-copy").onclick=e=>copyText(outputs.map(x=>`## ${cardTitle(x)}\n\n${x.textContent}`).join("\n\n"),e.currentTarget);
-  body.querySelector(".awb-workflow").onclick=()=>{const tasks=outputs.map(x=>({name:cardTitle(x),prompt:x.textContent}));const workflows=workflowStore();workflows.unshift({id:`wf-${Date.now().toString(36)}`,name:prompt.value.trim().split(/\s+/).slice(0,5).join(" ")||"Workbench mission",nodes:tasks,runs:[]});saveWorkflowStore(workflows);addPanel("workflow")};
-  cancelBtn.onclick=()=>{cancelled=true;runIds.forEach(id=>window.crowe.agent.stop(id));state.textContent="Cancelled"};
-  runBtn.onclick=async()=>{const task=prompt.value.trim();if(!task)return;cancelled=false;state.textContent="Running";runBtn.classList.add("hidden");cancelBtn.classList.remove("hidden");usage={tokens:0,cost:0};
-    const parallel=mode.value==="parallel",count=parallel?branchCount():mode.value==="compare"?2:1;renderShells("Agent running...");
-    let fileContext="";if(attachments.length){const files=await window.crowe.fs.readContext(attachments.map(x=>x.path));fileContext=files.map(x=>`File: ${x.path}\n${x.content||x.error}`).join("\n\n")}
-    const format=body.querySelector(".awb-format").value,tools=body.querySelector(".awb-tools input").checked,stamp=Date.now();
-    const branchIds=Array.from({length:count},(_,i)=>`${p.id}-run-${stamp}-${i}`),synthId=`${p.id}-run-${stamp}-synthesis`;
-    runIds=parallel?[...branchIds,synthId]:branchIds;
-    const off=window.crowe.agent.onEvent(ev=>{if(!runIds.includes(ev.agentId))return;if(ev.type==="telemetry"){usage.tokens+=(ev.promptTokens||0)+(ev.completionTokens||0);usage.cost+=(ev.cost||0);body.querySelector(".awb-meter").innerHTML=`<span>${usage.tokens.toLocaleString()} tokens</span><span>$${usage.cost.toFixed(4)}</span>`}});
-    try{
-      const head=[context.value.trim(),fileContext,`Output format: ${format}. Workspace tools: ${tools?"allowed":"not requested"}.`].filter(Boolean).join("\n\n");
-      const cards=parallel?outputs.slice(1):outputs;
-      // Branches stream into their own card as each finishes, so a slow branch never hides a fast one.
-      const drafts=await Promise.all(branchIds.map(async(id,i)=>{const lens=parallel?SYNTH_LENSES[i%SYNTH_LENSES.length].brief:i===1?"Provide an independent alternative approach.":"";const text=await runAgent(id,[head,task,lens].filter(Boolean).join("\n\n"));if(cards[i])cards[i].innerHTML=md(text);return text}));
-      let stored=drafts;
-      if(parallel){
-        if(cancelled)outputs[0].textContent="Cancelled before synthesis.";
-        else{
-          outputs[0].textContent="Synthesizing branches...";
-          const brief=drafts.map((d,i)=>`### Branch ${i+1}: ${SYNTH_LENSES[i%SYNTH_LENSES.length].name}\n\n${d}`).join("\n\n");
-          const synth=await runAgent(synthId,[head,`Task:\n\n${task}`,`${count} agents answered that task independently, each from a different angle. Their drafts:`,brief,"Merge the drafts into one answer. Keep the strongest reasoning from each branch, state plainly where the branches disagree and which side is right, and drop any claim no branch supports. Return the merged answer only. Do not narrate the merge."].join("\n\n"));
-          outputs[0].innerHTML=md(synth);stored=[synth,...drafts];
-        }
-      }
-      const history=workbenchHistory();history.unshift({at:Date.now(),name:task.split(/\s+/).slice(0,6).join(" "),prompt:task,mode:mode.value,branches:count,outputs:stored,usage});localStorage.setItem("crowe-workbench-history",JSON.stringify(history.slice(0,50)));
-      if(!cancelled)state.textContent="Completed";renderLibrary()
-    }finally{off();runIds=[];runBtn.classList.remove("hidden");cancelBtn.classList.add("hidden")}};
-  renderLibrary();syncMode();
-}
-
 /* The room list in the rail.
 
    Rooms are sessions with a roster, so they persist exactly as sessions do -
@@ -2590,30 +2333,24 @@ async function mountRoom(p, body, seed = {}) {
   }));
 }
 
-function mountOperator(p, body) {
-  body.innerHTML='<div class="operator-health"><span class="health-dot"></span><b>Operator service</b><span class="health-label">checking</span></div><div class="operator-grid"></div><div class="operator-lists"><section><b>Active agents</b><div class="agent-list">None</div></section><section><b>Active terminals</b><div class="terminal-list">None</div></section></div><div class="operator-actions"><button class="refresh primary sm">Refresh</button><button class="stop-agent ghost sm">Stop main agent</button><button class="stop-voice ghost sm">Stop voice</button><button class="emergency danger sm">Emergency stop all</button></div>';
-  const refresh=async()=>{const x=await window.crowe.operator.status();const scalar=Object.entries(x).filter(([,v])=>!Array.isArray(v));body.querySelector(".operator-grid").innerHTML=scalar.map(([k,v])=>`<div class="operator-stat">${esc(k)}<b>${esc(v)}</b></div>`).join("");body.querySelector(".agent-list").textContent=(x.agentIds||[]).join(", ")||"None";body.querySelector(".terminal-list").textContent=(x.terminalIds||[]).join(", ")||"None";body.querySelector(".health-label").textContent=x.app||"unavailable";body.querySelector(".health-dot").classList.toggle("ok",x.app==="running")};
-  body.querySelector(".refresh").onclick=refresh;body.querySelector(".stop-agent").onclick=async()=>{await window.crowe.agent.stop();refresh()};body.querySelector(".stop-voice").onclick=()=>speechSynthesis.cancel();body.querySelector(".emergency").onclick=async()=>{if(!confirm("Stop every agent and terminal process?"))return;await window.crowe.operator.stopAll();speechSynthesis.cancel();for(const x of terminalPanels.values())x.state.textContent="stopped";refresh()};refresh();p.operatorTimer=setInterval(()=>{if(document.body.contains(body))refresh();else clearInterval(p.operatorTimer)},5000);
-}
-function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"||p.type==="agent"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(p.operatorTimer)clearInterval(p.operatorTimer);if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
+function closePanel(id){const i=panels.findIndex((p)=>p.id===id);if(i<0)return;const p=panels[i];if(p.type==="terminal"||p.type==="system"){window.crowe.pty.close(id);const x=terminalPanels.get(id);if(x)x.term.dispose();terminalPanels.delete(id)}if(typeof p.onClose==="function"){try{p.onClose()}catch{}}panels.splice(i,1);panelDeck.querySelector(`[data-id="${id}"]`)?.remove();if(activePanelId===id)activePanelId=panels.length?panels[Math.min(i,panels.length-1)].id:null;savePanelState();renderDockTabs()}
 function hideLegacy(){document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.remove("active"));activeLegacy=null;panelDeck.style.display="";if(typeof renderDockTabs==="function")renderDockTabs()}
 function showPane(name){
   if(["files","git","output","activity"].includes(name)){panelDeck.style.display="none";document.querySelectorAll(".legacy-pane-view").forEach((x)=>x.classList.toggle("active",x.id==="pane-"+name));activeLegacy=name;if(name==="git")loadGit();renderDockTabs();return}
   const type = name === "term" ? "terminal" : name;
   hideLegacy();
   const found = [...panels].reverse().find((p)=>p.type===type);
-  if(found) focusPanel(found.id); else addPanel(type).then((p)=>focusPanel(p.id));
+  if(found) focusPanel(found.id); else addPanel(type).then((p)=>{if(p)focusPanel(p.id)});
 }
 function switchPane(name){showPane(name);setRailActive(name)}
 function navigate(u){hideLegacy();let p=[...panels].reverse().find((x)=>x.type==="browser");if(!p){addPanel("browser",{url:u});return}const el=panelDeck.querySelector(`[data-id="${p.id}"]`);const input=el?.querySelector("input.browser-url");if(input){input.value=u;el.querySelector(".go").click()}}
-$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-agent").onclick=()=>addPanel("agent",{title:`Crowe Logic Agent ${panels.filter(p=>p.type==="agent").length+1}`});$("panel-add-system").onclick=()=>{const existing=panels.find(p=>p.type==="system");if(existing){focusPanel(existing.id);return}addPanel("system")};$("panel-add-browser").onclick=()=>addPanel("browser");$("panel-add-operator").onclick=()=>addPanel("operator");$("panel-add-workflow").onclick=()=>addPanel("workflow");$("panel-add-agents").onclick=()=>addPanel("agents");$("panel-add-workbench").onclick=()=>addPanel("workbench");$("panel-add-room").onclick=()=>addPanel("room");
+$("panel-add-term").onclick=()=>addPanel("terminal");$("panel-add-system").onclick=()=>{const existing=panels.find(p=>p.type==="system");if(existing){focusPanel(existing.id);return}addPanel("system")};$("panel-add-browser").onclick=()=>addPanel("browser");
 $("panel-layout").onchange=()=>{panelDeck.className="panel-deck "+$("panel-layout").value;applyStackVisibility();savePanelState();setTimeout(fitTerminals,40)};
-$("glass-launcher").onclick=()=>$("panel-add-agent").click();
 document.querySelectorAll(".legacy-pane").forEach((b)=>b.onclick=()=>switchPane(b.dataset.pane));
 
 // ── Dock: one tab strip for pinned views and every open panel ──
 const dockTabs = $("dock-tabs");
-const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", "cloud-browser":"Cloud browser", operator:"Operator", workflow:"Missions", agents:"Agent fleet", workbench:"Workbench" };
+const PANEL_GLYPH = { terminal:"Terminal", browser:"Browser", "cloud-browser":"Cloud browser" };
 function applyStackVisibility(){
   const stacked = panelDeck.classList.contains("stack");
   if (stacked && !panels.some((p)=>p.id===activePanelId)) activePanelId = panels.length ? panels[panels.length-1].id : null;
@@ -2667,7 +2404,7 @@ $("dock-menu").addEventListener("click",(e)=>{ e.stopPropagation(); dockOverflow
 document.addEventListener("click",(e)=>{ if (!dockOverflow.contains(e.target) && !e.target.closest("#dock-menu")) dockOverflow.classList.add("hidden"); });
 
 window.addEventListener("resize",()=>{clampWorkbenchSplit();fitTerminals()});
-async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("crowe-workspace-panels")||"null")}catch{};st=st||{layout:"stack",panels:[{type:"terminal"}]};$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length)await addPanel("terminal");applyStackVisibility();renderDockTabs()}
+async function restorePanels(){let st;try{st=JSON.parse(localStorage.getItem("crowe-workspace-panels")||"null")}catch{};st=st||{layout:"stack",panels:[{type:"terminal"}]};$("panel-layout").value=st.layout||"stack";panelDeck.className="panel-deck "+$("panel-layout").value;for(const p of(st.panels||[]))await addPanel(p.type,p);if(!panels.length&&!window.crowe?.mobile)await addPanel("terminal");applyStackVisibility();renderDockTabs()}
 
 // ── Voice input and TTS ──
 let recognition=null;
@@ -2782,6 +2519,7 @@ async function renderCompanion(){
         const seen = d.lastSeen ? new Date(d.lastSeen).toLocaleString() : "never used";
         return `<div class="key-provider companion-device">
           <div class="companion-device-copy"><b>${esc(d.name)}</b><br><span class="said companion-last-used">last used ${esc(seen)}</span></div>
+          <label class="companion-terminal" title="Lets this device watch and type in this computer's terminals and open shells of its own. It can run any command as you."><input type="checkbox" class="companion-terminal-grant" data-id="${d.id}"${d.terminal ? " checked" : ""}> Terminal</label>
           <button class="ghost sm companion-revoke" data-id="${d.id}">Revoke</button></div>`;
       }).join(""));
     }
@@ -2816,6 +2554,14 @@ async function renderCompanion(){
     const host = $("companion-qr");
     if (host && r && r.svg) host.innerHTML = r.svg;
   };
+  body.querySelectorAll(".companion-terminal-grant").forEach((box) => {
+    box.onchange = async () => {
+      const name = (box.closest(".key-provider")?.querySelector("b") || {}).textContent || "this device";
+      if (box.checked && !confirm(`Give ${name} terminal access?\n\nIt can open shells on this computer and type in its terminals, running any command as you. Turn it off here at any time.`)) { box.checked = false; return; }
+      const r = await window.crowe.companion.setTerminal(box.dataset.id, box.checked);
+      if (r && r.error) { alert(r.error); box.checked = !box.checked; }
+    };
+  });
   body.querySelectorAll(".companion-revoke").forEach((b) => {
     b.onclick = async () => {
       const row = b.closest(".key-provider");
@@ -2864,6 +2610,8 @@ function renderSpacePicker() {
   const box = $("cfg-spaces"); if (!box) return;
   box.innerHTML = "";
   for (const [id, sp] of Object.entries(SPACES)) {
+    if (!availableSpaceIds().includes(id)) continue;
+    if (window.crowe?.mobile && !defaultSpaceIds().includes(id)) continue;
     const fixed = id === "chat"; // the thread every other space funnels into
     const row = document.createElement("label");
     row.className = "chk";
@@ -2892,6 +2640,7 @@ $("settings-btn").addEventListener("click", async () => {
   $("cfg-approvals").value = c.approvals || "high-risk";
   if ($("cfg-pace")) $("cfg-pace").value = c.textPace || TEXT_PACE;
   $("cfg-verifier").checked = c.verifier !== false;
+  if ($("cfg-phone-gates")) $("cfg-phone-gates").checked = c.phoneGates !== false;
   $("cfg-budget").value = Number(c.turnBudgetUsd ?? 2);
   $("cfg-mcp").value = c.mcpServers && Object.keys(c.mcpServers).length ? JSON.stringify(c.mcpServers, null, 2) : "";
   const live = (c.mcp || []).map((s) => `${s.name} (${s.tools} tools)`).join(", ");
@@ -2960,6 +2709,7 @@ $("cfg-save").addEventListener("click", async () => {
   const budget = Number($("cfg-budget").value);
   const patch = { baseUrl: $("cfg-base").value.trim(), cwd: $("cfg-cwd").value.trim(), autoApprove: $("cfg-auto").checked,
     approvals: $("cfg-approvals").value, verifier: $("cfg-verifier").checked,
+    ...($("cfg-phone-gates") ? { phoneGates: $("cfg-phone-gates").checked } : {}),
     turnBudgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 2 };
   if ($("cfg-pace")) { patch.textPace = $("cfg-pace").value; setTextPace(patch.textPace); }
   if ($("cfg-repos-root") && $("cfg-repos-root").value.trim()) patch.reposRoot = $("cfg-repos-root").value.trim();
@@ -3089,17 +2839,43 @@ function termTheme() {
 }
 
 function applyTheme(dark) {
+  // Instrument is a dark look, so asking for light hands back to Editorial.
+  if (!dark && document.body.dataset.look === "instrument") applyLook("editorial", { keepTheme: true });
   document.body.classList.toggle("dark", dark);
   const themeLabel = $("theme-btn").querySelector(".side-foot-label");
   if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
-  try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {}
+  // Instrument forces dark; that is not the operator choosing dark for Editorial.
+  if (document.body.dataset.look !== "instrument") { try { localStorage.setItem("crowe-theme", dark ? "dark" : "light"); } catch {} }
   const theme = termTheme();
   terminalPanels.forEach((t) => { try { t.term.options.theme = theme; } catch {} });
   if (window.CroweMark) CroweMark.reseed();  // re-anchor the living tokens to the new theme's family
 }
 $("theme-btn").addEventListener("click", () => applyTheme(!document.body.classList.contains("dark")));
+// The look (look.css): Editorial follows the theme, Instrument is dark glass.
+// Stored apart from the theme so leaving Instrument restores the last theme.
+function applyLook(look, { keepTheme = false } = {}) {
+  look = look === "instrument" ? "instrument" : "editorial";
+  document.body.dataset.look = look;
+  try { localStorage.setItem("crowe-look", look); } catch {}
+  if ($("cfg-look")) $("cfg-look").value = look;
+  if (keepTheme) return;
+  let stored = "dark";
+  try { stored = localStorage.getItem("crowe-theme") || "dark"; } catch {}
+  const dark = look === "instrument" || stored !== "light";
+  document.body.classList.toggle("dark", dark);
+  const theme = termTheme();
+  terminalPanels.forEach((t) => { try { t.term.options.theme = theme; } catch {} });
+  if (window.CroweMark) CroweMark.reseed();
+  const themeLabel = $("theme-btn").querySelector(".side-foot-label");
+  if (themeLabel) themeLabel.textContent = dark ? "Light" : "Dark";
+}
+if ($("cfg-look")) $("cfg-look").addEventListener("change", (e) => applyLook(e.target.value));
+
 // Dark console is the canonical app surface; light remains one click away.
-try { applyTheme(localStorage.getItem("crowe-theme") !== "light"); } catch { applyTheme(true); }
+try {
+  applyLook(localStorage.getItem("crowe-look"), { keepTheme: true });
+  applyTheme(document.body.dataset.look === "instrument" || localStorage.getItem("crowe-theme") !== "light");
+} catch { applyTheme(true); }
 
 // ── Sidebar collapse ──
 // Terminals are sized to their container, so the deck has to be refitted once
@@ -3729,10 +3505,24 @@ let PROFILE = new Set(Object.keys(SPACES));
 // Main deliberately ships the configured names through unchecked, so a typo or
 // a space deleted in a later version lands here and is dropped, rather than
 // putting a dead id into PROFILE and hiding a rail button that has no owner.
-function defaultSpaceIds() {
-  const all = Object.keys(SPACES);
+//
+// Cultivation is opt-in: it is the Mycology edition's space, so it exists only
+// on a build that declares it. Everywhere else it is not offered at all, not in
+// the default, the picker or the palette, and a saved list naming it from an
+// earlier version is read without it. The code stays for the edition.
+const OPT_IN_SPACES = new Set(["cultivation"]);
+function declaredSpaces() {
   const declared = window.crowe && window.crowe.installSpaces;
-  if (!Array.isArray(declared) || !declared.length) return all;
+  return Array.isArray(declared) && declared.length ? declared : null;
+}
+function availableSpaceIds() {
+  const declared = declaredSpaces();
+  return Object.keys(SPACES).filter((id) => !OPT_IN_SPACES.has(id) || (declared && declared.includes(id)));
+}
+function defaultSpaceIds() {
+  const all = availableSpaceIds();
+  const declared = declaredSpaces();
+  if (!declared) return all;
   const wanted = new Set(declared);
   return all.filter((id) => id === "chat" || wanted.has(id));
 }
@@ -3743,7 +3533,9 @@ function applySpaceProfile() {
     const raw = localStorage.getItem("crowe-spaces");
     if (raw) { const parsed = JSON.parse(raw); if (Array.isArray(parsed) && parsed.length) ids = parsed; }
   } catch {}
-  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => SPACES[id])]) : new Set(defaultSpaceIds());
+  const available = availableSpaceIds();
+  PROFILE = ids ? new Set(["chat", ...ids.filter((id) => available.includes(id))]) : new Set(defaultSpaceIds());
+  if (window.crowe?.mobile) PROFILE = new Set([...PROFILE].filter((id) => defaultSpaceIds().includes(id)));
   for (const [id, sp] of Object.entries(SPACES)) {
     const on = PROFILE.has(id);
     const btn = document.querySelector(`#spaces .seg-btn[data-space="${id}"]`);
@@ -3777,7 +3569,7 @@ function applySpaceProfile() {
 // and the next launch falls back to the build's two and silently discards what
 // they asked for. Measuring against the default makes both directions storable.
 function setSpaceProfile(ids) {
-  const all = Object.keys(SPACES);
+  const all = availableSpaceIds();
   const keep = all.filter((id) => id === "chat" || ids.includes(id));
   // Both are built by filtering `all`, so they are in registry order and can be
   // compared as strings rather than as sets.
@@ -4981,6 +4773,7 @@ function followAgent(ev) {
   switchPane(pane);
   if (pane === "git" && target.path && ev.type !== "tool_call") showDiff({ path: target.path, staged: false });
 }
+window.crowe.agent.onEvent((ev) => { try { handleGateEvent(ev); } catch {} });
 window.crowe.agent.onEvent((ev) => { try { followAgent(ev); } catch (e) { appendOutput("activity view: " + (e && e.message)); } });
 
 window.crowe.agent.onEvent((ev) => {
@@ -5176,13 +4969,16 @@ function showSignInPrompt() {
   clearWelcome();
   const b = addAssistant();
   b.innerHTML = '<p class="said"></p>';
-  b.querySelector(".said").textContent = window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
+  // The phone does not sell plans, so it does not name them either.
+  b.querySelector(".said").textContent = document.body.classList.contains("mobile")
+    ? "Sign in with your Crowe ID to start."
+    : window.CroweFirstRun ? window.CroweFirstRun.SIGN_IN_COPY : "Sign in with your Crowe ID to start. The free tier needs no card and no keys: CroweLM Flash, twenty turns a day, the full tool loop. Personal, Pro and Max open the whole CroweLM table.";
   const btn = document.createElement("button"); btn.className = "primary"; btn.textContent = "Sign in with Crowe ID";
   btn.classList.add("signin-prompt-action"); btn.addEventListener("click", doSignIn);
   b.appendChild(btn); scrollBottom();
 }
 $("signin").addEventListener("click", doSignIn);
-$("userbadge").addEventListener("click", async () => { await window.crowe.auth.logout(); await refreshAuth(); });
+$("userbadge").addEventListener("click", () => window.dispatchEvent(new CustomEvent("crowe:account")));
 
 // ── First-run onboarding ──
 // Shown once, on a machine with no Crowe ID session and no onboarded flag.
@@ -5196,7 +4992,8 @@ async function maybeShowOnboarding(cfg) {
     '<p class="said"><strong>Welcome to Crowe Logic.</strong> This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.</p>',
     '<p class="said">Three quick steps to your first task:</p>',
     '<ol class="said onboarding-steps">',
-    "<li>" + esc(window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
+    "<li>" + esc(document.body.classList.contains("mobile") ? "Sign in with your Crowe ID."
+      : window.CroweFirstRun ? window.CroweFirstRun.ONBOARDING_STEP_SIGN_IN : "Sign in with your Crowe ID. The free tier needs no card and no keys; Personal, Pro and Max open the whole CroweLM table.") + "</li>",
     "<li>Open the project folder the agent should work in (the button below, or Cmd+O).</li>",
     '<li>Give the agent a task. Try <em>"summarize this repo"</em> or <em>"run the tests and fix what fails"</em>.</li>',
     "</ol>",
@@ -5336,8 +5133,6 @@ function dismissLaunch() {
   // rail, and a notification click opens the room it came from.
   window.crowe.rooms.onChanged(() => refreshRoomListSoon());
   window.crowe.rooms.onOpen(({ id } = {}) => { if (id) openRoomPanel(id); });
-  // The dock's agent launcher wears the live mark rather than an <img>, so it takes the theme's ink.
-  document.querySelectorAll("#glass-launcher .cl-mark").forEach((el) => { if (window.CroweMark) CroweMark.mount(el, { state: "rest" }); });
   try { setAutonomyBadge(localStorage.getItem("crowe-tier") || "edit"); } catch {}
   const c = await refreshStatus(); loadTree();
   setAutonomyBadge((c && c.autonomy) || "edit");

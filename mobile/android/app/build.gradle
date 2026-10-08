@@ -37,8 +37,11 @@ def croweStorePass = croweKeystoreProps['storePassword'] ?: System.getenv('CROWE
 def croweKeyAlias = croweKeystoreProps['keyAlias'] ?: System.getenv('CROWE_ANDROID_KEY_ALIAS')
 def croweKeyPass = croweKeystoreProps['keyPassword'] ?: System.getenv('CROWE_ANDROID_KEY_PASSWORD')
 def croweCanSign = croweStorePath && file(croweStorePath).exists() && croweStorePass && croweKeyAlias && croweKeyPass
-if (!croweCanSign && croweStorePath) {
-    logger.warn("crowe: a keystore was named but is incomplete or missing at ${croweStorePath}; the release build will be unsigned")
+if (!croweCanSign && (croweStorePath || croweStorePass || croweKeyAlias || croweKeyPass)) {
+    throw new GradleException("Crowe Logic signing is incomplete. Supply all four signing settings and an existing keystore.")
+}
+if (System.getenv('CROWE_REQUIRE_ANDROID_SIGNING') == '1' && !croweCanSign) {
+    throw new GradleException("This release requires signing, but no complete signing configuration was supplied.")
 }
 
 android {

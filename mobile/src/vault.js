@@ -48,7 +48,16 @@
       try { const { value } = await Vault.get({ key }); return value || (migrated.has(key) ? null : await fromPrefs(key)); }
       catch { migrated.delete(key); return fromPrefs(key); }
     },
-    async set(key, value) {
+    async set(key, value, { strict = false } = {}) {
+      // Sign-out must clear the actual Keychain record and any older fallback.
+      // A Preferences-only write could otherwise report success, then expose
+      // the old Keychain session when the app is opened again.
+      if (strict) {
+        await Vault.set({ key, value });
+        if (Preferences) await Preferences.remove({ key });
+        migrated.add(key);
+        return;
+      }
       try { await Vault.set({ key, value }); migrated.add(key); }
       catch { migrated.delete(key); if (Preferences) await Preferences.set({ key, value }); else throw new Error("no store accepted the write"); }
     },

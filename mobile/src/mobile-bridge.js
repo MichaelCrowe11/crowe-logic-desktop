@@ -70,10 +70,10 @@
         return raw ? JSON.parse(raw) : null;
       } catch { return null; }
     },
-    async set(key, value) {
+    async set(key, value, options) {
       const json = JSON.stringify(value);
       try {
-        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.set(key, json); return true; }
+        if (window.croweVault && window.croweVault.handles(key)) { await window.croweVault.set(key, json, options); return true; }
         if (Preferences) await Preferences.set({ key, value: json });
         else localStorage.setItem("crowe:" + key, json);
         return true;
@@ -103,7 +103,17 @@
     autonomy: "edit",
     autoApprove: false,
     approvals: "high-risk",
-    textPace: "reading",      // a phone in a hand reads along; the desktop defaults to brisk
+    /* Brisk, as the desktop. 1.0 shipped "reading" here on the theory that a
+       phone in a hand reads along; on a real turn that pace ran to 150 s and
+       the founder, watching a grower wait, called it too slow. Reading stays
+       a choice in Settings. */
+    textPace: "brisk",
+    /* The developer chrome: which expert answered, tool calls, token counts and
+       cost under each reply, and the strip above the tabs. Off for a grower;
+       one switch in Settings (mobile-ui.js) turns it on. The desktop renderer
+       is untouched: the phone toggles a class on <body> and mobile.css does
+       the hiding. */
+    showUsage: false,
     verifier: false,          // the verifier is a second full turn; too expensive on cellular by default
     turnBudgetUsd: 2,
     telemetry: true,
@@ -146,6 +156,7 @@
       baseUrl: config.baseUrl, hasToken: Boolean(config.token), cwd: "",
       autoApprove: Boolean(config.autoApprove), autonomy: config.autonomy,
       approvals: config.approvals, textPace: config.textPace, verifier: Boolean(config.verifier),
+      showUsage: Boolean(config.showUsage),
       turnBudgetUsd: config.turnBudgetUsd, telemetry: Boolean(config.telemetry),
       onboarded: Boolean(config.onboarded), mcp: [], ptyAvailable: false,
       version: BUILD.version, platform: PLATFORM, mobile: true,
@@ -178,7 +189,12 @@
   }
   async function nativePost(url, headers, body) {
     if (!CapHttp) return null;
-    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text" });
+    const readTimeout = /\/(sessions|draft)\//.test(url) ? 10000 : 650000;
+    // Capacitor iOS uses connectTimeout as URLRequest.timeoutInterval, even
+    // while waiting for the reply. Keep its timeout at the response budget;
+    // Android has separate connect and read limits.
+    const connectTimeout = PLATFORM === "ios" ? readTimeout : 5000;
+    const res = await CapHttp.request({ url, method: "POST", headers, data: body, responseType: "text", connectTimeout, readTimeout });
     const text = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? "");
     return { ok: res.status >= 200 && res.status < 300, status: res.status, text };
   }
@@ -229,6 +245,7 @@
   const PHONE_FILE_MAX = 512 * 1024;
   const phoneListeners = new Set();
   const phoneNotify = () => { for (const fn of phoneListeners) { try { fn(); } catch {} } };
+  const publicCache = new Map();               // path -> { data, at }, see crowePhone.publicJson
   window.crowePhone = {
     max: PHONE_FILE_MAX,
     // For phone-only scripts that call the gateway themselves (speak.js): the
@@ -259,6 +276,36 @@
       return { ok: true, name: key };
     },
     images() { return [...phoneImages.entries()].map(([name, p]) => ({ name, size: p.dataUrl.length, at: p.at })); },
+    /* A public GET on the gateway, parsed, cached for a minute, never thrown.
+       The Founding Growers roster reads through this; a pane that fails quietly
+       needs a call that does the same. fetch first, native when CORS refuses,
+       and null when neither answers. */
+    async publicJson(path, ttlMs = 60000) {
+      await ready;
+      const key = String(path || "");
+      const hit = publicCache.get(key);
+      if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+      const url = `${base()}${key}`;
+      const headers = { Accept: "application/json" };
+      let text = null;
+      try {
+        const r = await fetch(url, { headers });
+        if (!r.ok) return hit ? hit.data : null;
+        text = await r.text();
+      } catch (e) {
+        if (!corsBlocked(e) || !CapHttp) return hit ? hit.data : null;
+        try {
+          const r = await CapHttp.request({ url, method: "GET", headers, responseType: "text" });
+          if (r.status < 200 || r.status >= 300) return hit ? hit.data : null;
+          text = typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? null);
+        } catch { return hit ? hit.data : null; }
+      }
+      try {
+        const data = JSON.parse(text);
+        publicCache.set(key, { data, at: Date.now() });
+        return data;
+      } catch { return hit ? hit.data : null; }
+    },
     async share(name) {
       const f = phoneFiles.get(String(name || ""));
       if (!f) return { error: "no such file" };
@@ -331,6 +378,20 @@
   }
   window.__croweNeedsKeyboard = needsKeyboard;
 
+  /* One question, asked the same way everywhere a person stands between the
+     agent and a consequence. mobile-ui.js draws it as a sheet that names the
+     machine, the tier and the exact text; without the UI (tests, a desktop
+     browser) it degrades to the system confirm with the same words. */
+  function dismissApprovals() { try { window.__croweApproveDismiss && window.__croweApproveDismiss(); } catch { /* no sheet UI */ } }
+
+  async function approve(spec) {
+    if (typeof window.__croweApprove === "function") {
+      try { return Boolean(await window.__croweApprove(spec)); } catch { /* fall through to the plain prompt */ }
+    }
+    return window.confirm([spec.title, spec.reason, spec.detail, spec.question].filter(Boolean).join("\n\n"));
+  }
+  const machineName = () => { try { return new URL(remoteBase()).hostname.split(".")[0]; } catch { return "your computer"; } };
+
   function persistenceRisk(text) {
     const s = String(text || "");
     for (const [re, why] of PERSISTENCE) if (re.test(s)) return why;
@@ -359,11 +420,23 @@
     if (!r) return { error: "the remote call needs the installed app" };
     let data = null;
     try { data = JSON.parse(r.text || "null"); } catch { /* not json — reported below */ }
-    if (r.status === 401) return { error: "the machine rejected this phone's token" };
-    if (r.status === 404 && path !== "/health") return { error: `the machine has no ${path} endpoint` };
-    if (!r.ok) return { error: (data && data.detail) || `${timeoutNote || "remote call"} failed (HTTP ${r.status})` };
+    if (r.status === 401) return { error: "the machine rejected this phone's token", status: 401 };
+    if (r.status === 404 && path !== "/health") return { error: `the machine has no ${path} endpoint. Update the desktop companion to use shared terminals.`, status: 404 };
+    if (!r.ok) return { error: (data && data.detail) || `${timeoutNote || "remote call"} failed (HTTP ${r.status})`, current: data?.current, status: r.status };
     return { ok: true, data };
   }
+
+  // The phone terminal uses the same paired native HTTP transport. It is a
+  // person typing, not the agent acting, so the agent's autonomy tier does not
+  // gate it: the desktop's per-device Terminal access grant does, host side.
+  window.croweMirrorTransport = {
+    async call(route, body = {}) {
+      await ready;
+      if (!/^\/(sessions\/(list|poll|open|close|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
+      return remoteCall(route, body, "session connection");
+    },
+    storage: store,
+  };
 
   /* Pairing by link, which is how a person who is not the author of this app
      will ever do it. Typing a tailnet address and a 48-character token on a
@@ -392,6 +465,30 @@
       return note;
     } finally { takingIntent = false; }
   }
+  /* Where a pairing may point. The token rides every request as a bearer header
+     and the requests are shell commands, so cleartext is allowed only where the
+     network itself is private: the tailnet (WireGuard underneath), the LAN, and
+     .local. Anything else must be https. Parsed with URL rather than a regex so
+     "http://100.64.0.1@evil.example" is judged by its real host, and the host
+     — not the raw string — is what the confirm shows. */
+  function pairAddress(raw) {
+    let u;
+    try { u = new URL(String(raw || "").trim()); } catch { return { error: "that is not a web address" }; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "the address needs http:// or https://" };
+    if (u.username || u.password) return { error: "a pairing address cannot carry a user name" };
+    const host = u.hostname.toLowerCase();
+    const ip = host.split(".").map(Number);
+    const v4 = ip.length === 4 && ip.every((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+    const privateNet = host.endsWith(".ts.net") || host.endsWith(".local") || host === "localhost" ||
+      (v4 && (ip[0] === 10 || ip[0] === 127 || (ip[0] === 192 && ip[1] === 168) ||
+              (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31) || (ip[0] === 100 && ip[1] >= 64 && ip[1] <= 127)));
+    if (u.protocol === "http:" && !privateNet) {
+      return { error: `${host} is on the open internet, so pairing needs https. Tailscale and home-network addresses may use http.` };
+    }
+    return { url: `${u.protocol}//${u.host}`, host: u.host };
+  }
+  window.__crowePairAddress = pairAddress;
+
   function pairFromUrl(rawUrl) {
     const url = String(rawUrl || "");
     if (!/^com\.crowelogic\.mobile:\/\/pair\b/i.test(url)) return false;
@@ -401,14 +498,17 @@
       host = String(q.get("url") || "").trim().replace(/\/$/, "");
       token = String(q.get("token") || "");
     } catch { return false; }
-    if (!/^https?:\/\//i.test(host)) return false;
+    const where = pairAddress(host);
     (async () => {
       await ready;
-      const ok = window.confirm(
-        `Pair this phone with ${host}?\n\n` +
-        "It will be able to read files, write files and run shell commands there, " +
-        "as the tier you choose allows.\n\nOnly continue if you started this."
-      );
+      if (where.error) { window.alert(`This pairing code was not used: ${where.error}`); return; }
+      host = where.url;
+      const ok = await approve({
+        kind: "pair", title: `Pair with ${where.host}?`,
+        reason: "This phone will be able to read files, write files and run commands there, as far as the tier you choose allows. The computer can revoke it at any time.",
+        detail: where.url, question: "Only continue if you started this from your own computer.",
+        confirm: "Pair this phone",
+      });
       if (!ok) return;
       await saveConfig({ remoteUrl: host, remoteToken: token });
       announceRemote();
@@ -435,7 +535,22 @@
        read and cleared here on launch and on every return to the foreground,
        then handed to the UI as a crowe:intent event. Two readers race on a cold
        start (this one and the appStateChange below), so the read is a take. */
-    Promise.resolve(App.addListener("appStateChange", (st) => { if (st && st.isActive) takePendingIntent(); })).catch(() => {});
+    Promise.resolve(App.addListener("appStateChange", (st) => {
+      if (!(st && st.isActive)) return;
+      takePendingIntent();
+      /* Back from Stripe. The webhook on the control plane stamps the tier on the
+         account when payment lands; a refreshed token carries it. Once per
+         opened checkout, and only within an hour of opening it, so an app that
+         merely changed windows does not hit the token endpoint every time. */
+      if (checkoutOpenedAt && Date.now() - checkoutOpenedAt < 3600e3) {
+        checkoutOpenedAt = 0;
+        refreshToken().then(() => {
+          const u = currentUser();
+          const tier = u ? String(u.tier || "") : "";
+          try { window.dispatchEvent(new CustomEvent("crowe:plan", { detail: { tier, paid: PAID_TIERS.includes(tier.toLowerCase()) } })); } catch { /* no window */ }
+        }).catch(() => {});
+      }
+    })).catch(() => {});
     ready.then(() => takePendingIntent()).catch(() => {});
     if (App.getLaunchUrl) {
       Promise.resolve(App.getLaunchUrl()).then((r) => { if (r && r.url) pairFromUrl(r.url); }).catch(() => {});
@@ -486,6 +601,29 @@
   // scripts/test-plan.js compares all three: a shorter list here would tell a
   // paying account it is free.
   const PAID_TIERS = ["byok", "personal", "pro", "team", "max", "scale", "studio", "business", "enterprise"];
+  // The estate's one ladder. Same Worker as main.js and web-bridge.js.
+  const CHECKOUT_URL = "https://crowe-checkout.yellow-block-3adc.workers.dev";
+  /* Whether this install may send a buyer out to the web. The United States
+     App Store storefront may, since the May 2025 Epic v. Apple order; no other
+     storefront is claimed here, and Android is not, because Play's billing
+     rules are Google's own and a wrong answer is a rejection or a pulled
+     listing. The storefront comes from StoreKit through CroweStore, never from
+     the locale: an en-US phone can buy from any storefront. No plugin, no
+     storefront, or an error all answer no, so a doubtful install refuses
+     rather than sells. The UI asks this before it draws any upgrade button or
+     web price, not only on tap. */
+  async function externalPurchaseAllowed() {
+    if (!(CAP && CAP.getPlatform && CAP.getPlatform() === "ios")) return false;
+    const store = plugin("CroweStore");
+    if (!store || !store.storefront) return false;
+    try {
+      const r = await store.storefront();
+      return String((r && r.countryCode) || "").toUpperCase() === "USA";
+    } catch { return false; }
+  }
+  // Set when Stripe was opened in the browser; the next return to the
+  // foreground refreshes the token so a paid tier shows without a sign-out.
+  let checkoutOpenedAt = 0;
   function currentUser() {
     if (!config.token) return null;
     const p = decodeJwt(config.token);
@@ -526,26 +664,29 @@
       return { error: String(e).slice(0, 200) };
     }
   }
-  let refreshing = null;
+  let refreshing = null, authGeneration = 0;
   async function refreshToken() {
     if (!config.refreshToken) return null;
     // One refresh in flight at a time. Two 401s landing together used to send
     // two refreshes, and the second one redeemed a rotated token that the first
     // had already spent — signing the user out mid-turn.
     if (refreshing) return refreshing;
-    refreshing = (async () => {
-      const d = await tokenRequest({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: config.refreshToken });
-      if (d && d.access_token) {
+    const generation = authGeneration, refresh = config.refreshToken;
+    const attempt = (async () => {
+      const d = await tokenRequest({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
+      if (d && d.access_token && generation === authGeneration && config.refreshToken === refresh) {
         await saveConfig({ token: d.access_token, refreshToken: d.refresh_token || config.refreshToken });
         return d.access_token;
       }
       return null;
     })();
-    try { return await refreshing; } finally { refreshing = null; }
+    refreshing = attempt;
+    try { return await attempt; } finally { if (refreshing === attempt) refreshing = null; }
   }
 
   async function signIn() {
     await ready;
+    const generation = authGeneration;
     const App = plugin("App"), Browser = plugin("Browser");
     if (!NATIVE || !App || !Browser) {
       return { error: "Sign-in needs the installed app. In a browser, paste a Crowe ID token in Settings." };
@@ -582,6 +723,7 @@
         if (!code) return finish({ error: params.get("error_description") || params.get("error") || "sign-in was cancelled" });
         const d = await tokenRequest({ grant_type: "authorization_code", code, redirect_uri: redirect,
                                        client_id: CROWE_ID_CLIENT, code_verifier: verifier });
+        if (generation !== authGeneration) return finish({ error: "Sign-in was cancelled by sign-out." });
         if (d && d.access_token) {
           await saveConfig({ token: d.access_token, refreshToken: d.refresh_token || "" });
           fetchCatalog();
@@ -606,13 +748,51 @@
       const url = `${base()}${route}`;
       const headers = { Authorization: `Bearer ${config.token}` };
       try {
-        const r = await fetch(url, { method, headers });
+        const r = await fetch(url, { method, headers, signal: AbortSignal.timeout(10000) });
         return { status: r.status, text: await r.text() };
       } catch (e) {
         if (!corsBlocked(e) || !CapHttp) throw e;
-        const r = await CapHttp.request({ url, method, headers, responseType: "text" });
+        const r = await CapHttp.request({ url, method, headers, responseType: "text", connectTimeout: 5000, readTimeout: 10000 });
         return { status: r.status, text: typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "") };
       }
+    };
+    try {
+      let res = await call();
+      if (res.status === 401 && await refreshToken()) res = await call();
+      let data = null; try { data = res.text ? JSON.parse(res.text) : null; } catch { data = null; }
+      return { status: res.status, data };
+    } catch { return { status: 0, data: null }; }
+  }
+
+  /* Authority gates: questions a run on the person's computer is asking, relayed
+     through gates.crowelogic.com (contract v1). The bearer is the Crowe ID access
+     token, so this phone and that computer see the same gates only when they are
+     signed in as the same person. Native HTTP first, so CORS never stands in the
+     way, with one 401 refresh like licensedFetch. Nothing here throws: a relay
+     that cannot be reached is {ok:false, status:0}, and the Home card says so. */
+  const GATES_DEFAULT = "https://gates.crowelogic.com";
+  function gatesBase() {
+    try {
+      const u = new URL(String(config.gatesUrl || "").trim());
+      const loopback = /^(127\.0\.0\.1|localhost)$/.test(u.hostname);
+      if (u.protocol === "https:" || (u.protocol === "http:" && loopback)) return u.origin + u.pathname.replace(/\/+$/, "");
+    } catch { /* default */ }
+    return GATES_DEFAULT;
+  }
+  async function gatesCall(method, route, payload) {
+    await ready;
+    if (!config.token) return { status: 401, data: null };
+    const call = async () => {
+      const url = `${gatesBase()}${route}`;
+      const headers = { Authorization: `Bearer ${config.token}` };
+      const data = payload ? JSON.stringify(payload) : undefined;
+      if (data) headers["Content-Type"] = "application/json";
+      if (CapHttp) {
+        const r = await CapHttp.request({ url, method, headers, data, responseType: "text" });
+        return { status: r.status, text: typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "") };
+      }
+      const r = await fetch(url, { method, headers, body: data });
+      return { status: r.status, text: await r.text() };
     };
     try {
       let res = await call();
@@ -668,7 +848,7 @@
     const handle = (payload) => {
       if (payload === "[DONE]") return;
       let d; try { d = JSON.parse(payload); } catch { return; }
-      if (d && d.error) { gatewayError = String(d.error.message || d.error); return; }
+      if (d && d.error) { gatewayError = d.error.type ? `${d.error.type}: ${d.error.message || ""}`.trim() : String(d.error.message || d.error); return; }
       const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
       const chunk = typeof delta.content === "string" ? delta.content : "";
       if (chunk) { content += chunk; if (onDelta) onDelta(chunk); }
@@ -821,18 +1001,12 @@
   const FREE_MODEL = "crowelm-flash";
   // Photos go here, whatever the words routed to. Same id the catalog serves.
   const VISION_MODEL = "crowelm-vision";
-  const PHOTO_DEFAULT_ASK = "Look at this photo. Is this contamination, and what should I do?";
+  const PHOTO_DEFAULT_ASK = "Describe this photo and explain the details relevant to my question.";
   const VISION_BRIEF = [
-    "A photo taken on this phone is attached to the user's message. Describe what is actually visible first:",
-    "the substrate or agar, the mycelium's color and texture, any discoloration, wet or slimy patches, pins or",
-    "fruit bodies. Then assess: healthy, or contamination and which kind (green Trichoderma, cobweb mold,",
-    "bacterial blotch or wet spot, black pin mold, yellow metabolite staining), where on the block or plate,",
-    "and how sure you are from this one image. Give the next action plainly: isolate, discard, or keep and",
-    "re-check, and when. Never guess past what the photo shows; say what a second, closer photo would settle.",
-    "Offer to log the finding with log_grow when the tier allows it.",
-    "Begin with exactly one line of the form REGIONS: [{\"label\": \"...\", \"x\": 0.1, \"y\": 0.2, \"w\": 0.3, \"h\": 0.2}] naming up to",
-    "four areas of the photo you examined, x y w h as fractions of the image width and height from the top left, then a",
-    "blank line, then the answer. The line drives the phone's display of what you looked at; never refer to it in the answer.",
+    "Describe what is actually visible in the attached photo. Follow the user's question, not an assumed industry or task.",
+    "Distinguish observation from inference, state uncertainty, and do not invent text or details that are not legible.",
+    'Begin with exactly one line REGIONS: [{"label":"...","x":0.1,"y":0.2,"w":0.3,"h":0.2}] naming up to four relevant areas.',
+    "Coordinates are fractions of image dimensions from the top left. Follow with a blank line and the answer; do not mention the display data.",
   ].join("\n");
   /* The REGIONS line is display data, not prose. It is lifted out of the
      stream before the transcript sees a character of it and handed to the UI
@@ -1117,8 +1291,8 @@
   // write. Plan and Read look at the log; Edit and Execute may add to it.
   const mayWrite = () => config.autonomy === "edit" || config.autonomy === "execute";
   function toolsForTurn() {
-    const tools = [READ_GROW, OPEN_URL];
-    if (mayWrite() && Object.keys(GROW.GROW_SCHEMA).length) tools.push(growToolSpec());
+    const tools = [OPEN_URL];
+
     /* The tier ladder means the same thing here as it does on the desktop, and
        it is the whole safety story for a shell you are carrying in a pocket:
          plan:     nothing on the machine, not even a read
@@ -1191,7 +1365,10 @@
          reached without a person seeing where it goes. */
       let host = url;
       try { host = new URL(url).host; } catch { /* shown in full below instead */ }
-      const ok = window.confirm(`Open ${host}?\n\n${url.slice(0, 300)}\n\nThe agent asked for this. Check the address if you did not expect it.`);
+      const ok = await approve({
+        kind: "open", title: `Open ${host}?`, reason: "The agent asked to open this page. Check the address if you did not expect it.",
+        detail: url.slice(0, 300), confirm: "Open page",
+      });
       if (!ok) return { text: `refused: the user declined to open ${host}`, status: "error" };
       const Browser = plugin("Browser");
       if (Browser) await Browser.open({ url }).catch(() => {});
@@ -1238,7 +1415,10 @@
         const command = String(args.command || "").trim();
         if (!command) return { text: "refused: no command given", status: "error" };
         const why = persistenceRisk(command);
-        if (why && !window.confirm(`This ${why}.\n\n${command.slice(0, 300)}\n\nRun it on ${remoteBase()}?`)) {
+        if (why && !(await approve({
+          kind: "run", danger: true, title: `Run this on ${machineName()}?`, reason: `This ${why}.`,
+          detail: command.slice(0, 600), machine: remoteBase(), tier: config.autonomy, confirm: "Run command",
+        }))) {
           return { text: `refused: the user declined a command that ${why}`, status: "error" };
         }
         const timeout = Math.max(1, Math.min(600, Number(args.timeout) || 60));
@@ -1265,7 +1445,10 @@
       const path = String(args.path || "");
       if (!path) return { text: "refused: no path given", status: "error" };
       const risk = persistenceRisk(path);
-      if (risk && !window.confirm(`Writing this file ${risk}.\n\n${path}\n\nWrite it on ${remoteBase()}?`)) {
+      if (risk && !(await approve({
+        kind: "write", danger: true, title: `Write this file on ${machineName()}?`, reason: `Writing it ${risk}.`,
+        detail: path, machine: remoteBase(), tier: config.autonomy, confirm: "Write file",
+      }))) {
         return { text: `refused: the user declined a write that ${risk}`, status: "error" };
       }
       const r = await remoteCall("/write_file", { path, content: String(args.content ?? "") }, "the write");
@@ -1321,11 +1504,9 @@
       attached,
       route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
       "",
-      "You also have the grower's own log (read_grow, and log_grow when the tier allows it) and open_url.",
-      "Answers about this farm's blocks, flushes, contamination, rooms, strains, recipes or",
-      "journal must come from read_grow, not from memory.",
+      "Use available tools only. Separate advice, proposed actions, executed actions, and verified results. Never claim a file changed or a command ran without its tool result.",
       "",
-      "Write for a small screen held in one hand, often in a grow room: short paragraphs, the answer first,",
+      "Write for a small screen held in one hand: short paragraphs, the answer first,",
       "no long tables, no ASCII diagrams. Give the number or the action before the reasoning.",
       route.expert && route.expert !== "operator" ? `You are answering as the ${route.expert} expert.` : "",
       user && user.email ? `The signed-in user is ${user.email}.` : "",
@@ -1348,6 +1529,41 @@
     }
     return out;
   }
+
+  // ─── What a failed turn says ───────────────────────────────────────────────
+  /* The founder watched a grower be shown the gateway's error dictionary when
+     the vision model was overloaded. Nobody standing at a rack can act on
+     `gateway: {"type":"overloaded_error",...}`. So every failure a turn can end
+     in is told in one plain sentence, in the app's voice, and the raw error goes
+     to the console and to Diagnostics, which is the surface a support reply
+     reads from. Three sentences, chosen by what the gateway said:
+
+       429                       the month's reading budget is spent
+       overloaded_error, 529     the upstream is busy; a moment fixes it
+       everything else           5xx, a broken stream, no network
+
+     Sentences the bridge itself wrote (not signed in, the plan gate, an empty
+     vision reply) are already in this voice and pass through untouched. */
+  const ERROR_COPY = {
+    budget: "This month's reading budget is used up. It resets on the first.",
+    busy: "The reader is busy. Try again in a moment.",
+    failed: "The reading did not come back. Try again.",
+  };
+  const RAW_ERROR_RE = /^(HTTP \d{3}\b|gateway( unreachable)?:|stream broke:|\s*[\[{])/i;
+  function errorKind(raw) {
+    const s = String(raw || "");
+    if (/^HTTP 429\b/.test(s) || /budget|quota/i.test(s) && /\b429\b/.test(s)) return "budget";
+    if (/overloaded|^HTTP 529\b/i.test(s)) return "busy";
+    return "failed";
+  }
+  function humanError(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return { text: ERROR_COPY.failed, kind: "failed", raw: s };
+    if (!RAW_ERROR_RE.test(s)) return { text: s, kind: "message", raw: s };
+    const kind = errorKind(s);
+    return { text: ERROR_COPY[kind], kind, raw: s };
+  }
+  window.__croweHumanError = humanError;
 
   // ─── The agent loop ────────────────────────────────────────────────────────
   const listeners = new Set();
@@ -1380,7 +1596,7 @@
         diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
       emit({ ...ev, agentId: id });
     };
-    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: (currentUser() || {}).email || "signed out" });
+    diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: currentUser() ? "signed in" : "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
     const budget = Number(config.turnBudgetUsd) > 0 ? Number(config.turnBudgetUsd) : 0;
     let text = "";
@@ -1470,10 +1686,15 @@
             send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });
             round -= 1; continue;
           }
-          const err = gate
-            ? `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`
-            : r.error;
-          send({ type: "error", text: err }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: err, text };
+          const said = gate
+            ? { text: `This Crowe ID has no plan that includes ${gate.model} (${gate.required} plan or higher). Sign in with an account that has a plan, or add one to this account.`, kind: "message", raw: r.error }
+            : humanError(r.error);
+          // The raw error lives in two places a person can read it from and
+          // one place a grower never sees it: the console, Diagnostics, and
+          // not the transcript.
+          if (said.kind !== "message") { try { console.error("[crowe] turn failed:", said.raw); } catch { /* no console */ } }
+          diag("run:error-raw", { kind: said.kind, raw: said.raw });
+          send({ type: "error", text: said.text, kind: said.kind }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: said.text, text };
         }
 
         if (r.content) {
@@ -1497,16 +1718,24 @@
           send({ type: "final", note: "answered" }); return { done: true, text };
         }
 
+        // Every call gets an id and every id gets an answer, even when Stop lands
+        // mid-round: a tool_call with no tool result is a conversation the
+        // provider rejects outright, which is how a stopped turn used to brick
+        // the ones after it.
+        calls.forEach((c, i) => { if (!c.id) c.id = `call_${round}_${i}_${Math.random().toString(36).slice(2, 8)}`; });
         convo.push({ role: "assistant", content: r.content || "", tool_calls: calls });
         for (const call of calls) {
-          if (run.aborted) break;
+          if (run.aborted) {
+            convo.push({ role: "tool", tool_call_id: call.id, name: call.function?.name || "", content: "cancelled: the user stopped the turn before this ran" });
+            continue;
+          }
           const name = call.function?.name || "";
           let args = {};
           try { args = JSON.parse(call.function?.arguments || "{}"); } catch { args = {}; }
           send({ type: "tool_call", name, args });
           const out = await execTool(name, args);
           send({ type: "tool_result", name, result: String(out.text).slice(0, TOOL_RESULT_MAX), status: out.status });
-          convo.push({ role: "tool", tool_call_id: call.id || name, name, content: String(out.text).slice(0, TOOL_RESULT_MAX) });
+          convo.push({ role: "tool", tool_call_id: call.id, name, content: String(out.text).slice(0, TOOL_RESULT_MAX) });
         }
       }
       send({ type: "final", note: `stopped after ${MAX_ROUNDS} rounds` });
@@ -1649,7 +1878,10 @@
         return;
       }
       const risky = persistenceRisk(command);
-      if (risky && !window.confirm(`This ${risky}.\n\n${command.slice(0, 300)}\n\nRun it?`)) {
+      if (risky && !(await approve({
+        kind: "run", danger: true, title: `Run this on ${machineName()}?`, reason: `This ${risky}.`,
+        detail: command.slice(0, 600), machine: remoteBase(), tier: config.autonomy, confirm: "Run command",
+      }))) {
         return write("cancelled", "term-console-note");
       }
       const head = needsKeyboard(command);
@@ -1766,7 +1998,7 @@
   const noop = () => () => {};
   window.crowe = promisify({
     // Every space ships on mobile; the phone chrome decides how they are reached.
-    installSpaces: null,
+    installSpaces: ["home", "chat", "projects"],
     /* Also the flag renderer.js branches on: it is the one part of the bridge
        that exists before any class is put on the body, so a panel deck mounting
        during init can still tell which shell it is in. */
@@ -1790,6 +2022,7 @@
 
     agent: {
       run: async (messages, id = "main", options = {}) => {
+        const generation = authGeneration;
         if (options && options.licensed) {
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };
@@ -1797,12 +2030,27 @@
         // A call with no messages answers, it does not reject: an unhandled
         // rejection is a console error in the WebView and a crash in Node.
         if (!Array.isArray(messages)) return { done: false, error: "nothing to send", text: "" };
-        const result = await runAgent(messages.slice(), String(id || "main"), options || {});
-        if (id === "main") { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
+        if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
+        // Saved before the turn, so a phone that iOS kills mid-reply still has
+        // the question when it comes back.
+        if (id === "main") { try { await persistSession(messages); } catch { /* not worth failing a turn over */ } }
+        if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
+        let result;
+        try {
+          result = await runAgent(messages.slice(), String(id || "main"), options || {});
+        } catch (e) {
+          const text = `This turn hit an error and stopped: ${String(e && e.message || e).slice(0, 200)}`;
+          diag("run:threw", text);
+          emit({ type: "error", text, agentId: String(id || "main") });
+          emit({ type: "final", note: "error", agentId: String(id || "main") });
+          result = { done: false, error: text, text: "" };
+        }
+        if (id === "main" && generation === authGeneration) { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
         return { done: Boolean(result.done), text: result.text || "", error: result.error };
       },
-      stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true }; },
-      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } return { ok: true, stopped: runs.size }; },
+      // A question about a turn that has stopped is answered "no" for it.
+      stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true, stopped: runs.size }; },
       onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
@@ -1810,7 +2058,46 @@
     intents: { take: takePendingIntent },
     auth: {
       login: signIn,
-      logout: async () => { await saveConfig({ refreshToken: "" }); config.token = ""; await store.set("config", config); return { ok: true }; },
+      /* Signing out leaves nothing the next person holding the phone could use:
+         the refresh token is revoked at Crowe ID (best effort; a phone offline
+         still forgets it locally), and the paired machine, provider keys,
+         conversations and diagnostics go with it. The grower's own records stay —
+         they are farm data, not account credentials. */
+      logout: async () => {
+        await ready;
+        authGeneration++; refreshing = null;
+        const refresh = config.refreshToken;
+        // Clear access before any network or storage wait. A late refresh or
+        // sign-in response must not resurrect this session.
+        config.token = ""; config.refreshToken = "";
+        config.remoteUrl = ""; config.remoteToken = ""; config.keys = {};
+        try { window.CroweLocalRooms?.stopAll(); } catch { /* clear account access even if a room cannot stop */ }
+        for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch {} }
+        dismissApprovals();
+        announceRemote();
+        await store.set("config", config, { strict: true });
+        if (refresh) {
+          const body = new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }).toString();
+          const url = `${CROWE_ID}/protocol/openid-connect/revoke`;
+          const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+          // Revocation is best effort. Offline sign-out must finish locally.
+          try {
+            const revoke = CapHttp
+              ? CapHttp.request({ url, method: "POST", headers, data: body, connectTimeout: 3000, readTimeout: 5000 })
+              : fetch(url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
+            Promise.resolve(revoke).catch(() => {});
+          } catch { /* a missing native network plugin must not prevent local sign-out */ }
+        }
+        for (const id of (await sessionIndex()).map((x) => x.id)) { try { await store.remove(`session:${id}`); } catch { /* gone */ } }
+        try { await store.remove("sessions"); await store.remove("diag"); } catch { /* gone */ }
+        diagBuf = null;
+        currentSession = null;
+        config.token = "";
+        const persisted = await store.set("config", config, { strict: true });
+        announceRemote();
+        if (!persisted) return { error: "Access is stopped, but this device could not save sign-out. Keep the app open and try Sign out again." };
+        return { ok: true };
+      },
       /* App Store guideline 5.1.1(v): an account a person can create in the app
          must be one they can delete from the app. The deletion itself lives on
          the Crowe ID account page (Keycloak's delete_account action), so the
@@ -1894,61 +2181,116 @@
         await saveConfig({ licenseWorkspaceId: workspaceId });
         return { ok: true, selectedWorkspaceId: workspaceId };
       },
-      billing: async () => {
-        const result = await licensedFetch("/api/billing/portal/self", "POST");
-        if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
-        let portal; try { portal = new URL(result.data.url); } catch { return { error: "Billing portal returned an unreadable URL" }; }
-        if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
-        const Browser = plugin("Browser");
-        if (Browser) await Browser.open({ url: portal.toString() });
-        else window.open(portal.toString(), "_blank", "noopener");
-        return { ok: true };
+      billing: async (options) => {
+        const generation = authGeneration;
+        const emailVerification = options?.emailVerification === true;
+        const result = emailVerification ? null : await licensedFetch("/api/billing/portal/self", "POST");
+        if (generation !== authGeneration) return { error: "Signed out before billing opened." };
+        const portal = emailVerification ? { url: window.CroweBillingPortal.EMAIL_LOGIN } : window.CroweBillingPortal.result(result);
+        if (portal.error) return portal;
+        try {
+          const Browser = plugin("Browser");
+          if (Browser) await Browser.open({ url: portal.url });
+          else window.open(portal.url, "_blank", "noopener");
+          return { ok: true };
+        } catch { return { error: "The billing browser could not be opened. Try again." }; }
       },
     },
 
-    /* The member's own plan, and why the phone cannot sell it.
+    /* The member's own plan, and the way up.
 
        Parity with the desktop bridge (scripts/test-mobile-bridge.js requires
-       every desktop method to exist here), but two of the four are stated
-       refusals rather than working calls, for two separate and both real
-       reasons:
+       every desktop method to exist here). plan and refresh are the token's
+       own claim. catalog reads the crowe-checkout Worker's ladder, the ONLY
+       source of a price this build shows; the Worker's allow-list carries the
+       phone's origin (app.crowelogic.com) since 2026-10-04, as the crowe-ai
+       Worker does.
 
-         · catalog — the checkout Worker answers with an Access-Control-Allow-
-           Origin allowlist naming crowelogic.com, not a wildcard. A fetch from
-           capacitor://localhost is refused by the browser after the request has
-           already been made. The desktop gets away with it by fetching from the
-           main process, where CORS does not apply, and the web is on the listed
-           origin. The phone is neither, so asking would fail silently and the
-           card would show "price at checkout" forever.
-
-         · checkout — selling a subscription to digital content inside an iOS or
-           Android app is the store's business, through its own purchase API.
-           Sending the buyer out to Stripe from in-app is the thing both review
-           teams reject for. `license.billing` above is a different case and
-           stays: managing a subscription that already exists is account
-           management, which both stores permit.
-
-       plan and refresh are the token's own claim, so they are real here. That
-       means the phone can say what tier this Crowe ID is on, and pick up a tier
-       bought elsewhere on the next refresh, which is the useful half. */
+       checkout opens Stripe in the system browser, not in the webview. Since
+       May 2025 an iOS app on the United States storefront may link out to buy
+       on the web without a commission or a mandated sheet (Epic v. Apple,
+       guideline 3.1.1 as amended); elsewhere, and on Android where Play's
+       rules differ, selling a digital subscription is the store's business
+       through its own purchase API, and the method refuses the way it did
+       before. The storefront is the one StoreKit reports (CroweStore), which
+       is what the US carve-out turns on; plan() carries it as buyHere so the
+       UI draws no upgrade button or web price where a sale may not happen.
+       The tier arrives on the next token refresh, which the foreground
+       listener forces when the app comes back after a checkout was opened. */
     billing: {
       plan: async () => {
         await ready;
         const u = currentUser();
         const tier = u ? String(u.tier || "") : "";
-        return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) };
+        // buyHere: whether this install may show a web upgrade at all.
+        return { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()), buyHere: await externalPurchaseAllowed() };
       },
-      catalog: async () => ({ error: "The plan list is not available in the phone app." }),
-      checkout: async () => ({
-        ok: false,
-        error: "Plans are not sold in the phone app. The plan on your Crowe ID reaches this phone on its next sign-in.",
-      }),
+      catalog: async () => {
+        let r;
+        try { r = await fetch(`${CHECKOUT_URL}/v1/catalog`, { headers: { accept: "application/json" } }); }
+        catch { return { error: "The plan list is not answering" }; }
+        if (!r.ok) return { error: `The plan list answered ${r.status}` };
+        const cat = await r.json().catch(() => null);
+        if (!cat || !Array.isArray(cat.ladder)) return { error: "The plan list is unreadable" };
+        return { ladder: cat.ladder };
+      },
+      checkout: async (slug) => {
+        await ready;
+        const u = currentUser();
+        if (!u || !u.email) return { ok: false, error: "Sign in with your Crowe ID first; the plan goes on that account." };
+        if (!(await externalPurchaseAllowed())) {
+          return { ok: false, error: "Plans are not sold in the phone app in your region. The plan on your Crowe ID reaches this phone on its next sign-in." };
+        }
+        const want = String(slug || "pro").toLowerCase();
+        if (!/^[a-z0-9-]{1,32}$/.test(want)) return { ok: false, error: "That plan is not one this app can open." };
+        let r;
+        try {
+          r = await fetch(`${CHECKOUT_URL}/v1/checkout`, {
+            method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ slug: want, email: u.email }),
+          });
+        } catch (e) { return { ok: false, error: "Checkout is not answering. Try again in a moment." }; }
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.url) return { ok: false, error: d.error || `Checkout answered ${r.status}` };
+        let url; try { url = new URL(d.url); } catch { return { ok: false, error: "Checkout returned an unreadable URL" }; }
+        // pay.crowelogic.com is the live account's Stripe custom domain; live
+        // sessions come back on it, not on checkout.stripe.com.
+        const stripeHost = /(^|\.)stripe\.com$/.test(url.hostname) || url.hostname === "pay.crowelogic.com";
+        if (url.protocol !== "https:" || !stripeHost) return { ok: false, error: "Checkout returned a URL that is not Stripe's" };
+        checkoutOpenedAt = Date.now();
+        const Browser = plugin("Browser");
+        if (Browser) await Browser.open({ url: url.href }).catch(() => {});
+        else window.open(url.href, "_blank", "noopener");
+        // The caller must not navigate the webview to it; opened is the result.
+        return { ok: true, opened: true };
+      },
       refresh: async () => {
         await ready;
         const t = await refreshToken();
         const u = currentUser();
         const tier = u ? String(u.tier || "") : "";
         return { ok: Boolean(t), plan: { email: u ? u.email : "", tier, known: Boolean(u), paid: PAID_TIERS.includes(tier.toLowerCase()) } };
+      },
+    },
+
+    /* Authority gates from the person's computer. decide() echoes back the
+       evidence_hash of the gate the person was shown; the relay refuses an
+       approval for anything else. Outcomes: ok (this answer won), 409 (already
+       answered, `gate` says how), 410 (expired). */
+    gates: {
+      list: async () => {
+        const r = await gatesCall("GET", "/v1/gates?status=pending");
+        const gates = r.status === 200 && r.data && Array.isArray(r.data.gates) ? r.data.gates : [];
+        return { ok: r.status === 200, status: r.status, gates, signedIn: r.status !== 401 };
+      },
+      decide: async (id, decision, evidence_hash) => {
+        const d = decision === "approve" ? "approve" : "deny";
+        const body = { decision: d, via: "phone" };
+        if (evidence_hash) body.evidence_hash = String(evidence_hash);
+        const r = await gatesCall("POST", `/v1/gates/${encodeURIComponent(String(id))}/decision`, body);
+        const data = r.data || {};
+        if (r.status === 200) return { ok: true, status: 200, gate: data.gate || data };
+        return { ok: false, status: r.status, error: data.error || (r.status ? "" : "unreachable"), gate: data.gate || null };
       },
     },
 
@@ -1960,8 +2302,12 @@
       status: async () => { await ready; return remoteStatus(); },
       pair: async ({ url, token } = {}) => {
         await ready;
-        const clean = String(url || "").trim().replace(/\/$/, "");
-        if (clean && !/^https?:\/\//i.test(clean)) return { error: "the address needs http:// or https://" };
+        let clean = String(url || "").trim().replace(/\/$/, "");
+        if (clean) {
+          const where = pairAddress(clean);
+          if (where.error) return { error: where.error };
+          clean = where.url;
+        }
         const patch = { remoteUrl: clean };
         // Same rule Settings uses for the Crowe ID token: blank means keep the
         // current one, so re-saving the address does not silently unpair.
@@ -1970,6 +2316,16 @@
         await saveConfig(patch);
         announceRemote();
         return { ok: true, ...(await remoteStatus()) };
+      },
+      // This phone's receipts from the paired machine: what it ran, read,
+      // wrote, and was refused. Read-only, and the machine filters to this
+      // device's own lines.
+      activity: async (limit = 30) => {
+        await ready;
+        if (!remoteBase()) return { error: "no machine is paired" };
+        const r = await remoteCall("/audit", { limit }, "activity");
+        if (r.error) return /no \/audit endpoint/.test(r.error) ? { error: "Update Crowe Logic on your computer to see its activity here.", outdated: true } : r;
+        return { ok: true, device: (r.data && r.data.device) || "", entries: (r.data && r.data.entries) || [] };
       },
       run: async (command, cwd) => {
         await ready;
@@ -2023,6 +2379,7 @@
       devices: async () => [],
       addDevice: async () => ({ error: "The desktop app mints device codes. This is the device that scans one." }),
       revokeDevice: async () => ({ error: "Revoke a device from the machine it was paired with." }),
+      setTerminal: async () => ({ error: "Grant terminal access on the machine this phone is paired with." }),
       audit: async () => [],
       pairSvg: async () => ({ error: "The desktop app draws the pairing code. This is the device that scans it." }),
       onEvent: () => noop(),
@@ -2036,9 +2393,10 @@
 
     pty: {
       start: () => ({ error: NO_SHELL() }),
-      input: () => {}, resize: () => {},
+      input: () => {}, reclaim: () => {}, resize: () => {},
       close: () => ({ ok: true }),
       onData: noop,
+      onEngine: noop,
     },
     fs: {
       list: () => ({ cwd: "", entries: [], error: NO_WORKSPACE() }),
@@ -2296,14 +2654,9 @@
     },
 
     operator: {
-      /* Every non-array key here is printed verbatim as a tile label in the
-         Operator Control panel — mountOperator() iterates the object rather
-         than owning a schema. On the desktop those keys are the machine's own
-         vocabulary (cwd, mcpServers) about a machine the user configured. On a
-         phone they were noise: three counters pinned to zero and an empty tile
-         labelled "cwd". So the phone reports in its own words, and only what
-         has a value here: the run state, the paired machine, and the tier.
-         agentIds/terminalIds stay for the "Active" lists the panel also reads. */
+      /* No panel reads this any more (Operator Control was removed); it stays
+         so the bridge keeps the desktop preload's shape, and stopAll is still
+         the one call that halts every run on the phone. */
       status: () => {
         const host = remoteBase().replace(/^https?:\/\//, "").replace(/:\d+$/, "");
         return {
@@ -2327,16 +2680,16 @@
 
      The workspace deck defaults to a terminal — reasonable on a workstation,
      and on a phone it opened the Panels tab onto a dead pane whose toolbar
-     offered to restart a shell that had never started. Operator Control is
-     what a phone actually wants there: what is running, and the button that
-     stops it.
+     offered to restart a shell that had never started. So the phone's deck
+     starts empty, and holds what the phone opens into it (a cloud browser,
+     a conversation).
 
      The rail defaults to open, which on a phone is a drawer across the app.
      Collapsing it here rather than from mobile-ui means it is never painted
      open and then shut in front of the user. */
   try {
     if (!localStorage.getItem("crowe-workspace-panels")) {
-      localStorage.setItem("crowe-workspace-panels", JSON.stringify({ layout: "stack", panels: [{ type: "operator" }] }));
+      localStorage.setItem("crowe-workspace-panels", JSON.stringify({ layout: "stack", panels: [] }));
     }
     if (!localStorage.getItem("crowe-sidebar")) localStorage.setItem("crowe-sidebar", "collapsed");
   } catch { /* a webview with storage disabled still boots, just without the defaults */ }

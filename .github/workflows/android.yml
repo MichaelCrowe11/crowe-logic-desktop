@@ -22,6 +22,9 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   bundle:
     runs-on: ubuntu-latest
@@ -54,6 +57,12 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      - name: Install verified bundle metadata reader
+        run: |
+          curl --fail --location --retry 3 https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar -o "$RUNNER_TEMP/bundletool.jar"
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum --check --strict
+          echo "BUNDLETOOL_JAR=$RUNNER_TEMP/bundletool.jar" >> "$GITHUB_ENV"
+
       # The www build runs from the repo root (build-www.js reads renderer/ and
       # mobile/src/), then Capacitor copies it into the Android project.
       - name: Install and build the web layer
@@ -68,6 +77,7 @@ jobs:
         run: |
           node -e 'const v=require("./package.json").version; console.log("version", v)'
           node scripts/sync-version.js --check
+          node --test ../scripts/test-mobile-release.js
 
       - name: Decode the upload keystore
         if: env.KS_B64 != ''
@@ -78,6 +88,7 @@ jobs:
       - name: Build the release bundle and APK
         working-directory: mobile/android
         env:
+          CROWE_REQUIRE_ANDROID_SIGNING: ${{ env.KS_B64 != '' && '1' || '0' }}
           CROWE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           CROWE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           CROWE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -86,20 +97,21 @@ jobs:
           ./gradlew --no-daemon bundleRelease assembleRelease
           ls -la app/build/outputs/bundle/release app/build/outputs/apk/release
 
-      # What Play will see: the versionCode and versionName inside the bundle,
-      # and whether the APK carries a signature. Printed rather than asserted so
-      # a signing gap reads as a warning here and a refusal at Play, not a
-      # mystery.
+      # Stale versions, invalid bundles and broken signatures fail the job.
+      # Without signing material, clearly label these as packaging evidence.
       - name: Inspect the outputs
         working-directory: mobile/android
         run: |
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          "$ANDROID_HOME"/build-tools/36.0.0/aapt dump badging "$APK" | grep -E "^package:|^application-label:" || true
-          "$ANDROID_HOME"/build-tools/36.0.0/apksigner verify --print-certs "$APK" 2>&1 | head -5 || echo "APK is unsigned (no keystore secrets)"
+          if [ -n "$KS_B64" ]; then
+            node ../scripts/verify-android-artifacts.js
+          else
+            node ../scripts/verify-android-artifacts.js --allow-unsigned
+            echo "Packaging only: these artifacts are not approved for distribution." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
-          name: crowe-logic-android
+          name: crowe-logic-android-${{ env.KS_B64 != '' && 'signed' || 'unsigned-packaging-only' }}
           path: |
             mobile/android/app/build/outputs/bundle/release/*.aab
             mobile/android/app/build/outputs/apk/release/*.apk

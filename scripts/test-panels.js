@@ -76,40 +76,18 @@ const PRELUDE = `
   window.__visible = () => [...panelDeck.querySelectorAll(".workspace-panel.stack-active")].length;
   window.__tabs = () => [...panelDeck.parentNode.querySelectorAll(".dock-tab.panel-tab")];
 
-  // Workbench helpers. __stubAgent swaps the bridge for a recorder so a run is
-  // deterministic and the synthesis prompt can be inspected; the real shim
-  // streams a scripted transcript that would make the assertions timing-bound.
-  window.__workbench = async () => {
-    const p = await addPanel("workbench");
-    return panelDeck.querySelector('[data-id="' + p.id + '"]');
-  };
-  window.__mode = (el, mode, branches) => {
-    el.querySelector(".awb-mode").value = mode;
-    if (branches) el.querySelector(".awb-branches").value = String(branches);
-    el.querySelector(".awb-mode").onchange();
-  };
-  window.__stubAgent = () => {
-    const calls = [];
-    window.crowe.agent.run = async (messages, id) => {
-      const content = messages[0].content;
-      const merge = /Merge the drafts/.test(content);
-      calls.push({ id, content, merge });
-      return { done: true, text: merge ? "MERGED" : "draft:" + id };
-    };
-    return calls;
-  };
   window.__settle = () => new Promise((r) => setTimeout(r, 400));
 
-  /* Workflow helpers. A workflow node is a full harness turn - it routes, calls
-     tools, can stop at an approval gate, and can fail - so a run is only worth
-     asserting on if the events are scripted. __stubAgentScript replaces onEvent
+  /* A turn is a full harness turn - it routes, calls tools, can stop at an
+     approval gate, and can fail - so a run is only worth asserting on if the
+     events are scripted. __stubAgentScript replaces onEvent
      as well as run, because the shim owns the listener list and what these tests
      are about is which surface's listener receives which event. An event may
      carry its own agentId to stand in for another agent on the same channel.
 
-     Both helpers hand back a restore. Leaving either behind is the same hazard
-     as a leftover space profile: every later test would run against a recorder
-     instead of the shim, or would mount this fixture as workflow zero. */
+     It hands back a restore. Leaving it behind is the same hazard as a
+     leftover space profile: every later test would run against a recorder
+     instead of the shim. */
   window.__stubAgentScript = (script, gapMs = 0) => {
     const priorRun = window.crowe.agent.run, priorOn = window.crowe.agent.onEvent;
     let listeners = [];
@@ -128,21 +106,6 @@ const PRELUDE = `
     };
     return () => { window.crowe.agent.run = priorRun; window.crowe.agent.onEvent = priorOn; };
   };
-  window.__workflowPanel = async (nodes, script) => {
-    const priorStore = localStorage.getItem("crowe-agent-workflows");
-    const unstub = window.__stubAgentScript(script);
-    localStorage.setItem("crowe-agent-workflows",
-      JSON.stringify([{ id: "wf-fixture", name: "Fixture", nodes, runs: [] }]));
-    const p = await addPanel("workflow");
-    const el = panelDeck.querySelector('[data-id="' + p.id + '"]');
-    el.__restore = () => {
-      unstub();
-      if (priorStore === null) localStorage.removeItem("crowe-agent-workflows");
-      else localStorage.setItem("crowe-agent-workflows", priorStore);
-    };
-    return el;
-  };
-
   // The space profile lives in localStorage, which survives the process. A run
   // that sets a profile and removes it again can still leave it on disk, because
   // Chromium flushes localStorage lazily and the harness calls app.exit as soon
@@ -163,10 +126,70 @@ const PRELUDE = `
     cultLane = "home";
     setSpace("chat");
   };
+  // Cultivation is opt-in: it exists only on a build that declares it, as the
+  // Mycology edition does. Tests about that space stand one up first.
+  window.__mycology = () => {
+    window.crowe.installSpaces = ["chat", "projects", "cultivation"];
+    applySpaceProfile();
+  };
   true;
 `;
 
 const tests = [
+  {
+    name: "terminal refusal renders its Workspace remedy",
+    body: `const real=window.crowe.pty; let p;
+      window.crowe.pty={...real,start:async()=>({ok:false,error:"Use the Workspace",remedy:{label:"Open workspace",url:"https://workspace.example.test"}}),close:async()=>({ok:true})};
+      try { p=await addPanel("terminal"); await new Promise(r=>setTimeout(r,100));
+        const b=terminalPanels.get(p.id).term.buffer.active; let text="";
+        for(let i=0;i<b.length;i++)text+=b.getLine(i)?.translateToString(true)||"";
+        return {reason:text.includes("Use the Workspace"),remedy:text.includes("workspace.example.test")};
+      }finally{if(p)closePanel(p.id);window.crowe.pty=real;}`,
+    expect: {reason:true,remedy:true},
+  },
+  {
+    name: "closing a panel before start completes closes the late shell generation",
+    body: `const real=window.crowe.pty;let finish;const closed=[];
+      window.crowe.pty={...real,start:()=>new Promise(r=>{finish=r}),close:async(id,generation)=>{closed.push({id,generation});return {ok:true}}};
+      try {const opening=addPanel("terminal",{id:"late-terminal"});closePanel("late-terminal");
+        finish({ok:true,id:"late-terminal",generation:"late-generation"});await opening;
+        return {closed:closed.some(x=>x.generation==="late-generation"),orphan:terminalPanels.has("late-terminal")};
+      }finally{window.crowe.pty=real;}`,
+    expect:{closed:true,orphan:false},
+  },
+  {
+    name: "late terminal start does not close a replacement panel with the same id",
+    body: `const real=window.crowe.pty;let finish;let calls=0;const closed=[];
+      window.crowe.pty={...real,start:()=>++calls===1?new Promise(r=>{finish=r}):Promise.resolve({ok:true,id:"reused-terminal",generation:"new-generation"}),close:async(id,generation)=>{closed.push({id,generation});return {ok:true}}};
+      try {const opening=addPanel("terminal",{id:"reused-terminal"});closePanel("reused-terminal");
+        await addPanel("terminal",{id:"reused-terminal"});finish({ok:true,id:"reused-terminal",generation:"old-generation"});await opening;
+        return {extraClose:closed.some(x=>x.generation),generation:terminalPanels.get("reused-terminal").generation};
+      }finally{closePanel("reused-terminal");window.crowe.pty=real;}`,
+    expect:{extraClose:false,generation:"new-generation"},
+  },
+
+  {
+    name: "engine panels attach the current generation and reconcile snapshot, live output and resize",
+    body: `const real=window.crowe.pty;let requested;const id="engine-attach-regression",generation="current-generation";
+      window.crowe.pty={...real,start:async opts=>{
+        requested={kind:opts.kind,generation:opts.generation};
+        receiveTerminalRecord({id,generation,type:"output",seq:1,data:"snapshot "});
+        receiveTerminalRecord({id,generation,type:"output",seq:2,data:"live"});
+        return {ok:true,id,generation,seq:1,snapshot:"snapshot ",cols:80,rows:24,engine:"Test engine"};
+      },resize(){},close:async()=>({ok:true})};
+      try{
+        const p=await receiveEngineTerminal({type:"opened",id,generation,openedBy:"Test engine",label:"tests"});
+        const entry=terminalPanels.get(id);
+        receiveTerminalRecord({id,generation,type:"output",seq:2,data:"duplicate"});
+        receiveTerminalRecord({id,generation:"old-generation",type:"output",seq:3,data:"stale"});
+        receiveTerminalRecord({id,generation,type:"resize",seq:3,cols:55,rows:18});
+        await entry.stream;
+        const result={requestedKind:requested.kind,requestedGeneration:requested.generation,text:entry.term.buffer.active.getLine(0).translateToString(true),cols:entry.term.cols,rows:entry.term.rows,
+          restartHidden:entry.host.parentNode.querySelector(".term-restart").hidden,saved:panelState().panels.some(x=>x.id===id)};
+        return result;
+      }finally{const p=panels.find(x=>x.id===id);if(p)closePanel(p.id);window.crowe.pty=real;}`,
+    expect: { requestedKind: "engine", requestedGeneration: "current-generation", text: "snapshot live", cols: 55, rows: 18, restartHidden: true, saved: false },
+  },
   {
     name: "the operator composer exposes state, guidance, and accessible controls",
     body: `const frame = document.querySelector(".composer-frame");
@@ -434,8 +457,8 @@ const tests = [
   {
     name: "addPanel appends a panel and makes it active",
     body: `await __reset();
-      const a = await addPanel("operator");
-      const b = await addPanel("operator");
+      const a = await addPanel("terminal");
+      const b = await addPanel("terminal");
       return { count: panels.length, active: activePanelId === b.id, order: __ids().indexOf(a.id) === 0 };`,
     expect: { count: 2, active: true, order: true },
   },
@@ -449,8 +472,8 @@ const tests = [
   {
     name: "closePanel removes the panel and its element",
     body: `await __reset();
-      const a = await addPanel("operator");
-      await addPanel("operator");
+      const a = await addPanel("terminal");
+      await addPanel("terminal");
       closePanel(a.id);
       return { count: panels.length, gone: !panelDeck.querySelector('[data-id="' + a.id + '"]') };`,
     expect: { count: 1, gone: true },
@@ -458,9 +481,9 @@ const tests = [
   {
     name: "closing the active panel promotes a neighbour",
     body: `await __reset();
-      const a = await addPanel("operator");
-      const b = await addPanel("operator");
-      const c = await addPanel("operator");
+      const a = await addPanel("terminal");
+      const b = await addPanel("terminal");
+      const c = await addPanel("terminal");
       focusPanel(b.id);
       closePanel(b.id);
       return { active: activePanelId === c.id, alive: panels.length === 2, hasA: __ids().includes(a.id) };`,
@@ -469,7 +492,7 @@ const tests = [
   {
     name: "closing the last panel clears the active id",
     body: `await __reset();
-      const a = await addPanel("operator");
+      const a = await addPanel("terminal");
       closePanel(a.id);
       return { count: panels.length, active: activePanelId };`,
     expect: { count: 0, active: null },
@@ -477,7 +500,7 @@ const tests = [
   {
     name: "closePanel ignores an unknown id",
     body: `await __reset();
-      await addPanel("operator");
+      await addPanel("terminal");
       closePanel("does-not-exist");
       return { count: panels.length };`,
     expect: { count: 1 },
@@ -485,7 +508,7 @@ const tests = [
   {
     name: "stack layout shows exactly one panel",
     body: `await __reset("stack");
-      await addPanel("operator"); await addPanel("operator"); await addPanel("operator");
+      await addPanel("terminal"); await addPanel("terminal"); await addPanel("terminal");
       applyStackVisibility();
       return { visible: __visible(), total: panels.length };`,
     expect: { visible: 1, total: 3 },
@@ -493,7 +516,7 @@ const tests = [
   {
     name: "columns layout shows every panel",
     body: `await __reset("columns");
-      await addPanel("operator"); await addPanel("operator"); await addPanel("operator");
+      await addPanel("terminal"); await addPanel("terminal"); await addPanel("terminal");
       applyStackVisibility();
       return { visible: __visible() };`,
     expect: { visible: 3 },
@@ -501,8 +524,8 @@ const tests = [
   {
     name: "focusPanel swaps which panel is visible in stack",
     body: `await __reset("stack");
-      const a = await addPanel("operator");
-      await addPanel("operator");
+      const a = await addPanel("terminal");
+      await addPanel("terminal");
       focusPanel(a.id);
       const el = panelDeck.querySelector('[data-id="' + a.id + '"]');
       return { visible: __visible(), shown: el.classList.contains("stack-active"), active: activePanelId === a.id };`,
@@ -511,8 +534,8 @@ const tests = [
   {
     name: "a stale active id falls back to the last panel",
     body: `await __reset("stack");
-      await addPanel("operator");
-      const b = await addPanel("operator");
+      await addPanel("terminal");
+      const b = await addPanel("terminal");
       activePanelId = "ghost";
       applyStackVisibility();
       return { active: activePanelId === b.id, visible: __visible() };`,
@@ -521,8 +544,8 @@ const tests = [
   {
     name: "dock renders one tab per panel and marks the active one",
     body: `await __reset();
-      await addPanel("operator");
-      const b = await addPanel("operator");
+      await addPanel("terminal");
+      const b = await addPanel("terminal");
       focusPanel(b.id);
       const tabs = __tabs();
       const current = tabs.filter((t) => t.getAttribute("aria-current") === "true");
@@ -532,7 +555,7 @@ const tests = [
   {
     name: "renaming a panel retitles its dock tab",
     body: `await __reset();
-      const a = await addPanel("operator");
+      const a = await addPanel("terminal");
       const input = panelDeck.querySelector('[data-id="' + a.id + '"] .panel-title');
       input.value = "Renamed";
       input.dispatchEvent(new Event("change"));
@@ -543,9 +566,9 @@ const tests = [
   {
     name: "reorderPanel moves a panel and reorders the DOM",
     body: `await __reset("columns");
-      const a = await addPanel("operator");
-      const b = await addPanel("operator");
-      const c = await addPanel("operator");
+      const a = await addPanel("terminal");
+      const b = await addPanel("terminal");
+      const c = await addPanel("terminal");
       reorderPanel(c.id, a.id);
       const dom = [...panelDeck.querySelectorAll(".workspace-panel")].map((e) => e.dataset.id);
       return { model: __ids().join(",") === [c.id, a.id, b.id].join(","), dom: dom.join(",") === __ids().join(",") };`,
@@ -554,8 +577,8 @@ const tests = [
   {
     name: "reorderPanel ignores unknown or identical ids",
     body: `await __reset();
-      const a = await addPanel("operator");
-      const b = await addPanel("operator");
+      const a = await addPanel("terminal");
+      const b = await addPanel("terminal");
       const before = __ids().join(",");
       reorderPanel(a.id, a.id); reorderPanel("nope", b.id); reorderPanel(a.id, "nope");
       return { unchanged: __ids().join(",") === before };`,
@@ -689,10 +712,25 @@ const tests = [
     body: `await __reset();
       await applyPanelState({ layout: "columns", panels: [
         { type: "browser", title: "One", url: "https://example.com/1" },
-        { type: "operator", title: "Two" } ] });
+        { type: "terminal", title: "Two" } ] });
       return { count: panels.length, layout: $("panel-layout").value,
                titles: panels.map((p) => p.title).join(","), deck: panelDeck.className.includes("columns") };`,
     expect: { count: 2, layout: "columns", titles: "One,Two", deck: true },
+  },
+  {
+    // Missions, Agent Fleet, Operator Control, Workbench and the agent console
+    // were removed. A layout saved while they existed restores what it still
+    // can and drops the rest without a word, and never throws.
+    name: "a saved deck drops the panel kinds this version no longer builds",
+    body: `await __reset();
+      await applyPanelState({ layout: "stack", panels: [
+        { type: "operator" }, { type: "workflow" }, { type: "agents" },
+        { type: "browser", title: "Kept", url: "https://example.com/k" },
+        { type: "agent", title: "Old agent" }, { type: "workbench" } ] });
+      const restored = panels.map((p) => p.type + ":" + p.title).join(",");
+      const removed = await addPanel("operator");
+      return { restored, removed, tabs: __tabs().length };`,
+    expect: { restored: "browser:Kept", removed: null, tabs: 1 },
   },
   {
     name: "applyPanelState with no panels falls back to a terminal",
@@ -723,7 +761,7 @@ const tests = [
   {
     name: "a legacy pane hides the deck and drops the active tab",
     body: `await __reset();
-      const a = await addPanel("operator");
+      const a = await addPanel("terminal");
       focusPanel(a.id);
       showPane("files");
       const current = __tabs().filter((t) => t.getAttribute("aria-current") === "true");
@@ -734,14 +772,14 @@ const tests = [
     name: "adding a panel leaves a legacy pane and shows the deck again",
     body: `await __reset();
       showPane("files");
-      await addPanel("operator");
+      await addPanel("terminal");
       return { legacy: activeLegacy, shown: panelDeck.style.display !== "none", visible: __visible() };`,
     expect: { legacy: null, shown: true, visible: 1 },
   },
   {
     name: "panel ids stay unique across rapid creation",
     body: `await __reset();
-      for (let i = 0; i < 8; i++) await addPanel("operator");
+      for (let i = 0; i < 8; i++) await addPanel("terminal");
       return { count: panels.length, unique: new Set(__ids()).size };`,
     expect: { count: 8, unique: 8 },
   },
@@ -838,58 +876,6 @@ const tests = [
         binding: MOD_LABEL === (mac ? "Cmd" : "Ctrl") };`,
     expect: { found: true, wrong: 0, binding: true },
   },
-  {
-    name: "parallel mode lays out a synthesis card plus one card per branch",
-    body: `await __reset();
-      const el = await __workbench();
-      __mode(el, "parallel", 4);
-      const cards = [...el.querySelectorAll(".awb-results article")];
-      return { cards: cards.length, first: cards[0].classList.contains("awb-synthesis"),
-        onlyOneSynthesis: cards.filter((c) => c.classList.contains("awb-synthesis")).length,
-        branchesShown: !el.querySelector(".awb-branch-field").classList.contains("hidden") };`,
-    expect: { cards: 5, first: true, onlyOneSynthesis: 1, branchesShown: true },
-  },
-  {
-    name: "parallel synthesis merges every branch draft into one answer",
-    body: `await __reset();
-      const el = await __workbench();
-      const calls = __stubAgent();
-      __mode(el, "parallel", 3);
-      el.querySelector(".awb-prompt").value = "Plan the spring harvest";
-      el.querySelector(".awb-run").click();
-      await __settle();
-      const merge = calls.find((c) => c.merge), drafts = calls.filter((c) => !c.merge);
-      const cards = [...el.querySelectorAll(".awb-output")];
-      return { total: calls.length, drafts: drafts.length,
-        distinctLenses: new Set(drafts.map((c) => c.content)).size,
-        sawEveryDraft: Boolean(merge) && drafts.every((c) => merge.content.includes("draft:" + c.id)),
-        keptTheTask: Boolean(merge) && merge.content.includes("Plan the spring harvest"),
-        synthesised: cards[0].textContent.includes("MERGED"),
-        branchesRendered: cards.slice(1).every((c) => c.textContent.startsWith("draft:")) };`,
-    expect: { total: 4, drafts: 3, distinctLenses: 3, sawEveryDraft: true,
-      keptTheTask: true, synthesised: true, branchesRendered: true },
-  },
-  {
-    name: "single and compare modes run without a synthesis pass",
-    body: `await __reset();
-      const el = await __workbench();
-      const runs = [];
-      for (const m of ["single", "compare"]) {
-        const calls = __stubAgent();
-        __mode(el, m);
-        el.querySelector(".awb-prompt").value = "Summarise the account";
-        el.querySelector(".awb-run").click();
-        await __settle();
-        runs.push({ agents: calls.length, merges: calls.filter((c) => c.merge).length,
-          cards: el.querySelectorAll(".awb-results article").length });
-      }
-      return { singleAgents: runs[0].agents, singleCards: runs[0].cards,
-        compareAgents: runs[1].agents, compareCards: runs[1].cards,
-        merges: runs[0].merges + runs[1].merges,
-        branchFieldHidden: el.querySelector(".awb-branch-field").classList.contains("hidden") };`,
-    expect: { singleAgents: 1, singleCards: 1, compareAgents: 2, compareCards: 2,
-      merges: 0, branchFieldHidden: true },
-  },
 
   /* Workflows. The surface listened for `assistant` and `assistant_delta` and
      nothing else, which made two failures indistinguishable from success. A node
@@ -898,148 +884,6 @@ const tests = [
      whose gateway call errored still reported "Completed." with a green dot.
      These assert the whole event surface of a node, because that is the part the
      one-line listener silently dropped. */
-  {
-    name: "a workflow node shows its route, hosts its own gate, and carries its receipt",
-    body: `await __reset();
-      const el = await __workflowPanel(
-        [{ name: "Intake", prompt: "qualify this request" }, { name: "Plan", prompt: "build the plan" }],
-        (id) => id.endsWith("-0")
-          ? [{ type: "route", expert: "coding", model: "crowelm" },
-             { type: "approval_request", id: 91, kind: "run_shell", risk: "strict",
-               why: "rewrites a remote branch's history", detail: "git push --force origin main" },
-             { type: "assistant", text: "intake settled" },
-             { type: "verdict", status: "pass", summary: "the plan matches the request" }]
-          : [{ type: "route", expert: "cultivation", model: "crowelm-grower" },
-             { type: "assistant", text: "plan drafted" }]);
-      el.querySelector(".wf-run").click();
-      await __settle();
-      const nodes = [...el.querySelectorAll(".wf-node")];
-      const out = el.querySelector(".wf-output pre").textContent;
-      const result = {
-        routes: nodes.map((n) => n.querySelector(".wf-node-route").textContent).join(" | "),
-        gates: nodes.map((n) => n.querySelectorAll(".wf-node-gate .gatecard").length).join(","),
-        // A gate card anywhere but inside the node that asked for it means the
-        // user is being asked to authorise an action they are not looking at.
-        loose: [...document.querySelectorAll(".gatecard")].filter((c) => !c.closest(".wf-node-gate")).length,
-        done: nodes.every((n) => n.querySelector(".wf-node-dot").classList.contains("done")),
-        status: el.querySelector(".wf-status").textContent,
-        receipt: /Verification pass: the plan matches the request/.test(out),
-        both: /intake settled/.test(out) && /plan drafted/.test(out),
-      };
-      el.__restore();
-      return result;`,
-    expect: { routes: "coding · crowelm | cultivation · crowelm-grower", gates: "1,0", loose: 0,
-      done: true, status: "Completed", receipt: true, both: true },
-  },
-  {
-    name: "a workflow node that fails says so instead of reporting Completed",
-    body: `await __reset();
-      const el = await __workflowPanel(
-        [{ name: "Intake", prompt: "qualify this request" }, { name: "Plan", prompt: "build the plan" }],
-        (id) => id.endsWith("-1")
-          ? [{ type: "route", expert: "coding", model: "crowelm" },
-             { type: "error", text: "the gateway refused the call" }]
-          : [{ type: "route", expert: "coding", model: "crowelm" },
-             { type: "assistant", text: "intake settled" }]);
-      el.querySelector(".wf-run").click();
-      await __settle();
-      const nodes = [...el.querySelectorAll(".wf-node")];
-      const out = el.querySelector(".wf-output pre").textContent;
-      const result = {
-        dots: nodes.map((n) => n.querySelector(".wf-node-dot").classList.contains("failed")).join(","),
-        state: nodes[1].querySelector(".wf-node-state").textContent,
-        status: el.querySelector(".wf-status").textContent,
-        reported: /\\*\\*Failed:\\*\\* the gateway refused the call/.test(out),
-      };
-      el.__restore();
-      return result;`,
-    expect: { dots: "false,true", state: "Failed · the gateway refused the call",
-      status: "1 of 2 failed", reported: true },
-  },
-  {
-    // The canvas is authored by the agents: the operator describes the
-    // operation and a harness turn returns the nodes. The reply arrives
-    // fenced in prose because models do that no matter what the brief says,
-    // so this also pins the lenient cut from first "{" to last "}".
-    name: "a sentence composes a workflow the agents author",
-    body: `await __reset();
-      const el = await __workflowPanel([], (id) => id.endsWith("-compose")
-        ? [{ type: "route", expert: "planning", model: "crowelm" },
-           { type: "assistant", text: 'Here is the design:\\n\\u0060\\u0060\\u0060json\\n{"name":"Invoice Chase","nodes":[{"name":"Ledger Sweep","prompt":"Find every unpaid invoice and list amounts owed."},{"name":"Reminder Draft","prompt":"Write firm, polite payment reminders for each debtor."}]}\\n\\u0060\\u0060\\u0060 done.' }]
-        : []);
-      el.querySelector(".wf-compose-say").value = "chase unpaid invoices";
-      el.querySelector(".wf-compose-go").click();
-      await __settle();
-      const nodes = [...el.querySelectorAll(".wf-node")];
-      const result = {
-        name: el.querySelector(".wf-name").value,
-        agents: nodes.map((n) => n.querySelector(".wf-node-name").value).join(" | "),
-        prompted: nodes.every((n) => n.querySelector(".wf-node-prompt").value.length > 20),
-        state: el.querySelector(".wf-compose-state").textContent,
-        // composing must land in the store, or the workflow dies with the panel
-        stored: JSON.parse(localStorage.getItem("crowe-agent-workflows"))[0].name,
-      };
-      el.__restore();
-      return result;`,
-    expect: { name: "Invoice Chase", agents: "Ledger Sweep | Reminder Draft", prompted: true,
-      state: "Composed 2 agents", stored: "Invoice Chase" },
-  },
-  {
-    // A reply that does not parse must not half-draw the canvas. The failure
-    // lands where the operator typed, and the empty workflow stays empty.
-    name: "a compose that returns no workflow fails without touching the canvas",
-    body: `await __reset();
-      const el = await __workflowPanel([], (id) => id.endsWith("-compose")
-        ? [{ type: "assistant", text: "I would suggest three agents for this operation." }]
-        : []);
-      el.querySelector(".wf-compose-say").value = "chase unpaid invoices";
-      el.querySelector(".wf-compose-go").click();
-      await __settle();
-      const result = {
-        failed: /^Failed · the agent did not return a mission/.test(el.querySelector(".wf-compose-state").textContent),
-        nodes: el.querySelectorAll(".wf-node").length,
-        empty: !!el.querySelector(".wf-empty"),
-        enabled: !el.querySelector(".wf-compose-go").disabled,
-      };
-      el.__restore();
-      return result;`,
-    expect: { failed: true, nodes: 0, empty: true, enabled: true },
-  },
-  {
-    // The harness's compose_workflow tool ends here: the agent authored a
-    // workflow in chat, and it must land somewhere the user can see without
-    // hunting - the store first, then a Runbook panel opening on it.
-    name: "a workflow the chat agent authors lands in the runbook and opens it",
-    body: `await __reset();
-      const priorStore = localStorage.getItem("crowe-agent-workflows");
-      localStorage.removeItem("crowe-agent-workflows");
-      workflowAuthored({ type: "workflow_authored", workflow: { name: "Invoice Chase", nodes: [
-        { name: "Ledger Sweep", prompt: "Find every unpaid invoice and list amounts owed." },
-        { name: "Reminder Draft", prompt: "Write firm, polite payment reminders for each debtor." },
-      ] } });
-      await __settle();
-      const bodyEl = panelDeck.querySelector(".workflow-surface");
-      const result = {
-        stored: JSON.parse(localStorage.getItem("crowe-agent-workflows"))[0].name,
-        opened: !!bodyEl,
-        shown: bodyEl ? bodyEl.querySelector(".wf-name").value : "",
-        agents: bodyEl ? [...bodyEl.querySelectorAll(".wf-node-name")].map((n) => n.value).join(" | ") : "",
-      };
-      // a second authoring while the panel is open must land in place
-      workflowAuthored({ type: "workflow_authored", workflow: { name: "Refund Sweep", nodes: [
-        { name: "Case Finder", prompt: "List refund cases open past their promise date." },
-        { name: "Make-good Draft", prompt: "Draft the make-good for each late case." },
-      ] } });
-      await __settle();
-      result.updated = bodyEl ? bodyEl.querySelector(".wf-name").value : "";
-      const panel = bodyEl && bodyEl.closest(".workspace-panel");
-      if (panel) closePanel(panel.dataset.id);
-      if (priorStore === null) localStorage.removeItem("crowe-agent-workflows");
-      else localStorage.setItem("crowe-agent-workflows", priorStore);
-      return result;`,
-    expect: { stored: "Invoice Chase", opened: true, shown: "Invoice Chase",
-      agents: "Ledger Sweep | Reminder Draft", updated: "Refund Sweep" },
-  },
   {
     // Real streaming's two hazards, in one turn: the closing assistant event
     // repeats text the deltas already delivered (streamed:true means "receipt,
@@ -1233,7 +1077,7 @@ const tests = [
     // test asks for Cultivation, silently gets Chat, and fails - which is
     // exactly how this leaked between runs before anyone noticed.
     name: "a leaked space profile cannot poison the next test",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
       applySpaceProfile();
       return { size: PROFILE.size, cultHidden: document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden") };`,
@@ -1241,7 +1085,7 @@ const tests = [
   },
   {
     name: "each space shows its own nav rail and no other",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       const rails = {};
       for (const id of Object.keys(SPACES)) {
         setSpace(id);
@@ -1314,7 +1158,7 @@ const tests = [
     // under each space. A test that only checked Cultivation would still pass if
     // the rule leaked onto Projects and watermarked the whole app.
     name: "the cultivation watermark follows the space, not the surface",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       const read = () => {
         const s = [...document.querySelectorAll(".surface")].find((x) => !x.classList.contains("hidden"));
         const cs = s && getComputedStyle(s, "::before");
@@ -1336,7 +1180,7 @@ const tests = [
     // behind. The test above passes either way: it only asks whether a mask is
     // present, which is exactly the blind spot that let this ship.
     name: "the cultivation watermark does not reflow the text it sits behind",
-    body: `__resetSpaces(); setSpace("cultivation"); await __settle();
+    body: `__resetSpaces(); __mycology(); setSpace("cultivation"); await __settle();
       const p = [...document.querySelectorAll(".sh-sub")].find((e) => e.offsetParent);
       const kill = document.createElement("style");
       document.head.appendChild(kill);
@@ -1620,31 +1464,9 @@ const tests = [
     expect: { para: true, list: true, table: true, settled: true },
   },
   {
-    // The console is collapsed because the objective runs on the gateway agent,
-    // not in this PTY - the shell was a second window onto something nobody was
-    // driving. Two ways that regresses silently: the display rule gets dropped
-    // and the terminal comes back for everyone, or the event stream keeps the
-    // fixed basis it had when it was sharing height and the panel shows a 140px
-    // log above dead space. Assert the collapsed geometry, not just the class.
-    name: "the agent console is collapsed until it is asked for",
-    body: `const host = document.createElement("div");
-      host.className = "workspace-agent-node";
-      host.innerHTML = '<div class="agent-event-stream"></div><div class="agent-terminal-slot"></div>';
-      document.body.appendChild(host);
-      const slot = host.querySelector(".agent-terminal-slot");
-      const stream = host.querySelector(".agent-event-stream");
-      const closed = { slot: getComputedStyle(slot).display, grow: getComputedStyle(stream).flexGrow };
-      host.classList.add("console-open");
-      const open = { slot: getComputedStyle(slot).display, grow: getComputedStyle(stream).flexGrow };
-      host.remove();
-      return { closedSlot: closed.slot, closedStreamGrows: closed.grow === "1",
-        openSlot: open.slot, openStreamFixed: open.grow === "0" };`,
-    expect: { closedSlot: "none", closedStreamGrows: true, openSlot: "block", openStreamFixed: true },
-  },
-  {
-    // The agent panel used to type "crowe-logic" and Enter into its console the
-    // moment the PTY came up, so every agent panel opened as a CLI session (and
-    // every plain terminal once did too). Terminals are shells now. This stands
+    // The agent panel (since removed) used to type "crowe-logic" and Enter into
+    // its console the moment the PTY came up, and every plain terminal once did
+    // too. Terminals are shells now. This stands
     // in a PTY that says yes and records every byte written to it, mounts each
     // terminal-backed panel type, and asserts nothing was typed for the
     // operator. The source check closes the other door: no call site may hand
@@ -1654,38 +1476,36 @@ const tests = [
     body: `const real = window.crowe.pty; const typed = []; const opened = [];
       window.crowe.pty = { ...real, start: async (o) => ({ ok: true, id: o.id }), input: (id, data) => typed.push(String(data)), resize() {}, close: async () => ({ ok: true }) };
       try {
-        for (const [type, seed] of [["agent", { title: "Probe agent" }], ["terminal", {}], ["system", {}]]) opened.push(await addPanel(type, seed));
+        for (const type of ["terminal", "system"]) opened.push(await addPanel(type));
         await new Promise((r) => setTimeout(r, 150));
         const src = await (await fetch("renderer.js")).text();
         const literal = /pty\\.input\\([^,)]+,\\s*["'\`]/.test(src);
-        const head = document.querySelector('[data-id="' + opened[0].id + '"] .agent-operation-head small');
-        return { typed: typed.join("|"), literal, label: head ? head.textContent : null, mounted: opened.length };
+        return { typed: typed.join("|"), literal, mounted: opened.length };
       } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
-    expect: { typed: "", literal: false, label: "AGENT", mounted: 3 },
+    expect: { typed: "", literal: false, mounted: 2 },
   },
   {
     // The IPC used to throw when node-pty could not spawn (a fresh checkout's
     // spawn-helper has no execute bit), and the panel awaited it with no catch:
     // an unhandled rejection and a state label stuck on "starting". A thrown
     // start is the same refusal as a returned one, printed where the operator
-    // can read it, on both terminal-backed panel kinds.
+    // can read it.
     name: "a pty that throws on start leaves the panel refused, with the reason on screen",
     body: `const real = window.crowe.pty; const opened = [];
       window.crowe.pty = { ...real, start: async () => { throw new Error("posix_spawnp failed."); }, input() {}, resize() {}, close: async () => ({ ok: true }) };
       try {
-        const t = await addPanel("terminal"); const a = await addPanel("agent", { title: "Probe agent" }); opened.push(t, a);
+        const t = await addPanel("terminal"); opened.push(t);
         await new Promise((r) => setTimeout(r, 200));
         const el = (p) => document.querySelector('.workspace-panel[data-id="' + p.id + '"]');
         const shown = (p) => el(p).querySelector(".xterm") ? terminalPanels.get(p.id).term.buffer.active : null;
         const text = (p) => { const b = shown(p); if (!b) return ""; let s = ""; for (let i = 0; i < b.length; i++) s += (b.getLine(i)?.translateToString(true) || "") + "\\n"; return s; };
-        return { termState: el(t).querySelector(".terminal-state").textContent, termSaysWhy: /posix_spawnp/.test(text(t)),
-          agentChip: el(a).querySelector(".agent-operation-chip").textContent, agentEvent: /posix_spawnp/.test(el(a).querySelector(".agent-event-stream").textContent) };
+        return { termState: el(t).querySelector(".terminal-state").textContent, termSaysWhy: /posix_spawnp/.test(text(t)) };
       } finally { for (const p of opened) closePanel(p.id); window.crowe.pty = real; }`,
-    expect: { termState: "no shell", termSaysWhy: true, agentChip: "READY", agentEvent: true },
+    expect: { termState: "no shell", termSaysWhy: true },
   },
   {
     name: "lane navigation exposes the current page and follows programmatic changes",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       projLane = "deployments"; setSpace("projects");
       const current = () => [...document.querySelectorAll('#space-nav [aria-current="page"]')].map(b => b.dataset.lane).join(",");
       const direct = current();
@@ -1700,7 +1520,7 @@ const tests = [
   },
   {
     name: "a profile hides the spaces it leaves out",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       localStorage.setItem("crowe-spaces", JSON.stringify(["projects"]));
       applySpaceProfile();
       const btn = (id) => document.querySelector('#spaces .seg-btn[data-space="' + id + '"]').classList.contains("hidden");
@@ -1722,7 +1542,7 @@ const tests = [
     // These drive the settings control instead, because a picker that renders
     // correctly and writes nothing looks identical to one that works.
     name: "unchecking a space in the picker narrows the shell",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       renderSpacePicker();
       const box = $("cfg-spaces");
       const cb = (id) => box.querySelector('input[data-space="' + id + '"]');
@@ -1743,7 +1563,7 @@ const tests = [
     // Storing nothing when everything is on is what keeps a space added in a
     // later version from being invisible on every install that ever saved.
     name: "an all-on selection stores no profile at all",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       localStorage.setItem("crowe-spaces", JSON.stringify(["chat","projects"]));
       applySpaceProfile();
       renderSpacePicker();
@@ -1770,7 +1590,7 @@ const tests = [
       const stored = localStorage.getItem("crowe-spaces");
       __resetSpaces();
       return { ...hidden, stored, restored: PROFILE.size };`,
-    expect: { chat: false, projects: false, cultivation: true, stored: null, restored: 3 },
+    expect: { chat: false, projects: false, cultivation: true, stored: null, restored: 2 },
   },
   {
     // The regression the install default introduces, and the reason
@@ -1783,11 +1603,11 @@ const tests = [
     // vanish again on restart.
     name: "a build's default does not swallow turning a space back on",
     body: `__resetSpaces();
-      window.crowe.installSpaces = ["projects"];
+      window.crowe.installSpaces = ["cultivation"];
       applySpaceProfile();
       renderSpacePicker();
       const box = $("cfg-spaces");
-      for (const id of ["cultivation"]) box.querySelector('input[data-space="' + id + '"]').click();
+      for (const id of ["projects"]) box.querySelector('input[data-space="' + id + '"]').click();
       const stored = localStorage.getItem("crowe-spaces"), size = PROFILE.size;
       // What the next launch does: re-read storage against the same build.
       applySpaceProfile();
@@ -1811,12 +1631,32 @@ const tests = [
     expect: { size: 2, has: false, rail: 2 },
   },
   {
+    // Cultivation belongs to the Mycology edition. A build that does not
+    // declare it offers it nowhere: not on the rail, not in the picker, not in
+    // the palette, and a saved list from before it was opt-in is read without it.
+    name: "a build that does not declare Cultivation offers it nowhere",
+    body: `__resetSpaces();
+      const shown = !document.querySelector('#spaces .seg-btn[data-space="cultivation"]').classList.contains("hidden");
+      renderSpacePicker();
+      const picker = [...$("cfg-spaces").querySelectorAll("input")].map((i) => i.dataset.space).join(",");
+      renderPal("Space:");
+      const pal = [...palList.querySelectorAll(".pal-row")].map((r) => r.textContent).join("|");
+      localStorage.setItem("crowe-spaces", JSON.stringify(["chat", "projects", "cultivation"]));
+      applySpaceProfile();
+      const saved = [...PROFILE].join(",");
+      setSpace("cultivation");
+      const landed = document.body.dataset.space;
+      __resetSpaces();
+      return { shown, picker, pal, saved, landed };`,
+    expect: { shown: false, picker: "chat,projects", pal: "Space: Chat|Space: Projects", saved: "chat,projects", landed: "chat" },
+  },
+  {
     // Two places the farm showed through on a Chat and Projects build: the Home
     // card's "growing" row and the grower's line in Deployments. Both read the
     // same catalog, so both are asserted here, in both directions - a rule that
     // simply hid the grower everywhere would pass the narrowed half alone.
     name: "a build without Cultivation shows no grower on Home or in Deployments",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       const rows = async () => {
         await refreshHome();
         const asks = [...$("home-routing").querySelectorAll(".k")].map((k) => k.textContent);
@@ -1865,10 +1705,11 @@ const tests = [
     // including cultivation, projects and chat, and no spaces at all - and read
     // in both directions, since a rule that hid every cultivation mention would
     // pass the narrowed half and take Crowe Skills out of every install. The
-    // Crowe Sense section beside it follows the same profile, and the picker
-    // path is exercised too: switching Cultivation back on brings both back.
+    // Crowe Sense section beside it follows the same profile. The picker cannot
+    // bring them back on a build that does not declare Cultivation: there the
+    // space is not offered at all.
     name: "a build without Cultivation lists no cultivation-only plugin and hides Crowe Sense",
-    body: `__resetSpaces();
+    body: `__resetSpaces(); __mycology();
       const real = window.crowe.plugins.list;
       const row = (id, name, spaces) => ({ id, name, description: "", spaces, available: true, enabled: false, envPrompts: [] });
       window.crowe.plugins.list = async () => [
@@ -1883,14 +1724,14 @@ const tests = [
         const full = await names(), fullSense = senseHidden();
         window.crowe.installSpaces = ["chat", "projects"]; applySpaceProfile();
         const narrowed = await names(), narrowedSense = senseHidden();
-        // The picker wins over the build: tick Cultivation and both come back.
+        // A stored or hand-made list naming Cultivation does not bring it back.
         setSpaceProfile(["chat", "projects", "cultivation"]);
         const restored = await names(), restoredSense = senseHidden();
         return { full, fullSense, narrowed, narrowedSense, restored, restoredSense };
       } finally { window.crowe.plugins.list = real; __resetSpaces(); }`,
     expect: { full: "Crowe Skills,Crowe Sense,GitHub,Everywhere", fullSense: false,
       narrowed: "Crowe Skills,GitHub,Everywhere", narrowedSense: true,
-      restored: "Crowe Skills,Crowe Sense,GitHub,Everywhere", restoredSense: false },
+      restored: "Crowe Skills,GitHub,Everywhere", restoredSense: true },
   },
   {
     name: "the picker cannot turn chat off",
@@ -1916,6 +1757,7 @@ const tests = [
       renderSpacePicker();
       const covered = [];
       for (const i of $("cfg-spaces").querySelectorAll("input")) {
+        i.scrollIntoView({ block: "center", behavior: "instant" });
         const b = i.getBoundingClientRect();
         if (document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) !== i) covered.push(i.dataset.space);
       }

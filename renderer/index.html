@@ -9,6 +9,7 @@
        through the CSS Object Model, which the policy does not police. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'" />
   <title>Crowe Logic</title>
+  <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
   <!-- Before every other script: xterm and the logotype inliner both write
@@ -16,6 +17,8 @@
        above. -->
   <script src="adopted-styles.js"></script>
   <link rel="stylesheet" href="council.css" />
+  <!-- Last, so it only refines: the look picked in Settings (look.css). -->
+  <link rel="stylesheet" href="look.css" />
 </head>
 <body>
   <!-- The theme, before anything is drawn. renderer.js applies it too, but that
@@ -35,25 +38,25 @@
        still lifts and the shell underneath is whatever the app managed to
        render. JS only fills in the animated logotype and removes the node. -->
   <div id="launch" aria-hidden="true">
+    <div class="launch-identity"><svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
     <span class="lockup launch-mark"><span class="lockup-ink" aria-hidden="true"></span></span>
+    </div>
   </div>
 
   <header id="bar">
     <button id="sidebar-toggle" class="bar-icon" title="Toggle sidebar (Cmd+B)" aria-label="Toggle sidebar" aria-expanded="true" aria-controls="sidebar">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
     </button>
-    <!-- The logotype, not the name set in a font. The spore is the tittle of
-         the i, so the mark is inside the word and does not need to sit beside
-         it - which is why the separate #mark span that used to live here is
-         gone. The animated mark still speaks, but as a spinner and as an agent
-         avatar, where movement means something. -->
+    <!-- Gate Glyph beside the original custom wordmark. -->
+    <span class="header-identity"><svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
     <span class="lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></span>
+    </span>
     <span class="ws-sep" aria-hidden="true"></span>
     <span id="ws-path" class="ws-path" title="Workspace folder"></span>
     <div class="spacer"></div>
     <span id="mcp-badge" class="badge alt hidden"></span>
     <button id="signin" class="ghost sm">Sign in with Crowe ID</button>
-    <span id="userbadge" class="badge hidden" title="Signed in to Crowe ID. Click to sign out."></span>
+    <button id="userbadge" type="button" class="badge hidden" title="Account and billing"></button>
   </header>
 
   <div id="update-banner" class="hidden">
@@ -79,7 +82,7 @@
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5l2 2h9v9H4z"/></svg>
           Projects
         </button>
-        <button class="seg-btn" data-space="cultivation">
+        <button class="seg-btn hidden" data-space="cultivation">
           <!-- A cap fruiting from a substrate block, not a bare mushroom. One cap
                on one stem is the universal mushroom pictogram, so it read as an
                umbrella and said nothing about this space in particular; the block
@@ -163,6 +166,7 @@
       </aside>
 
       <div class="side-foot">
+        <button id="account-nav" type="button" class="side-foot-btn" title="Account and billing">Account &amp; billing</button>
         <button id="rail-palette" class="side-foot-btn" title="Command palette (Cmd+K)">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-3.6-3.6"/></svg>
           Search
@@ -237,12 +241,8 @@
         </div>
         <div id="transcript">
           <div class="welcome">
-            <!-- The logotype, held still. This was a 104px mark animating at
-                 idle with the name retyped in Fraunces underneath: the hyphae
-                 turning under a wordmark reads as an animated novelty rather
-                 than as an identity, and the words below it were the third time
-                 the same name appeared on screen. The mark still moves where
-                 motion reports something - thinking glyphs and agent panels. -->
+            <!-- One standalone identity across every platform. -->
+            <svg class="brand-gate" viewBox="3.5 0 64 64" aria-hidden="true"><path d="M41.31,47.76 A20,20 0 1 1 41.31,16.24" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="butt"/><path d="M48,12 h8 v40 h-8 z M48,44 h15 v8 h-15 z" fill="currentColor"/><polygon points="37.63,35.25 32.00,38.50 26.37,35.25 26.37,28.75 32.00,25.50 37.63,28.75" fill="#D0B471"/></svg>
             <h1 class="welcome-logotype lockup" role="img" aria-label="Crowe Logic"><span class="lockup-ink" aria-hidden="true"></span></h1>
             <p>Your operator. Ask it to reason, run commands, edit files, and browse. It drives the workspace on the right and shows you every action.</p>
             <div class="chips">
@@ -301,9 +301,6 @@
           </div>
           <button id="dock-add" class="dock-icon" title="Add to panel" aria-label="Add to panel">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-          </button>
-          <button id="glass-launcher" class="dock-icon agent-launch" type="button" title="Open a Crowe Logic CLI agent in the workspace" aria-label="Open Crowe Logic agent in workspace">
-            <span class="cl-mark" aria-hidden="true"></span>
           </button>
           <div class="spacer"></div>
           <span id="cwd" class="cwd"></span>
@@ -365,6 +362,19 @@
   <div id="settings" class="modal hidden">
     <div class="modal-card">
       <h2>Settings</h2>
+      <section id="account-settings" class="key-manager account-settings" aria-labelledby="account-heading">
+        <div class="settings-section-head"><div><b id="account-heading" tabindex="-1">Account &amp; billing</b><span id="account-email">Reading your account.</span></div></div>
+        <p id="account-plan" class="hint"></p>
+        <p class="hint">Manage your subscription, payment methods and invoices securely in Stripe. Any changes are confirmed there.</p>
+        <div class="account-actions">
+          <button id="account-signin" type="button" class="primary">Sign in with Crowe ID</button>
+          <button id="account-billing" type="button" class="primary" hidden>Manage billing</button>
+          <button id="account-email-billing" type="button" class="ghost" hidden>Verify billing by email</button>
+          <button id="account-refresh" type="button" class="ghost" hidden>Refresh plan</button>
+          <button id="account-signout" type="button" class="ghost" hidden>Sign out</button>
+        </div>
+        <p id="account-notice" class="hint" role="status" aria-live="polite"></p>
+      </section>
       <label>Gateway URL <input id="cfg-base" type="text" placeholder="https://..." /></label>
       <label>Workspace folder <input id="cfg-cwd" type="text" placeholder="/Users/you/project" /></label>
       <label>Token (Crowe ID) <input id="cfg-token" type="password" placeholder="paste to update; blank keeps current" /></label>
@@ -394,6 +404,7 @@
           </select>
         </label>
         <label class="chk"><input id="cfg-verifier" type="checkbox" /> Check a mutating turn independently before reporting it done</label>
+        <label class="chk"><input id="cfg-phone-gates" type="checkbox" /> Send authority gates to my phone (while signed in with Crowe ID)</label>
         <label>Cost ceiling per turn, in dollars (0 for none) <input id="cfg-budget" type="number" min="0" step="0.25" /></label>
       </section>
       <!-- Crowe Sense. Below Guardrails for the same reason Guardrails is below
@@ -431,6 +442,14 @@
         <textarea id="cfg-mcp" rows="3" spellcheck="false" placeholder='{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/Users/you"]}}'></textarea>
       </label>
       <p id="cfg-mcp-live" class="hint"></p>
+      <!-- The look. At the foot of the card for the reason everything above
+           Spaces stays put, and applied as it changes, like the theme button. -->
+      <label>Look
+        <select id="cfg-look">
+          <option value="editorial">Editorial, light or dark</option>
+          <option value="instrument">Instrument, dark glass</option>
+        </select>
+      </label>
       <div class="row"><button id="cfg-save" class="primary">Save</button><button id="cfg-cancel" class="ghost">Cancel</button></div>
       <p id="cfg-status" class="hint"></p>
     </div>
@@ -443,33 +462,12 @@
         <button id="panel-add-term" class="pal-row" title="New terminal panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 10l3 2-3 2M13 15h4"/></svg>
           <span>Terminal</span></button>
-        <button id="panel-add-agent" class="pal-row" title="New Crowe Logic agent with a plain shell console">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 4.2v2.4M12 17.4v2.4M4.2 12h2.4M17.4 12h2.4M6.5 6.5l1.7 1.7M15.8 15.8l1.7 1.7M17.5 6.5l-1.7 1.7M8.2 15.8l-1.7 1.7"/></svg>
-          <span>Crowe Logic agent</span></button>
         <button id="panel-add-system" class="pal-row" title="Open the isolated CroweLM system terminal">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="1.6"/><path d="M7 20h10M12 17v3M7 9l2.5 2L7 13"/></svg>
           <span>System terminal</span></button>
         <button id="panel-add-browser" class="pal-row" title="New browser panel">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/></svg>
           <span>Browser</span></button>
-        <button id="panel-add-operator" class="pal-row" title="Operator control panel">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
-          <span>Operator control</span></button>
-        <button id="panel-add-workflow" class="pal-row" title="Build and run multi-agent missions">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="12" r="2"/><path d="M8 7h4a2 2 0 0 1 2 2v1M8 17h4a2 2 0 0 0 2-2v-1"/></svg>
-          <span>Missions</span></button>
-        <button id="panel-add-agents" class="pal-row" title="Launch licensed Crowe Agents">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7.5a3 3 0 0 1 0 5.4M17.5 19a5.4 5.4 0 0 0-2-4.2"/></svg>
-          <span>Agent fleet</span></button>
-        <button id="panel-add-room" class="pal-row" title="Open a room: several named agents and you in one thread">
-          <!-- Three seats around a table, which is what a room is. Not three
-               avatars: at 16px a cluster of heads is a smudge, and the shape
-               that survives is the arrangement. -->
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="4.4" r="1.7"/><circle cx="5.2" cy="16.4" r="1.7"/><circle cx="18.8" cy="16.4" r="1.7"/></svg>
-          <span>Room</span></button>
-        <button id="panel-add-workbench" class="pal-row" title="Compose, compare, and save agent runs">
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
-          <span>Workbench</span></button>
       </div>
     </div>
   </div>
@@ -486,6 +484,7 @@
   <script src="council.js"></script>
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
+  <script src="billing-portal.js"></script>
   <script src="mark-geometry.js"></script>
   <script src="mark.js"></script>
   <script src="messages.js"></script>
@@ -493,6 +492,7 @@
   <script src="first-run.js"></script>
   <script src="activity.js"></script>
 <script src="renderer.js"></script>
+  <script src="account.js"></script>
   <script src="plan.js"></script>
 </body>
 </html>

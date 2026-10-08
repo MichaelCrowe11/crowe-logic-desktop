@@ -66,6 +66,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
     Capacitor: capacitor || null,
     crypto: require("crypto").webcrypto,
     CROWE_GROW: require(path.join(root, "grow-schema.js")),
+    CroweBillingPortal: require(path.join(root, "renderer/billing-portal.js")),
     open: () => {},
   };
   const localStorage = {
@@ -73,11 +74,15 @@ function loadMobileSurface(fetchImpl, capacitor) {
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
   };
+  const consoleLog = [];
   const sandbox = {
     window: win, localStorage,
+    // The bridge writes a failed turn's raw error to the console and nowhere a
+    // grower reads; recorded here so a check can see it without it printing.
+    console: { error: (...a) => consoleLog.push(a.map(String).join(" ")), log: () => {}, warn: () => {} },
     document: { createElement: () => ({ appendChild() {}, style: {}, classList: { add() {} } }) },
     fetch: fetchImpl || (() => Promise.reject(new TypeError("offline"))),
-    navigator: { clipboard: { writeText: () => Promise.resolve() } },
+    navigator: { clipboard: { writeText: () => Promise.resolve() }, language: "en-US", languages: ["en-US"] },
     performance: { now: () => 0 },
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
@@ -91,6 +96,7 @@ function loadMobileSurface(fetchImpl, capacitor) {
   // than on it — the surface parity walk below must see exactly the desktop's
   // shape. Exposed for the phone-file checks without widening the surface.
   loadMobileSurface.lastWindow = win;
+  loadMobileSurface.lastConsole = consoleLog;
   return win.crowe;
 }
 
@@ -153,8 +159,8 @@ function methodPaths(surface) {
     // the address to the system browser instead. There is nothing for the
     // desktop to grow here either — it already has the engine this is standing
     // in for.
-    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "mobile.openExternal", "auth.deleteAccount",
-      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note"];
+    const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "remote.activity", "mobile.openExternal", "auth.deleteAccount",
+      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note", "gates.list", "gates.decide"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -289,7 +295,7 @@ function methodPaths(surface) {
     off();
     assert(result.done && /Harvest at 9/.test(result.text), `turn returned ${JSON.stringify(result)}`);
     const names = (bodies[0].tools || []).map((t) => t.function.name);
-    assert(names.includes("google_calendar_list_events") && names.includes("read_grow"), `tools sent: ${names.join(",")}`);
+    assert(names.includes("google_calendar_list_events") && !names.includes("read_grow") && !names.includes("log_grow"), `tools sent: ${names.join(",")}`);
     assert(acted.length === 1 && acted[0][0] === "google_calendar_list_events" && acted[0][1].query === "harvest", `act saw ${JSON.stringify(acted)}`);
     const toolMsg = bodies[1].messages.find((m) => m.role === "tool");
     assert(toolMsg && /Harvest/.test(toolMsg.content), "the connector result did not go back to the model");
@@ -320,11 +326,18 @@ function methodPaths(surface) {
     ({ vault, prefs } = load({ get: async () => ({ value: null }), set: async () => { throw new Error("keychain write failed: -34018"); }, remove: async () => {} }));
     await vault.set("config", JSON.stringify({ token: "new" }));
     assert(JSON.parse(prefs.get("config")).token === "new", "a refused Keychain write was lost");
+    let strictRefused = false;
+    try { await vault.set("config", JSON.stringify({ token: "", refreshToken: "" }), { strict: true }); }
+    catch { strictRefused = true; }
+    assert(strictRefused, "sign-out silently accepted a Preferences-only write while the Keychain refused");
     // 3. Healthy Keychain: the first read migrates Preferences into it and clears Preferences.
     const kc = new Map();
     ({ vault, prefs } = load({ get: async ({ key }) => ({ value: kc.has(key) ? kc.get(key) : null }), set: async ({ key, value }) => { kc.set(key, value); }, remove: async ({ key }) => { kc.delete(key); } }));
     const m = await vault.get("config");
     assert(m && JSON.parse(m).token === "t.o.k" && kc.has("config") && !prefs.has("config"), "a healthy Keychain did not take over the record on first read");
+    prefs.set("config", JSON.stringify({ token: "stale-fallback" }));
+    await vault.set("config", JSON.stringify({ token: "", refreshToken: "" }), { strict: true });
+    assert(!JSON.parse(kc.get("config")).token && !prefs.has("config"), "sign-out retained a credential in a backing store");
     return "refused read -> Preferences (kept); refused write -> Preferences; healthy -> migrated once";
   });
 
@@ -352,9 +365,10 @@ function methodPaths(surface) {
     const speak = read("mobile/src/speak.js"), ui = read("mobile/src/mobile-ui.js");
     assert(/localStorage\.getItem\("crowe-reply-voice"\)/.test(speak), "speak.js must read crowe-reply-voice");
     assert(/localStorage\.setItem\("crowe-reply-voice"/.test(ui), "the Settings row must write crowe-reply-voice");
-    assert(/\["michael", "neural", "phone"\]/.test(speak) && /VOICES = \["michael", "neural", "phone"\]/.test(ui), "the two sides must agree on the three voices");
-    assert(/if \(preferred === "phone"\) return fallback\(said\);/.test(speak), "the phone's own voice must never call the gateway");
-    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
+    assert(/\["neural", "phone"\]/.test(speak) && /VOICES = \["neural", "phone"\]/.test(ui), "the two sides must agree on the two voices");
+    assert(/id !== "michael"/.test(speak) && !/value="michael"/.test(ui), "the retired cloned voice must never be offered or requested");
+    assert(/preferred === "phone" \|\| !window\.croweCloud/.test(speak), "the phone's own voice must use the local fallback");
+    assert(/x-crowe-voice/.test(speak) && /x-crowe-chars/.test(speak) && /diag\?\.note\("speech"/.test(speak), "each gateway read must note the voice that spoke and the characters it cost");
     return "one localStorage key, three voices, phone stays local, speech noted in Diagnostics";
   });
 
@@ -477,7 +491,7 @@ function methodPaths(surface) {
     assert(Array.isArray(last.content) && last.content[0].type === "text" && last.content[0].text === "Is this contamination?"
       && last.content[1].type === "image_url" && /^data:image\/jpeg;base64,/.test(last.content[1].image_url.url),
       `the user turn was ${JSON.stringify(last.content).slice(0, 200)}`);
-    assert(/photo taken on this phone/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
+    assert(/Follow the user's question, not an assumed industry or task/.test(bodies[0].messages[0].content), "the system prompt did not carry the vision brief");
     const route = seen.find((e) => e.type === "route");
     assert(route && route.expert === "vision" && route.model === "crowelm-vision", `route was ${JSON.stringify(route)}`);
     const photos = seen.find((e) => e.type === "photos");
@@ -618,7 +632,7 @@ function methodPaths(surface) {
     return "refused in words, nothing sent";
   });
 
-  await check("the native fallback never asks the gateway to stream, and still reads a stream if handed one", async () => {
+  await check("the iOS native fallback permits a slow reply and reads a stream without requesting one", async () => {
     // Since control plane 0.2.17 the gateway honours stream:true. CapacitorHttp
     // hands back one finished body, so a fallback that forwards the fetch body
     // unchanged gets an event stream, fails to parse it as JSON, and shows the
@@ -626,13 +640,20 @@ function methodPaths(surface) {
     // reply on 2026-09-09 until it was fixed.
     const prefs = new Map();
     const seen = [];
-    const capacitor = { Plugins: {
+    const capacitor = { getPlatform: () => "ios", Plugins: {
       Preferences: {
         get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
         set: async ({ key, value }) => { prefs.set(key, value); },
         remove: async ({ key }) => { prefs.delete(key); },
       },
-      CapacitorHttp: { request: async (opts) => { seen.push(opts); return { status: 200, data:
+      CapacitorHttp: { request: async (opts) => {
+        seen.push(opts);
+        // Mirror URLRequest's timeout selection in the installed iOS plugin.
+        // A six-second model reply used to fail despite readTimeout=650000.
+        if (String(opts.url).includes("/api/gateway/chat") && (opts.connectTimeout ?? opts.readTimeout ?? 600000) < 6000) {
+          throw new Error("The request timed out.");
+        }
+        return { status: 200, data:
         'data: {"choices":[{"delta":{"content":"Whole "}}]}\ndata: {"choices":[{"delta":{"content":"answer."}}]}\ndata: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\ndata: [DONE]\n' }; } },
     } };
     const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
@@ -642,7 +663,7 @@ function methodPaths(surface) {
     assert(chat, "the fallback never reached the gateway");
     assert(chat.data && chat.data.stream === undefined, `the native body still asked to stream: ${JSON.stringify(chat.data.stream)}`);
     assert(result.done && result.text === "Whole answer.", `the fallback returned ${JSON.stringify(result)}`);
-    return "stream stripped from the native body; an SSE body is still read";
+    return "six-second reply survives the iOS request budget; native SSE body is read";
   });
 
   await check("reminders schedule through the system and come back in order; the camera roll keeps a verdict per lot", async () => {
@@ -709,6 +730,135 @@ function methodPaths(surface) {
     await bridge.diag.clear();
     assert((await bridge.diag.list()).length === 0, "clear left entries");
     return `${kinds.length} entries for a good run; a dead network shows as net:fetch-threw Load failed`;
+  });
+
+  await check("a failed turn is one sentence in the app's voice; the raw error goes to the console and Diagnostics only", async () => {
+    // 1.1. The founder watched a grower be shown the gateway's error dictionary
+    // when the vision model was overloaded. Four ways a turn fails, three
+    // sentences, and the raw text in exactly two places a person can read it
+    // from: the console and the Diagnostics ring.
+    const token = "header." + Buffer.from('{"email":"grower@example.com","tier":"personal","exp":9999999999}').toString("base64") + ".sig";
+    const RAW = {
+      budget: () => new Response('{"detail":{"error":"budget_exhausted","message":"Monthly reading budget used"}}', { status: 429 }),
+      busy: () => new Response('data: {"error":{"type":"overloaded_error","message":"Overloaded"}}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } }),
+      five: () => new Response('{"detail":"upstream unavailable"}', { status: 503 }),
+      net: () => { throw new TypeError("Load failed"); },
+    };
+    const WANT = {
+      budget: "This month's reading budget is used up. It resets on the first.",
+      busy: "The reader is busy. Try again in a moment.",
+      five: "The reading did not come back. Try again.",
+      net: "The reading did not come back. Try again.",
+    };
+    const seen = [];
+    for (const [mode, answer] of Object.entries(RAW)) {
+      const bridge = loadMobileSurface(async (url) => (String(url).includes("/api/gateway/chat") ? answer() : new Response("{}", { status: 200 })));
+      const log = loadMobileSurface.lastConsole;
+      await bridge.setConfig({ token });
+      const events = [];
+      bridge.agent.onEvent((ev) => events.push(ev));
+      const r = await bridge.agent.run([{ role: "user", content: "What is this?" }]);
+      const err = events.find((e) => e.type === "error");
+      assert(err, `${mode}: no error event`);
+      assert(err.text === WANT[mode], `${mode}: said ${JSON.stringify(err.text)}`);
+      assert(r.done === false && r.error === WANT[mode], `${mode}: the run's own error is ${JSON.stringify(r.error)}`);
+      assert(!/HTTP \d|\{|overloaded_error|Load failed/.test(err.text), `${mode}: the raw error leaked into the transcript`);
+      assert(log.some((l) => /turn failed/.test(l) && (/429|overloaded|503|Load failed/i.test(l))), `${mode}: the raw error did not reach the console: ${JSON.stringify(log)}`);
+      const rows = await bridge.diag.list();
+      assert(rows.some((x) => x.k === "run:error-raw" && /429|overloaded|503|Load failed/i.test(x.d)), `${mode}: Diagnostics did not keep the raw error`);
+      seen.push(`${mode} -> ${err.kind}`);
+    }
+    // Sentences the bridge itself writes pass through untouched.
+    const h = loadMobileSurface.lastWindow.__croweHumanError;
+    assert(h('Not signed in. Tap "Sign in with Crowe ID" to continue.').kind === "message", "an app-voice sentence was rewritten");
+    assert(h("HTTP 502: Bad Gateway").text === WANT.five && h("stream broke: TypeError").text === WANT.five, "a 5xx or a broken stream did not read as a failed reading");
+    return seen.join(", ");
+  });
+
+  await check("the phone starts on brisk pace with the developer chrome off, and remembers the switch", async () => {
+    const bridge = loadMobileSurface();
+    const c = await bridge.getConfig();
+    assert(c.textPace === "brisk", `textPace defaults to ${c.textPace}`);
+    assert(c.showUsage === false, `showUsage defaults to ${JSON.stringify(c.showUsage)}`);
+    const after = await bridge.setConfig({ showUsage: true, textPace: "reading" });
+    assert(after.showUsage === true && after.textPace === "reading", "the switch and the pace did not persist through setConfig");
+    return "brisk, quiet; both settable";
+  });
+
+  await check("crowePhone.publicJson reads a public gateway route once a minute and answers null when it cannot", async () => {
+    let calls = 0;    // founders reads only: the bridge's boot also fetches build.json through the same fetch
+    const bridge = loadMobileSurface(async (url) => { if (String(url).includes("/api/public/founders")) calls++; return String(url).includes("/api/public/founders")
+      ? new Response('{"spots":100,"taken":0,"founders":[]}', { status: 200 }) : new Response("", { status: 404 }); });
+    await bridge.getConfig();
+    const phone = loadMobileSurface.lastWindow.crowePhone;
+    const a = await phone.publicJson("/api/public/founders");
+    const b = await phone.publicJson("/api/public/founders");
+    assert(a && a.spots === 100 && b === a && calls === 1, `expected one fetch and a cached answer, got ${calls} call(s): ${JSON.stringify([a, b])}`);
+    assert((await phone.publicJson("/api/public/missing")) === null, "a 404 did not answer null");
+    const down = loadMobileSurface(async () => { throw new TypeError("Load failed"); });
+    await down.getConfig();
+    assert((await loadMobileSurface.lastWindow.crowePhone.publicJson("/api/public/founders")) === null, "a dead network did not answer null");
+    return "1 fetch for 2 reads; 404 and no network read as null";
+  });
+
+  await check("gates.list and gates.decide speak the relay contract with the Crowe ID bearer, refresh once on 401, and report 409/410/unreachable plainly", async () => {
+    const seen = [];
+    let mode = "ok", gate = { id: "g_1", status: "pending", title: "Run a command", evidence_hash: "h1" };
+    const answer = (status, body) => ({ status, ok: status < 300, text: async () => JSON.stringify(body), json: async () => body });
+    const relay = async (url, init = {}) => {
+      const u = String(url);
+      if (u.includes("/protocol/openid-connect/token")) return answer(200, { access_token: "fresh", refresh_token: "r2" });
+      if (!u.startsWith("http://127.0.0.1:8788")) throw new TypeError("unexpected fetch " + u);
+      seen.push({ url: u, method: init.method, auth: init.headers && init.headers.Authorization, body: init.body ? JSON.parse(init.body) : null });
+      if (mode === "down") throw new TypeError("Load failed");
+      if (init.headers.Authorization === "Bearer stale") return answer(401, { error: "unauthorized" });
+      if (u.endsWith("/v1/gates?status=pending")) return answer(200, { gates: [gate] });
+      if (u.endsWith("/decision")) {
+        if (mode === "409") return answer(409, { error: "already_decided", gate: { ...gate, status: "denied", decided_via: "desktop" } });
+        if (mode === "410") return answer(410, { error: "expired", gate: { ...gate, status: "expired" } });
+        return answer(200, { gate: { ...gate, status: "approved", decided_via: "phone" } });
+      }
+      return answer(404, {});
+    };
+    // Signed out: no request leaves the phone, and the list says so.
+    let bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788" });
+    let r = await bridge.gates.list();
+    assert(r.ok === false && r.signedIn === false && r.gates.length === 0 && seen.length === 0, `signed-out list: ${JSON.stringify(r)} after ${seen.length} request(s)`);
+    // Signed in.
+    bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788", token: "good", refreshToken: "r1" });
+    r = await bridge.gates.list();
+    assert(r.ok && r.signedIn && r.gates.length === 1 && r.gates[0].id === "g_1", `list: ${JSON.stringify(r)}`);
+    assert(seen[0].auth === "Bearer good" && seen[0].method === "GET", `list request: ${JSON.stringify(seen[0])}`);
+    let d = await bridge.gates.decide("g_1", "approve", "h1");
+    const sent = seen[seen.length - 1];
+    assert(d.ok && d.gate.status === "approved", `decide: ${JSON.stringify(d)}`);
+    assert(sent.url.endsWith("/v1/gates/g_1/decision") && sent.method === "POST" && sent.body.decision === "approve" && sent.body.via === "phone" && sent.body.evidence_hash === "h1", `decision request: ${JSON.stringify(sent)}`);
+    d = await bridge.gates.decide("g_1", "anything-else", "");
+    assert(seen[seen.length - 1].body.decision === "deny" && !("evidence_hash" in seen[seen.length - 1].body), "an unknown decision must read as deny, with no empty hash");
+    mode = "409"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 409 && d.error === "already_decided" && d.gate.decided_via === "desktop", `409: ${JSON.stringify(d)}`);
+    mode = "410"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 410 && d.error === "expired", `410: ${JSON.stringify(d)}`);
+    mode = "down"; d = await bridge.gates.decide("g_1", "approve", "h1");
+    assert(d.ok === false && d.status === 0 && d.error === "unreachable", `unreachable decide: ${JSON.stringify(d)}`);
+    r = await bridge.gates.list();
+    assert(r.ok === false && r.signedIn === true && r.gates.length === 0, `unreachable list must not read as signed out: ${JSON.stringify(r)}`);
+    // A stale token refreshes once and the retry carries the fresh one.
+    mode = "ok"; seen.length = 0;
+    bridge = loadMobileSurface(relay);
+    await bridge.setConfig({ gatesUrl: "http://127.0.0.1:8788", token: "stale", refreshToken: "r1" });
+    r = await bridge.gates.list();
+    assert(r.ok && seen.length === 2 && seen[0].auth === "Bearer stale" && seen[1].auth === "Bearer fresh", `refresh path: ${JSON.stringify(seen)}`);
+    // A relay URL that is not https or loopback never receives the bearer.
+    seen.length = 0;
+    bridge = loadMobileSurface(async (url) => { seen.push(String(url)); throw new TypeError("offline"); });
+    await bridge.setConfig({ gatesUrl: "http://evil.example.com", token: "good" });
+    await bridge.gates.list();
+    const gateCalls = seen.filter((u) => u.includes("/v1/gates"));
+    assert(gateCalls.length === 1 && gateCalls[0].startsWith("https://gates.crowelogic.com/"), `a plaintext relay URL was used: ${JSON.stringify(seen)}`);
+    return "bearer, refresh, 409, 410, unreachable, signed-out, and URL guard";
   });
 
   await check("Delete account opens the Crowe ID account page and signs the phone out only once the account is gone", async () => {
@@ -870,6 +1020,65 @@ function methodPaths(surface) {
     const error = seen.find((e) => e.type === "error");
     assert(error && /signed in/i.test(error.text), `the error event was ${JSON.stringify(error)}`);
     assert(!result.done, "an unauthenticated turn reported success");
+  });
+
+  await check("checkout opens Stripe only on the US App Store storefront, and plan says so before any button is drawn", async () => {
+    // Epic v. Apple lets a US-storefront iOS app link out to buy on the web.
+    // The storefront is StoreKit's (CroweStore), never the locale: every case
+    // here runs with an en-US locale, so a GBR storefront refusing proves the
+    // locale is not what decides. No plugin, no storefront, a throwing plugin,
+    // Android, signed out, or a checkout URL that is not Stripe's all refuse
+    // without opening anything.
+    const jwt = (claims) => "h." + Buffer.from(JSON.stringify(claims)).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_") + ".s";
+    const token = jwt({ email: "grower@example.com", crowe_tier: "free", exp: Math.floor(Date.now() / 1000) + 3600 });
+    const run = async ({ platform = "ios", store = "USA", signedIn = true, url = "https://checkout.stripe.com/c/pay/cs_test_1" } = {}) => {
+      const opened = [], posted = [];
+      const prefs = new Map();
+      const plugins = {
+        Preferences: { get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }), set: async ({ key, value }) => { prefs.set(key, value); }, remove: async ({ key }) => { prefs.delete(key); } },
+        Browser: { open: async ({ url: u }) => { opened.push(u); }, addListener: () => ({ remove() {} }) },
+      };
+      if (store === "throws") plugins.CroweStore = { storefront: async () => { throw new Error("storekit down"); } };
+      else if (store !== null) plugins.CroweStore = { storefront: async () => ({ countryCode: store }) };
+      const cap = { getPlatform: () => platform, isNativePlatform: () => true, Plugins: plugins };
+      const fetchImpl = async (u, init = {}) => {
+        if (!String(u).includes("crowe-checkout")) throw new TypeError("unexpected fetch " + u);
+        posted.push({ url: String(u), body: init.body ? JSON.parse(init.body) : null });
+        return new Response(JSON.stringify({ url }), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const bridge = loadMobileSurface(fetchImpl, cap);
+      if (signedIn) await bridge.setConfig({ token });
+      const plan = await bridge.billing.plan();
+      const r = await bridge.billing.checkout("pro");
+      return { r, plan, opened, posted };
+    };
+
+    let t = await run();
+    assert(t.plan.buyHere === true, `plan did not offer a purchase on the US storefront: ${JSON.stringify(t.plan)}`);
+    assert(t.r.ok && t.r.opened && !t.r.url, `US iOS did not open: ${JSON.stringify(t.r)}`);
+    assert(t.opened.length === 1 && t.opened[0].startsWith("https://checkout.stripe.com/"), `opened ${JSON.stringify(t.opened)}`);
+    assert(t.posted[0].body.slug === "pro" && t.posted[0].body.email === "grower@example.com", `posted ${JSON.stringify(t.posted)}`);
+
+    for (const [label, opts] of [
+      ["GBR storefront on an en-US phone", { store: "GBR" }],
+      ["no storefront", { store: "" }],
+      ["no CroweStore plugin", { store: null }],
+      ["StoreKit error", { store: "throws" }],
+      ["US Android", { platform: "android" }],
+    ]) {
+      t = await run(opts);
+      assert(t.plan.buyHere === false, `${label}: plan offered a purchase: ${JSON.stringify(t.plan)}`);
+      assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `${label} was not refused before any request: ${JSON.stringify(t)}`);
+    }
+    t = await run({ signedIn: false });
+    assert(!t.r.ok && t.opened.length === 0 && t.posted.length === 0, `signed out was not refused: ${JSON.stringify(t)}`);
+    t = await run({ url: "https://pay.crowelogic.com/c/pay/cs_live_1" });
+    assert(t.r.ok && t.opened[0] === "https://pay.crowelogic.com/c/pay/cs_live_1", `the live custom checkout domain was refused: ${JSON.stringify(t)}`);
+    for (const url of ["https://stripe.com.evil.example/pay", "https://pay.crowelogic.com.evil.example/c/pay", "http://pay.crowelogic.com/c/pay"]) {
+      t = await run({ url });
+      assert(!t.r.ok && t.opened.length === 0, `an off-Stripe URL was opened: ${url} ${JSON.stringify(t)}`);
+    }
+    return "USA opens Stripe; GBR, none, no plugin, StoreKit error, Android, signed-out, off-Stripe refuse";
   });
 
   // ─── Routing parity with the harness ─────────────────────────────────────────
@@ -1095,6 +1304,187 @@ function methodPaths(surface) {
     assert(/className\s*=\s*"sess-meta"/.test(rr), "renderer no longer draws .sess-meta; update this check");
     assert(/closest\("\.sess-meta"\)/.test(ui), "mobile-ui closes the drawer on taps inside .sess-meta");
     return "editor taps ignored";
+  });
+
+  /* native-chrome.js against a scripted CroweChrome: a bridge call can reject
+     or resolve late, and the native bar must still end up showing what the web
+     tabs say, with the web bar back in charge whenever the native one is not. */
+  function nativeChromeHarness(plugin) {
+    const vm = require("vm");
+    const observers = [];
+    const classes = new Set(["mobile", "sidebar-collapsed"]);
+    const props = {};
+    const mk = (id, label, current) => ({ dataset: { id }, textContent: label, current,
+      getAttribute: function (n) { return n === "aria-current" && this.current ? "true" : null; }, click() {} });
+    const items = [mk("home", "Home", true), mk("chat", "Chat", false), mk("playground", "Playground", false)];
+    const tabs = { querySelectorAll: () => items, querySelector: (s) => items.find((t) => s.includes(`"${t.dataset.id}"`)) };
+    const body = { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      style: { setProperty: (k, v) => { props[k] = v; } }, appendChild() {} };
+    const listeners = {};
+    const sheet = { open: false, classList: { contains: (c) => c === "modal" } };
+    plugin.addListener = (ev, fn) => { listeners[ev] = fn; return Promise.resolve({ remove() {} }); };
+    const ctx = {
+      window: {}, setTimeout, CSS: { escape: (s) => s },
+      document: { getElementById: (id) => (id === "m-tabs" ? tabs : null), createElement: () => ({ style: {} }), body,
+        querySelector: (s) => (s === ".modal:not(.hidden)" && sheet.open ? sheet : null) },
+      getComputedStyle: () => ({ color: "rgb(160, 120, 40)" }),
+      MutationObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} },
+    };
+    ctx.window.Capacitor = { isNativePlatform: () => true, Plugins: { CroweChrome: plugin } };
+    vm.runInNewContext(read("mobile/src/native-chrome.js"), ctx);
+    const select = (id) => { items.forEach((t) => { t.current = t.dataset.id === id; }); observers.forEach((o) => o.fn([])); };
+    const toggleSheet = (open) => { sheet.open = open; observers.forEach((o) => o.fn([{ target: sheet }])); };
+    return { classes, props, listeners, select, items, toggleSheet, notify: () => observers.forEach((o) => o.fn([])) };
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  await check("drawer footer is clear of native tabs and late native taps cannot close it", async () => {
+    let hidden = null, taps = 0;
+    const h = nativeChromeHarness({ setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async s => { hidden = s.hidden; }, haptic: async () => {} });
+    h.items[0].click = () => { taps++; };
+    await sleep(20);
+    h.classes.delete("sidebar-collapsed"); h.notify(); await sleep(20);
+    assert(hidden === true, "native Home tab covers the lower-left drawer footer");
+    h.listeners.tabSelected({ id: "home" }); await sleep(20);
+    assert(taps === 0, "a late native tap navigated under the drawer");
+    h.toggleSheet(true); h.classes.add("sidebar-collapsed"); h.notify(); await sleep(20);
+    assert(hidden === true, "opening Settings from the drawer exposed native tabs");
+    h.toggleSheet(false); await sleep(20);
+    assert(hidden === false, "native navigation did not return");
+  });
+
+  await check("billing uses the authenticated portal_url contract and rejects foreign hosts", async () => {
+    let address = "https://billing.stripe.com/p/session/test_fixture", opened = [], requests = 0;
+    const bridge = loadMobileSurface(async (url, init) => {
+      if (!String(url).includes("/api/billing/portal/self")) return new Response("{}");
+      requests++;
+      assert(init.method === "POST" && init.headers.Authorization === "Bearer fixture-token", "portal request lost its identity");
+      return new Response(JSON.stringify({ portal_url: address }), { status: 200 });
+    });
+    loadMobileSurface.lastWindow.open = url => opened.push(url);
+    await bridge.setConfig({ token: "fixture-token" });
+    assert((await bridge.license.billing()).ok && opened[0] === address, "valid backend portal did not open");
+    for (address of ["http://billing.stripe.com/p/session/x", "https://evil.example/p/session/x", "https://billing.stripe.com.evil.example/p/session/x", "https://user@billing.stripe.com/p/session/x"]) {
+      assert((await bridge.license.billing()).error, "untrusted portal accepted");
+    }
+    assert(opened.length === 1, "invalid portal opened a browser");
+    const before = requests;
+    assert((await bridge.license.billing({ emailVerification: true })).ok, "email verification portal failed");
+    assert(requests === before && opened[1] === require("../renderer/billing-portal").EMAIL_LOGIN, "email portal used untrusted or authenticated data");
+  });
+
+  await check("offline sign-out finishes and an older refresh cannot sign the phone back in", async () => {
+    let completeRefresh, started;
+    const began = new Promise(resolve => { started = resolve; });
+    const bridge = loadMobileSurface(async url => {
+      if (String(url).endsWith("/revoke")) return new Promise(() => {});
+      if (String(url).endsWith("/token")) { started(); return new Promise(resolve => { completeRefresh = resolve; }); }
+      return new Response("{}");
+    });
+    await bridge.setConfig({ token: "old", refreshToken: "fixture-refresh" });
+    const pending = bridge.billing.refresh(); await began;
+    const result = await Promise.race([bridge.auth.logout(), sleep(500).then(() => ({ timeout: true }))]);
+    assert(result.ok && !result.timeout, "sign-out waited for the network");
+    completeRefresh(new Response(JSON.stringify({ access_token: "resurrected", refresh_token: "rotated" })));
+    await pending;
+    assert(!(await bridge.getConfig()).hasToken && !(await bridge.auth.status()).user, "late refresh restored a signed-out account");
+  });
+
+  await check("sign-out reports a secure-storage refusal instead of reloading into an old account", async () => {
+    const bridge = loadMobileSurface(async () => new Response("{}"));
+    await bridge.setConfig({ token: "fixture-access", refreshToken: "fixture-refresh" });
+    const win = loadMobileSurface.lastWindow;
+    let strictWrites = 0;
+    win.croweVault = { handles: key => key === "config", set: async (_key, _value, options) => {
+      assert(options?.strict === true, "sign-out did not require the actual secure store");
+      strictWrites++;
+      throw new Error("fixture storage refusal");
+    } };
+    const result = await bridge.auth.logout();
+    assert(result.error && !result.ok && strictWrites === 2, "secure storage failure was reported as success");
+    assert(!(await bridge.getConfig()).hasToken, "in-memory access remained active");
+  });
+
+  await check("native tabs recover from a rejected setTabs and hand navigation back meanwhile", async () => {
+    let calls = 0;
+    const plugin = { setTabs: async () => { if (++calls === 1) throw new Error("no host view"); return { height: 83 }; },
+      setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(50);
+    assert(!h.classes.has("native-tabs"), "the spacer claimed a native bar after setTabs rejected");
+    await sleep(700);
+    assert(calls >= 2, "a rejected setTabs was never retried");
+    assert(h.classes.has("native-tabs"), "the retry succeeded but native-tabs was not set");
+    assert(h.props["--native-tab-h"] === "83px", `reserved height ${h.props["--native-tab-h"]}`);
+    return `${calls} setTabs calls, spacer 83px`;
+  });
+
+  await check("native tab selection is serialised and lands on the last web state", async () => {
+    let inFlight = 0, overlap = false; const seen = [];
+    const plugin = { setTabs: async () => ({ height: 83 }), setHidden: async () => {}, haptic: async () => {},
+      setCurrent: async ({ id }) => { if (++inFlight > 1) overlap = true; await sleep(id === "chat" ? 60 : 5); seen.push(id); inFlight--; } };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    h.select("chat"); h.select("playground"); h.select("home"); h.select("playground");
+    await sleep(250);
+    assert(!overlap, "two setCurrent calls were in flight at once");
+    assert(seen[seen.length - 1] === "playground", `native bar ended on ${seen[seen.length - 1]}, not playground`);
+    return `calls: ${seen.join(" -> ")}`;
+  });
+
+  await check("approval hides native tabs, blocks taps, and preserves keyboard hiding", async () => {
+    let hidden = null, taps = 0;
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async (s) => { hidden = s.hidden; }, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    h.items[1].click = () => { taps++; };
+    await sleep(20);
+    h.classes.add("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "approval left the native tabs visible");
+    h.listeners.tabSelected({ id: "chat" }); await sleep(20);
+    assert(taps === 0, "native tab navigated behind approval");
+    h.classes.add("kb-open"); h.classes.delete("approval-open"); h.notify(); await sleep(20);
+    assert(hidden === true, "dismissal exposed tabs over the keyboard");
+    h.classes.delete("kb-open"); h.notify(); await sleep(20);
+    assert(hidden === false, "tabs did not return after dismissal");
+    return "approval and keyboard visibility compose; modal taps ignored";
+  });
+
+  await check("an open sheet (Settings) hides the native tabs so its buttons are not under them", async () => {
+    let hidden = null;
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {},
+      setHidden: async (s) => { hidden = s.hidden; }, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    assert(hidden === false, `tabs start hidden=${hidden}`);
+    h.toggleSheet(true); await sleep(20);
+    assert(hidden === true, "Settings left the native tabs over its action row");
+    h.toggleSheet(false); await sleep(20);
+    assert(hidden === false, "tabs did not return after Settings closed");
+    return "sheet open -> hidden, closed -> shown";
+  });
+
+  await check("native bar geometry changes move the web spacer", async () => {
+    const plugin = { setTabs: async () => ({ height: 83 }), setCurrent: async () => {}, setHidden: async () => {}, haptic: async () => {} };
+    const h = nativeChromeHarness(plugin);
+    await sleep(20);
+    assert(typeof h.listeners.geometry === "function", "native-chrome does not listen for geometry");
+    h.listeners.geometry({ height: 53 });
+    assert(h.props["--native-tab-h"] === "53px", `spacer stayed at ${h.props["--native-tab-h"]} after rotation`);
+    return "83px -> 53px";
+  });
+
+  await check("dictation refuses to start natively without permission, and stops when the app leaves the foreground", () => {
+    const ios = read("mobile/ios/App/App/CroweSpeech.swift");
+    assert(/guard self\.permissionState\(\) == "granted"/.test(ios), "CroweSpeech.start does not check permission itself");
+    assert(/willResignActiveNotification/.test(ios) && /appWillResignActive\(\) \{ teardown\(notify: true\) \}/.test(ios),
+      "CroweSpeech keeps listening after the app leaves the foreground");
+    const ui = read("mobile/src/mobile-ui.js");
+    const keyboard = read("mobile/src/crowe-keyboard.js");
+    assert(/window\.croweKeyboard\?\.captureSpeech/.test(ui) && /begin\(Speech, "composer"/.test(ui), "the composer must use the shared speech permission lifecycle");
+    assert(/perm\.speechRecognition !== "granted"/.test(keyboard), "shared dictation must stop on denied permission");
+    return "iOS guarded";
   });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");

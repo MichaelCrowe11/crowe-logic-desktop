@@ -56,11 +56,11 @@ const TARGETS = [
 /* No em dashes, no emojis, and nothing that describes the app as an "AI".
    Each line says what the surface under it actually does. */
 const PANELS = [
-  { file: "01-chat.png", head: "Your operator,\nin your pocket.", sub: "Ask it to reason, look things up, and keep track of what you are working on." },
-  { file: "02-projects.png", head: "Every thread,\nand who answered it.", sub: "Coding, development and research, run by the operator." },
-  { file: "03-studio.png", head: "Film, music,\nand the studio.", sub: "The creative house, under one roof." },
-  { file: "04-cultivation.png", head: "The grower's\nspace.", sub: "Questions go straight to the mycology expert, with no need to phrase them for a router." },
-  { file: "05-panels.png", head: "Operator control,\nfrom the phone.", sub: "See what is running, and stop it from here." },
+  { file: "01-home.png", head: "What are we\nworking on?", sub: "Understand a problem, review a file, plan a change, or try a model. Start from Home." },
+  { file: "02-chat.png", head: "Your operator,\nin your pocket.", sub: "Ask it to reason, look things up, and keep track of what you are working on." },
+  { file: "03-playground.png", head: "Try the models\nside by side.", sub: "Text and image models in a scratch space. Compare two, and nothing is saved to your chats." },
+  { file: "04-messages.png", head: "Every thread,\nand who answered it.", sub: "Group conversations with the models and the people you work with." },
+  { file: "05-home-dark.png", head: "Pair your own\ncomputer.", sub: "Read files and run commands on your Mac from here, over your private Tailscale network. Chat works without it." },
 ];
 
 const PY = path.join(__dirname, "gen-store-frames.py");

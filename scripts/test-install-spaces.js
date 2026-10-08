@@ -1,7 +1,11 @@
 // Does a build shipped with a narrower set of spaces actually arrive narrowed?
 //
 //   CROWE_SPACES=chat,projects electron scripts/test-install-spaces.js   # narrowed
+//   CROWE_SPACES=chat,projects,cultivation electron scripts/...         # Mycology-shaped
 //   electron scripts/test-install-spaces.js                             # ordinary
+//
+// Cultivation is opt-in: an ordinary build ships Chat and Projects, and only a
+// build that declares Cultivation (the Mycology edition does) shows it.
 //
 // test-panels.js covers the renderer's half of this by assigning
 // window.crowe.installSpaces directly, which is fast and tests the interesting
@@ -25,8 +29,9 @@ const { shutdownNativeResources } = require(path.join(__dirname, "..", "main.js"
 
 const WANT = (process.env.CROWE_SPACES || "").split(",").map((s) => s.trim()).filter(Boolean);
 const NARROWED = WANT.length > 0;
+const CULTIVATION = WANT.includes("cultivation");
 const LABEL = NARROWED ? `a build declaring ${WANT.join(" + ")} ships only those spaces`
-                       : "a build declaring nothing ships every space";
+                       : "a build declaring nothing ships every space but the opt-in Cultivation";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
@@ -72,7 +77,7 @@ app.whenReady().then(async () => {
     check("window.crowe.installSpaces", seen.bridged, NARROWED ? WANT : null);
     // ...and the renderer acted on it. Chat is never optional, so it is present
     // either way; the rail is what someone actually sees.
-    const expected = NARROWED ? ["chat", ...WANT.filter((id) => id !== "chat")] : ["chat", "projects", "cultivation"];
+    const expected = NARROWED ? ["chat", ...WANT.filter((id) => id !== "chat")] : ["chat", "projects"];
     check("PROFILE", seen.profile, expected);
     check("visible rail buttons", seen.rail, expected);
     // A build default is the build talking, not a choice anyone made. Writing it
@@ -80,16 +85,16 @@ app.whenReady().then(async () => {
     check("stored profile", seen.stored, null);
     // The Home card names the grower through the bridge table whether or not
     // the gateway answered, so this half holds offline in both directions.
-    check("home routing shows the grower", seen.growing, !NARROWED);
+    check("home routing shows the grower", seen.growing, CULTIVATION);
     // Deployments needs the live catalog. Offline the lane is empty and the
-    // check is vacuous, so only the narrowed direction is asserted.
-    if (NARROWED) check("deployments list the grower", seen.grower, false);
+    // check is vacuous, so only the direction without Cultivation is asserted.
+    if (!CULTIVATION) check("deployments list the grower", seen.grower, false);
     // Crowe Sense declares only cultivation in plugins.builtin.json, so it is
     // the row that must go; Crowe Skills names chat and projects too, so it is
     // the row that must stay, in both directions.
-    check("settings list Crowe Sense", seen.plugins.includes("Crowe Sense"), !NARROWED);
+    check("settings list Crowe Sense", seen.plugins.includes("Crowe Sense"), CULTIVATION);
     check("settings list Crowe Skills", seen.plugins.includes("Crowe Skills"), true);
-    check("the Crowe Sense section is hidden", seen.senseHidden, NARROWED);
+    check("the Crowe Sense section is hidden", seen.senseHidden, !CULTIVATION);
 
     console.log(`${failures ? "not ok" : "ok    "}  ${LABEL}`);
   } catch (error) {

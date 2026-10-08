@@ -42,13 +42,13 @@ const root = path.join(mobileDir, "..");
 const assets = path.join(root, "assets");
 const out = path.join(mobileDir, "resources");
 
-const CREAM = "#f7f3ea";
-const INK = "#16130f";
+const CREAM = "#F4F0E7";
+const INK = "#191919";
 
 // The mark's own viewBox, and the fraction of the canvas it should cover.
 // A launch screen wants the mark small and centred — big enough to read at
 // arm's length, far enough from the edges that a notch never crops it.
-const MARK_BOX = { x: 15.93, y: 15.93, w: 88.14, h: 88.14 };
+const MARK_BOX = { x: 0, y: 0, w: 64, h: 64 };
 
 function markBody(file) {
   const svg = fs.readFileSync(path.join(assets, file), "utf8");
@@ -60,11 +60,12 @@ function markBody(file) {
 // A canvas with the mark centred at `scale` of the shorter side. Nested <svg>
 // rather than a <use> or a transform: the inner viewBox does the arithmetic,
 // so the mark stays centred whatever size the outer canvas is asked for.
-function compose({ size, background, mark, scale }) {
-  const side = Math.round(size * scale);
-  const offset = Math.round((size - side) / 2);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-${background ? `  <rect width="${size}" height="${size}" fill="${background}"/>\n` : ""}  <svg x="${offset}" y="${offset}" width="${side}" height="${side}" viewBox="${MARK_BOX.x} ${MARK_BOX.y} ${MARK_BOX.w} ${MARK_BOX.h}">
+function compose({ size, width = size, height = size, background, mark, scale }) {
+  const side = Math.round(Math.min(width, height) * scale);
+  const offsetX = Math.round((width - side) / 2);
+  const offsetY = Math.round((height - side) / 2);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+${background ? `  <rect width="${width}" height="${height}" fill="${background}"/>\n` : ""}  <svg x="${offsetX}" y="${offsetY}" width="${side}" height="${side}" viewBox="${MARK_BOX.x} ${MARK_BOX.y} ${MARK_BOX.w} ${MARK_BOX.h}">
 ${markBody(mark).replace(/^/gm, "    ")}
   </svg>
 </svg>
@@ -73,8 +74,8 @@ ${markBody(mark).replace(/^/gm, "    ")}
 
 const SOURCES = [
   // [file, contents]
-  ["splash.svg", () => compose({ size: 2732, background: CREAM, mark: "mark-simple.svg", scale: 0.17 })],
-  ["splash-dark.svg", () => compose({ size: 2732, background: INK, mark: "mark-simple-dark.svg", scale: 0.17 })],
+  ["splash.svg", () => compose({ size: 2732, background: CREAM, mark: "gate-glyph.svg", scale: 0.17 })],
+  ["splash-dark.svg", () => compose({ size: 2732, background: INK, mark: "gate-glyph-dark.svg", scale: 0.17 })],
 ];
 
 // [svg, png, pixel size]
@@ -98,6 +99,23 @@ function main() {
       execFileSync("rsvg-convert", ["-w", String(size), "-h", String(size), path.join(out, svg), "-o", path.join(out, png)]);
       wrote.push(png);
     }
+    // Regenerate the native slots in place so both packaged apps receive the art.
+    const ios = path.join(mobileDir, "ios/App/App/Assets.xcassets/Splash.imageset");
+    const android = path.join(mobileDir, "android/app/src/main/res");
+    const native = fs.readdirSync(ios).filter(n => n.endsWith(".png")).map(n => path.join(ios, n));
+    for (const name of fs.readdirSync(android).filter(n => n.startsWith("drawable"))) {
+      const file = path.join(android, name, "splash.png");
+      if (fs.existsSync(file)) native.push(file);
+    }
+    for (const file of native) {
+      const png = fs.readFileSync(file);
+      const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+      const dark = file.includes("night") || file.includes("-dark");
+      const svg = compose({ width, height, background: dark ? INK : CREAM,
+        mark: dark ? "gate-glyph-dark.svg" : "gate-glyph.svg", scale: 0.17 });
+      execFileSync("rsvg-convert", ["-w", String(width), "-h", String(height), "-o", file], { input: svg });
+    }
+    console.log(`Updated ${native.length} native splash slots at their original dimensions.`);
   }
 
   console.log(`resources/: ${wrote.join(" ")}`);
@@ -106,7 +124,7 @@ function main() {
     console.log("  macOS: brew install librsvg     Debian/Ubuntu: apt install librsvg2-bin");
     console.log("The launch screen falls back to a flat brand colour.");
   }
-  console.log("\nNext: npx @capacitor/assets generate \\\n        --splashBackgroundColor '#f7f3ea' --splashBackgroundColorDark '#16130f'");
+  console.log("\nNext: npx @capacitor/assets generate \\\n        --splashBackgroundColor '#F4F0E7' --splashBackgroundColorDark '#191919'");
   console.log("\nThat command touches the splash art only, because resources/ now holds only");
   console.log("splashes. The launcher icons are `npm run icons`; if a stale icon.png ever");
   console.log("reappears in resources/, delete it rather than letting that command place it.");

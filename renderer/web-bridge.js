@@ -1202,9 +1202,11 @@
     pty: {
       start: escalate("The terminal", { ok: false }),
       input: () => {},
+      reclaim: () => {},
       resize: () => {},
       close: async () => ({ ok: true }),
       onData: () => () => {},
+      onEngine: () => () => {},
     },
     fs: {
       list: escalate("The file browser", { cwd: "", entries: [] }),
@@ -1278,7 +1280,7 @@
       status: async () => ({ running: false }),
       start: unsupported("The phone companion"), stop: unsupported("The phone companion"),
       rotate: unsupported("The phone companion"), devices: async () => [],
-      addDevice: unsupported("The phone companion"), revokeDevice: unsupported("The phone companion"),
+      addDevice: unsupported("The phone companion"), revokeDevice: unsupported("The phone companion"), setTerminal: unsupported("The phone companion"),
       audit: async () => [], pairSvg: unsupported("Pairing"),
       onEvent: () => () => {},
     },

@@ -114,6 +114,104 @@ function readJson(req, limit = 2_000_000) {
   });
 }
 
+/* What a phone may touch on this machine through /read_file and /write_file.
+
+   The phone's own regex confirm is a courtesy: a leaked token never runs that
+   code. These checks run here, after symlinks are resolved, so the answer does
+   not depend on which client asked or how the path was spelled. Execute is
+   still a login shell and can reach all of this — that is what the tier means —
+   but no lesser tier, and no file tool at any tier, hands over a credential. */
+function realish(p, depth = 0) {
+  // The nearest existing ancestor is resolved, so a write into a new folder
+  // under a symlinked directory is judged by where it really lands. The native
+  // call matters on macOS: it returns the name as the disk spells it, so
+  // ~/.SSH comes back as ~/.ssh instead of slipping past the list below.
+  let cur = path.resolve(p);
+  const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); }
+    catch {
+      // A link whose target does not exist yet still decides where a write
+      // lands: writeFile follows it. Judge the target, not the link's name.
+      try {
+        if (depth < 16 && fs.lstatSync(cur).isSymbolicLink()) {
+          const target = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+          return realish(path.join(target, ...rest.reverse()), depth + 1);
+        }
+      } catch { /* not there at all; walk up */ }
+      const up = path.dirname(cur);
+      if (up === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = up;
+    }
+  }
+}
+
+// The default macOS and Windows volumes ignore case, so the comparison has to
+// as well, or ~/Library/keychains is a different place from Library/Keychains
+// to this code and the same place to the disk. Slashes are made one kind so
+// the patterns below read the same on Windows.
+const FOLD = process.platform === "darwin" || process.platform === "win32";
+function norm(p) {
+  const s = String(p).normalize("NFC").replace(/\\/g, "/");
+  return FOLD ? s.toLowerCase() : s;
+}
+
+function under(p, root) {
+  const a = norm(p), r = norm(root).replace(/\/+$/, "");
+  return a === r || a.startsWith(r + "/");
+}
+
+function secretRoots(home) {
+  return [
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc",
+    ".git-credentials", ".config/gcloud", ".config/gh", ".config/op", ".appstoreconnect", ".password-store",
+    ".config/crowe-logic", ".claude", ".env", ".zsh_history", ".bash_history",
+    "Library/Keychains", "Library/Cookies",
+    "Library/Application Support/Google", "Library/Application Support/Firefox",
+    "Library/Application Support/BraveSoftware", "Library/Application Support/Arc",
+    "Library/Application Support/Microsoft Edge", "Library/Application Support/Chromium",
+    "Library/Safari", "Library/Messages", "Library/Mail",
+  ].map((r) => realish(path.join(home, r)));
+}
+
+// Files that make code run later without anyone asking: the tier ladder treats
+// writing one of these as running a command, because that is what it becomes.
+// Tested against norm(), so forward slashes, and case-blind like the disk.
+const AUTORUN = [
+  /\/library\/launch(agents|daemons)\//i,
+  /\/\.(zshrc|zshenv|zprofile|zlogin|zlogout|bashrc|bash_profile|bash_login|bash_logout|profile|envrc)$/i,
+  /\/\.config\/fish\//i,
+  /\/\.config\/(autostart|systemd)\//i,
+  /\/(etc|var\/spool|usr\/lib)\/cron/i,
+  /\/\.ssh\/authorized_keys$/i,
+  // Git runs hooks on the next commit, and its config can name a program to run.
+  /\/\.git\/(hooks\/|config$)/i,
+  /\/(\.gitconfig|\.config\/git\/)/i,
+];
+
+function resolveForPhone(raw, { home = os.homedir(), ownFiles = [] } = {}) {
+  const given = String(raw || "").trim();
+  if (!given) throw Object.assign(new Error("no path given"), { status: 400 });
+  const expanded = given === "~" ? home : given.replace(/^~(?=[\/\\])/, home);
+  if (!path.isAbsolute(expanded)) throw Object.assign(new Error(`use an absolute or ~/ path: ${given}`), { status: 400 });
+  const real = realish(expanded);
+  const blocked = [...secretRoots(home), ...ownFiles.map((f) => realish(f))];
+  if (blocked.some((root) => under(real, root))) {
+    throw Object.assign(new Error(`${given} holds credentials, and the phone cannot read or write it. Open it on the machine itself.`), { status: 403, secret: true });
+  }
+  return real;
+}
+
+function writableRoots(home) {
+  return [home, os.tmpdir(), "/tmp"].map((r) => realish(r));
+}
+
+function autorunRisk(real) {
+  const p = norm(real);
+  return AUTORUN.some((re) => re.test(p));
+}
+
 class Companion {
   /* `loopback` and `port` exist for scripts/test-companion.js, which drives the
      real bridge against a real instance of this and cannot depend on the
@@ -121,8 +219,21 @@ class Companion {
      safe to bind unconditionally — it is not reachable from another machine at
      all — and port 0 lets the OS pick a free one so a test never collides with
      a companion the user has actually started. */
-  constructor({ tokenFile, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true } = {}) {
+  constructor({ tokenFile, privateDir = null, onEvent, loopback = false, port = PORT, keepAwake = null, tierAllows = () => true, sessions = null, openShell = null, hostName = null } = {}) {
+    this.sessions = sessions;
+    // Starts a shell for a phone on this machine: ({ cols, rows, device }) =>
+    // session. Without it the phone can watch and drive desktop terminals but
+    // not open its own.
+    this.openShell = openShell;
+    this.phoneShellSequence = 0;
+    this.phoneOpenOperations = new Map();
+    this.serviceEpoch = 0;
+    this.stopping = false;
+    this.hostName = hostName;
     this.tokenFile = tokenFile;
+    // The app's own folder (sign-in, config, this file) is never a phone's to
+    // touch: config names where the bearer token goes.
+    this.privateDir = privateDir;
     // Asked before every run and write with "run" or "write". Main answers from
     // the autonomy tier; a phone gets no more than the composer would.
     this.tierAllows = typeof tierAllows === "function" ? tierAllows : () => true;
@@ -188,7 +299,7 @@ class Companion {
     } catch { /* in memory only; pairing still works until the app quits */ }
   }
 
-  addDevice(name) {
+  addDevice(name, { terminal = false } = {}) {
     const devices = this.loadDevices();
     const device = {
       id: crypto.randomUUID(),
@@ -196,6 +307,7 @@ class Companion {
       token: crypto.randomBytes(32).toString("hex"),
       created: Date.now(),
       lastSeen: null,
+      terminal: Boolean(terminal),
     };
     devices.push(device);
     this.saveDevices();
@@ -208,14 +320,34 @@ class Companion {
     const at = devices.findIndex((d) => d.id === id);
     if (at < 0) return { error: "no such device" };
     const [gone] = devices.splice(at, 1);
+    this.sessions?.revoke(gone.id);
+    this.sessions?.closeOpenedBy?.(gone.id);
     this.saveDevices();
     this.onEvent({ type: "device-revoked", id: gone.id, name: gone.name });
     return { ok: true, name: gone.name };
   }
 
+  /* Terminal access: whether this device may watch and drive this machine's
+     terminals and open shells of its own. It is the operator's grant at the
+     desk, one device at a time, and it is off until given; a device paired
+     before the grant existed does not gain it. It is separate from the
+     agent's autonomy tier, which governs what the agent may do, not what a
+     person at a paired phone may type. Withdrawing it ends the device's
+     control and closes the shells it opened. */
+  setTerminal(id, on) {
+    const device = this.loadDevices().find((d) => d.id === id);
+    if (!device) return { error: "no such device" };
+    device.terminal = Boolean(on);
+    if (!device.terminal) { this.sessions?.revoke(device.id); this.sessions?.closeOpenedBy?.(device.id); }
+    this.saveDevices();
+    this.audit({ kind: "grant", device: device.name, deviceId: device.id, path: "terminal", detail: device.terminal ? "on" : "off" });
+    this.onEvent({ type: "device-terminal", id: device.id, name: device.name, terminal: device.terminal });
+    return { ok: true, terminal: device.terminal };
+  }
+
   // Never the tokens. This is what the Settings pane lists.
   deviceList() {
-    return this.loadDevices().map(({ id, name, created, lastSeen }) => ({ id, name, created, lastSeen }));
+    return this.loadDevices().map(({ id, name, created, lastSeen, terminal }) => ({ id, name, created, lastSeen, terminal: Boolean(terminal) }));
   }
 
   // Constant-time against every device, and the loop does not stop early: a
@@ -235,6 +367,8 @@ class Companion {
 
   // Kept for the case the device list cannot answer: revoke everything at once.
   rotateToken() {
+    this.sessions?.revoke();
+    this.sessions?.closeOpenedBy?.();
     this.devices = [];
     this.saveDevices();
     try { fs.unlinkSync(this.tokenFile); } catch { /* already gone */ }
@@ -248,6 +382,10 @@ class Companion {
      survives a restart and can be read the morning after. JSONL so it can be
      grepped with the same shell it is recording. */
   auditPath() { return this.tokenFile.replace(/\.token$/, "") + ".audit.jsonl"; }
+
+  // The pairing secrets and the record of what the phone did: never readable
+  // or rewritable through the very channel they guard.
+  ownFiles() { return [this.tokenFile, this.devicesPath(), this.auditPath(), this.privateDir].filter(Boolean); }
 
   audit(entry) {
     const line = JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n";
@@ -326,11 +464,16 @@ class Companion {
       try { this.awakeId = this.keepAwake.start("prevent-app-suspension"); }
       catch { this.awakeId = null; }      // not fatal: the phone still reaches it while awake
     }
+    this.stopping = false;
     this.onEvent({ type: "started", host, name: this.name, port: this.port, keepingAwake: this.awakeId !== null });
     return this.status();
   }
 
   async stop() {
+    this.stopping = true;
+    this.serviceEpoch++;
+    this.sessions?.revoke();
+    this.sessions?.closeOpenedBy?.();
     if (!this.server) return this.status();
     await new Promise((r) => this.server.close(r));
     this.server = null;
@@ -345,7 +488,7 @@ class Companion {
 
   send(res, code, body) {
     const text = JSON.stringify(body);
-    res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text) });
+    res.writeHead(code, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), "Cache-Control": "no-store" });
     res.end(text);
   }
 
@@ -372,11 +515,115 @@ class Companion {
     let body;
     try { body = await readJson(req); }
     catch (e) { return this.send(res, 400, { detail: String(e.message || e) }); }
+    // A device may be revoked while a slow request body is still arriving.
+    // Check again before any route can read or change the host.
+    if (!this.deviceFor(auth.replace(/^Bearer\s+/i, ""))) {
+      this.audit({ kind: "denied", deviceId: device.id, path: url.pathname, reason: "device revoked" });
+      return this.send(res, 401, { detail: "Device revoked." });
+    }
 
     try {
+      // The phone's own receipts: what this device ran, read, wrote or was
+      // refused, newest first. Only its own lines, so one phone cannot watch
+      // another, and not itself logged — reading the log is not an action.
+      if (url.pathname === "/audit") {
+        const limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
+        const mine = this.recentAudit(1000)
+          .filter((e) => e.deviceId === device.id)   // by id only: two phones can share a name
+          .slice(0, limit)
+          .map(({ at, kind, command, path: p, exit, bytes, reason, detail }) => ({ at, kind, command, path: p, exit, bytes, reason, detail }));
+        return this.send(res, 200, { device: device.name, entries: mine });
+      }
+      if (this.sessions && (url.pathname.startsWith("/sessions/") || url.pathname.startsWith("/draft/"))) {
+        const route = url.pathname;
+        const sessions = this.sessions;
+        const host = this.hostName?.() || this.name || null;
+        // The list answers every paired device, so a phone can say why it has
+        // no terminal: the host's name and whether access is granted, and the
+        // sessions only when it is.
+        if (route === "/sessions/list") return this.send(res, 200, { protocol: 3, deviceId: device.id, host, device: device.name,
+          terminal: Boolean(device.terminal), canOpen: Boolean(device.terminal && this.openShell), sessions: device.terminal ? sessions.list(device.id) : [] });
+        if (!device.terminal) {
+          sessions.revoke(device.id);
+          this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: route, reason: "terminal access off" });
+          return this.send(res, 403, { detail: `Terminal access is off for ${device.name}. Turn it on in Crowe Logic on ${host || "the computer"}: Settings, Phone.`, needsGrant: true });
+        }
+        // A new shell for this phone, as the operator would open one at the
+        // desk: a receipt, and an announcement on the desktop so a shell
+        // started from a phone is never a silent one. The phone holds control
+        // from the first keystroke.
+        if (route === "/sessions/open") {
+          if (this.stopping) return this.send(res, 503, { detail: "The companion is stopping." });
+          const serviceEpoch = this.serviceEpoch;
+          if (!this.openShell) return this.send(res, 404, { detail: "This desktop cannot open a shell for the phone. Update Crowe Logic on the computer." });
+          if (body.operationId !== undefined && (typeof body.operationId !== "string" || !/^[\w-]{8,100}$/.test(body.operationId))) return this.send(res, 400, { detail: "Invalid terminal open operation." });
+          const cols = Number.isInteger(body.cols) ? Math.max(20, Math.min(300, body.cols)) : 80;
+          const rows = Number.isInteger(body.rows) ? Math.max(5, Math.min(120, body.rows)) : 24;
+          const key = body.operationId ? `${device.id}:${body.operationId}` : null;
+          for (const [id, entry] of this.phoneOpenOperations) if (entry.done && Date.now() - entry.at > 300000) this.phoneOpenOperations.delete(id);
+          if (key && !this.phoneOpenOperations.has(key) && this.phoneOpenOperations.size >= 256) return this.send(res, 429, { detail: "Wait before opening another terminal." });
+          let entry = key && this.phoneOpenOperations.get(key);
+          if (!entry) {
+            entry = { at: Date.now(), done: false };
+            entry.promise = (async () => {
+              const label = `Terminal ${++this.phoneShellSequence}`;
+              const opened = await this.openShell({ cols, rows, device, label });
+              if (this.stopping || this.serviceEpoch !== serviceEpoch) {
+                if (opened.openedBy?.deviceId === device.id && opened.openedBy?.kind === "device") sessions.close(opened.id);
+                throw Object.assign(new Error("The companion stopped while opening the shell."), { status: 503 });
+              }
+              const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+              if (!still || !still.terminal) {
+                if (opened.openedBy?.deviceId === device.id && opened.openedBy?.kind === "device") sessions.close(opened.id);
+                throw Object.assign(new Error("Terminal access was removed while opening the shell."), { status: still ? 403 : 401 });
+              }
+              opened.label = label;
+              const meta = sessions.acquire(opened.id, opened.generation, device);
+              this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: opened.id });
+              this.onEvent({ type: "phone-shell", id: opened.id, name: device.name, open: true });
+              return meta;
+            })().finally(() => { entry.done = true; });
+            if (key) this.phoneOpenOperations.set(key, entry);
+          }
+          const meta = await entry.promise;
+          const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+          if (!still || !still.terminal) return this.send(res, still ? 403 : 401, { detail: "Terminal access was removed." });
+          const current = sessions.get(meta.id, meta.generation);
+          return this.send(res, 200, { ...sessions.meta(current, device.id), mine: true });
+        }
+        const s = sessions.get(body.sessionId, body.generation);
+        if (route === "/sessions/poll") {
+          // Held until output lands (up to `wait`), so typing echoes at the
+          // speed of the network rather than of a polling timer.
+          const wait = Math.max(0, Math.min(8000, Number(body.wait) || 0));
+          if (wait && body.generation === s.generation) await sessions.waitFor(s.id, body.after, wait);
+          const result = await sessions.poll(s.id, body.generation, body.after);
+          const still = this.deviceFor(auth.replace(/^Bearer\s+/i, ""));
+          if (!still) return this.send(res, 401, { detail: "Device revoked." });
+          if (!still.terminal) return this.send(res, 403, { detail: `Terminal access is off for ${device.name}.`, needsGrant: true });
+          return this.send(res, 200, { ...result, controller: sessions.meta(s).controller });
+        }
+        if (!body.generation || body.generation !== s.generation) return this.send(res, 409, { detail: "Select the current session before changing it." });
+        if (route === "/draft/get") return this.send(res, 200, sessions.draft(s.id, body.draftId));
+        const writingDraft = ["/draft/save", "/draft/return"].includes(route);
+        let result;
+        if (route === "/sessions/control") result = sessions.acquire(s.id, s.generation, device);
+        else if (route === "/sessions/renew") result = sessions.renew(s.id, s.generation, device, body.lease);
+        else if (route === "/sessions/release") { sessions.controlled(s.id, s.generation, device, body.lease); result = sessions.reclaim(s.id); }
+        else if (route === "/sessions/close") { result = sessions.closeOwned(s.id, s.generation, device); this.onEvent({ type: "phone-shell", id: s.id, name: device.name, open: false }); }
+        else if (route === "/sessions/input") result = sessions.input(s.id, s.generation, device, body.lease, body.inputId, body.data);
+        else if (route === "/sessions/resize") { sessions.controlled(s.id, s.generation, device, body.lease); await sessions.resize(s.id, body.cols, body.rows); result = sessions.meta(s); }
+        else if (writingDraft) result = sessions.changeDraft(s.id, body.draftId, { baseRevision: body.baseRevision, text: body.text,
+          operationId: `${device.id}-${body.operationId}`, action: route === "/draft/save" ? "save" : "return" });
+        else return this.send(res, 404, { detail: "Unknown session operation." });
+        if (!["/sessions/input", "/sessions/renew", "/sessions/resize"].includes(route)) {
+          this.audit({ kind: "session", device: device.name, deviceId: device.id, path: route, sessionId: s.id });
+        }
+        return this.send(res, 200, result);
+      }
       if (url.pathname === "/run") {
         if (!this.tierAllows("run")) {
-          this.audit({ kind: "denied", device: device.name, path: url.pathname, reason: "autonomy tier" });
+          this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: url.pathname, reason: "autonomy tier" });
           return this.send(res, 403, { detail: "the desktop's autonomy tier does not allow a shell; set it to Execute in the composer" });
         }
         const result = await this.run(body);
@@ -391,7 +638,7 @@ class Companion {
       }
       if (url.pathname === "/write_file") {
         if (!this.tierAllows("write")) {
-          this.audit({ kind: "denied", device: device.name, path: url.pathname, reason: "autonomy tier" });
+          this.audit({ kind: "denied", device: device.name, deviceId: device.id, path: url.pathname, reason: "autonomy tier" });
           return this.send(res, 403, { detail: "the desktop's autonomy tier does not allow writes; set it to Edit or Execute in the composer" });
         }
         const result = this.writeFile(body);
@@ -400,8 +647,9 @@ class Companion {
         return this.send(res, 200, result);
       }
     } catch (e) {
-      this.audit({ kind: "error", device: device.name, path: url.pathname, detail: String(e.message || e).slice(0, 200) });
-      return this.send(res, e.status || 400, { detail: String(e.message || e) });
+      this.audit({ kind: e.status === 403 ? "denied" : "error", device: device.name, deviceId: device.id, path: url.pathname,
+                   ...(e.status === 403 ? { reason: "path guard" } : {}), detail: String(e.message || e).slice(0, 200) });
+      return this.send(res, e.status || 400, { detail: String(e.message || e), current: e.current });
     }
     return this.send(res, 404, { detail: `no such route: ${url.pathname}` });
   }
@@ -459,8 +707,7 @@ class Companion {
   }
 
   readFile(body) {
-    const p = String(body.path || "").replace(/^~/, os.homedir());
-    if (!p) throw Object.assign(new Error("no path given"), { status: 400 });
+    const p = resolveForPhone(body.path, { ownFiles: this.ownFiles() });
     let stat;
     try { stat = fs.statSync(p); } catch { throw Object.assign(new Error(`not a file: ${p}`), { status: 404 }); }
     if (!stat.isFile()) throw Object.assign(new Error(`not a file: ${p}`), { status: 404 });
@@ -474,8 +721,13 @@ class Companion {
   }
 
   writeFile(body) {
-    const p = String(body.path || "").replace(/^~/, os.homedir());
-    if (!p) throw Object.assign(new Error("no path given"), { status: 400 });
+    const p = resolveForPhone(body.path, { ownFiles: this.ownFiles() });
+    if (!writableRoots(os.homedir()).some((root) => under(p, root))) {
+      throw Object.assign(new Error(`${p} is outside your home folder; the phone writes only there and in temp`), { status: 403 });
+    }
+    if (autorunRisk(p) && !this.tierAllows("run")) {
+      throw Object.assign(new Error(`writing ${p} makes code run on its own later, so it needs the Execute tier`), { status: 403 });
+    }
     const content = String(body.content ?? "");
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, content);
@@ -484,4 +736,4 @@ class Companion {
   }
 }
 
-module.exports = { Companion, tailscaleAddress, magicDnsName, tokenMatches, PORT };
+module.exports = { Companion, tailscaleAddress, magicDnsName, tokenMatches, resolveForPhone, PORT };

@@ -41,9 +41,9 @@ check(isAppDocument(`${appUrl}#projects`, entry), "in-document routes must remai
 const harnessCtxSrc = (mainSrc.match(/\nconst harnessCtx = \{[\s\S]*?\n\};/) || [""])[0];
 check(harnessCtxSrc.length > 0, "harnessCtx must be findable for the rooms pin");
 check(!/^\s{2}rooms:/m.test(harnessCtxSrc), "harnessCtx must not carry the rooms hook");
-check(/const ctx = \{ \.\.\.harnessCtx, rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook");
+check(/const ctx = \{ \.\.\.harnessCtx, terminals: engineTerminalsForRun\(id, run\), rooms: roomsForHarness\(\), loadConfig/.test(mainSrc), "the chat run must hand the harness the rooms hook and turn-bound terminals");
 check((mainSrc.match(/rooms: roomsForHarness\(\)/g) || []).length === 1, "the rooms hook is handed out in exactly one place");
-check(/harness\.runAgent\(harnessCtx, messages\.slice\(\)/.test(mainSrc), "room seats must run on the bare harnessCtx");
+check(/harness\.runAgent\(\{ \.\.\.harnessCtx, terminals: engineTerminalsForRun\(seatId, run\) \}, messages\.slice\(\)/.test(mainSrc), "room seats receive only turn-bound terminals on the bare harnessCtx, not the rooms hook");
 check(/if \(!\/\^r-\[A-Za-z0-9_-\]\{1,80\}\$\/\.test\(String\(id \|\| ""\)\)\) return null;/.test(mainSrc), "the rooms hook must load only r- ids");
 check(!isAppDocument(pathToFileURL(path.join(root, "renderer", "preview.html")), entry), "other local documents must be blocked");
 check(isTrustedPermissionUrl(appUrl, entry), "the app renderer must be eligible for declared permissions");
@@ -190,7 +190,9 @@ check(/gitRun\(\["checkout", "--end-of-options", branch\]\)/.test(main), "checko
 // the renderer never catches. The spawn sits inside try/catch and answers
 // { ok: false, error }; the dev-only mode-bit repair never touches a packaged
 // bundle, which the code signature seals.
-check(/try \{ proc = spawnShell\(cols, rows\); \}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed spawn into { ok: false, error }");
+check(/try \{\s*await draftBridge\.start\(\);[\s\S]{0,650}proc = terminalSessions\.create\([\s\S]{0,650}\}\s*catch \(err\) \{ return \{ ok: false, error:/.test(main), "crowe:pty:start must turn a failed managed spawn into { ok: false, error }");
+const managedDraft = fs.readFileSync(path.join(root, "managed-draft-window.js"), "utf8");
+check(/windows\.get\(event\.sender\.id\)/.test(managedDraft) && /event\.senderFrame !== event\.sender\.mainFrame/.test(managedDraft) && /event\.senderFrame\.url !== pathToFileURL\(page\)\.href/.test(managedDraft), "shared draft IPC must verify its own window and exact main-frame document");
 check(/if \(app\.isPackaged \|\| process\.platform === "win32" \|\| !\/posix_spawnp\/i\.test/.test(main), "the spawn-helper mode-bit repair must be dev-only");
 check(!/pty\.spawn\([^\n]*\n[^\n]*ptyProcs\.set/.test(main), "no bare pty.spawn may feed ptyProcs outside spawnShell");
 // The terminal is the operator's login shell (their PATH, even from a Finder
@@ -213,6 +215,9 @@ check(/webRequest\.onBeforeRequest\(/.test(main) && /resourceType === "mainFrame
 check(/st !== state\) \{ res\.writeHead\(400/.test(main) && !/if \(!code \|\| st !== state\) return finish/.test(main), "a callback with the wrong state must be refused without closing the sign-in");
 check(/tierAllows: \(kind\) =>/.test(main) && /if \(kind === "run"\) return tier === "execute"/.test(main), "the companion must be handed the autonomy tier");
 check(!Object.hasOwn(sanitizeConfigPatch({ token: "x".repeat(40) }), "token"), "the renderer must not be able to write a bearer token through set-config");
+// The phone authority gate: the renderer may switch it, but never point it. The relay URL receives the Crowe ID bearer.
+check(sanitizeConfigPatch({ phoneGates: false }).phoneGates === false && sanitizeConfigPatch({ phoneGates: true }).phoneGates === true, "the renderer must be able to switch the phone authority gate");
+check(!Object.hasOwn(sanitizeConfigPatch({ gatesUrl: "https://gates.example.com" }), "gatesUrl") && !Object.hasOwn(sanitizeConfigPatch({ phoneGates: "yes" }), "phoneGates"), "the renderer must not set the relay URL, and phoneGates must be a boolean");
 // Crowe Browser: the renderer may set the service URL, which must be https
 // (loopback http for a local fake). The key is not config: it goes to the
 // encrypted store through crowe:keys:set under its own id, outside the model
@@ -249,7 +254,7 @@ const renderer = fs.readFileSync(path.join(root, "renderer", "renderer.js"), "ut
 check(!/setAttribute\(["']allowpopups/.test(renderer), "the browser guest must not opt into popups");
 check(!/croweBrowser\.key\b/.test(renderer), "the renderer must never read the Crowe Browser key");
 check(/window\.crowe\.keys\.set\("croweBrowser", k\)/.test(renderer) && /window\.crowe\.keys\.remove\("croweBrowser"\)/.test(renderer) && !/patch\.croweBrowser = \{[^}]*\bkey\b/.test(renderer), "the renderer must save and remove the Crowe Browser key through the key store, never through set-config");
-check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser"\)/.test(renderer), "cloud browser panels, whose address carries a session token, must not be saved with the deck");
+check(/panels\.filter\(\(p\) => p\.type !== "cloud-browser" && !p\.engine\)/.test(renderer), "cloud browser and transient engine panels must not be saved with the deck");
 check(!/\sstyle=["']/.test(renderer), "dynamic renderer markup must not contain inline style attributes");
 check(/liftMotionStyle/.test(renderer) && /croweAdoptStyle/.test(renderer), "the logotype's style block must be adopted, not inlined");
 check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not write style attributes, which the policy blocks");

@@ -66,6 +66,15 @@ check('the script parses and passes shellcheck when shellcheck is installed', ()
   catch (e) { if (e.code !== 'ENOENT') throw new Error(e.stdout || e.message); }
 });
 
+check('every renderer stylesheet referenced by the web document is shipped', () => {
+  const files = /^FILES=\((.*)\)$/m.exec(source)[1].split(/\s+/);
+  for (const [, href] of committed.matchAll(/<link rel="stylesheet" href="([^"?]+)(?:\?[^\"]*)?"/g)) {
+    if (href.includes("/")) continue;
+    assert.ok(files.some(file => path.basename(file) === href), `Missing web stylesheet: ${href}`);
+  }
+  assert.ok(committed.indexOf('href="look.css') > committed.indexOf('href="council.css'));
+});
+
 for (const [s, n] of results) console.log(`${s.padEnd(4)}\t${n}`);
 const failed = results.filter(([s]) => s === 'FAIL').length;
 console.log(`${results.length - failed}/${results.length} passed`);

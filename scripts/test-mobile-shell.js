@@ -109,19 +109,101 @@ const PRELUDE = `
 
 const tests = [
   {
+    name: "Look switches to Instrument and restores the Editorial theme",
+    body: `const oldLook = localStorage.getItem("crowe-look");
+      const oldTheme = localStorage.getItem("crowe-theme");
+      applyLook("editorial"); applyTheme(false);
+      const field = document.getElementById("cfg-look");
+      field.value = "instrument"; field.dispatchEvent(new Event("change"));
+      const instrument = document.body.dataset.look === "instrument" && document.body.classList.contains("dark");
+      const remembered = localStorage.getItem("crowe-theme") === "light" && localStorage.getItem("crowe-look") === "instrument";
+      field.value = "editorial"; field.dispatchEvent(new Event("change"));
+      const restored = document.body.dataset.look === "editorial" && !document.body.classList.contains("dark");
+      const lastStylesheet = [...document.querySelectorAll('link[rel="stylesheet"]')].at(-1).getAttribute("href").split("?")[0];
+      localStorage.setItem("crowe-theme", oldTheme || "dark"); applyLook(oldLook || "editorial");
+      if (oldLook === null) localStorage.removeItem("crowe-look");
+      if (oldTheme === null) localStorage.removeItem("crowe-theme");
+      return { instrument, remembered, restored, lastStylesheet };`,
+    expect: { instrument: true, remembered: true, restored: true, lastStylesheet: "look.css" },
+  },
+  {
+    name: "Home reads loaded pairing, opens the shared terminal and reuses it",
+    body: `const getConfig = window.crowe.getConfig;
+      window.crowe.getConfig = async () => ({ ...await getConfig(), remote: { configured: true } });
+      let result;
+      try {
+        __pair(true); await __settle();
+        // Reproduce native cold start: saved pairing is ready, the CSS
+        // pairing class has not caught up when Home first renders.
+        document.body.classList.remove("m-paired"); __tap("Home"); await __settle();
+        const button = document.getElementById("m-home-mirror");
+        const available = !!button && button.checkVisibility();
+        if (!button) throw new Error("Shared terminal entry is missing from Home");
+        __pair(true); await __settle();
+        button.click(); await __settle();
+        const first = document.querySelectorAll(".phone-mirror").length;
+        const visible = document.querySelector(".phone-mirror")?.checkVisibility();
+        const pane = document.body.dataset.pane;
+        __tap("Home"); await __settle(); document.getElementById("m-home-mirror").click(); await __settle();
+        const second = document.querySelectorAll(".phone-mirror").length;
+        result = { available, visible, pane, reused: first === second };
+      } finally {
+        for (const m of document.querySelectorAll(".phone-mirror")) closePanel(m.closest(".workspace-panel").dataset.id);
+        window.crowe.getConfig = getConfig; __pair(false); await __settle(); __tap("Home"); await __settle();
+      }
+      return result;`,
+    expect: { available: true, visible: true, pane: "workspace", reused: true },
+  },
+  {
+    /* The web upgrade is drawn only where billing.plan() says buyHere (the US
+       App Store storefront). Elsewhere a free account sees its tier and
+       nothing to tap: no Settings button, no See plans under a plan notice,
+       no card, since showing a way out to buy is itself steering (3.1.1). */
+    name: "upgrade affordances appear only where the storefront allows a web purchase",
+    body: `const b = window.crowe.billing, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      b.catalog = async () => ({ ladder: [{ slug: "pro", amount: 9900, interval: "month", features: ["Every tier"] }] });
+      const free = (buyHere) => async () => ({ email: "g@example.com", tier: "free", known: true, paid: false, buyHere });
+      const notice = () => { const n = document.createElement("div"); n.className = "notice plan"; n.textContent = "Free plan";
+        document.getElementById("transcript").appendChild(n); return n; };
+      const look = async (buyHere) => {
+        b.plan = free(buyHere); window.dispatchEvent(new CustomEvent("crowe:plan", { detail: {} }));
+        const n = notice(); await sleep(80);
+        const r = { button: !document.getElementById("m-plan-up").hidden, line: document.getElementById("m-plan-line").textContent,
+                    seePlans: Boolean(n.querySelector(".m-plan-up")) };
+        n.querySelector(".m-plan-up") && n.querySelector(".m-plan-up").click(); await sleep(80);
+        const card = document.querySelector("#transcript .plan-card");
+        r.card = Boolean(card); r.price = card ? card.querySelector(".plan-price").textContent : "";
+        if (card) card.closest(".msg").remove(); n.remove();
+        return r;
+      };
+      const e = await look(false), u = await look(true);
+      document.getElementById("settings").classList.remove("hidden");
+      document.getElementById("m-plan-up").click(); await sleep(100);
+      const settingsClosed = document.getElementById("settings").classList.contains("hidden");
+      const settingsCard = Boolean(document.querySelector("#transcript .plan-card"));
+      const settingsPane = document.body.dataset.pane;
+      document.querySelector("#transcript .plan-card")?.closest(".msg").remove();
+      __tap("Home"); await __settle();
+      return { settingsClosed, settingsCard, settingsPane, elseButton: e.button, elseLine: e.line, elseSeePlans: e.seePlans, elseCard: e.card,
+               usButton: u.button, usSeePlans: u.seePlans, usCard: u.card, usPrice: u.price };`,
+    expect: { settingsClosed: true, settingsCard: true, settingsPane: "agent", elseButton: false, elseLine: "Free.", elseSeePlans: false, elseCard: false,
+              usButton: true, usSeePlans: true, usCard: true, usPrice: "$99 a month" },
+  },
+  {
     name: "the bridge is installed and the phone chrome is applied",
     body: `return { bridge: typeof window.crowe, mobile: document.body.classList.contains("mobile"),
                     pane: document.body.dataset.pane, tabBar: __shown("#m-tabs") };`,
-    expect: { bridge: "object", mobile: true, pane: "agent", tabBar: true },
+    expect: { bridge: "object", mobile: true, pane: "home", tabBar: true },
   },
   {
-    name: "the phone's tabs are Home, Chat, Camera and Log; Machine appears only once paired",
+    name: "the task-first tabs exclude cultivation; Machine appears only once paired",
     body: `const before = __tabs().join(",");
       __pair(true); await __settle(50);
       const paired = __tabs().join(",");
       __pair(false); await __settle(50);
-      return { tabs: before, current: __current().join(","), paired };`,
-    expect: { tabs: "Home,Chat,Camera,Log", current: "Chat", paired: "Home,Chat,Camera,Log,Machine" },
+      const current = __current().join(","); __tap("Chat"); await __settle();
+      return { tabs: before, current, paired };`,
+    expect: { tabs: "Home,Chat,Messages,Playground", current: "Home", paired: "Home,Chat,Messages,Playground,Machine" },
   },
   {
     name: "the drawer starts off screen and the app is not behind it",
@@ -143,6 +225,41 @@ const tests = [
     expect: { open: true, closed: true },
   },
   {
+    name: "Account and billing is reachable from the lower drawer with visible sign-out",
+    body: `const auth = window.crowe.auth.status;
+      window.crowe.auth.status = async () => ({user: {email: "operator@example.com", tier: "pro"}});
+      try {
+        if (!__drawerOpen()) document.getElementById("sidebar-toggle").click();
+        const nav = document.getElementById("account-nav"); nav.scrollIntoView({block: "center"}); await __settle();
+        const box = nav.getBoundingClientRect();
+        const target = document.elementFromPoint(box.left + box.width/2, box.top + box.height/2);
+        const hit = target === nav || nav.contains(target);
+        nav.click(); await __settle(300);
+        const reachable = __shown("#account-signout") && __box("#account-signout").bottom <= innerHeight;
+        return {hit, closed: !__drawerOpen(), reachable, billing: __shown("#account-billing"),
+          email: document.getElementById("account-email").textContent === "operator@example.com"};
+      } finally { window.crowe.auth.status = auth; document.getElementById("cfg-cancel").click(); }`,
+    expect: {hit: true, closed: true, reachable: true, billing: true, email: true},
+  },
+  {
+    name: "Account billing failure offers verified email access and refresh updates the plan",
+    body: `const c=window.crowe, auth=c.auth.status, billing=c.license.billing, refresh=c.billing.refresh;
+      let tier="pro", calls=[], refreshed=0;
+      c.auth.status=async()=>({user:{email:"member@example.com",tier}});
+      c.license.billing=async options=>{ calls.push(options); return options?.emailVerification ? {ok:true} : {error:"Service unavailable. Verify your billing email instead."}; };
+      c.billing.refresh=async()=>{refreshed++; tier="personal";return{ok:true}};
+      try {
+        document.getElementById("account-nav").click();await __settle(200);
+        document.getElementById("account-billing").click();await __settle(100);
+        const failure=/Verify your billing email/.test(document.getElementById("account-notice").textContent);
+        document.getElementById("account-email-billing").click();await __settle(100);
+        document.getElementById("account-refresh").click();await __settle(100);
+        return {failure,verified:calls[1]?.emailVerification===true, refreshed:refreshed>0,
+          plan:document.getElementById("account-plan").textContent.includes("personal")};
+      } finally {c.auth.status=auth;c.license.billing=billing;c.billing.refresh=refresh;document.getElementById("cfg-cancel").click();}`,
+    expect:{failure:true,verified:true,refreshed:true,plan:true},
+  },
+  {
     name: "nothing pushes the page sideways",
     // A horizontal body scroll on a phone reads as a broken layout rather than
     // as more content, so wide things scroll inside their own box or not at all.
@@ -150,11 +267,104 @@ const tests = [
     expect: { overflow: 0, width: 390 },
   },
   {
-    name: "the composer and the HUD sit above the tab bar",
-    body: `const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
-      return { composerAbove: composer.bottom <= hud.top + 1, hudAbove: hud.bottom <= tabs.top + 1,
-               tabsOnScreen: tabs.bottom <= window.innerHeight + 1 };`,
-    expect: { composerAbove: true, hudAbove: true, tabsOnScreen: true },
+    name: "the composer sits above the tab bar; the HUD is off by default and, switched on, sits between them",
+    // 1.1: the HUD strip is developer chrome and hidden until Settings says
+    // otherwise. Both states are measured: quiet, the composer meets the tabs;
+    // with the switch on, the HUD is drawn between them.
+    body: `const quiet = { hudHidden: !__shown("#hud"),
+        composerAbove: __box("#composer").bottom <= __box("#m-tabs").top + 1,
+        tabsOnScreen: __box("#m-tabs").bottom <= window.innerHeight + 1 };
+      document.body.classList.add("m-usage"); await __settle(50);
+      const composer = __box("#composer"), hud = __box("#hud"), tabs = __box("#m-tabs");
+      const loud = { hudShown: __shown("#hud"), composerAboveHud: composer.bottom <= hud.top + 1, hudAboveTabs: hud.bottom <= tabs.top + 1 };
+      document.body.classList.remove("m-usage"); await __settle(50);
+      return { ...quiet, ...loud };`,
+    expect: { hudHidden: true, composerAbove: true, tabsOnScreen: true, hudShown: true, composerAboveHud: true, hudAboveTabs: true },
+  },
+  {
+    name: "usage and routing details are off by default, and one Settings switch turns them on and persists",
+    body: `const off = { hud: __shown("#hud"), tier: __shown("#autonomy"), copy: __shown("#copy-conversation"),
+                    configured: (await window.crowe.getConfig()).showUsage };
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const box = document.getElementById("m-cfg-usage");
+      const row = { present: Boolean(box), shown: __shown("#m-cfg-usage"), checked: box ? box.checked : null };
+      box.checked = true; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const on = { hud: __shown("#hud") || document.body.classList.contains("m-usage"), tier: document.body.classList.contains("m-usage"),
+                   configured: (await window.crowe.getConfig()).showUsage };
+      box.checked = false; box.dispatchEvent(new Event("change"));
+      await __settle(150);
+      const back = { configured: (await window.crowe.getConfig()).showUsage, cls: document.body.classList.contains("m-usage") };
+      document.getElementById("cfg-cancel").click();
+      await __settle(120);
+      return { offHud: off.hud, offTier: off.tier, offCopy: off.copy, offConfigured: off.configured,
+               rowPresent: row.present, rowShown: row.shown, rowChecked: row.checked,
+               onHud: on.hud, onTier: on.tier, onConfigured: on.configured, backConfigured: back.configured, backCls: back.cls };`,
+    expect: { offHud: false, offTier: false, offCopy: false, offConfigured: false, rowPresent: true, rowShown: true, rowChecked: false,
+              onHud: true, onTier: true, onConfigured: true, backConfigured: false, backCls: false },
+  },
+  {
+    name: "Settings hides the legacy founders promotion while retaining its handlers",
+    // The roster read is stubbed: this harness must not reach the live gateway.
+    body: `const real = window.crowePhone.publicJson;
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 2, founders: [{ name: "B. Grower", farm: "Second Farm", n: 2 }, { name: "A. Grower", farm: "First Farm", n: 1 }] });
+      document.getElementById("settings-btn").click();
+      await __settle(300);
+      const row = __shown("#m-founders-open");
+      document.getElementById("m-founders-open").click();
+      await __settle(300);
+      const names = [...document.querySelectorAll("#m-founders-roster li b")].map((b) => b.textContent);
+      const out = { row, sheet: __shown("#m-founders"), settingsClosed: !__shown("#settings"),
+                    seats: document.getElementById("m-founders-seats").textContent, first: names[0], count: names.length,
+                    link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => ({ spots: 100, taken: 100, founders: [] });
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const full = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      window.crowePhone.publicJson = async () => null;
+      document.getElementById("m-founders-close").click();
+      document.getElementById("settings-btn").click(); await __settle(200);
+      document.getElementById("m-founders-open").click(); await __settle(300);
+      const down = { seats: document.getElementById("m-founders-seats").textContent, link: __shown("#m-founders-link") };
+      document.getElementById("m-founders-close").click();
+      window.crowePhone.publicJson = real;
+      await __settle(120);
+      return { ...out, fullSeats: full.seats, fullLink: full.link, downSeats: down.seats, downLink: down.link, closed: !__shown("#m-founders") };`,
+    expect: { row: false, sheet: true, settingsClosed: true, seats: "2 of 100 seats taken.", first: "A. Grower", count: 2, link: true,
+              fullSeats: "All 100 seats are taken.", fullLink: false, downSeats: "The roster could not be reached right now.", downLink: false, closed: true },
+  },
+  {
+    name: "a tool card folds to one plain line that opens on tap; a failed turn is one sentence with Try again",
+    // Drawn the way the renderer draws them (renderer.js addToolCard, addError),
+    // without a gateway: the fold and the button are the phone layer's, and
+    // both are measured on the same DOM the renderer produces.
+    body: `const t = document.getElementById("transcript");
+      const msgU = document.createElement("div"); msgU.className = "msg user"; msgU.innerHTML = '<div class="who"><div class="u">You</div></div><div class="body"><p>Is this lot ready?</p></div>';
+      const msgA = document.createElement("div"); msgA.className = "msg assistant"; msgA.innerHTML = '<div class="who"></div><div class="body"></div>';
+      t.appendChild(msgU); t.appendChild(msgA);
+      const body = msgA.querySelector(".body");
+      const card = document.createElement("div"); card.className = "toolcard ok";
+      card.innerHTML = '<div class="tc-head"><span class="tc-dot"></span><span class="tc-name">read_grow</span><span class="tc-arg">{"type":"blocks"}</span></div><div class="tc-result">2 blocks row(s)</div>';
+      body.appendChild(card);
+      // A raw error is logged to the console on purpose; the harness counts console errors, so it is caught here.
+      const realError = console.error; const logged = []; console.error = (...a) => logged.push(a.join(" "));
+      const err = document.createElement("div"); err.className = "err"; err.textContent = 'gateway: {"type":"overloaded_error","message":"Overloaded"}';
+      body.appendChild(err);
+      await __settle(80);
+      console.error = realError;
+      const sum = card.querySelector(".m-tc-summary");
+      const folded = { line: sum ? sum.querySelector(".m-tc-text").textContent : null, summaryShown: Boolean(sum) && sum.checkVisibility(),
+                       headHidden: !card.querySelector(".tc-head").checkVisibility(), resultHidden: !card.querySelector(".tc-result").checkVisibility() };
+      sum.click(); await __settle(50);
+      const opened = { headShown: card.querySelector(".tc-head").checkVisibility(), resultShown: card.querySelector(".tc-result").checkVisibility() };
+      const retry = err.querySelector(".m-retry");
+      const said = { text: err.childNodes[0].textContent, retry: Boolean(retry) && retry.checkVisibility() };
+      msgU.remove(); msgA.remove();
+      return { ...folded, ...opened, ...said, rawLogged: logged.some((l) => /overloaded_error/.test(l)) };`,
+    expect: { line: "Looked up your records", summaryShown: true, headHidden: true, resultHidden: true, headShown: true, resultShown: true,
+              text: "The reader is busy. Try again in a moment.", retry: true, rawLogged: true },
   },
   {
     name: "the composer shows its whole placeholder before anything is typed",
@@ -171,7 +381,7 @@ const tests = [
       await __settle();
       const onPanels = { pane: document.body.dataset.pane, agentHidden: !__shown("#agent"),
                          workspaceShown: __shown("#workspace"), current: __current().join(",") };
-      __tap("Log");
+      __tap("Chat");
       await __settle();
       const back = { pane: document.body.dataset.pane, current: __current().join(",") };
       __tap("Chat");
@@ -179,10 +389,14 @@ const tests = [
       __pair(false); await __settle(50);
       return { ...onPanels, backPane: back.pane, backCurrent: back.current };`,
     expect: { pane: "workspace", agentHidden: true, workspaceShown: true, current: "Machine",
-              backPane: "agent", backCurrent: "Log" },
+              backPane: "agent", backCurrent: "Chat" },
   },
   {
-    name: "the workspace opens on Operator Control, not a terminal that cannot start",
+    // Operator Control used to be the phone's default panel. It was removed, and
+    // the phone has no shell, so the deck starts empty rather than falling back
+    // to a terminal that cannot start, and Add to panel (nothing in it a phone
+    // can open) is not offered.
+    name: "the workspace opens empty, not on a terminal that cannot start",
     body: `__pair(true); await __settle(50);
       __tap("Machine");
       await __settle();
@@ -190,31 +404,37 @@ const tests = [
       // the title is its value, not its text.
       const titles = [...document.querySelectorAll("#panel-deck .workspace-panel")]
         .map((p) => (p.querySelector(".panel-title") || {}).value || "").join(",");
+      const add = __shown("#dock-add");
       __tap("Chat");
       await __settle();
       __pair(false); await __settle(50);
-      return { titles, terminals: /Terminal/.test(titles) };`,
-    expect: { titles: "Operator Control", terminals: false },
+      return { titles, terminals: /Terminal/.test(titles), add };`,
+    expect: { titles: "", terminals: false, add: false },
   },
   {
     name: "a tap in the drawer closes it on the way to where it goes",
     body: `document.getElementById("sidebar-toggle").click();
       await __settle();
-      document.querySelector('#spaces .seg-btn[data-space="cultivation"]').click();
+      document.querySelector('#spaces .seg-btn[data-space="chat"]').click();
       await __settle();
       const state = { space: document.body.dataset.space, closed: !__drawerOpen() };
       __tap("Chat");
       await __settle();
       return state;`,
-    expect: { space: "cultivation", closed: true },
+    expect: { space: "chat", closed: true },
   },
   {
     name: "what this device cannot do is not offered",
     // Settings has to be open for its own rows to be asked about — inside a
     // closed modal everything is invisible, and the check would pass by
     // accident whether the rows were hidden or not.
-    body: `const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
+    // 1.1: the tier picker is developer chrome, off unless the Details switch is
+    // on, so the picker is measured with the switch on; what it hides within
+    // itself (Execute, unpaired) is the question here.
+    body: `document.body.classList.add("m-usage"); await __settle(30);
+      const composer = { execTier: __shown('#autonomy .seg-btn[data-tier="execute"]'),
                           editTier: __shown('#autonomy .seg-btn[data-tier="edit"]') };
+      document.body.classList.remove("m-usage");
       // The dock bar lives inside the workspace column, so its controls have to
       // be asked about while that column is the one on screen.
       __pair(true); await __settle(50);
@@ -223,7 +443,7 @@ const tests = [
       const dock = { gitTab: __shown('.dock-tab[data-pane="git"]'),
                      filesTab: __shown('.dock-tab[data-pane="files"]'),
                      outputTab: __shown('.dock-tab[data-pane="output"]'),
-                     cliAgent: __shown("#glass-launcher") };
+                     launcher: Boolean(document.getElementById("glass-launcher")) };
       __tap("Chat");
       await __settle();
       // Same for Settings: inside a closed modal everything is invisible, and
@@ -231,15 +451,16 @@ const tests = [
       document.getElementById("settings-btn").click();
       await __settle();
       const settings = { cwdRow: __shown("#cfg-cwd"), mcpRow: __shown("#cfg-mcp"),
-                         autoApproveRow: __shown("#cfg-auto"), gatewayRow: __shown("#cfg-base") };
+                         autoApproveRow: __shown("#cfg-auto"), gatewayRow: __shown("#cfg-base"),
+                         advanced: __shown(".m-advanced > summary") };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       __pair(false); await __settle(50);
       return { ...composer, ...dock, ...settings };`,
-    // The two trues are the control: they prove this check can still see a row
+    // The trues are the control: they prove this check can still see a row
     // that is meant to be there, rather than reporting everything as hidden.
     expect: { execTier: false, editTier: true, gitTab: false, filesTab: false, outputTab: true,
-              cliAgent: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: true },
+              launcher: false, cwdRow: false, mcpRow: false, autoApproveRow: false, gatewayRow: false, advanced: true },
   },
   {
     /* The case above proves Execute is hidden with nothing paired. This proves
@@ -252,7 +473,8 @@ const tests = [
        test asserting only `execTier: false` is happy either way: it cannot tell
        "correctly hidden while unpaired" from "hidden forever". */
     name: "pairing a machine brings the Execute tier back",
-    body: `const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
+    body: `document.body.classList.add("m-usage"); await __settle(30);   // the picker is chrome; see above
+      const unpaired = __shown('#autonomy .seg-btn[data-tier="execute"]');
       document.body.classList.add("m-paired");
       await __settle();
       const paired = __shown('#autonomy .seg-btn[data-tier="execute"]');
@@ -260,6 +482,7 @@ const tests = [
       document.body.classList.remove("m-paired");
       await __settle();
       const restored = __shown('#autonomy .seg-btn[data-tier="execute"]');
+      document.body.classList.remove("m-usage");
       return { unpaired, paired, restored };`,
     expect: { unpaired: false, paired: true, restored: false },
   },
@@ -296,6 +519,217 @@ const tests = [
               reason: "installs something that runs at every login" },
   },
   {
+    /* The pairing token rides every request and the requests are shell
+       commands, so cleartext is only acceptable where the network is private.
+       A userinfo trick must be judged by its real host. */
+    name: "pairing accepts private networks over http and the internet only over https",
+    body: `const p = window.__crowePairAddress;
+      return {
+        tailnet: p("http://mac.tail1234.ts.net:8787").url,
+        cgnat: !p("http://100.101.1.2:8787").error,
+        lan: !p("http://192.168.1.20:8787").error,
+        publicHttp: Boolean(p("http://203.0.113.9:8787").error),
+        publicHttps: !p("https://mac.example.com").error,
+        userinfo: Boolean(p("http://100.64.0.1@evil.example").error),
+        scheme: Boolean(p("javascript:alert(1)").error),
+      };`,
+    expect: { tailnet: "http://mac.tail1234.ts.net:8787", cgnat: true, lan: true, publicHttp: true,
+              publicHttps: true, userinfo: true, scheme: true },
+  },
+  {
+    /* A phone is handed to someone else more often than a laptop. Signing out
+       has to take the paired machine and the provider keys with it, or the
+       next person can drive the first person's computer. */
+    name: "signing out forgets the paired machine, provider keys and conversations",
+    body: `const c = window.crowe;
+      await c.remote.pair({ url: "http://mac.tail1234.ts.net:8787", token: "t-should-be-forgotten" });
+      const before = (await c.keys.set("openai", "sk-test-should-be-forgotten")).ok;
+      const out = await c.auth.logout();
+      const after = await c.remote.status();
+      const keys = (await c.keys.list()).providers.some((k) => k.configured);
+      const sessions = await c.sessions.list();
+      return { before, out: out.ok, paired: after.configured, keys, sessions: (sessions.sessions || sessions || []).length };`,
+    expect: { before: true, out: true, paired: false, keys: false, sessions: 0 },
+  },
+  {
+    name: "approval is visible and defaults to refusal even when animation frames are suspended",
+    body: `const frame = window.requestAnimationFrame;
+      window.requestAnimationFrame = () => 0;
+      let answer;
+      try {
+        answer = window.__croweApprove({ title: "Review a command", detail: "harmless evidence ".repeat(300), confirm: "Allow" });
+        await __settle(50);
+        const sheet = document.querySelector(".m-approve");
+        const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+        return { open: sheet.classList.contains("open"),
+          focused: document.activeElement === sheet.querySelector(".m-approve-no"),
+          visible: footer.top >= 0 && footer.bottom <= innerHeight };
+      } finally {
+        window.requestAnimationFrame = frame;
+        window.__croweApproveDismiss();
+        await answer; await __settle(30);
+      }`,
+    expect: { open: true, focused: true, visible: true },
+  },
+  {
+    /* The approval sheet is drawn from model output, so it must be inert text;
+       "Not now" declines; assistive activation approves without a hold; and
+       the machine and tier are named, since that is what is being approved. */
+    name: "the approval sheet names machine and tier, renders the command as text, and declines by default",
+    body: `const evil = '<img src=x onerror="window.__pwned=1">rm -rf ~';
+      const p1 = window.__croweApprove({ danger: true, title: "Run this on mac?", reason: "This runs as root.",
+        detail: evil, machine: "http://mac.tail1234.ts.net:8787", tier: "execute", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 30));
+      const sheet = document.querySelector(".m-approve");
+      const shown = { pre: sheet.querySelector(".m-approve-detail").textContent, imgs: sheet.querySelectorAll("img").length,
+        chips: [...sheet.querySelectorAll(".m-chip")].map((c) => c.textContent).join(" | "), hold: sheet.querySelector(".m-approve-yes").textContent,
+        focused: document.activeElement && document.activeElement.textContent };
+      sheet.querySelector(".m-approve-no").click();
+      const declined = await p1;
+      const p2 = window.__croweApprove({ danger: true, title: "x", detail: "sudo true", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 30));
+      document.querySelector(".m-approve:not(.leaving) .m-approve-yes").click();
+      const accessible = await p2;
+      await new Promise((r) => setTimeout(r, 200));
+      return { ...shown, pwned: Boolean(window.__pwned), declined, accessible, left: document.querySelectorAll(".m-approve").length };`,
+    expect: { pre: '<img src=x onerror="window.__pwned=1">rm -rf ~', imgs: 0, chips: "mac.tail1234.ts.net | Execute tier",
+              hold: "Hold to run command", focused: "Not now", pwned: false, declined: false, accessible: true, left: 0 },
+  },
+  {
+    name: "long approval keeps actions visible and navigation hidden through dismissal",
+    body: `const answer = window.__croweApprove({ danger: true, title: "Run this on a-long-computer-name?",
+        detail: "a long harmless command description ".repeat(100), machine: "https://a-very-long-machine-name.tail1234.ts.net", tier: "execute", confirm: "Run command" });
+      await new Promise((r) => setTimeout(r, 300));
+      const sheet = document.querySelector(".m-approve");
+      const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+      const content = sheet.querySelector(".m-approve-content");
+      const blocked = document.body.classList.contains("approval-open");
+      const visible = footer.top >= 0 && footer.bottom <= innerHeight && footer.width <= innerWidth;
+      const scrollable = getComputedStyle(content).overflowY === "auto";
+      sheet.querySelector(".m-approve-no").click();
+      const blockedDuringExit = document.body.classList.contains("approval-open");
+      const result = await answer;
+      await new Promise((r) => setTimeout(r, 30));
+      return { blocked, visible, scrollable, blockedDuringExit, result, restored: !document.body.classList.contains("approval-open") };`,
+    expect: { blocked: true, visible: true, scrollable: true, blockedDuringExit: true, result: false, restored: true },
+  },
+  {
+    /* Authority gates relayed from the person's computer: the Home card lists
+       them, a tap opens the approval sheet, a 300-line diff scrolls inside the
+       content area with Deny and Approve still on screen, diff lines colour by
+       their first character without ever being parsed as markup, and Approve
+       echoes the evidence hash that was shown. */
+    name: "an authority gate with a long diff opens in the sheet with its actions visible, and approve echoes the evidence hash",
+    body: `window.__tap("Home"); await window.__settle(200);
+      const realGates = window.crowe.gates, realStatus = window.crowe.auth.status;
+      const diff = ["@@ line 1 @@"].concat(Array.from({ length: 300 }, (_, i) => (i % 3 ? "+" : "-") + "line " + i + (i === 4 ? " <img src=x onerror=window.__pwned=1>" : ""))).join("\\n");
+      const gate = { id: "g_TEST", status: "pending", machine: "Michael's MacBook Pro", mission: "Fix the flaky upload test", kind: "edit",
+        title: "Edit src/upload.js", detail: "src/upload.js  (+200 -100)", why: "changes a file in your workspace", risk: "review",
+        evidence: { path: "src/upload.js", diff }, evidence_hash: "hash-shown-to-the-person", expires_at: Date.now() + 600000 };
+      let decided = null, gates = [gate];
+      window.crowe.auth.status = async () => ({ user: { email: "m@example.com" } });
+      window.crowe.gates = { list: async () => ({ ok: true, status: 200, gates, signedIn: true }),
+        decide: async (id, d, h) => { decided = { id, d, h }; return { ok: true, status: 200, gate: { ...gate, status: "approved" } }; } };
+      window.__croweGates.stop();
+      await window.__croweGates.poll();
+      const card = document.getElementById("m-gates");
+      const home = { count: card.querySelector(".m-gate-n") && card.querySelector(".m-gate-n").textContent,
+        row: card.querySelector(".m-gate-row b") && card.querySelector(".m-gate-row b").textContent,
+        meta: card.querySelector(".m-gate-meta").textContent.replace(/ · [0-9:]+ left$/, "") };
+      card.querySelector(".m-gate-row").click();
+      await window.__settle(300);
+      const sheet = document.querySelector(".m-approve");
+      const footer = sheet.querySelector(".m-approve-actions").getBoundingClientRect();
+      const content = sheet.querySelector(".m-approve-content");
+      const spans = [...sheet.querySelectorAll(".m-approve-diff .m-dl")];
+      const shown = { chips: [...sheet.querySelectorAll(".m-chip")].map((c) => c.textContent).join(" | "),
+        mission: sheet.querySelector(".m-approve-mission").textContent, evidence: sheet.querySelector(".m-approve-evidence").textContent,
+        lines: spans.length, adds: spans.filter((n) => n.classList.contains("add")).length, dels: spans.filter((n) => n.classList.contains("del")).length,
+        hunks: spans.filter((n) => n.classList.contains("hunk")).length, imgs: sheet.querySelectorAll("img").length,
+        scrollable: getComputedStyle(content).overflowY === "auto" && content.scrollHeight > content.clientHeight,
+        actionsVisible: footer.top >= 0 && footer.bottom <= innerHeight && footer.width <= innerWidth,
+        buttons: [...sheet.querySelectorAll(".m-approve-actions button")].map((b) => b.textContent).join("|"),
+        expiry: /^Expires in /.test(sheet.querySelector(".m-approve-expiry").textContent) };
+      sheet.querySelector(".m-approve-yes").click();
+      await window.__settle(300);
+      gates = [];
+      await window.__settle(100);
+      await window.__croweGates.poll();
+      const empty = document.getElementById("m-gates").textContent;
+      window.crowe.gates = realGates; window.crowe.auth.status = realStatus;
+      window.__croweGates.stop();
+      return { home: JSON.stringify(home), shown: JSON.stringify(shown), pwned: Boolean(window.__pwned), decided: JSON.stringify(decided), empty: /No gates waiting. Runs on your computer will ask here./.test(empty),
+        left: document.querySelectorAll(".m-approve").length };`,
+    expect: { home: JSON.stringify({ count: "1", row: "Edit src/upload.js", meta: "Michael's MacBook Pro · Fix the flaky upload test" }),
+      shown: JSON.stringify({ chips: "Authority gate | Michael's MacBook Pro", mission: "Mission Fix the flaky upload test", evidence: "Evidencepathsrc/upload.js",
+        lines: 301, adds: 200, dels: 100, hunks: 1, imgs: 0, scrollable: true, actionsVisible: true, buttons: "Not now|Deny|Approve", expiry: true }),
+      pwned: false, decided: JSON.stringify({ id: "g_TEST", d: "approve", h: "hash-shown-to-the-person" }), empty: true, left: 0 },
+  },
+  {
+    /* The answers a stale or raced gate can come back with are said in plain
+       words, and a strict gate asks to be held rather than tapped. */
+    name: "a strict gate is held to approve, and a 409 from the relay reads as answered on the computer",
+    body: `window.__tap("Home"); await window.__settle(200);
+      const realGates = window.crowe.gates, realStatus = window.crowe.auth.status;
+      const gate = { id: "g_STRICT", status: "pending", machine: "Studio", kind: "run", title: "Run a command", detail: "rm -rf build", why: "deletes files",
+        risk: "strict", evidence: { command: "rm -rf build", cwd: "/work" }, evidence_hash: "h2", expires_at: Date.now() + 600000 };
+      window.crowe.auth.status = async () => ({ user: { email: "m@example.com" } });
+      window.crowe.gates = { list: async () => ({ ok: true, status: 200, gates: [gate], signedIn: true }),
+        decide: async () => ({ ok: false, status: 409, error: "already_decided", gate: { ...gate, status: "denied", decided_via: "desktop" } }) };
+      window.__croweGates.stop(); await window.__croweGates.poll();
+      document.querySelector("#m-gates .m-gate-row").click(); await window.__settle(300);
+      const sheet = document.querySelector(".m-approve");
+      const hold = sheet.querySelector(".m-approve-yes").textContent;
+      const ev = sheet.querySelector(".m-approve-evidence").textContent;
+      sheet.querySelector(".m-approve-yes").click();      // keyboard/VoiceOver activation approves without the hold
+      await window.__settle(300);
+      const note = document.querySelector("#m-gates .m-gate-note").textContent;
+      window.crowe.gates = realGates; window.crowe.auth.status = realStatus; window.__croweGates.stop();
+      return { hold, ev, note };`,
+    expect: { hold: "Hold to approve", ev: "Evidencecwd/work", note: "Already answered on your computer" },
+  },
+  {
+    /* Two questions at once queue rather than stack; the page behind is inert
+       while one is up; and stopping the turn answers the open one and the
+       waiting one "no", so a stopped turn never hangs on a sheet. */
+    name: "approval sheets queue, bench the page, and a stop answers them no",
+    body: `const a = window.__croweApprove({ title: "first", confirm: "Allow" });
+      const b = window.__croweApprove({ title: "second", confirm: "Allow" });
+      await new Promise((r) => setTimeout(r, 30));
+      const open = document.querySelectorAll(".m-approve:not(.leaving)").length;
+      const benched = document.getElementById("composer") ? document.getElementById("composer").closest("[inert]") !== null : null;
+      await window.crowe.agent.stop("main");
+      const answers = [await a, await b];
+      await new Promise((r) => setTimeout(r, 200));
+      const restored = !document.querySelector("body > [inert]");
+      return { open, benched, answers: answers.join(","), left: document.querySelectorAll(".m-approve").length, restored };`,
+    expect: { open: 1, benched: true, answers: "false,false", left: 0, restored: true },
+  },
+  {
+    /* Rooms are dock panels, and the dock sits in the workspace pane that only a
+       paired phone can reach, so New message used to open a room nobody could
+       see. Messages is a tab now, a room opens full screen, and Back returns to
+       the list. */
+    name: "Messages is a tab; New message opens a full-screen room with a way back",
+    body: `const tab = document.querySelector('#m-tabs [data-id="messages"]');
+      if (!tab) return { tab: false };
+      tab.click(); await new Promise((r) => setTimeout(r, 100));
+      const listPane = document.body.dataset.pane;
+      const listShown = document.getElementById("rooms-drawer").checkVisibility() && document.getElementById("m-messages-pane").getBoundingClientRect().width >= innerWidth - 1;
+      document.getElementById("room-new").click(); await new Promise((r) => setTimeout(r, 400));
+      const roomPane = document.body.dataset.pane;
+      const roomShown = Boolean(document.querySelector(".m-room-on .room") && document.querySelector(".m-room-on .room").checkVisibility());
+      const back = document.querySelector(".m-room-on .m-room-back");
+      const backShown = Boolean(back && back.checkVisibility());
+      const tabLit = tab.getAttribute("aria-current") === "true";
+      if (back) back.click(); await new Promise((r) => setTimeout(r, 100));
+      const after = document.body.dataset.pane;
+      document.querySelector(".m-room-on .panel-close")?.click();
+      document.querySelector('#m-tabs [data-id="chat"]').click();
+      return { tab: true, listPane, listShown, roomPane, roomShown, backShown, tabLit, after };`,
+    expect: { tab: true, listPane: "messages", listShown: true, roomPane: "room", roomShown: true, backShown: true, tabLit: true, after: "messages" },
+  },
+  {
     /* The first version of this matched on the program name and nothing else,
        so it refused `claude -p "..."` — the exact form its own error message
        tells you to use. A guard that blocks the alternative it recommends
@@ -320,10 +754,10 @@ const tests = [
               sshBare: "ssh", sshCommand: null, ordinary: null, pathed: "vim" },
   },
   {
-    name: "the terminal pane explains itself instead of loading xterm",
-    body: `return { stub: typeof window.Terminal, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
+    name: "the phone bundles xterm for remote sessions while local PTYs stay unavailable",
+    body: `return { terminal: typeof window.Terminal, mirror: typeof window.crowePhoneMirror?.mount, xterm: Boolean(window.Terminal && window.Terminal.prototype.parser),
                     ptyAvailable: (await window.crowe.getConfig()).ptyAvailable };`,
-    expect: { stub: "function", xterm: false, ptyAvailable: false },
+    expect: { terminal: "function", mirror: "function", xterm: true, ptyAvailable: false },
   },
   {
     /* This used to require the opening copy to talk about the farm, which was
@@ -443,69 +877,53 @@ const tests = [
     expect: { hadCard: true, removed: true, emptyBubbles: 0 },
   },
   {
-    name: "an existing block's lot code is read-only while editing; a new block's is not",
-    // Flushes, readings and journal lines point at a block by its lot code, so
-    // retyping it on an existing record would orphan them. A new block's code
-    // is only a default the farm's traceability SOP may overwrite.
-    body: `__tap("Log");
-      await __settle();
-      // The space opens on its Overview; the Blocks lane is a section of it.
-      document.querySelector('#cult-nav .sn-item[data-cult="blocks"]').click();
-      await __settle(500);
-      let form = document.querySelector("#lane-body form.grow-add");
-      if (!form) return { form: false };
-      const newEditable = !form.elements.code.readOnly;
-      form.elements.species.value = "Oyster"; form.elements.count.value = "4"; form.elements.stage.value = "spawned";
-      form.requestSubmit();
-      await __settle(400);
-      const open = document.querySelector(".growrow .gr-open");
-      if (!open) return { form: true, newEditable, saved: false };
-      open.click();
-      await __settle(400);
-      form = document.querySelector("#lane-body form.grow-add");
-      return { form: true, newEditable, saved: true, editing: Boolean(form && form.classList.contains("editing")),
-               lockedWhileEditing: Boolean(form && form.elements.code.readOnly) };`,
-    expect: { form: true, newEditable: true, saved: true, editing: true, lockedWhileEditing: true },
+    name: "legacy cultivation records remain readable without a Log tab",
+    body: `localStorage.setItem('crowe:grow:blocks', JSON.stringify([{id:'legacy-test',code:'RETAINED'}]));
+      const rows = await window.crowe.grow.list('blocks');
+      return { retained: rows.some(row => row.code === 'RETAINED'), logVisible: __tabs().includes('Log') };`,
+    expect: { retained: true, logVisible: false },
   },
   {
-    name: "Reply pace is a setting and the phone starts on reading pace",
+    name: "Reply pace is a setting and the phone starts on brisk; reading pace stays offered",
     body: `document.getElementById("settings-btn").click();
       await __settle();
       const sel = document.getElementById("cfg-pace");
       const out = { present: Boolean(sel), shown: __shown("#cfg-pace"), value: sel ? sel.value : null,
-                    configured: (await window.crowe.getConfig()).textPace };
+                    configured: (await window.crowe.getConfig()).textPace,
+                    reading: Boolean(sel && [...sel.options].some((o) => o.value === "reading")),
+                    // The desktop's label calls reading pace the phone's default; the phone relabels it.
+                    labelHonest: Boolean(sel && ![...sel.options].some((o) => o.value === "reading" && /default/.test(o.textContent))) };
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { present: true, shown: true, value: "reading", configured: "reading" },
+    expect: { present: true, shown: true, value: "brisk", configured: "brisk", reading: true, labelHonest: true },
   },
   {
-    name: "Home lists the lots by stage from the log on this phone, with Remind me and Photograph",
-    // The lot test above added a block; Home must show it without a desktop.
+    name: "Home introduces paired computer work and opens Chat",
     body: `__tap("Home");
       await __settle(500);
-      const lots = [...document.querySelectorAll("#m-home-pane .m-lot")];
-      const out = { paneShown: __shown("#m-home-pane"), chatHidden: !__shown("#agent"), lots: lots.length,
-                    stage: lots.length ? lots[0].querySelector(".m-stage").textContent.trim() : "",
-                    remind: Boolean(document.querySelector("#m-home-pane .m-remind")), photo: Boolean(document.querySelector("#m-home-pane .m-check")),
-                    reminders: __shown("#m-home-reminders"),
-                    // The Siri words show only where Siri is; this harness has no Capacitor, so the gate must hide them.
-                    siriHidden: !document.querySelector("#m-home-siri") };
-      __tap("Chat");
+      const out = { paneShown: __shown("#m-home-pane"),
+        pairing: Boolean(document.querySelector("#m-home-pair")),
+        limits: /desktop app must stay running/.test(document.querySelector("#m-home-pane").textContent),
+        noGrowHeadline: !/Your grow, today/.test(document.querySelector("#m-home-pane").textContent) };
+      document.getElementById("m-home-chat").click();
       await __settle();
       return { ...out, backToChat: __shown("#agent") };`,
-    expect: { paneShown: true, chatHidden: true, lots: 1, stage: "spawned", remind: true, photo: true, reminders: true, siriHidden: true, backToChat: true },
+    expect: { paneShown: true, pairing: true, limits: true, noGrowHeadline: true, backToChat: true },
   },
   {
-    name: "Camera offers Photograph and Choose a photo, and names the engine",
-    body: `__tap("Camera");
-      await __settle(300);
-      const out = { paneShown: __shown("#m-camera-pane"), shoot: __shown("#m-camera-pane .m-cam-shoot"), pick: __shown("#m-camera-pane .m-cam-pick"),
-                    engine: /CroweLM Vision/.test(document.querySelector("#m-camera-pane").textContent), input: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
+    name: "Playground is a tab of its own, and signed out it says so instead of failing",
+    body: `__tap("Playground");
+      await __settle(800);
+      const pane = document.querySelector("#m-playground-pane");
+      const out = { paneShown: __shown("#m-playground-pane"), chatHidden: !__shown("#agent"),
+                    title: /Playground/.test(pane ? pane.textContent : ""),
+                    signIn: /Sign in to use the Playground|Loading models|unavailable/.test(pane ? pane.textContent : ""),
+                    photoStillReachable: Boolean(document.querySelector('input[type="file"][accept="image/*"]')) };
       __tap("Chat");
       await __settle();
       return out;`,
-    expect: { paneShown: true, shoot: true, pick: true, engine: true, input: true },
+    expect: { paneShown: true, chatHidden: true, title: true, signIn: true, photoStillReachable: true },
   },
   {
     name: "Settings carries Diagnostics with Copy, Share and Clear, and the reminders test",
@@ -522,11 +940,13 @@ const tests = [
       out.voiceOptions = sel ? [...sel.options].map((o) => o.value).join(",") : "";
       if (sel) { sel.value = "neural"; sel.dispatchEvent(new Event("change")); }
       out.voiceStored = localStorage.getItem("crowe-reply-voice");
-      if (sel) { sel.value = "michael"; sel.dispatchEvent(new Event("change")); }
+      if (sel) { sel.value = "phone"; sel.dispatchEvent(new Event("change")); }
+      out.voiceStored += "," + localStorage.getItem("crowe-reply-voice");
+      localStorage.removeItem("crowe-reply-voice");
       document.getElementById("cfg-cancel").click();
       await __settle(120);
       return out;`,
-    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "michael,neural,phone", voiceStored: "neural" },
+    expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "phone,neural", voiceStored: "neural,phone" },
   },
 ];
 
@@ -556,6 +976,12 @@ app.whenReady().then(async () => {
     // useContentSize, so the numbers above are the viewport and not the
     // viewport plus whatever frame this platform draws around it.
     const win = new BrowserWindow({ ...PHONE, useContentSize: true, show: false });
+    /* Storage is per origin, and the origin is 127.0.0.1 on whatever port the
+       OS handed out. When it hands out one it gave an earlier run, that run's
+       config, its onboarding flag and the block its lot test saved are all
+       still there, and four checks fail for reasons that have nothing to do
+       with the checkout under test. Start clean every time. */
+    await win.webContents.session.clearStorageData({ storages: ["localstorage", "indexdb", "cookies"] });
     const pageErrors = [];
     // Electron 43 passes an event object here and deprecates the old positional
     // (event, level, message). Both are read so this file does not start

@@ -68,6 +68,7 @@
     syncTabs();
     if (pane === "home" && typeof renderHome === "function") renderHome();
     if (pane === "camera" && typeof renderCamera === "function") renderCamera();
+    if (pane === "playground" && window.crowePlayground) window.crowePlayground.render();
     // The transcript and the panel deck each remember their own scroll, and a
     // deck that was laid out while display:none has no size. Nudging resize
     // lets the panels measure themselves the moment they become visible.
@@ -79,6 +80,8 @@
      Panels describe a workspace on a machine, so they appear only once a
      machine is paired, as one "Machine" tab onto the workspace pane. */
   const HOME_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>';
+  const MESSAGES_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><path d="M19 9h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-1v3l-4-3h-4"/></svg>';
+  const PLAYGROUND_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
   const CAMERA_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
   const railIcon = (space) => { const b = spaceButtons().find((x) => x.dataset.space === space); return b && b.querySelector("svg") ? b.querySelector("svg").outerHTML : ""; };
   const spaceOn = (space) => Boolean(spaceButtons().find((b) => b.dataset.space === space && !b.classList.contains("hidden")));
@@ -86,8 +89,12 @@
   function buildTabs() {
     const items = [{ kind: "pane", id: "home", label: "Home", icon: HOME_ICON }];
     items.push({ kind: "space", id: "chat", label: "Chat", icon: railIcon("chat") });
-    items.push({ kind: "pane", id: "camera", label: "Camera", icon: CAMERA_ICON });
-    if (spaceOn("cultivation")) items.push({ kind: "space", id: "cultivation", label: "Log", icon: railIcon("cultivation") });
+    // Messages run on the phone itself, so the tab needs no paired machine.
+    if ($("rooms-drawer")) items.push({ kind: "pane", id: "messages", label: "Messages", icon: MESSAGES_ICON });
+    // Photo questions start from the camera button in Chat; the tab slot goes
+    // to the Playground (playground.js), which owns its pane.
+    items.push({ kind: "pane", id: "playground", label: "Playground", icon: PLAYGROUND_ICON });
+
     // Read the class directly: isPaired is declared further down and this runs at boot.
     if (body.classList.contains("m-paired")) items.push({ kind: "pane", id: "workspace", label: "Machine", icon: PANE_ICON });
 
@@ -125,7 +132,7 @@
     const onPanels = pane === "workspace" && showsWorkbench();
     tabs.querySelectorAll(".m-tab").forEach((tab) => {
       let current = false;
-      if (tab.dataset.kind === "pane") current = tab.dataset.id === "workspace" ? onPanels : pane === tab.dataset.id;
+      if (tab.dataset.kind === "pane") current = tab.dataset.id === "workspace" ? onPanels : tab.dataset.id === "messages" ? pane === "messages" || pane === "room" : pane === tab.dataset.id;
       else current = pane === "agent" && tab.dataset.id === space;
       if (current) tab.setAttribute("aria-current", "true"); else tab.removeAttribute("aria-current");
     });
@@ -133,6 +140,28 @@
 
   buildTabs();
   window.addEventListener("crowe:remote", () => buildTabs());
+
+  /* The account badge: an avatar with the address's initial (mobile.css draws
+     it). On the desktop a click signs out at once; on a phone that is one
+     stray tap from losing the session, so here the tap opens Settings, where
+     signing out is a deliberate row. Captured so the renderer's handler never
+     runs. */
+  const badge = $("userbadge");
+  if (badge) {
+    const initial = () => {
+      const t = (badge.textContent || "").trim();
+      if (t) { badge.dataset.initial = t[0].toUpperCase(); badge.setAttribute("aria-label", `Account: ${t}`); }
+      else delete badge.dataset.initial;
+    };
+    new MutationObserver(initial).observe(badge, { childList: true, characterData: true, subtree: true });
+    initial();
+    badge.setAttribute("role", "button");
+    badge.title = "Account and settings";
+    badge.addEventListener("click", (e) => {
+      e.stopImmediatePropagation(); e.preventDefault();
+      window.dispatchEvent(new CustomEvent("crowe:account"));
+    }, true);
+  }
 
   /* ── Home and Camera: the phone's own panes ─────────────────────────────────
      Two sections beside the workbench and the surfaces. Home answers "what
@@ -143,6 +172,62 @@
   const homePane = document.createElement("section"); homePane.id = "m-home-pane"; homePane.className = "m-pane"; homePane.setAttribute("aria-label", "Home");
   const cameraPane = document.createElement("section"); cameraPane.id = "m-camera-pane"; cameraPane.className = "m-pane"; cameraPane.setAttribute("aria-label", "Camera");
   if (workbenchEl && workbenchEl.parentNode) { workbenchEl.parentNode.insertBefore(homePane, workbenchEl); workbenchEl.parentNode.insertBefore(cameraPane, workbenchEl); }
+
+  /* Messages: the conversation list as a tab of its own, the way a phone keeps
+     texts. The desktop keeps it in the rail, which on a phone is a drawer you
+     have to know to open, so the list moves here whole, with its listeners.
+     A room is a dock panel, and the dock lives in the workspace pane that only
+     a paired phone shows; opening one switches to a "room" pane that shows that
+     panel alone, full screen, with a way back to the list. */
+  const roomsDrawer = $("rooms-drawer");
+  const messagesPane = document.createElement("section"); messagesPane.id = "m-messages-pane"; messagesPane.className = "m-pane"; messagesPane.setAttribute("aria-label", "Messages");
+  if (roomsDrawer && workbenchEl && workbenchEl.parentNode) {
+    workbenchEl.parentNode.insertBefore(messagesPane, workbenchEl);
+    messagesPane.appendChild(roomsDrawer);
+    roomsDrawer.classList.remove("hidden");
+  }
+  const roomPanels = () => [...document.querySelectorAll("#panel-deck .workspace-panel")].filter((el) => el.querySelector(".room"));
+  function showRoom(panelEl) {
+    if (!panelEl) return;
+    roomPanels().forEach((el) => el.classList.toggle("m-room-on", el === panelEl));
+    const head = panelEl.querySelector(".panel-head");
+    if (head && !head.querySelector(".m-room-back")) {
+      const back = document.createElement("button");
+      back.type = "button"; back.className = "m-room-back ghost sm"; back.textContent = "Messages";
+      back.setAttribute("aria-label", "Back to Messages");
+      back.addEventListener("click", () => setPane("messages"));
+      head.prepend(back);
+    }
+    const go = () => setPane("room");
+    if (showsWorkbench()) { go(); return; }
+    // Same order as the Machine tab: the space change resets the pane, so the
+    // room is shown after it.
+    const chat = spaceButtons().find((b) => b.dataset.space === "chat");
+    if (chat) chat.click();
+    setTimeout(go, 0);
+  }
+  // A tap on a row focuses its open panel or opens a new one; either way the
+  // panel that ends up active is the one to show. A new room's panel is added
+  // a moment later, which the observer below catches.
+  if (roomsDrawer) roomsDrawer.addEventListener("click", (e) => {
+    if (!e.target.closest || e.target.closest(".sess-del")) return;
+    if (!e.target.closest(".msg-row")) return;
+    setTimeout(() => { const el = document.querySelector("#panel-deck .workspace-panel.stack-active .room, #panel-deck .workspace-panel:last-child .room"); if (el) showRoom(el.closest(".workspace-panel")); }, 60);
+  });
+  const deck = $("panel-deck");
+  if (deck) new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) {
+      if (n.nodeType !== 1 || !n.classList.contains("workspace-panel")) continue;
+      // The room's body is mounted after the shell is appended.
+      // Only from the list: panels restored at launch must not open the app
+      // into a room.
+      if (!["messages", "room"].includes(body.dataset.pane)) continue;
+      setTimeout(() => { if (n.querySelector(".room") && document.body.contains(n)) showRoom(n); }, 0);
+    }
+  }).observe(deck, { childList: true });
+  // A closed room leaves the room pane with nothing in it.
+  if (deck) new MutationObserver(() => { if (body.dataset.pane === "room" && !deck.querySelector(".workspace-panel.m-room-on")) setPane("messages"); })
+    .observe(deck, { childList: true });
   const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   const sinceDays = (iso) => { const t = Date.parse(String(iso || "") + "T00:00:00"); if (!Number.isFinite(t)) return ""; const d = Math.floor((Date.now() - t) / 86400000); return d < 0 ? "" : d === 0 ? "today" : d === 1 ? "1 day" : `${d} days`; };
   const live = (blocks) => (blocks || []).filter((b) => b && b.code && !["spent", "discarded"].includes(b.stage));
@@ -156,36 +241,122 @@
     return b.basis === "dry" ? `${pct}% biological efficiency: ${got.toFixed(1)} lb from ${w} lb dry substrate`
       : b.basis === "wet" ? `${pct}% of wet block weight: ${got.toFixed(1)} lb from ${w} lb` : `${got.toFixed(1)} lb harvested (state the weight basis to see the ratio)`;
   }
-  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict">${esc((c.verdict || "").slice(0, 180))}</div></div></div>`;
+  /* A finding is markdown: the model bolds the stage and lists the actions.
+     Home and Camera used to escape it and show the asterisks. The transcript's
+     own renderer (md, renderer.js) draws it here too, inside a .said so the
+     list and heading rules it already has apply; one-line rows get the plain
+     words instead, since a grid cell cannot hold a list. */
+  const mdSafe = (t) => (typeof md === "function" ? md(String(t || "")) : esc(String(t || "")));
+  const rollCard = (c) => `<div class="m-roll">${c.thumb ? `<img src="${c.thumb}" alt="" class="m-roll-thumb">` : ""}<div><b>${esc(c.lot || "unassigned")}</b> <span class="m-lot-meta">${esc(new Date(c.ts).toLocaleDateString([], { month: "short", day: "numeric" }))}</span><div class="m-roll-verdict said m-md">${mdSafe(c.verdict)}</div></div></div>`;
   let pendingLot = "", cameraArmed = false, photoTurn = null;
+  const transcript = $("transcript");
 
   const isIOS = () => Boolean(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() === "ios");
+  /* What the phone may do on the paired computer, said where the connection is
+     shown. The mode is chosen in the composer and applies to every request
+     until it is changed; this is not a per-action approval, and the wording
+     does not suggest one. Risky commands still stop for a yes on their own. */
+  const HOME_MODE = {
+    plan: ["Plan", "Proposes steps and changes nothing."],
+    readonly: ["Read", "Reads files. Changes nothing."],
+    edit: ["Edit", "Reads and writes files. Commands need Execute."],
+    execute: ["Execute", "Reads, writes and runs commands."],
+  };
+  const homeMode = () => {
+    const [name, means] = HOME_MODE[body.dataset.tier] || HOME_MODE.edit;
+    return `<div class="m-h-mode" id="m-home-mode"><span class="m-h-mode-k">Operating mode</span><b>${name}</b><span class="m-h-mode-v">${means} Change it in Chat, under the message box.</span></div>`;
+  };
+  new MutationObserver(() => { if (body.dataset.pane === "home" && $("m-home-mode")) $("m-home-mode").outerHTML = homeMode(); })
+    .observe(body, { attributes: true, attributeFilter: ["data-tier"] });
   async function renderHome() {
-    const crowe = window.crowe; if (!crowe || !crowe.grow) return;
-    const safe = (p) => Promise.resolve(p).catch(() => []);
-    const [blocks, flushes, reminders, roll, sessions] = await Promise.all([
-      safe(crowe.grow.list("blocks")), safe(crowe.grow.list("flushes")),
-      crowe.reminders ? safe(crowe.reminders.list()) : [], crowe.camera ? safe(crowe.camera.list()) : [],
-      crowe.sessions && crowe.sessions.list ? safe(crowe.sessions.list()) : []]);
-    const rows = live(blocks).sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage));
-    const byLot = {}; for (const f of flushes || []) if (f && f.block) byLot[f.block] = (byLot[f.block] || 0) + (Number(f.weight) || 0);
-    const upcoming = (reminders || []).filter((r) => r.at > Date.now() - 3600000).slice(0, 6);
+    // The native vault can finish after the initial pane is selected. Read
+    // the ready config instead of capturing the not-yet-synced CSS class.
+    const cfg = await window.crowe.getConfig().catch(() => null);
+    const paired = Boolean(cfg?.remote?.configured);
+    const sessions = window.crowe?.sessions?.list ? await window.crowe.sessions.list().catch(() => []) : [];
+    const hour = new Date().getHours();
+    const greeting = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+    const TASKS = [
+      ["Understand a problem", "Explain an error or compare approaches", "Explain this problem and help me choose the next step: ", '<path d="M12 17h.01"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4"/><circle cx="12" cy="12" r="9"/>'],
+      ["Review a file", "An attachment or a file on your computer", "Help me review a file. First ask me to attach it or provide its path on my paired computer.", '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>'],
+      ["Plan a change", "See the action before it runs", "Help me plan a change. Show the proposed action and how we will verify the result before doing any work.", '<path d="M4 6h10M4 12h16M4 18h7"/><path d="M17 4l3 2-3 2"/>'],
+    ];
     homePane.innerHTML = [
-      '<div class="m-home-inner">',
-      `<header class="m-home-head"><div class="m-kicker">Grow log · this phone</div><h1 class="m-title">Your grow, today</h1><p class="m-home-sub">${rows.length ? `${rows.length} active lot${rows.length === 1 ? "" : "s"} on this phone.` : "Nothing logged yet. Add a block in Log, or photograph one in Camera."}</p></header>`,
-      rows.length ? '<section class="m-home-sec" id="m-home-blocks"><h2>Blocks by stage</h2>' + rows.map((b) => `<div class="m-lot" data-lot="${esc(b.code)}"><div class="m-lot-main"><b>${esc(b.code)}</b><span class="m-lot-name">${esc([b.species, b.strain].filter(Boolean).join(" · "))}</span><span class="m-stage m-stage-${esc(b.stage || "")}">${esc(b.stage || "")}</span></div><div class="m-lot-meta">${b.spawned ? esc(sinceDays(b.spawned)) + " since spawn" : ""}${b.count ? ` · ${esc(String(b.count))}×` : ""}${b.room ? ` · ${esc(b.room)}` : ""}</div>${yieldLine(b, byLot) ? `<div class="m-lot-yield">${esc(yieldLine(b, byLot))}</div>` : ""}<div class="m-lot-actions"><button type="button" class="ghost sm m-remind" data-lot="${esc(b.code)}" data-species="${esc(b.species || "")}" data-stage="${esc(b.stage || "")}">Remind me</button><button type="button" class="ghost sm m-check" data-lot="${esc(b.code)}">Photograph</button></div></div>`).join("") + "</section>" : "",
-      '<section class="m-home-sec" id="m-home-reminders"><h2>Reminders</h2>' + (upcoming.length ? upcoming.map((r) => `<div class="m-rem"><div><b>${esc(r.title)}</b><div class="m-lot-meta">${esc(new Date(r.at).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${r.body ? " · " + esc(r.body) : ""}</div></div><button type="button" class="ghost sm m-rem-x" data-id="${r.id}">Remove</button></div>`).join("") : '<p class="m-home-empty">None set. Tap Remind me on a block.</p>') + "</section>",
-      // Siri only where Siri is. The phrase is the whole sentence: iOS App
-      // Shortcuts carry no free text, so a question spoken in the same breath
-      // gets "hasn't added support for that". That was the first hardware report.
-      isIOS() ? '<section class="m-home-sec" id="m-home-siri"><h2>Siri</h2><p class="m-home-empty">Say “Hey Siri, ask Crowe” and stop there. Siri asks what you want to ask, then opens the answer here. The question cannot ride in the same sentence.</p></section>' : "",
-      roll.length ? '<section class="m-home-sec"><h2>Camera checks</h2>' + roll.slice(0, 4).map(rollCard).join("") + "</section>" : "",
-      sessions.length ? '<section class="m-home-sec"><h2>Recent conversations</h2>' + sessions.slice(0, 3).map((x) => `<div class="m-sess">${esc(x.name || x.title || "Untitled")}</div>`).join("") + "</section>" : "",
-      "</div>",
-    ].join("");
-    homePane.querySelectorAll(".m-remind").forEach((btn) => btn.addEventListener("click", () => remindChooser(btn.dataset.lot, btn.dataset.species, btn.dataset.stage)));
-    homePane.querySelectorAll(".m-check").forEach((btn) => btn.addEventListener("click", () => { pendingLot = btn.dataset.lot; setPane("camera"); }));
-    homePane.querySelectorAll(".m-rem-x").forEach((btn) => btn.addEventListener("click", async () => { await window.crowe.reminders.remove(Number(btn.dataset.id)); renderHome(); }));
+      '<div class="m-home-inner m-h">',
+      `<header class="m-h-head"><p class="m-h-hello">${greeting}</p><h1 class="m-h-title">What are we working on?</h1></header>`,
+      '<button type="button" class="m-h-ask" id="m-home-chat"><span>Ask anything</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>',
+      '<section class="m-h-tiles" aria-label="Start a task">',
+      TASKS.map(([t, sub, task, icon]) => `<button type="button" class="m-h-tile" data-task="${esc(task)}"><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><b>${t}</b><span>${sub}</span></button>`).join(""),
+      '<button type="button" class="m-h-tile m-h-tile-pg" id="m-home-pg"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/></svg><b>Try a model</b><span>Compare models side by side</span></button>',
+      '</section>',
+      '<section class="m-h-group" id="m-gates" aria-label="Authority gates" aria-live="polite"></section>',
+      `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
+      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
+      paired ? homeMode() : '',
+      paired ? '<button type="button" class="primary m-h-cta" id="m-home-mirror">Shared terminal and drafts</button>' : '',
+      `<button type="button" class="${paired ? "ghost" : "primary"} m-h-cta" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button>`,
+      '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Open Shared terminal to watch a desktop session, take control, or edit its Control+G draft. The desktop app must stay running. Drafts return to the prompt for you to submit. File tools and commands have activity receipts; terminal keystrokes and draft contents are not logged.</p></details>',
+      '</div></section>',
+      paired ? '<section class="m-h-group" id="m-activity" aria-live="polite"><h2>Activity on your computer</h2><p class="m-home-empty">Checking&hellip;</p></section>' : '',
+      sessions.length ? '<section class="m-h-group"><h2 class="m-h-label">Recent</h2><div class="m-h-card m-h-list">' + sessions.slice(0, 4).map((x) => `<button type="button" class="m-sess" data-session="${esc(x.id)}"><span>${esc(x.name || x.title || "Untitled")}</span><i class="m-chev" aria-hidden="true"></i></button>`).join("") + '</div></section>' : '',
+      '</div>',
+    ].join('');
+    $("m-home-pair").addEventListener("click", () => { $("settings-btn").click(); remoteSection.scrollIntoView({ block: "center" }); });
+    $("m-home-mirror")?.addEventListener("click", () => {
+      __tapTab("Machine");
+      setTimeout(async () => {
+        if (typeof addPanel !== "function") return;
+        const existing = document.querySelector('.phone-mirror')?.closest('.workspace-panel');
+        if (existing && typeof focusPanel === "function") focusPanel(existing.dataset.id);
+        else await addPanel("terminal", { title: "Shared terminal" });
+      }, 0);
+    });
+    $("m-home-chat").addEventListener("click", () => { __tapTab("Chat"); const i = $("input"); if (i) i.focus(); });
+    $("m-home-pg").addEventListener("click", () => __tapTab("Playground"));
+    homePane.querySelectorAll("[data-session]").forEach((b) => b.addEventListener("click", async () => {
+      if (typeof loadSession === "function") await loadSession(b.dataset.session);
+      __tapTab("Chat");
+    }));
+    if (paired) renderActivity();
+    renderGates();
+    startGates(true);
+    homePane.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => {
+      __tapTab("Chat");
+      const input = $("input");
+      input.value = button.dataset.task;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    }));
+  }
+
+  /* Receipts from the paired machine, on the phone: the trail the desktop keeps
+     for every command, read, write and refusal this device caused. The thing
+     a remote shell owes its owner is evidence, and this is where it is read. */
+  const ACT_LABEL = { run: "Ran", read: "Read", write: "Wrote", denied: "Refused", error: "Failed" };
+  function ago(at) {
+    const t = Date.parse(at);
+    if (Number.isNaN(t)) return "";
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  async function renderActivity() {
+    const host = $("m-activity");
+    if (!host || !window.crowe?.remote?.activity) return;
+    const r = await window.crowe.remote.activity(8).catch((e) => ({ error: String(e) }));
+    if (!host.isConnected) return;
+    const note = (t) => `<h2>Activity on your computer</h2><p class="m-home-empty">${esc(t)}</p>`;
+    if (r.error) { host.innerHTML = note(r.error); return; }
+    if (!r.entries.length) { host.innerHTML = note("Nothing yet. Every command, read and write this phone causes will be listed here."); return; }
+    host.innerHTML = '<h2>Activity on your computer</h2><ol class="m-act">' + r.entries.map((e) => {
+      const bad = e.kind === "denied" || e.kind === "error" || (e.kind === "run" && e.exit !== 0);
+      // A refusal's path field is the route (/write_file); the file it refused is in detail.
+      const what = e.kind === "denied" || e.kind === "error" ? (e.detail || e.path || e.reason || "") : (e.command || e.path || e.reason || e.detail || "");
+      const tail = e.kind === "run" ? (e.exit == null ? "no exit code" : `exit ${e.exit}`) : e.kind === "write" && e.bytes != null ? `${e.bytes} B` : e.reason || "";
+      return `<li class="m-act-row${bad ? " bad" : ""}"><span class="m-act-kind">${esc(ACT_LABEL[e.kind] || e.kind)}</span><code class="m-act-what">${esc(what)}</code><span class="m-act-meta">${esc([tail, ago(e.at)].filter(Boolean).join(" · "))}</span></li>`;
+    }).join("") + '</ol>';
   }
 
   function remindChooser(lot, species, stage) {
@@ -199,31 +370,32 @@
     }));
   }
 
-  const VISION_PROMPT = "Look at this photo of my block. Tell me what stage it is at, whether you see contamination or another problem, and what I should do next.";
+  const VISION_PROMPT = "Describe what is visible in this photo, explain relevant details, and tell me what is uncertain.";
   /* The Camera tab reads as a field inspection: a specimen frame with the last
      capture on file, a numbered capture protocol, and a ledger of findings
      against lots. The register is the Log's: mono kickers, a serif title,
      hairline rows. Nothing here claims more than one photo can carry. */
   const verdictKind = (v) => /contamin|trichoderma|mold|mould|bacteri|cobweb|discard|isolate/i.test(v) ? "bad" : /harvest|ready|pins|pinning|fruit|cluster/i.test(v) ? "gold" : /healthy|clean|no contamination|colonis|coloniz/i.test(v) ? "myc" : "neutral";
-  const firstSentence = (v) => { const t = String(v || "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
+  const plainWords = (v) => String(v || "").replace(/\*\*|__|`/g, "").replace(/^\s*(#{1,6}\s+|[-*+]\s+|\d+\.\s+)/gm, "").replace(/(^|\s)[*_](\S[^*_]*?)[*_](?=[\s.,;:!?]|$)/g, "$1$2");
+  const firstSentence = (v) => { const t = plainWords(v).replace(/\s+/g, " ").trim(); const m = /^(.{12,160}?[.!?])(\s|$)/.exec(t); return m ? m[1] : t.slice(0, 140); };
   const fmtDay = (ts) => new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
   async function renderCamera() {
     const roll = window.crowe && window.crowe.camera ? await window.crowe.camera.list().catch(() => []) : [];
     const last = roll[0];
     cameraPane.innerHTML = [
       '<div class="m-home-inner">',
-      '<header class="m-fi-head"><div class="m-kicker">Field inspection · CroweLM Vision</div><h1 class="m-title">Photograph a block</h1>',
-      '<p class="m-home-sub">The block face is read by CroweLM Vision, running Claude Fable 5.1. Each check returns a graded finding, marked on the photo, and is recorded against its lot.</p></header>',
+      '<header class="m-fi-head"><div class="m-kicker">Photo questions · CroweLM Vision</div><h1 class="m-title">Explore a photo</h1>',
+      '<p class="m-home-sub">Choose a photo and ask CroweLM Vision to describe what is visible. Check important details yourself.</p></header>',
       `<section class="m-fi-frame${last ? "" : " is-empty"}"><div class="m-fi-view">`,
       last && last.thumb ? `<img class="m-fi-img" src="${last.thumb}" alt="last capture">` : "",
       '<div class="m-fi-lattice"></div><i class="m-fi-c c1"></i><i class="m-fi-c c2"></i><i class="m-fi-c c3"></i><i class="m-fi-c c4"></i><i class="m-fi-cross"></i>',
-      last ? `<div class="m-fi-meta"><span>Last check</span><span>${esc(last.lot || "no lot")}</span><span>${esc(fmtDay(last.ts))}</span></div>` : '<div class="m-fi-empty"><span class="m-kicker">Specimen</span>No capture on file.<br>Frame the block face and photograph it.</div>',
+      last ? `<div class="m-fi-meta"><span>Last check</span><span>${esc(last.lot || "Photo")}</span><span>${esc(fmtDay(last.ts))}</span></div>` : '<div class="m-fi-empty"><span class="m-kicker">Photo</span>No capture on file.<br>Choose a clear photo to discuss in Chat.</div>',
       pendingLot ? `<div class="m-fi-lot">Checking lot <b>${esc(pendingLot)}</b></div>` : "",
       "</div>",
       '<div class="m-cam-actions"><button type="button" class="primary m-cam-shoot">Photograph</button><button type="button" class="ghost m-cam-pick">Choose a photo</button></div></section>',
-      '<section class="m-fi-sec"><h2 class="m-kicker">Capture protocol</h2><ol class="m-fi-protocol"><li>Fill the frame with the block face.</li><li>Even light. No flash glare on the bag.</li><li>Include the lot tag when there is one.</li><li>One block per photo.</li></ol></section>',
-      '<section class="m-fi-sec"><h2 class="m-kicker">Inspection ledger</h2>',
-      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Lot</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "no lot")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<p>${esc(c.verdict || "")}</p></div>`).join("") + "</div>" : '<p class="m-home-empty">No inspections recorded on this phone.</p>',
+      '<section class="m-fi-sec"><h2 class="m-kicker">Capture protocol</h2><ol class="m-fi-protocol"><li>Keep the subject in focus.</li><li>Use even light without glare.</li><li>Exclude private or sensitive information.</li><li>Review the answer before acting.</li></ol></section>',
+      '<section class="m-fi-sec"><h2 class="m-kicker">Photo history</h2>',
+      roll.length ? '<div class="m-ledger"><div class="m-ledger-head"><span>Date</span><span>Context</span><span>Finding</span></div>' + roll.slice(0, 20).map((c, i) => `<button type="button" class="m-ledger-row m-r-${verdictKind(c.verdict)}" data-i="${i}"><span class="d">${esc(fmtDay(c.ts))}</span><span class="l">${esc(c.lot || "Photo")}</span><span class="f">${esc(firstSentence(c.verdict))}</span><i class="mark"></i></button><div class="m-ledger-detail" hidden>${c.thumb ? `<img src="${c.thumb}" alt="">` : ""}<div class="said m-md">${mdSafe(c.verdict)}</div></div>`).join("") + "</div>" : '<p class="m-home-empty">No photo questions yet.</p>',
       "</section>",
       '<p class="m-fi-note">A finding is the model\'s reading of one image. It informs a hands-on inspection; it does not replace one.</p>',
       "</div>",
@@ -262,27 +434,133 @@
     window.crowe.agent.onEvent(async (ev) => {
       if (!ev) return;
       if (ev.type === "photos" && Array.isArray(ev.thumbs)) { if (!photoTurn) photoTurn = { lot: pendingLot, thumb: "" }; photoTurn.thumb = ev.thumbs[0] || ""; return; }
-      if (ev.type !== "assistant" || !photoTurn || ev.agentId && ev.agentId !== "main") return;
+      if (!photoTurn || ev.agentId && ev.agentId !== "main") return;
+      // The finding is the LAST thing the model said in this turn, not the first: a turn that opens
+      // with "I'll pull your recent block records first" and then reads the photo must log the read,
+      // not the preamble. Collect assistant texts and act when the turn is final.
+      if (ev.type === "assistant") { const t = String(ev.text || "").trim(); if (t) photoTurn.text = t; return; }
+      if (ev.type !== "final") return;
       const turn = photoTurn; photoTurn = null; pendingLot = "";
-      const text = String(ev.text || "").trim(); if (!text) return;
+      const text = String(turn.text || "").trim(); if (!text) return;
       const bodies = document.querySelectorAll(".msg.assistant .body"); const body = bodies[bodies.length - 1]; if (!body) return;
-      const blocks = live(await window.crowe.grow.list("blocks").catch(() => []));
-      // The lot the check came from; else the only lot; else the fruiting one, which is the one usually photographed.
-      const pick = turn.lot || (blocks.length === 1 ? blocks[0].code : ((blocks.find((b) => b.stage === "fruiting") || {}).code || ""));
       const row = document.createElement("div"); row.className = "m-log-row";
-      row.innerHTML = `<select aria-label="Lot">${blocks.map((b) => `<option value="${esc(b.code)}"${b.code === pick ? " selected" : ""}>${esc(b.code)}${b.species ? " · " + esc(b.species) : ""}</option>`).join("")}<option value=""${pick ? "" : " selected"}>No lot</option></select><button type="button" class="primary sm m-log-it">Log this check</button><button type="button" class="ghost sm m-log-skip">Not now</button>`;
+      row.innerHTML = '<button type="button" class="ghost sm m-log-it">Save to photo history</button><button type="button" class="ghost sm m-log-skip">Not now</button>';
       body.appendChild(row);
       row.querySelector(".m-log-skip").addEventListener("click", () => row.remove());
       row.querySelector(".m-log-it").addEventListener("click", async () => {
-        const lot = row.querySelector("select").value;
-        const entry = (lot ? `Photo check of ${lot}. ` : "Photo check. ") + text.slice(0, 1200);
-        const saved = await window.crowe.grow.save("log", { date: todayISO(), subject: lot ? `Photo check ${lot}` : "Photo check", entry });
-        if (!saved || saved.ok === false) { alert((saved && saved.error) || "The journal did not take the entry."); return; }
-        await window.crowe.camera.add({ lot, verdict: text.slice(0, 400), thumb: turn.thumb });
-        row.innerHTML = `<span class="m-log-done">Logged${lot ? " to " + esc(lot) : ""} in the grow journal.</span>`;
+        await window.crowe.camera.add({ lot: "", verdict: text.slice(0, 400), thumb: turn.thumb });
+        row.innerHTML = '<span class="m-log-done">Saved to photo history on this phone.</span>';
       });
     });
   }
+  /* ── 1.1: the transcript a grower sees ─────────────────────────────────────
+     The launch films had to hide the developer chrome with a stylesheet to be
+     watchable: the colophon's tool and token counts, the route card, the tool
+     cards' arguments and results, the tier picker, the copy buttons, the HUD
+     strip. On the phone all of it is now off unless Settings says otherwise.
+     Nothing is removed: mobile.css hides by class, keyed on body.m-usage, so
+     the desktop renderer draws exactly what it always did and the switch turns
+     the same elements back on.
+
+     Two things need script rather than a stylesheet. A tool card collapses to
+     one plain line ("Looked up your grow records") that expands on tap, and
+     that line has to be written from the tool's name. And a failed turn ends
+     in one sentence with a Try again button that sends the same message, and
+     the same photo, again. */
+  const TOOL_SUMMARY = {
+    read_grow: "Looked up your records",
+    log_grow: "Added to your log",
+    open_url: "Opened a web page",
+    read_file: "Read a file",
+    write_file: "Wrote a file",
+    run_command: "Ran a command on your machine",
+  };
+  const toolSummary = (name) => TOOL_SUMMARY[name]
+    || (/calendar|event/i.test(name) ? "Checked your calendar"
+      : /drive|doc|sheet/i.test(name) ? "Looked in your Drive"
+      : /search|lookup|find|list/i.test(name) ? "Looked something up"
+      : "Used a tool");
+  function summarise(card) {
+    if (card.dataset.mobile) return;
+    card.dataset.mobile = "1";
+    const isEdit = card.classList.contains("editcard");
+    const name = isEdit ? "" : ((card.querySelector(".tc-name") || {}).textContent || "").trim();
+    const path = isEdit ? ((card.querySelector(".ec-path") || {}).textContent || "").trim() : "";
+    const line = isEdit ? `Proposed an edit${path ? " to " + path : ""}` : toolSummary(name);
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "m-tc-summary";
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML = `<span class="m-tc-dot"></span><span class="m-tc-text">${esc(line)}</span><span class="m-tc-more">Details</span>`;
+    btn.addEventListener("click", () => { const open = card.classList.toggle("m-open"); btn.setAttribute("aria-expanded", String(open)); });
+    card.insertBefore(btn, card.firstChild);
+  }
+
+  /* The turn that failed, so Try again can send it back. The text is the user
+     bubble's own; the photos are the ones the scan drew into it, still data
+     URLs; the lot is the one the Camera tab was checking, remembered here
+     because the log-row handler above clears it when the turn ends. */
+  let failedLot = "";
+  if (window.crowe && window.crowe.agent && window.crowe.agent.onEvent) {
+    window.crowe.agent.onEvent((ev) => {
+      if (ev && ev.type === "error" && (!ev.agentId || ev.agentId === "main")) failedLot = photoTurn ? photoTurn.lot : "";
+    });
+  }
+  const RAW_ERROR = /^(HTTP \d{3}\b|gateway( unreachable)?:|stream broke:|The run did not complete:|\s*[\[{])/i;
+  function dressError(err) {
+    if (err.dataset.mobile) return;
+    err.dataset.mobile = "1";
+    const raw = err.textContent;
+    // The bridge already speaks plainly; this is the net under the renderer's
+    // own two error paths, which quote whatever was thrown.
+    if (RAW_ERROR.test(raw)) {
+      const said = window.__croweHumanError ? window.__croweHumanError(raw) : null;
+      try { console.error("[crowe] turn failed:", raw); } catch { /* no console */ }
+      err.textContent = said && said.kind !== "message" ? said.text : "The reading did not come back. Try again.";
+    }
+    const msg = err.closest(".msg.assistant");
+    const user = msg && msg.previousElementSibling;
+    if (!user || !user.classList.contains("user")) return;
+    const p = user.querySelector(".body > p");
+    const text = p ? p.textContent : "";
+    if (!text.trim()) return;
+    const photos = [...user.querySelectorAll(".m-sent-photos img")]
+      .map((img, i) => ({ name: i ? `photo ${i + 1}.jpg` : "photo.jpg", src: img.getAttribute("src") || "" }))
+      .filter((x) => /^data:image\//.test(x.src));
+    const lot = failedLot;
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "m-retry ghost sm"; btn.textContent = "Try again";
+    btn.addEventListener("click", () => retryTurn({ text, photos, lot, user, msg }));
+    err.appendChild(btn);
+  }
+  function retryTurn(t) {
+    if (typeof send !== "function") return;
+    if (typeof running !== "undefined" && running) return;
+    // The failed exchange comes out of the transcript and out of the
+    // conversation the model is shown, so the retry is the same turn again and
+    // not a second copy of the question under the first.
+    try {
+      if (typeof messages !== "undefined" && messages.length && messages[messages.length - 1].role === "user" && messages[messages.length - 1].content === t.text) messages.pop();
+    } catch { /* the renderer keeps its own list; a duplicate is not worth failing the retry */ }
+    t.msg.remove(); t.user.remove();
+    if (t.lot) pendingLot = t.lot;
+    if (t.photos.length && window.crowePhone && window.crowePhone.addImage) {
+      cameraArmed = false;    // the photo rides this send; the Camera tab's own trigger stays quiet
+      for (const ph of t.photos) window.crowePhone.addImage(ph.name, ph.src);
+    }
+    send(t.text);
+  }
+  if (transcript) {
+    const dress = (root) => {
+      if (!root || root.nodeType !== 1) return;
+      if (root.matches(".toolcard, .editcard:not(.gatecard)")) summarise(root);
+      root.querySelectorAll(".toolcard, .editcard:not(.gatecard)").forEach(summarise);
+      if (root.matches(".err")) dressError(root);
+      root.querySelectorAll(".err").forEach(dressError);
+    };
+    dress(transcript);
+    new MutationObserver((records) => { for (const r of records) r.addedNodes.forEach(dress); }).observe(transcript, { childList: true, subtree: true });
+  }
+
   // The space picker in Settings hides and shows rail buttons after load, and
   // the rail is the tab bar's only source of truth about which spaces exist.
   new MutationObserver(buildTabs).observe($("spaces"), { attributes: true, subtree: true, attributeFilter: ["class"] });
@@ -327,15 +605,13 @@
     "What is running on my Mac right now?",
     "Show me the last 30 lines of the log and tell me what went wrong",
   ];
-  const CULTIVATION_CHIP = "What did I log about contamination this month, and what should I change?";
-  const CULTIVATION_PHOTO_CHIP = "Photograph this block and tell me if that is contamination";
 
   // Three, in the order they earn their place: the machine when there is one,
   // the farm when that space is on, then general reasoning to fill the rest.
   const welcomeChips = () => {
     const chips = [];
     if (isPaired()) chips.push(...MACHINE_CHIPS);
-    if (cultivationOn()) chips.push(CULTIVATION_PHOTO_CHIP, CULTIVATION_CHIP);
+
     chips.push(...GENERAL_CHIPS);
     return chips.slice(0, 3);
   };
@@ -360,7 +636,7 @@
      fails, rather than the phone quietly going back to promising a terminal. */
   const COPY = [
     ["This is the operator over your CroweLM gateway: chat, a real terminal, files, git, and plugin tools, all reviewed through one agent loop.",
-     "This is the operator over your CroweLM gateway, on your phone: reasoning, routing to the right expert, and once you pair a desktop, its shell, files and git."],
+     "Turn a question into work you can inspect: understand a problem, review an attachment, or work with files and commands on your paired computer."],
     ["Open the project folder the agent should work in (the button below, or Cmd+O).",
      "Pair a desktop in Settings under Remote machine, and it can work on that machine from here."],
     ["Give the agent a task. Try",
@@ -377,7 +653,6 @@
     if (changed) root.innerHTML = html;
   }
 
-  const transcript = $("transcript");
   if (transcript) {
     mobiliseWelcome(transcript);
     transcript.querySelectorAll(".msg .said").forEach(mobiliseCopy);
@@ -417,15 +692,15 @@
   const TIER_HINT = {
     plan: "Describe a task. It plans it out first.",
     readonly: "Ask anything. It reads, changes nothing.",
-    edit: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
-    execute: () => (cultivationOn() ? "Ask anything. It can add to your grow log." : "Ask anything."),
+    edit: "Describe the file change you need.",
+    execute: "Describe the task and the result you want.",
   };
   // What each tier means changes once a machine is paired, because the tier is
   // then gating a real shell and not only the grow log. Saying "your grow log"
   // while Execute can delete a directory would be the friendliest lie here.
   const TIER_HINT_PAIRED = {
     plan: "Describe a task. It plans it out first, and touches nothing.",
-    readonly: "Ask anything. It reads your log and files on the paired machine.",
+    readonly: "Ask anything. It reads files on the paired machine.",
     edit: "Ask anything. It can write files on the paired machine.",
     execute: "Ask anything. It can run commands on the paired machine.",
   };
@@ -485,8 +760,8 @@
     cam.type = "file"; cam.accept = "image/*"; cam.hidden = true; cam.setAttribute("capture", "environment");
     const camBtn = document.createElement("button");
     camBtn.type = "button"; camBtn.id = "m-camera"; camBtn.className = "bar-icon";
-    camBtn.title = "Photograph a block, bag or plate";
-    camBtn.setAttribute("aria-label", "Photograph a block, bag or plate");
+    camBtn.title = "Attach a photo to your question";
+    camBtn.setAttribute("aria-label", "Attach a photo to your question");
     camBtn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
     camBtn.addEventListener("click", () => cam.click());
     clipBtn.insertAdjacentElement("afterend", camBtn);
@@ -638,7 +913,7 @@
       if (!activeScan) return;
       activeScan.strip.classList.add("m-scan-done");
       activeScan.wrap.classList.remove("m-scan-sending");
-      scanSay(how === "error" ? ("The photo could not be read. " + String(why || "").slice(0, 140)).trim() : how === "stopped" ? "Stopped." :
+      scanSay(how === "error" ? String(why || "The photo could not be read.").slice(0, 160) : how === "stopped" ? "Stopped." :
         (activeScan.regions.length ? `Read. ${activeScan.regions.length} area${activeScan.regions.length === 1 ? "" : "s"} marked; tap the photo to hide them.` : "Read."));
       activeScan = null;
     }
@@ -648,7 +923,13 @@
         if (ev.type === "vision_regions" && Array.isArray(ev.regions)) { scanRegions(ev.regions); return; }
         if (ev.type === "vision_reasoning" && typeof ev.text === "string") { scanReasoning(ev.text); return; }
         if (ev.type === "assistant_delta") { scanReading(); return; }
-        if (ev.type === "assistant" || ev.type === "final") { endScan("done"); return; }
+        /* The scan runs until the TURN ends, not until the first text. A read
+           that opens with "I'll pull your recent block records first", calls
+           read_grow and then reads the photo used to be marked Read. at the
+           preamble, and the regions arriving a round later had no scan left to
+           land on. Same shape of bug as the log row's, fixed the same way. */
+        if (ev.type === "assistant") { scanReading(); return; }
+        if (ev.type === "final") { endScan("done"); return; }
         if (ev.type === "error") { endScan("error", ev.text); return; }
         if (ev.type === "stopped") { endScan("stopped"); return; }
         if (ev.type !== "photos" || !Array.isArray(ev.thumbs)) return;
@@ -700,6 +981,38 @@
   const companionSection = companion && companion.closest("section");
   if (companionSection) companionSection.classList.add("m-desktop-only");
 
+  /* The reply pace. The phone now starts on brisk (mobile-bridge.js DEFAULTS),
+     so the desktop's option label naming reading pace as the phone's default is
+     relabelled here, on the phone only. */
+  const paceSelect = $("cfg-pace");
+  if (paceSelect) {
+    const PACE_LABEL = { reading: "Reading pace, slower", brisk: "Brisk, keeps up with the model (the phone's default)", instant: "Instant" };
+    [...paceSelect.options].forEach((o) => { if (PACE_LABEL[o.value]) o.textContent = PACE_LABEL[o.value]; });
+  }
+
+  /* The one switch for the developer chrome (see "the transcript a grower
+     sees" above). Applies on the tap and persists through the bridge as
+     showUsage, so it is a fact the app remembers and not a mode it is in. */
+  const detailsSection = document.createElement("section");
+  detailsSection.className = "key-manager m-details";
+  detailsSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Details</b>',
+    "<span>Which expert answered, what it looked up, token counts and cost under each reply, the strip above the tabs, and the Plan, Read and Edit picker under the composer. Off, a reply is just the reply.</span></div></div>",
+    '<label class="chk"><input id="m-cfg-usage" type="checkbox" /> Show usage and routing details</label>',
+  ].join("");
+  const guardrails = paceSelect && paceSelect.closest("section");
+  if (guardrails && guardrails.parentNode) guardrails.parentNode.insertBefore(detailsSection, guardrails.nextSibling);
+  const usageBox = $("m-cfg-usage");
+  const paintUsage = (on) => { body.classList.toggle("m-usage", Boolean(on)); if (usageBox) usageBox.checked = Boolean(on); };
+  async function syncUsage() {
+    try { const c = await window.crowe.getConfig(); paintUsage(c && c.showUsage); } catch { /* the bridge answers on the next open */ }
+  }
+  syncUsage();
+  if (usageBox) usageBox.addEventListener("change", async () => {
+    paintUsage(usageBox.checked);
+    try { await window.crowe.setConfig({ showUsage: usageBox.checked }); } catch { /* shown either way; saved next time */ }
+  });
+
   /* Remote machine.
      "Workspace folder" is hidden just above because a phone has no folder. What
      it has instead is a machine it can reach: Crowe Terminal, over Tailscale.
@@ -732,6 +1045,23 @@
   ].join("");
   const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
   if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
+  /* The gateway address and a pasted token are for support and self-hosting,
+     not for a first look. Folded away, Settings opens on what a person came for
+     — the computer, the account — and a reviewer does not meet two developer
+     fields before anything else. */
+  const baseRow = $("cfg-base") && $("cfg-base").closest("label");
+  if (baseRow && tokenRow && baseRow.parentNode) {
+    const adv = document.createElement("details");
+    adv.className = "m-advanced";
+    adv.innerHTML = '<summary>Advanced: gateway and token</summary>';
+    baseRow.parentNode.insertBefore(adv, remoteSection.nextSibling);
+    adv.append(baseRow, tokenRow);
+  }
+  /* The status line sits after the sticky action row on desktop. Here that
+     leaves a strip below the buttons where the scroll shows through, so it
+     reads above them instead, next to what was just saved. */
+  const status = $("cfg-status"), actions = status && status.previousElementSibling;
+  if (actions && actions.classList.contains("row")) actions.parentNode.insertBefore(status, actions);
 
   /* Account deletion, App Store guideline 5.1.1(v). The deletion happens on
      the Crowe ID account page, which the bridge opens in the browser sheet;
@@ -739,16 +1069,28 @@
      there and signs the phone out if it is not. Phone-only for the same reason
      as the section above: the desktop has its own account surface. */
   /* Siri and Shortcuts. "Ask Crowe Logic <question>" sends the question as a
-     turn; "Log a block" opens the grow log on the Blocks lane with the note in
-     the form. The note arrives from the bridge as crowe:intent (see
-     takePendingIntent), on launch and on every return to the foreground. */
+     turn — unless a paired computer is at Edit or Execute, where a Shortcut
+     automation (not a person) could otherwise write files or run commands
+     unseen. There it lands in the composer for a tap. The note arrives from the
+     bridge as crowe:intent (see takePendingIntent). "log-block" notes from
+     builds before 1.1 still open the legacy form. */
   window.addEventListener("crowe:intent", (e) => {
     if (e && e.detail && e.detail.kind === "home") { setPane("home"); return; }
     const d = (e && e.detail) || {};
     if (d.kind === "ask" && d.text) {
       __tapTab("Chat");
-      if (typeof send === "function") { send(d.text); }
+      const acts = body.classList.contains("m-paired") && (body.dataset.tier === "edit" || body.dataset.tier === "execute");
+      if (acts) {
+        const inp = $("input");
+        if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
+      } else if (typeof send === "function") { send(d.text); }
       else { const inp = $("input"); if (inp) { inp.value = d.text; inp.dispatchEvent(new Event("input")); const go = $("send"); if (go) go.click(); } }
+    } else if (d.kind === "log-block" && !cultivationOn()) {
+      // No Cultivation on this build, so no form to open: the note waits in
+      // Chat's composer instead of vanishing.
+      __tapTab("Chat");
+      const inp = $("input");
+      if (inp && d.text) { inp.value = d.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
     } else if (d.kind === "log-block") {
       __tapTab("Cultivation");
       const blocks = document.querySelector('#cult-nav .sn-item[data-cult="blocks"]');
@@ -778,37 +1120,144 @@
   const say = (text, state) => { if (typeof setComposerStatus === "function") setComposerStatus(text, state); };
   if (dictBtn && dictInput && Speech && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     dictBtn.classList.remove("unavailable"); dictBtn.removeAttribute("aria-disabled"); dictBtn.title = "Dictate with microphone";
-    let listening = false, base = "";
+    let capture = null, revision = 0;
     const stopped = () => {
-      listening = false;
       dictBtn.classList.remove("active"); dictBtn.setAttribute("aria-pressed", "false");
       const st = $("composer-status");
       if (st && st.dataset.state === "listening") say("Ready");
     };
-    Promise.resolve(Speech.addListener("partialResults", (d) => {
-      const heard = d && Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
-      dictInput.value = (base + " " + heard).trim();
-      dictInput.dispatchEvent(new Event("input"));
-    })).catch(() => {});
-    Promise.resolve(Speech.addListener("listeningState", (d) => { if (d && d.status === "stopped") stopped(); })).catch(() => {});
-    dictBtn.onclick = async () => {
-      if (listening) { try { await Speech.stop(); } catch { stopped(); } return; }
-      let perm = { speechRecognition: "denied" };
-      try { perm = await Speech.requestPermissions(); } catch { /* answered below */ }
-      if (perm.speechRecognition !== "granted") { say("Allow the microphone and speech recognition in Settings to dictate", "error"); return; }
-      let avail = { available: false };
-      try { avail = await Speech.available(); } catch { /* answered below */ }
-      if (!avail.available) { say("Dictation is not available on this phone right now", "error"); return; }
-      base = dictInput.value.trim(); listening = true;
+    const cancel = () => { revision++; const old = capture; capture = null; stopped(); if (old) void old.stop(); };
+    dictBtn.onclick = () => {
+      if (capture) { cancel(); return; }
+      const begin = window.croweKeyboard?.captureSpeech;
+      if (!begin) { say("Dictation is not available in this build", "error"); return; }
+      if (document.hidden) return;
+      const attempt = ++revision, base = dictInput.value.trim();
+      const current = () => attempt === revision && !document.hidden && dictInput.isConnected && dictInput.getClientRects().length;
+      const next = begin(Speech, "composer", {
+        partial: d => {
+          if (!current()) { cancel(); return; }
+          const heard = Array.isArray(d.matches) && d.matches.length ? String(d.matches[0]) : "";
+          dictInput.value = (base + " " + heard).trim();
+          dictInput.dispatchEvent(new Event("input"));
+        },
+        stopped: () => { if (attempt === revision) { capture = null; stopped(); } },
+        error: e => { if (attempt === revision) { capture = null; say("Dictation failed: " + String(e?.message || e).slice(0, 120), "error"); stopped(); } },
+      });
+      if (!next) { say("Finish the current dictation before starting another", "error"); return; }
+      capture = next;
       dictBtn.classList.add("active"); dictBtn.setAttribute("aria-pressed", "true"); say("Listening", "listening");
-      try { await Speech.start({ language: "en-US", partialResults: true }); }
-      catch (e) { say("Dictation failed: " + String(e && e.message || e).slice(0, 80), "error"); stopped(); }
     };
+    document.addEventListener("visibilitychange", () => { if (document.hidden) cancel(); });
+    window.addEventListener("pagehide", cancel);
+    const speechVisibility = new MutationObserver(() => {
+      if (capture && (!dictInput.isConnected || !dictInput.getClientRects().length)) cancel();
+    });
+    speechVisibility.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style"] });
   } else if (dictBtn && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
     // No native recogniser in this build: say so instead of lighting a button that fails.
     dictBtn.classList.add("unavailable"); dictBtn.setAttribute("aria-disabled", "true"); dictBtn.title = "Dictation is not available in this build";
     dictBtn.onclick = () => say("Dictation is not available in this build", "error");
   }
+
+  /* The plan, and the way up. Three places a free account meets it:
+
+       · a plan notice in the transcript (the bridge's "plan" event, which the
+         renderer renders as one muted line) gets a See plans button under it;
+       · the Settings row below names the tier and offers the same;
+       · the card itself, in the transcript, in the renderer's own .plan-card
+         markup, with the live price from the ladder.
+
+     The bridge decides whether a sale may happen here at all: billing.plan()
+     answers buyHere, true only on the United States App Store storefront.
+     Where it is false none of the three is drawn, not the button, not the
+     card, not a web price, because showing a way out to buy is itself what
+     App Review calls steering (3.1.1). Nothing is drawn while the answer is
+     pending either, so a refused storefront never sees a flash. The UI never
+     reads the price from anywhere but billing.catalog, and never navigates the
+     webview to Stripe: the bridge opens the system browser and the card waits
+     for crowe:plan, which the bridge fires on the way back. */
+  const billing = window.crowe && window.crowe.billing;
+  const PLAN_NAMES = { free: "Free", personal: "Personal", pro: "Pro", team: "Team", max: "Max", scale: "Scale", studio: "Studio", business: "Business", enterprise: "Enterprise", byok: "BYOK" };
+  const money = (cents, interval) => `$${Math.round(cents / 100)}${interval ? ` a ${interval}` : ""}`;
+  const buyHere = async () => { try { return Boolean((await billing.plan()).buyHere); } catch { return false; } };
+  async function planCard(reason) {
+    if (!transcript || !billing || !(await buyHere())) return;
+    const prior = transcript.querySelector(".plan-card");
+    if (prior) { prior.scrollIntoView({ block: "nearest" }); return; }
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    wrap.innerHTML = '<div class="who"><span class="who-mark" role="img" aria-label="Crowe Logic"></span></div><div class="body"><div class="plan-card">'
+      + '<div class="plan-head"><b>Crowe Logic Pro</b><span class="plan-price">reading the price</span></div>'
+      + '<p class="said plan-why"></p><ul class="plan-feats"></ul>'
+      + '<div class="plan-row"><button type="button" class="primary plan-go">Upgrade on crowelogic.com</button><button type="button" class="ghost plan-later">Not now</button></div>'
+      + '<p class="hint plan-note"></p></div></div>';
+    const welcome = transcript.querySelector(".welcome"); if (welcome) welcome.remove();
+    transcript.appendChild(wrap); wrap.scrollIntoView({ block: "end" });
+    const card = wrap.querySelector(".plan-card");
+    card.querySelector(".plan-why").textContent = (reason === "paywall" ? "That turn needs a plan. " : "")
+      + "One subscription unlocks every Crowe Logic surface: the operator here and on the desktop, the rooms and named agents, and the CLI. It opens in your browser; the plan goes on your Crowe ID.";
+    const priceEl = card.querySelector(".plan-price");
+    try {
+      const cat = await billing.catalog();
+      const pro = ((cat && cat.ladder) || []).find((i) => i.slug === "pro");
+      if (pro && pro.amount) {
+        priceEl.textContent = money(pro.amount, pro.interval);
+        card.querySelector(".plan-feats").innerHTML = (pro.features || []).slice(0, 6).map((f) => `<li>${esc(f)}</li>`).join("");
+      } else priceEl.textContent = "price at checkout";
+    } catch { priceEl.textContent = "price at checkout"; }
+    const go = card.querySelector(".plan-go");
+    go.addEventListener("click", async () => {
+      go.disabled = true; go.textContent = "Opening your browser";
+      const r = await billing.checkout("pro");
+      if (r && r.ok) { card.querySelector(".plan-note").textContent = "Finish in your browser. This phone picks up the plan when you come back."; go.textContent = "Opened in your browser"; return; }
+      go.disabled = false; go.textContent = "Upgrade on crowelogic.com";
+      card.querySelector(".plan-note").textContent = (r && r.error) || "Checkout is not answering. Try again in a moment.";
+    });
+    card.querySelector(".plan-later").addEventListener("click", () => wrap.remove());
+  }
+  // A See plans button under each plan notice the renderer writes.
+  if (transcript && billing) new MutationObserver(async (records) => {
+    const added = records.flatMap((r) => [...r.addedNodes]);
+    if (!added.some((n) => n instanceof HTMLElement && (n.matches(".notice.plan") || n.querySelector(".notice.plan")))) return;
+    if (!(await buyHere())) return;
+    for (const n of added) {
+      if (!(n instanceof HTMLElement)) continue;
+      const notices = n.matches && n.matches(".notice.plan") ? [n] : [...(n.querySelectorAll ? n.querySelectorAll(".notice.plan") : [])];
+      for (const el of notices) {
+        if (el.dataset.upgrade) continue; el.dataset.upgrade = "1";
+        const b = document.createElement("button"); b.type = "button"; b.className = "ghost sm m-plan-up"; b.textContent = "See plans";
+        b.addEventListener("click", () => planCard("paywall"));
+        el.appendChild(document.createTextNode(" ")); el.appendChild(b);
+      }
+    }
+  }).observe(transcript, { childList: true, subtree: true });
+
+  const planSection = document.createElement("section");
+  planSection.className = "key-manager m-plan";
+  planSection.innerHTML = '<div class="settings-section-head"><div><b>Your plan</b><span id="m-plan-line">Reading your plan.</span></div></div><button id="m-plan-up" class="ghost sm" type="button" hidden>See plans</button>';
+  async function paintPlan(p) {
+    if (!billing) return;
+    try { p = p || await billing.plan(); } catch { p = null; }
+    const line = planSection.querySelector("#m-plan-line"), btn = planSection.querySelector("#m-plan-up");
+    if (!p || !p.email) { line.textContent = "Sign in with your Crowe ID to see your plan."; btn.hidden = true; return; }
+    if (!p.known) { line.textContent = "Your plan is managed on your Crowe ID."; btn.hidden = true; return; }
+    const name = PLAN_NAMES[String(p.tier || "free").toLowerCase()] || p.tier || "Free";
+    line.textContent = p.paid ? `${name}. Use Manage billing above to review your subscription.`
+      : p.buyHere ? "Free. Pro unlocks every CroweLM tier and the frontier engines." : `${name}.`;
+    btn.hidden = Boolean(p.paid) || !p.buyHere;
+  }
+  planSection.querySelector("#m-plan-up").addEventListener("click", () => {
+    $("settings")?.classList.add("hidden");
+    __tapTab("Chat");
+    planCard("settings");
+  });
+  window.addEventListener("crowe:plan", (e) => {
+    paintPlan(null);
+    const d = e && e.detail;
+    if (d && d.paid) { const c = transcript && transcript.querySelector(".plan-card"); if (c) c.querySelector(".plan-note").textContent = `Your Crowe ID is on ${PLAN_NAMES[String(d.tier).toLowerCase()] || d.tier}. Thank you.`; }
+  });
+  paintPlan(null);
 
   const accountSection = document.createElement("section");
   accountSection.className = "key-manager m-account";
@@ -819,6 +1268,64 @@
     '<button id="m-delete-account" class="ghost sm" type="button">Delete account</button>',
   ].join("");
   if (remoteSection.parentNode) remoteSection.parentNode.insertBefore(accountSection, remoteSection.nextSibling);
+  if (accountSection.parentNode) accountSection.parentNode.insertBefore(planSection, accountSection);
+
+  /* Founding Growers. A hundred seats for the growers backing the app in its
+     first year; the roster is public at GET /api/public/founders and lists the
+     ones who chose to be named, in the order they signed up. A row in Settings
+     opens a sheet with the count, the roster, and the way in while seats
+     remain. The read is cached a minute in the bridge and fails quietly: a
+     roster that cannot be reached is one muted line, not an error. */
+  const foundersSection = document.createElement("section");
+  foundersSection.className = "key-manager m-founders-row";
+  foundersSection.innerHTML = [
+    '<div class="settings-section-head"><div><b>Founding Growers</b>',
+    "<span>The first hundred growers behind Crowe Logic, and who has taken a seat so far.</span></div></div>",
+    '<button id="m-founders-open" class="ghost sm" type="button">Founding Growers</button>',
+  ].join("");
+  // Keep legacy handlers intact without promoting the cultivation roster.
+  foundersSection.hidden = true;
+  if (accountSection.parentNode) accountSection.parentNode.insertBefore(foundersSection, accountSection.nextSibling);
+  const FOUNDERS_URL = "https://crowelogic.com/founders";
+  const foundersSheet = document.createElement("div");
+  foundersSheet.id = "m-founders"; foundersSheet.className = "modal hidden";
+  foundersSheet.setAttribute("aria-label", "Founding Growers");
+  foundersSheet.innerHTML = [
+    '<div class="modal-card m-founders-card">',
+    '<div class="m-kicker">Founding Growers</div><h2 class="m-title">The first hundred</h2>',
+    '<p id="m-founders-seats" class="m-home-sub">Reading the roster.</p>',
+    '<ol id="m-founders-roster" class="m-founders-roster"></ol>',
+    '<p id="m-founders-note" class="m-home-empty"></p>',
+    '<div class="row"><button id="m-founders-link" class="primary" type="button">Take a seat at crowelogic.com/founders</button><button id="m-founders-close" class="ghost" type="button">Close</button></div>',
+    "</div>",
+  ].join("");
+  body.appendChild(foundersSheet);
+  async function renderFounders() {
+    const seats = $("m-founders-seats"), roster = $("m-founders-roster"), note = $("m-founders-note"), link = $("m-founders-link");
+    const d = window.crowePhone && window.crowePhone.publicJson ? await window.crowePhone.publicJson("/api/public/founders") : null;
+    if (!d || !Number.isFinite(Number(d.spots))) {
+      seats.textContent = "The roster could not be reached right now.";
+      roster.innerHTML = ""; note.textContent = ""; link.hidden = true;
+      return;
+    }
+    const spots = Number(d.spots), taken = Math.max(0, Number(d.taken) || 0);
+    const list = (Array.isArray(d.founders) ? d.founders : []).filter((f) => f && (f.name || f.farm))
+      .slice().sort((a, b) => (Number(a.n) || 0) - (Number(b.n) || 0));
+    seats.textContent = taken >= spots ? `All ${spots} seats are taken.` : `${taken} of ${spots} seats taken.`;
+    roster.innerHTML = list.map((f) => `<li><span class="m-founders-n">${esc(String(Number(f.n) || "").padStart(2, "0"))}</span><span><b>${esc(f.name || "A grower")}</b>${f.farm ? `<span class="m-founders-farm">${esc(f.farm)}</span>` : ""}</span></li>`).join("");
+    note.textContent = list.length ? "" : (taken ? "The growers so far have chosen not to be listed." : "No seats taken yet. The roster fills in sign-up order.");
+    link.hidden = taken >= spots;
+  }
+  $("m-founders-open").addEventListener("click", () => {
+    const settings = $("settings"); if (settings) settings.classList.add("hidden");
+    foundersSheet.classList.remove("hidden");
+    renderFounders();
+  });
+  $("m-founders-close").addEventListener("click", () => foundersSheet.classList.add("hidden"));
+  $("m-founders-link").addEventListener("click", () => {
+    if (window.crowe && window.crowe.mobile && window.crowe.mobile.openExternal) window.crowe.mobile.openExternal(FOUNDERS_URL);
+    else window.open(FOUNDERS_URL, "_blank", "noopener");
+  });
   /* Diagnostics. What the bridge did, newest first, with Copy and Share, so a
      phone that says nothing can be read from a text message. Errors the page
      itself throws are noted here too. */
@@ -837,23 +1344,23 @@
   accountSection.parentNode && accountSection.parentNode.insertBefore(diagSection, accountSection.nextSibling);
   /* Reply voice. speak.js reads localStorage crowe-reply-voice on every tap of
      the speaker, so this row needs no bridge round trip and no config key.
-     "michael" needs a paid plan at the gateway; when the plan says no, speak.js
-     takes the first voice the gateway allows and says which one spoke. */
+     "phone" is Apple's on-device voice and the default; "neural" is the cloud
+     voice from the crowe-ai worker. No choice here is a real person's voice. */
   const voiceSection = document.createElement("section");
   voiceSection.className = "key-manager m-voice";
   voiceSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Reply voice</b>',
-    "<span>What the speaker button uses to read a reply. Michael's voice needs a paid plan; the Crowe Logic voice is the gateway's own; the phone's voice never leaves the device.</span></div></div>",
-    '<label class="m-voice-row">Voice <select id="m-voice"><option value="michael">Michael\'s voice</option><option value="neural">Crowe Logic voice</option><option value="phone">This phone\'s voice</option></select></label>',
+    "<span>What the speaker button uses to read a reply. Apple's voice runs on this phone and never leaves it; the natural voice is generated in the Crowe Logic cloud.</span></div></div>",
+    '<label class="m-voice-row">Voice <select id="m-voice"><option value="phone">Apple voice (on this phone)</option><option value="neural">Natural voice (cloud)</option></select></label>',
   ].join("");
   diagSection.parentNode && diagSection.parentNode.insertBefore(voiceSection, diagSection);
-  const VOICES = ["michael", "neural", "phone"];
+  const VOICES = ["neural", "phone"];
   const voiceSel = $("m-voice");
-  try { const v = localStorage.getItem("crowe-reply-voice"); voiceSel.value = VOICES.includes(v) ? v : "michael"; } catch { voiceSel.value = "michael"; }
+  try { const v = localStorage.getItem("crowe-reply-voice"); voiceSel.value = VOICES.includes(v) ? v : "phone"; } catch { voiceSel.value = "phone"; }
   voiceSel.addEventListener("change", () => {
-    const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "michael";
-    try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to michael */ }
-    say(v === "michael" ? "Replies read in Michael's voice" : v === "neural" ? "Replies read in the Crowe Logic voice" : "Replies read by this phone", "note");
+    const v = VOICES.includes(voiceSel.value) ? voiceSel.value : "phone";
+    try { localStorage.setItem("crowe-reply-voice", v); } catch { /* storage refused; speak.js falls back to phone */ }
+    say(v === "neural" ? "Replies read in the natural voice" : "Replies read by Apple's voice on this phone", "note");
   });
   const diagText = async () => {
     const rows = window.crowe && window.crowe.diag ? await window.crowe.diag.list().catch(() => []) : [];
@@ -892,7 +1399,7 @@
     else say((r && r.error) || "The reminder could not be set.", "error");
     renderPending(); if (typeof renderHome === "function") renderHome();
   });
-  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); }, 50));
+  $("settings-btn").addEventListener("click", () => setTimeout(() => { renderDiag(); renderPending(); syncUsage(); }, 50));
   window.addEventListener("error", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:error", `${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}`); });
   window.addEventListener("unhandledrejection", (e) => { if (window.crowe && window.crowe.diag) window.crowe.diag.note("page:rejection", String(e.reason && e.reason.message || e.reason).slice(0, 200)); });
 
@@ -1030,6 +1537,7 @@
       const modal = [...document.querySelectorAll(".modal")].find((m) => !m.classList.contains("hidden"));
       if (modal) { modal.classList.add("hidden"); return; }
       if (drawerOpen()) { setDrawer(false); return; }
+      if (body.dataset.pane === "room") { setPane("messages"); return; }
       if (body.dataset.pane === "workspace") { setPane("agent"); return; }
       if ((body.dataset.space || "chat") !== "chat") {
         const chat = spaceButtons().find((b) => b.dataset.space === "chat");
@@ -1049,6 +1557,289 @@
     const hide = () => setTimeout(() => SplashScreen.hide().catch(() => {}), 120);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(hide, hide);
     else requestAnimationFrame(hide);
+  }
+
+  const sensorSettings = $("sense-state")?.closest("section");
+  if (sensorSettings) sensorSettings.hidden = true;
+  setTimeout(() => { setPane("home"); }, 0);
+
+  /* ─── Approval sheet ───────────────────────────────────────────────────────
+     Where a person stands between the agent and a consequence, the question is
+     drawn rather than delegated to window.confirm: which computer, at which
+     tier, the exact text that will run, and why it was flagged. A risky action
+     is approved by holding the button, so a reflexive tap cannot approve a
+     LaunchAgent; VoiceOver and keyboard activation (click with no pointer
+     press) approve directly, since a hold is not an accessible gesture.
+     Everything is set with textContent: the command came from a model. */
+  /* One sheet at a time: an agent tool and a Terminal command asking together
+     queue, rather than stacking two sheets that one Escape answers both of.
+     Stopping the turn answers every open and waiting sheet "no", so a stopped
+     turn never sits on a question nobody can see the point of any more. */
+  let approveChain = Promise.resolve();
+  let approveGen = 0;                       // bumped by a stop; queued sheets from before it never open
+  const approveOpen = new Set();
+  window.__croweApproveDismiss = () => { approveGen++; for (const d of [...approveOpen]) d(false); };
+  window.__croweApprove = (spec) => {
+    const gen = approveGen;
+    const next = approveChain.then(() => (gen === approveGen ? showApprove(spec) : false));
+    approveChain = next.catch(() => false);
+    return next;
+  };
+  const showApprove = (spec) => new Promise((resolve) => {
+    const s = spec || {};
+    const prior = document.activeElement;
+    const wrap = document.createElement("div");
+    wrap.className = "m-approve" + (s.danger ? " danger" : "");
+    wrap.setAttribute("role", "alertdialog");
+    wrap.setAttribute("aria-modal", "true");
+    const card = document.createElement("div");
+    card.className = "m-approve-card";
+    const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+    if (s.machine || s.tier) {
+      const chips = el("div", "m-approve-chips");
+      if (s.machine) { let h = s.machine; try { h = new URL(s.machine).hostname; } catch { /* shown as given */ } chips.appendChild(el("span", "m-chip", h)); }
+      if (s.tier) chips.appendChild(el("span", "m-chip tier-" + s.tier, s.tier.charAt(0).toUpperCase() + s.tier.slice(1) + " tier"));
+      card.appendChild(chips);
+    }
+    if (s.kicker && card.firstChild === null) { const chips = el("div", "m-approve-chips"); card.appendChild(chips); }
+    if (s.kicker) card.firstChild.insertBefore(el("span", "m-chip m-chip-gate", s.kicker), card.firstChild.firstChild);
+    const title = el("h2", "m-approve-title", s.title || "Allow this?");
+    title.id = "m-approve-title";
+    wrap.setAttribute("aria-labelledby", title.id);
+    card.appendChild(title);
+    if (s.mission) { const m = el("p", "m-approve-mission"); m.append(el("b", null, "Mission "), document.createTextNode(s.mission)); card.appendChild(m); }
+    if (s.reason) card.appendChild(el("p", "m-approve-reason", s.reason));
+    if (s.detail) card.appendChild(el("pre", "m-approve-detail", s.detail));
+    if (Array.isArray(s.evidence) && s.evidence.length) {
+      const ev = el("div", "m-approve-evidence");
+      ev.appendChild(el("span", "m-approve-evidence-k", "Evidence"));
+      for (const [k, v] of s.evidence) { const row = el("div", "m-ev-row"); row.append(el("span", "m-ev-k", k), el("code", "m-ev-v", v)); ev.appendChild(row); }
+      card.appendChild(ev);
+    }
+    /* A diff arrives as unified text from the computer. Each line is its own
+       span, coloured by its first character, and all of it is textContent. */
+    if (s.diff) {
+      const pre = el("pre", "m-approve-diff");
+      for (const line of String(s.diff).split("\n")) {
+        const c = line[0];
+        pre.appendChild(el("span", "m-dl " + (c === "+" ? "add" : c === "-" ? "del" : line.startsWith("@@") ? "hunk" : "ctx"), line + "\n"));
+      }
+      card.appendChild(pre);
+    }
+    let expiryEl = null;
+    if (s.expiresAt) { expiryEl = el("p", "m-approve-expiry", ""); card.appendChild(expiryEl); }
+    if (s.question) card.appendChild(el("p", "m-approve-q", s.question));
+    const content = el("div", "m-approve-content");
+    while (card.firstChild) content.appendChild(card.firstChild);
+    card.appendChild(content);
+    const row = el("div", "m-approve-actions");
+    const no = el("button", "ghost m-approve-no", "Not now");
+    no.type = "button";
+    const deny = s.deny ? el("button", "ghost m-approve-deny", s.deny) : null;
+    if (deny) deny.type = "button";
+    const yes = el("button", "m-approve-yes", s.danger ? `Hold to ${String(s.confirm || "approve").toLowerCase()}` : (s.confirm || "Allow"));
+    yes.type = "button";
+    row.append(no);
+    if (deny) row.append(deny);
+    row.append(yes);
+    card.appendChild(row);
+    wrap.appendChild(card);
+    let settled = false;
+    let cancelHold = () => {};
+    // aria-modal alone does not stop VoiceOver's rotor or a hardware keyboard
+    // reaching the page behind; inert does.
+    const benched = Array.from(body.children).filter((n) => n !== wrap && !n.inert);
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      if (tick) clearInterval(tick);
+      cancelHold();
+      window.removeEventListener("blur", cancelHold);
+      approveOpen.delete(done);
+      wrap.classList.add("leaving");
+      document.removeEventListener("keydown", onKey, true);
+      setTimeout(() => {
+        wrap.remove();
+        benched.forEach((n) => { n.inert = false; });
+        try { prior && prior.focus && prior.focus(); } catch { /* gone */ }
+        resolve(v);
+        // Queued approvals open before navigation is restored.
+        setTimeout(() => {
+          if (!document.querySelector(".m-approve")) body.classList.remove("approval-open");
+        }, 0);
+      }, 160);
+    };
+    approveOpen.add(done);
+    if (deny) deny.addEventListener("click", () => done("deny"));
+    /* The countdown, and a way for the caller to close the sheet from outside:
+       a gate answered on the computer, or expired, must not stay answerable. */
+    let tick = null;
+    if (expiryEl) {
+      const paint = () => {
+        const left = Math.max(0, Math.round((s.expiresAt - Date.now()) / 1000));
+        expiryEl.textContent = left > 0 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Expired";
+        if (left <= 0) { clearInterval(tick); if (s.onExpire) s.onExpire(); done(false); }
+      };
+      tick = setInterval(paint, 1000); setTimeout(paint, 0);
+    }
+    if (s.onOpen) s.onOpen((v) => done(v === undefined ? false : v));
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); done(false); }
+      else if (e.key === "Tab") { e.preventDefault(); (document.activeElement === no ? yes : no).focus(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    no.addEventListener("click", () => done(false));
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) done(false); });
+    if (s.danger) {
+      const HOLD = 650;
+      let timer = null;
+      const cancel = () => { clearTimeout(timer); timer = null; yes.classList.remove("holding"); };
+      cancelHold = cancel;
+      window.addEventListener("blur", cancelHold);
+      yes.addEventListener("blur", cancel);
+      yes.addEventListener("pointerdown", (e) => {
+        if (settled || e.button !== 0 || e.isPrimary === false) return;
+        e.preventDefault();
+        cancel();
+        yes.classList.add("holding");
+        timer = setTimeout(() => { timer = null; done(true); }, HOLD);
+      });
+      ["pointerup", "pointerleave", "pointercancel"].forEach((t) => yes.addEventListener(t, cancel));
+      yes.addEventListener("click", (e) => { if (e.detail === 0) done(true); });
+      yes.setAttribute("aria-label", s.confirm || "Approve");
+    } else {
+      yes.addEventListener("click", () => done(true));
+    }
+    body.classList.add("approval-open");
+    body.appendChild(wrap);
+    benched.forEach((n) => { n.inert = true; });
+    // Establish the entrance style without making authority controls wait for
+    // an animation frame, which a hidden or backgrounded window can suspend.
+    wrap.getBoundingClientRect();
+    wrap.classList.add("open");
+    no.focus({ preventScroll: true });
+  });
+
+
+  /* ─── Authority gates ─────────────────────────────────────────────────────
+     A run on the person's computer that reaches something it should not take
+     alone asks, and the same question lands here through the gate relay. The
+     Home card lists what is waiting; a tap opens the approval sheet with the
+     machine, the mission, the exact command or diff, and the time left. An
+     approval echoes the evidence hash the person was shown, so the relay can
+     refuse it if the gate changed underneath.
+     Polling is every 4 s and only while the app is in the foreground and the
+     person is signed in: it stops when the app is backgrounded and resumes the
+     moment it returns. There is no remote push in this version, so a gate that
+     arrives while the app is closed waits (until it expires) for the next open. */
+  const GATES_POLL_MS = 4000;
+  let gatesState = { gates: [], signedIn: true, error: "", note: "", loaded: false };
+  let gatesTimer = null, gatesBusy = false, gatesFg = true, openGate = null;
+  const gatesWanted = () => gatesFg && !document.hidden && Boolean(window.crowe && window.crowe.gates);
+  function gateLeft(g) {
+    const left = Math.max(0, Math.round((Number(g.expires_at) - Date.now()) / 1000));
+    return left > 0 ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left` : "expired";
+  }
+  function renderGates() {
+    const host = $("m-gates");
+    if (!host) return;
+    const st = gatesState;
+    host.textContent = "";
+    const h = document.createElement("h2"); h.className = "m-h-label"; h.textContent = "Authority gates";
+    host.appendChild(h);
+    const card = document.createElement("div"); card.className = "m-h-card";
+    const line = (cls, text) => { const p = document.createElement("p"); p.className = cls; p.textContent = text; return p; };
+    if (!st.signedIn) card.appendChild(line("m-home-empty", "Sign in with Crowe ID to receive authority gates from your computer."));
+    else if (!st.loaded) card.appendChild(line("m-home-empty", "Checking…"));
+    else {
+      if (st.gates.length) {
+        const head = document.createElement("div"); head.className = "m-gate-head";
+        const k = document.createElement("span"); k.className = "m-gate-k"; k.textContent = "Waiting on you";
+        const n = document.createElement("b"); n.className = "m-gate-n"; n.textContent = String(st.gates.length);
+        head.append(k, n); card.appendChild(head);
+        for (const g of st.gates) {
+          const row = document.createElement("button"); row.type = "button"; row.className = "m-gate-row" + (g.risk === "strict" ? " strict" : "");
+          row.dataset.gate = g.id;
+          const t = document.createElement("b"); t.textContent = g.title || "An action needs your authorization";
+          const meta = document.createElement("span"); meta.className = "m-gate-meta";
+          meta.textContent = [g.machine, g.mission, gateLeft(g)].filter(Boolean).join(" · ");
+          row.append(t, meta);
+          row.addEventListener("click", () => openGateSheet(g.id));
+          card.appendChild(row);
+        }
+      } else card.appendChild(line("m-home-empty", "No gates waiting. Runs on your computer will ask here."));
+      if (st.error) card.appendChild(line("m-gate-note warn", "Could not reach the gate relay. Your computer still asks you there."));
+    }
+    if (st.note) card.appendChild(line("m-gate-note", st.note));
+    host.appendChild(card);
+  }
+  async function pollGates() {
+    if (gatesBusy || !gatesWanted()) return;
+    gatesBusy = true;
+    try {
+      const status = window.crowe.auth && window.crowe.auth.status ? await window.crowe.auth.status().catch(() => null) : null;
+      if (!status || !status.user) {
+        gatesState = { ...gatesState, gates: [], signedIn: false, loaded: true, error: "" };
+        stopGates(); renderGates(); return;
+      }
+      const r = await window.crowe.gates.list();
+      if (r.ok) gatesState = { ...gatesState, gates: r.gates, signedIn: true, loaded: true, error: "" };
+      else if (r.signedIn === false) { gatesState = { ...gatesState, gates: [], signedIn: false, loaded: true, error: "" }; stopGates(); }
+      else gatesState = { ...gatesState, signedIn: true, loaded: true, error: "unreachable" };
+      renderGates();
+      // The sheet is for a pending gate. If this one was answered on the computer, close it.
+      if (r.ok && openGate && !r.gates.some((g) => g.id === openGate.id)) openGate.close("elsewhere");
+    } finally { gatesBusy = false; }
+  }
+  function startGates(immediate) {
+    if (!gatesWanted()) return;
+    if (!gatesTimer) gatesTimer = setInterval(pollGates, GATES_POLL_MS);
+    if (immediate) pollGates();
+  }
+  function stopGates() { if (gatesTimer) clearInterval(gatesTimer); gatesTimer = null; }
+  window.__croweGates = { poll: pollGates, start: startGates, stop: stopGates, state: () => gatesState, open: (id) => openGateSheet(id), polling: () => Boolean(gatesTimer) };
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopGates(); else if (gatesFg) startGates(true); });
+  if (App) Promise.resolve(App.addListener("appStateChange", (st) => {
+    gatesFg = Boolean(st && st.isActive);
+    if (gatesFg) startGates(true); else stopGates();
+  })).catch(() => {});
+  setTimeout(() => startGates(true), 800);
+
+  async function openGateSheet(id) {
+    const g = gatesState.gates.find((x) => x.id === id);
+    if (!g || openGate) return;
+    const ev = g.evidence || {};
+    const rows = [];
+    if (ev.command && ev.command !== g.detail) rows.push(["command", ev.command]);
+    if (ev.cwd) rows.push(["cwd", ev.cwd]);
+    if (ev.path) rows.push(["path", ev.path]);
+    if (ev.args && typeof ev.args === "object") rows.push(["args", JSON.stringify(ev.args)]);
+    let dismiss = null, reason = "";
+    openGate = { id: g.id, close: (why) => { reason = why; if (dismiss) dismiss(false); } };
+    const answer = await window.__croweApprove({
+      kicker: "Authority gate", title: g.title || "An action needs your authorization",
+      machine: g.machine, mission: g.mission, reason: g.why ? `This ${g.why}.` : "", detail: g.detail,
+      evidence: rows, diff: ev.diff, expiresAt: Number(g.expires_at) || 0,
+      danger: g.risk === "strict", confirm: "Approve", deny: "Deny",
+      onOpen: (d) => { dismiss = d; }, onExpire: () => { reason = "expired"; },
+    });
+    openGate = null;
+    let note = "";
+    if (reason === "elsewhere") note = "Already answered on your computer";
+    else if (reason === "expired") note = "Expired";
+    else if (answer === true || answer === "deny") {
+      const r = await window.crowe.gates.decide(g.id, answer === true ? "approve" : "deny", g.evidence_hash);
+      if (r.ok) note = answer === true ? "Approved. The run continues on your computer." : "Denied.";
+      else if (r.status === 409 && r.error === "evidence_mismatch") note = "This gate changed on your computer. Open it again to review the new evidence.";
+      else if (r.status === 409) note = r.gate && (r.gate.decided_via === "desktop" || r.gate.decided_via === "cli") ? "Already answered on your computer" : "Already answered";
+      else if (r.status === 410) note = "Expired";
+      else if (r.status === 401) note = "Signed out. Sign in with Crowe ID to answer gates.";
+      else note = "Could not reach the gate relay. Nothing was sent. Your computer still asks you there.";
+    }
+    gatesState = { ...gatesState, note };
+    renderGates();
+    pollGates();
+    if (note) setTimeout(() => { if (gatesState.note === note) { gatesState = { ...gatesState, note: "" }; renderGates(); } }, 8000);
   }
 
   // The document itself must not scroll or rubber-band; every scroll on this

@@ -14,6 +14,7 @@ const { GROW_TYPES, growValidate } = require("./grow-schema");
 const Sense = require("./sense");
 const Repos = require("./repos");
 const Browser = require("./browser-client");
+const Gates = require("./gates-client");
 const { isAppDocument, isTrustedPermissionUrl, isSafeGuestUrl, isTrustedIpcSender, isSafeRecordId,
   hardenGuestPreferences, sanitizePluginEnv, sanitizeConfigPatch, sanitizeAgentMessages, MAX_MESSAGE_CHARS } = require("./main-security");
 
@@ -81,6 +82,11 @@ const DEFAULTS = {
   recentWorkspaces: [],
   // Where a GitHub repository lands when cloned from the sidebar: <root>/<owner>/<name>.
   reposRoot: Repos.defaultReposRoot(),
+  // Send authority gates to the signed-in person's phone as well as asking here.
+  // On by default; it only does anything while signed in with Crowe ID. The relay
+  // URL is `gatesUrl` (hand-edited in config.json, deliberately not settable from
+  // the renderer, since the Crowe ID bearer is sent to it).
+  phoneGates: true,
 };
 const APPROVAL_MODES = new Set(["off", "high-risk", "strict"]);
 const PLANE_MODES = new Set(["off", "local", "remote"]);
@@ -187,6 +193,7 @@ function loadConfig() {
     // recognises must land on the safe end, not on whatever `||` reaches first.
     if (!APPROVAL_MODES.has(cfg.approvals)) cfg.approvals = DEFAULTS.approvals;
     if (typeof cfg.verifier !== "boolean") cfg.verifier = DEFAULTS.verifier;
+    if (typeof cfg.phoneGates !== "boolean") cfg.phoneGates = DEFAULTS.phoneGates;
     const budget = Number(cfg.turnBudgetUsd);
     cfg.turnBudgetUsd = Number.isFinite(budget) && budget >= 0 ? budget : DEFAULTS.turnBudgetUsd;
     const tokenCap = Number(cfg.turnTokenCap);
@@ -456,16 +463,18 @@ app.on("web-contents-created", (_event, contents) => {
 // and have the standard (authorization code) flow enabled in Keycloak realm `crowe`.
 const CROWE_ID = "https://id.crowelogic.com/realms/crowe";
 const CROWE_ID_CLIENT = "crowe-cli";
+// The crowe CLI's own sign-in store. The desktop may seed itself from it but never
+// writes or deletes it: removing it signs the CLI out, and the authority gate needs
+// the CLI and this app signed in as the same person at the same time.
 const LEGACY_AUTH_JSON = path.join(os.homedir(), ".config", "crowe-logic", "auth.json");
 function b64url(buf) { return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function decodeJwt(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")); } catch { return {}; } }
 function persistTokens(d) {
-  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "" });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  saveConfig({ token: d.access_token, refreshToken: d.refresh_token || loadConfig().refreshToken || "", accountSignedOut: false });
 }
 function migrateLegacyAuth() {
   const cfg = loadConfig();
-  if (cfg.token || cfg.refreshToken) return;
+  if (cfg.accountSignedOut || cfg.token || cfg.refreshToken) return;
   let legacy = {};
   try { legacy = JSON.parse(fs.readFileSync(LEGACY_AUTH_JSON, "utf8")); } catch {}
   let oldConfig = {};
@@ -473,24 +482,30 @@ function migrateLegacyAuth() {
   const token = legacy.access_token || oldConfig.token || "";
   const refreshToken = legacy.refresh_token || oldConfig.refreshToken || "";
   if (token || refreshToken) saveConfig({ token, refreshToken });
-  try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
 }
 function currentUser() {
   const c = loadConfig(); if (!c.token) return null;
   const p = decodeJwt(c.token);
   return { email: p.email || p.preferred_username || "", name: p.name || p.given_name || "", tier: p.crowe_tier || p.tier || "", exp: p.exp || 0 };
 }
+let authGeneration = 0, tokenRefresh = null;
 async function refreshToken() {
+  if (tokenRefresh) return tokenRefresh;
   const cfg = loadConfig();
   const refresh = cfg.refreshToken;
   if (!refresh) return null;
+  const generation = authGeneration;
+  const attempt = (async () => {
   try {
     const body = new URLSearchParams({ grant_type: "refresh_token", client_id: CROWE_ID_CLIENT, refresh_token: refresh });
-    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(10000) });
     const d = await r.json();
-    if (d.access_token) { persistTokens(d); return d.access_token; }
+    if (d.access_token && generation === authGeneration && loadConfig().refreshToken === refresh) { persistTokens(d); return d.access_token; }
   } catch { /* noop */ }
   return null;
+  })();
+  tokenRefresh = attempt;
+  try { return await attempt; } finally { if (tokenRefresh === attempt) tokenRefresh = null; }
 }
 /* One sign-in at a time. The loopback listener holds its port for up to five
    minutes while the browser page waits, so a second click used to open a second
@@ -499,6 +514,7 @@ async function refreshToken() {
 let pendingSignIn = null;
 function signIn() {
   if (pendingSignIn) { if (pendingSignIn.authUrl) shell.openExternal(pendingSignIn.authUrl); return pendingSignIn.promise; }
+  const generation = authGeneration;
   const pending = { promise: null, authUrl: "" };
   pending.promise = new Promise((resolve) => {
     const verifier = b64url(crypto.randomBytes(32));
@@ -521,6 +537,7 @@ function signIn() {
         const body = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: CROWE_ID_CLIENT, code_verifier: verifier });
         const r = await fetch(`${CROWE_ID}/protocol/openid-connect/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
         const d = await r.json();
+        if (generation !== authGeneration) return finish({ error: "Sign-in was cancelled by sign-out." });
         if (d.access_token) { persistTokens(d); return finish({ ok: true, user: currentUser() }); }
         return finish({ error: d.error_description || d.error || "token exchange failed" });
       } catch (e) { return finish({ error: String(e).slice(0, 200) }); }
@@ -549,7 +566,15 @@ function signIn() {
 }
 ipcMain.handle("crowe:auth:login", async () => { const r = await signIn(); if (r && r.ok) fetchCatalog(); return r; });
 ipcMain.handle("crowe:auth:logout", () => {
-  saveConfig({ token: "", refreshToken: "" }); try { fs.unlinkSync(LEGACY_AUTH_JSON); } catch {}
+  authGeneration++; tokenRefresh = null;
+  const refresh = loadConfig().refreshToken;
+  saveConfig({ token: "", refreshToken: "", accountSignedOut: true });  // the CLI keeps its own sign-in; `crowe logout` ends it
+  stopAccountRuns();
+  if (refresh) fetch(`${CROWE_ID}/protocol/openid-connect/revoke`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: CROWE_ID_CLIENT, token: refresh, token_type_hint: "refresh_token" }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => {});
   // Cloud browser sessions opened under this person's Crowe ID end with the sign-out.
   browserSessions.endAll().catch(() => {});
   return { ok: true };
@@ -596,13 +621,18 @@ ipcMain.handle("crowe:license:select", (_event, { workspaceId } = {}) => {
   saveConfig({ licenseWorkspaceId: workspaceId });
   return { ok: true, selectedWorkspaceId: workspaceId };
 });
-ipcMain.handle("crowe:license:billing", async () => {
+ipcMain.handle("crowe:license:billing", async (_event, options) => {
+  const generation = authGeneration;
   try {
+    if (options?.emailVerification === true) {
+      await shell.openExternal(require("./renderer/billing-portal").EMAIL_LOGIN);
+      return { ok: true, emailVerification: true };
+    }
     const result = await licensedFetch("/api/billing/portal/self", "POST");
-    if (result.status >= 400 || !result.data?.url) return { error: "Billing portal is unavailable" };
-    const portal = new URL(result.data.url);
-    if (portal.protocol !== "https:") return { error: "Billing portal returned an unsafe URL" };
-    await shell.openExternal(portal.toString()); return { ok: true };
+    if (generation !== authGeneration) return { error: "Signed out before billing opened." };
+    const portal = require("./renderer/billing-portal").result(result);
+    if (portal.error) return portal;
+    await shell.openExternal(portal.url); return { ok: true };
   } catch { return { error: "Billing portal could not be reached" }; }
 });
 
@@ -999,7 +1029,57 @@ function resolvePath(p) { if (!p) return CWD; p = p.replace(/^~(?=$|\/)/, os.hom
 
 // ─── Edit review (approve/reject) ────────────────────────────────────────────
 let editSeq = 0; const pendingEdits = new Map();
-ipcMain.handle("crowe:edit:decide", (_e, { id, approved }) => { const r = pendingEdits.get(id); if (r) { r(approved); pendingEdits.delete(id); } });
+/* Authority gates on the phone. When the person is signed in with Crowe ID and
+   has not turned it off, every approval card and edit review is also sent to the
+   gate relay (gates-client.js), so the same question can be answered from the
+   phone. Whichever answer reaches the relay first wins, and this process obeys
+   the relay's verdict. A relay that is down changes nothing: the local card works
+   exactly as it always has. */
+function gatesClient() {
+  const cfg = loadConfig();
+  if (cfg.phoneGates === false || !cfg.token) return null;
+  return Gates.createGatesClient({ baseUrl: cfg.gatesUrl, getToken: () => loadConfig().token, refreshToken });
+}
+let computerNameCache = null;
+function machineName() {
+  if (computerNameCache) return computerNameCache;
+  let named = "";
+  if (process.platform === "darwin") { try { named = require("child_process").execFileSync("scutil", ["--get", "ComputerName"], { timeout: 1000 }).toString().trim(); } catch { /* hostname will do */ } }
+  computerNameCache = Gates.friendlyMachineName(os.hostname(), named);
+  return computerNameCache;
+}
+// What the operator was asked to do, per agent: the last user message of the running turn.
+const agentMissions = new Map();
+function missionText(messages) {
+  const last = [...(messages || [])].reverse().find((m) => m && m.role === "user");
+  if (!last) return "";
+  const c = last.content;
+  const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (p && typeof p.text === "string" ? p.text : "")).join(" ") : "";
+  return text.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+const sendAgentEvent = (ev) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", ev); };
+ipcMain.handle("crowe:edit:decide", async (_e, { id, approved }) => {
+  const r = pendingEdits.get(id);
+  if (!r || r.deciding) return;
+  if (!r.relay) { pendingEdits.delete(id); r(approved); return; }
+  r.deciding = true;
+  const o = await r.relay.localDecision(approved);
+  if (!pendingEdits.has(id)) return;
+  pendingEdits.delete(id);
+  if (o.via && o.via !== "desktop") sendAgentEvent({ type: "edit_resolved", id, approved: o.approved, via: o.via });
+  if (o.via === "phone") journalWrite({ event_type: o.approved ? "EDIT_APPROVED_REMOTE" : "EDIT_DENIED_REMOTE", tool_id: "edit", output_summary: `${o.approved ? "approved" : "denied"} on the phone while the desktop card was open` });
+  r(o.approved);
+});
+// A stopped run has no use for a half-answered edit: release it as rejected and
+// withdraw the phone's copy, so nobody approves an edit nothing is waiting for.
+function rejectPendingEdits() {
+  for (const [id, r] of [...pendingEdits]) {
+    pendingEdits.delete(id);
+    if (r.relay) r.relay.cancel("stopped on the computer");
+    sendAgentEvent({ type: "edit_resolved", id, approved: false, via: "stopped" });
+    r(false);
+  }
+}
 function lineDiff(oldStr, newStr) {
   const a = oldStr.split("\n"), b = newStr.split("\n");
   const n = a.length, m = b.length, lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -1020,8 +1100,25 @@ async function proposeEdit(filePath, newContent) {
   let oldContent = ""; try { oldContent = fs.readFileSync(abs, "utf8"); } catch {}
   if (loadConfig().autoApprove) { fs.writeFileSync(abs, newContent); return `wrote ${filePath} (${newContent.length} bytes, auto-approved)`; }
   const id = ++editSeq;
-  if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "edit_proposal", id, path: filePath, diff: lineDiff(oldContent, newContent) });
-  const approved = await new Promise((res) => pendingEdits.set(id, res));
+  const diff = lineDiff(oldContent, newContent);
+  if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "edit_proposal", id, path: filePath, diff });
+  const approved = await new Promise((res) => {
+    const client = gatesClient();
+    if (client) {
+      res.relay = client.session(Gates.fieldsForEdit(filePath, diff, { machine: machineName(), mission: agentMissions.get("main") }), {
+        expiryStaysLocal: true,
+        onCreated: () => sendAgentEvent({ type: "edit_relayed", id }),
+        onRemote: (o) => {
+          if (!pendingEdits.has(id)) return;
+          pendingEdits.delete(id);
+          sendAgentEvent({ type: "edit_resolved", id, approved: o.approved, via: o.via || "phone" });
+          journalWrite({ event_type: o.approved ? "EDIT_APPROVED_REMOTE" : "EDIT_DENIED_REMOTE", tool_id: "edit", output_summary: `${o.approved ? "approved" : "denied"} on the phone` });
+          res(o.approved);
+        },
+      });
+    }
+    pendingEdits.set(id, res);
+  });
   if (approved) { fs.writeFileSync(abs, newContent); return `applied edit to ${filePath}`; }
   return `the user REJECTED the edit to ${filePath}; do not reapply it unless they ask`;
 }
@@ -1036,9 +1133,20 @@ async function proposeEdit(filePath, newContent) {
    worse outcome than a turn that stopped and said why. */
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 let approvalSeq = 0; const pendingApprovals = new Map();
-ipcMain.handle("crowe:approval:decide", (_e, { id, approved }) => {
+ipcMain.handle("crowe:approval:decide", async (_e, { id, approved }) => {
   const r = pendingApprovals.get(id);
-  if (r) { pendingApprovals.delete(id); r({ approved: Boolean(approved) }); }
+  if (!r || r.deciding) return { ok: true };
+  if (!r.relay) { pendingApprovals.delete(id); r({ approved: Boolean(approved) }); return { ok: true }; }
+  /* Relayed: post the click as a decision and obey the verdict. The phone may
+     have answered first, in which case that answer stands and the card says so. */
+  r.deciding = true;
+  const o = await r.relay.localDecision(approved);
+  if (!pendingApprovals.has(id)) return { ok: true };
+  if (o.via && o.via !== "desktop" && !o.expired) {
+    sendAgentEvent({ type: "approval_resolved", id, agentId: r.agentId, approved: o.approved, allowed: o.approved, via: o.via });
+    if (o.via === "phone") r.journalRemote(o);
+  }
+  r({ approved: o.approved, expired: Boolean(o.expired) || undefined, via: o.via || "desktop" });
   return { ok: true };
 });
 // Stopping a run has to release whatever it was waiting on. A Stop that leaves
@@ -1049,7 +1157,7 @@ function denyPendingApprovals(agentId) {
     if (agentId && done.agentId && done.agentId !== agentId) continue;
     pendingApprovals.delete(id);
     if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId: done.agentId || "main" });
-    done({ approved: false });
+    done({ approved: false }, "stopped on the computer");
   }
 }
 function requestApproval(req) {
@@ -1072,12 +1180,34 @@ function requestApproval(req) {
   });
   journalWrite({ event_type: "APPROVAL_PROMPTED", tool_id: req.kind, input_hash: req.hash, output_summary: `${req.risk}: ${req.why}` });
   return new Promise((resolve) => {
-    const done = (v) => { pendingApprovals.delete(id); clearTimeout(timer); resolve(v); };
+    const client = gatesClient();
+    const relay = client ? client.session(Gates.fieldsForApproval(req, { machine: machineName(), mission: agentMissions.get(agentId), cwd: CWD, ttlS: APPROVAL_TIMEOUT_MS / 1000 }), {
+      onCreated: () => sendAgentEvent({ type: "approval_relayed", id, agentId }),
+      onRemote: (o) => {
+        if (!pendingApprovals.has(id)) return;
+        // Expired or withdrawn on the relay is the same as unanswered here.
+        if (o.expired || o.cancelled || o.via !== "phone") {
+          sendAgentEvent({ type: "approval_expired", id, agentId });
+          return done({ approved: false, expired: true });
+        }
+        sendAgentEvent({ type: "approval_resolved", id, agentId, approved: o.approved, allowed: o.approved, via: "phone" });
+        done.journalRemote(o);
+        done({ approved: o.approved, via: "phone" });
+      },
+    }) : null;
+    const done = (v, cancelReason) => {
+      pendingApprovals.delete(id); clearTimeout(timer);
+      if (relay) { if (cancelReason) relay.cancel(cancelReason); else relay.close(); }
+      resolve(v);
+    };
     const timer = setTimeout(() => {
+      if (done.deciding) return;
       if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "approval_expired", id, agentId });
-      done({ approved: false, expired: true });
+      done({ approved: false, expired: true }, "no answer in time");
     }, APPROVAL_TIMEOUT_MS);
     done.agentId = agentId;
+    done.relay = relay;
+    done.journalRemote = (o) => journalWrite({ event_type: o.approved ? "APPROVAL_GRANTED_REMOTE" : "APPROVAL_DENIED_REMOTE", tool_id: req.kind, input_hash: req.hash, output_summary: `${o.approved ? "approved" : "denied"} on the phone: ${req.why}` });
     pendingApprovals.set(id, done);
   });
 }
@@ -1252,10 +1382,8 @@ const harnessCtx = {
   openUrl: (u) => { if (mainWindow) mainWindow.webContents.send("crowe:browser:navigate", u); },
   // The document printer above. The harness never requires electron itself.
   printToPdf,
-  // The Runbook lives in the renderer's store, so authoring is an event, not a
-  // write from here: the renderer saves it and surfaces the canvas. Stamped
-  // "main" because chat is the only surface that offers the tool.
-  authorWorkflow: (wf) => { if (mainWindow) mainWindow.webContents.send("crowe:agent:event", { type: "workflow_authored", workflow: wf, agentId: "main" }); },
+  // No authorWorkflow: the Missions canvas it wrote into is gone, and the
+  // harness offers compose_workflow only to a build that attaches one.
   getCatalog: () => catalogCache.models,
   // The token's tier claim, read the way the gateway reads it: absent means
   // free, not unknown. Null only when nobody is signed in, so the harness
@@ -1309,19 +1437,24 @@ ipcMain.handle("crowe:agent:stop", (_evt, { id = "main" } = {}) => {
   const run = agentRuns.get(id);
   if (run) { run.aborted = true; try { run.controller && run.controller.abort(); } catch {} }
   denyPendingApprovals(id);
+  rejectPendingEdits();
+  terminalSessions.closeEngineOwner(id);
   if (isSeatId(id)) browserSessions.drop(id).catch(() => {});
   return { ok: true };
 });
-ipcMain.handle("crowe:agent:stop-all", () => {
+function stopAccountRuns() {
   councilHost.stopAll();
   for (const run of agentRuns.values()) {
     run.aborted = true;
     try { if (run.controller) run.controller.abort(); } catch {}
   }
   denyPendingApprovals();
+  rejectPendingEdits();
   browserSessions.dropWhere(isSeatId).catch(() => {});
+  terminalSessions.closeEngineOwner();
   return { ok: true, stopped: agentRuns.size };
-});
+}
+ipcMain.handle("crowe:agent:stop-all", stopAccountRuns);
 ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
   messages = sanitizeAgentMessages(messages);
   if (!messages.length) return { done: false, error: "A turn needs a user message", text: "A turn needs a user message" };
@@ -1329,8 +1462,10 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
     const entitlement = await requireAgentEntitlement(workspaceId);
     if (!entitlement.ok) return { done: false, error: entitlement.error, text: entitlement.error };
   }
+  if (agentRuns.has(id)) return { done: false, error: "This engine seat is already working. Stop it before starting another turn.", text: "This engine seat is already working. Stop it before starting another turn." };
   const run = { aborted: false, controller: null };
   agentRuns.set(id, run);
+  agentMissions.set(id, missionText(messages));
   postTelemetry("agent_turn", { turns: messages.length, agentId: id });
   try {
     const cfg = loadConfig();
@@ -1363,7 +1498,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
         // already enforces, so it ends a turn with a reserve and a closing
         // call rather than as a second, blunter stop.
         // Rooms are readable from the person's own seat only; see roomsForHarness.
-        const ctx = { ...harnessCtx, rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
+        const ctx = { ...harnessCtx, terminals: engineTerminalsForRun(id, run), rooms: roomsForHarness(), loadConfig: () => ({ ...loadConfig(), turnBudgetUsd: ceiling }) };
         const r = await harness.runAgent(ctx, messages.slice(), {
           gatewayChat: (msgs, tools, signal, model, onDelta) => gatewayChat(msgs, tools, false, signal, model, onDelta),
           send,
@@ -1395,12 +1530,61 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
     return { done: true, text: turn.text || "" };
   } finally {
     agentRuns.delete(id);
+    agentMissions.delete(id);
   }
 });
 ipcMain.handle("crowe:chat", async (_e, { messages }) => gatewayChat(sanitizeAgentMessages(messages), null));
 
 // ─── PTY terminal ────────────────────────────────────────────────────────────
 const ptyProcs = new Map();
+const { TerminalSessions } = require("./terminal-sessions");
+const { EngineTerminalProcess } = require("./engine-terminal-process");
+const { DraftBridge } = require("./draft-bridge");
+const terminalSessions = new TerminalSessions();
+const draftBridge = new DraftBridge(terminalSessions);
+require("./managed-draft-window").installManagedDraftWindows(terminalSessions, registerIpcHandler);
+terminalSessions.on("control", state => { try { mainWindow?.webContents.send("crowe:companion:event", { type: "terminal-control", ...state }); } catch {} });
+terminalSessions.on("fault", state => console.error("Terminal mirror:", state.error));
+// Publish only committed screen records, so snapshots and live output share
+// one generation/sequence boundary (including resizes).
+terminalSessions.on("record", (_id, event) => broadcast("crowe:pty:data", event));
+ipcMain.handle("crowe:pty:list-engines", () => terminalSessions.list().filter(s => s.origin === "engine"));
+/* Engine terminals persist the display, not an interpreter's input buffer.
+   Each gated command starts a fresh process in the terminal's opening folder.
+   Operator keys reach only a running process. Up to six terminals per owner,
+   with concurrent owners sharing the total session cap. */
+const engineTerminals = {
+  open(owner, { label = "", cwd = CWD, engine = "" } = {}) {
+    if (!pty) throw new Error("This build has no terminal; use run_shell.");
+    if (terminalSessions.engineList(owner).length >= 6) throw new Error("This engine already has six terminals open. Close one with terminal_close first.");
+    const id = `engine-${crypto.randomUUID().slice(0, 8)}`;
+    const name = engine || (isSeatId(owner) ? "Room seat" : "Engine");
+    const s = terminalSessions.create(id, () => new EngineTerminalProcess({ pty, cwd, cols: 120, rows: 32,
+      env: { ...harness.safeShellEnv(), PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", EDITOR: "true", CROWE_ENGINE_TERMINAL: "1" },
+    }), { cols: 120, rows: 32, cwd, label: label || `${name} terminal`, openedBy: { id: owner, name, kind: "engine" } });
+    ptyProcs.set(id, s.proc);
+    s.proc.onExit(() => { ptyProcs.delete(id); broadcast("crowe:pty:exit", { id, generation: s.generation }); broadcast("crowe:terminal:engine", { type: "closed", id, generation: s.generation }); });
+    broadcast("crowe:terminal:engine", { type: "opened", ...terminalSessions.meta(s) });
+    journalWrite({ event_type: "ENGINE_TERMINAL_OPENED", tool_id: "terminal_open", output_summary: `${name} opened ${id} in ${cwd}` });
+    return terminalSessions.meta(s);
+  },
+  run: (owner, id, command, timeoutMs) => terminalSessions.exec(id, owner, command, { timeoutMs }),
+  send: (owner, id, data) => terminalSessions.engineInput(id, owner, data),
+  read: (owner, id) => { terminalSessions.engineSession(id, owner); return terminalSessions.screenText(id); },
+  list: (owner) => terminalSessions.engineList(owner),
+  close: (owner, id) => terminalSessions.engineClose(id, owner),
+};
+harnessCtx.terminals = engineTerminals;
+// Bind queued tool calls to the turn that requested them. Stop closes this
+// seat's terminals and prevents an approval resolving later from reopening one.
+function engineTerminalsForRun(owner, run) {
+  const current = () => { if (run.aborted || agentRuns.get(owner) !== run) throw new Error("This engine turn has stopped."); };
+  return Object.fromEntries(Object.entries(engineTerminals).map(([name, fn]) => [name, (...args) => {
+    current();
+    if (args[0] !== owner) throw new Error("This terminal belongs to another engine seat.");
+    return fn(...args);
+  }]));
+}
 /* The shell is the one capability the autonomy menu names out loud: two of its
    four tiers say "no shell" in the label the user picked. Nothing enforced it -
    every tier opened a full login shell - so the promise was decoration, and the
@@ -1439,9 +1623,9 @@ function shellCommand() {
   if (process.platform === "win32") return { file: "powershell.exe", args: [] };
   return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
 }
-function spawnShell(cols, rows) {
+function spawnShell(cols, rows, sessionEnv = {}, cwd = CWD) {
   const { file, args } = shellCommand();
-  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd: CWD, env: process.env };
+  const opts = { name: "xterm-color", cols: cols || 80, rows: rows || 24, cwd, env: { ...process.env, ...sessionEnv } };
   try { return pty.spawn(file, args, opts); }
   catch (err) {
     if (app.isPackaged || process.platform === "win32" || !/posix_spawnp/i.test(String(err && err.message))) throw err;
@@ -1454,21 +1638,43 @@ function spawnShell(cols, rows) {
     return pty.spawn(file, args, opts);
   }
 }
-ipcMain.handle("crowe:pty:start", (evt, { id = "main", cols, rows, kind = "terminal" } = {}) => {
+ipcMain.handle("crowe:pty:start", async (evt, { id = "main", cols = 80, rows = 24, kind = "terminal", generation } = {}) => {
   if (!pty) return { ok: false, error: "pty unavailable in this build" };
+  const engineOnly = kind === "engine" || String(id).startsWith("engine-");
+  if (engineOnly) {
+    const live = terminalSessions.sessions.get(id);
+    if (!generation || live?.openedBy?.kind !== "engine" || live.generation !== generation) return { ok: false, ended: true, error: "This engine terminal ended." };
+    try { return await terminalSessions.attachment(id, generation); }
+    catch { return { ok: false, ended: true, error: "This engine terminal ended." }; }
+  }
   if (kind !== "terminal" && shellBlocked()) return { ok: false, error: `the shell is off in "${loadConfig().autonomy || "edit"}" operating mode. Switch to Execute to open an agent terminal` };
-  if (ptyProcs.has(id)) return { ok: true, id };
+  if (ptyProcs.has(id)) {
+    try { return await terminalSessions.attachment(id); }
+    catch { return { ok: false, ended: true, error: "This terminal ended." }; }
+  }
   let proc;
-  try { proc = spawnShell(cols, rows); }
+  try {
+    await draftBridge.start();
+    const editor = require("./session-editor").editorCommand({ executable: process.execPath, appPath: __dirname, packaged: app.isPackaged });
+    proc = terminalSessions.create(id, s => spawnShell(s.cols, s.rows, {
+      ...draftBridge.env(s), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || editor,
+    }), { cols, rows, cwd: CWD, label: id }).proc;
+  }
   catch (err) { return { ok: false, error: `the shell could not start: ${err && err.message ? err.message : err}` }; }
   ptyProcs.set(id, proc);
-  proc.onData((data) => { try { evt.sender.send("crowe:pty:data", { id, data }); } catch {} });
   proc.onExit(() => { ptyProcs.delete(id); try { evt.sender.send("crowe:pty:exit", { id }); } catch {} });
-  return { ok: true, id };
+  try { return await terminalSessions.attachment(id); }
+  catch { return { ok: false, ended: true, error: "This terminal ended." }; }
 });
-ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { const proc = ptyProcs.get(id); if (proc) proc.write(data || ""); });
-ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { const proc = ptyProcs.get(id); if (proc) { try { proc.resize(cols, rows); } catch {} } });
-ipcMain.handle("crowe:pty:close", (_e, { id = "main" } = {}) => { const proc = ptyProcs.get(id); if (proc) { try { proc.kill(); } catch {} ptyProcs.delete(id); } return { ok: true }; });
+ipcMain.on("crowe:pty:input", (_e, { id = "main", data } = {}) => { try { terminalSessions.localInput(id, data || ""); } catch {} });
+// Taking a terminal back from a phone types nothing; it only ends the lease.
+ipcMain.on("crowe:pty:reclaim", (_e, { id = "main" } = {}) => { try { terminalSessions.reclaim(id); } catch {} });
+ipcMain.on("crowe:pty:resize", (_e, { id = "main", cols, rows }) => { try { terminalSessions.localResize(id, cols, rows); } catch {} });
+ipcMain.handle("crowe:pty:close", (_e, { id = "main", generation } = {}) => {
+  const session = terminalSessions.sessions.get(id);
+  if (generation && session?.generation !== generation) return { ok: true };
+  terminalSessions.close(id); ptyProcs.delete(id); return { ok: true };
+});
 ipcMain.handle("crowe:operator:status", () => ({
   app: "running", agents: agentRuns.size,
   agentIds: [...agentRuns.keys()], terminals: ptyProcs.size, terminalIds: [...ptyProcs.keys()],
@@ -1480,6 +1686,7 @@ ipcMain.handle("crowe:operator:stop-all", () => {
   councilHost.stopAll();
   for (const run of agentRuns.values()) { run.aborted = true; try { if (run.controller) run.controller.abort(); } catch {} }
   denyPendingApprovals();
+  rejectPendingEdits();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   return { ok: true };
 });
@@ -1784,6 +1991,7 @@ ipcMain.handle("crowe:get-config", () => {
   return { baseUrl: c.baseUrl, hasToken: Boolean(c.token), cwd: CWD, homeDir: os.homedir(), autoApprove: c.autoApprove, autonomy: c.autonomy,
     approvals: c.approvals, textPace: c.textPace, verifier: Boolean(c.verifier), turnBudgetUsd: c.turnBudgetUsd,
     telemetry: Boolean(c.telemetry), onboarded: Boolean(c.onboarded), sense: c.sense,
+    phoneGates: c.phoneGates !== false,
     reposRoot: c.reposRoot,
     mcpServers: c.mcpServers || {},
     ...browserConfigView(c),
@@ -2008,7 +2216,7 @@ function roomRunner(room) {
       let usage = { usd: 0, promptTokens: 0, completionTokens: 0 };
       let proposal = null;
       try {
-        const result = await harness.runAgent(harnessCtx, messages.slice(), {
+        const result = await harness.runAgent({ ...harnessCtx, terminals: engineTerminalsForRun(seatId, run) }, messages.slice(), {
           gatewayChat: (msgs, tools, signal, m, onDelta) => gatewayChat(msgs, tools, false, signal, m, onDelta),
           send: (ev) => {
             // Telemetry is captured for attribution as well as forwarded: the
@@ -2369,6 +2577,23 @@ function companionInstance() {
   if (!companion) {
     companion = new Companion({
       tokenFile: path.join(app.getPath("userData"), "companion.token"),
+      privateDir: app.getPath("userData"),
+      sessions: terminalSessions,
+      hostName: () => machineName(),
+      // A shell the phone opens is an ordinary login shell in the workspace
+      // folder, with the same draft bridge as a desktop terminal, so Control+G
+      // in the CLI works from the phone too.
+      openShell: async ({ cols, rows, device, label }) => {
+        if (!pty) throw Object.assign(new Error("This build has no terminal."), { status: 503 });
+        await draftBridge.start();
+        const id = `phone-${crypto.randomUUID().slice(0, 8)}`;
+        const editor = require("./session-editor").editorCommand({ executable: process.execPath, appPath: __dirname, packaged: app.isPackaged });
+        const s = terminalSessions.create(id, st => spawnShell(cols, rows, {
+          ...draftBridge.env(st), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || editor,
+        }), { cols, rows, cwd: CWD, label: label || `${device.name} shell`, openedBy: device });
+        journalWrite({ event_type: "PHONE_SHELL_OPENED", tool_id: "terminal", output_summary: `${device.name} opened a shell in ${CWD}` });
+        return s;
+      },
       // Electron's own blocker: "prevent-app-suspension" keeps the system from
       // idling out while still letting the display sleep, which is what a
       // machine being driven from a phone wants.
@@ -2390,10 +2615,11 @@ function companionInstance() {
 }
 ipcMain.handle("crowe:companion:status", () => companionInstance().status());
 ipcMain.handle("crowe:companion:start", async () => {
-  try { return await companionInstance().start(); }
+  try { const r = await companionInstance().start(); if (!r?.error) saveConfig({ companionOn: true }); return r; }
   catch (e) { return { error: String(e.message || e) }; }
 });
-ipcMain.handle("crowe:companion:stop", () => companionInstance().stop());
+ipcMain.handle("crowe:companion:stop", () => { saveConfig({ companionOn: false }); return companionInstance().stop(); });
+ipcMain.handle("crowe:companion:setTerminal", (_e, { id, on } = {}) => companionInstance().setTerminal(id, on));
 ipcMain.handle("crowe:companion:devices", () => companionInstance().deviceList());
 ipcMain.handle("crowe:companion:addDevice", (_e, { name } = {}) => {
   const c = companionInstance();
@@ -2595,6 +2821,14 @@ app.whenReady().then(async () => {
   if (Repos.normalizePath(CWD) !== Repos.normalizePath(os.homedir())) rememberWorkspace(CWD);
   fetchCatalog(); setInterval(fetchCatalog, 10 * 60 * 1000);
   sensePoller().start();
+  // A companion the operator started stays started across relaunches until
+  // they press Stop: a paired phone should not find its machine gone because
+  // the app updated. A profile from before this setting, with devices already
+  // paired, counts as started.
+  try {
+    const on = loadConfig().companionOn;
+    if (on === true || (on === undefined && companionInstance().deviceList().length)) companionInstance().start().catch(() => {});
+  } catch {}
   // Rooms with routines speak first; the scheduler is what lets them.
   startRoutineScheduler();
   // Keep the Crowe ID session fresh while the app runs: refresh proactively
@@ -2616,6 +2850,8 @@ app.whenReady().then(async () => {
 // when a preview was running; null means there is nothing to wait for. The
 // scripts that call this by hand before app.exit ignore the return value.
 function shutdownNativeResources() {
+  draftBridge.stop();
+  terminalSessions.closeAll();
   for (const [id, proc] of ptyProcs) { try { proc.kill(); } catch {} ptyProcs.delete(id); }
   for (const [id, srv] of Object.entries(MCP)) { try { srv.proc.kill(); } catch {} delete MCP[id]; }
   // Cloud browsers are ended the same way: best effort, bounded by the

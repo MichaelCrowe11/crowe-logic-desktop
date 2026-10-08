@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld("crowe", {
   },
   license: {
     status: () => ipcRenderer.invoke("crowe:license:status"),
-    billing: () => ipcRenderer.invoke("crowe:license:billing"),
+    billing: (options) => ipcRenderer.invoke("crowe:license:billing", { emailVerification: options?.emailVerification === true }),
     select: (workspaceId) => ipcRenderer.invoke("crowe:license:select", { workspaceId }),
   },
   /* The member's own plan and the one ladder. `license` above is the
@@ -58,9 +58,12 @@ contextBridge.exposeInMainWorld("crowe", {
   pty: {
     start: (size) => ipcRenderer.invoke("crowe:pty:start", size),
     input: (id, data) => ipcRenderer.send("crowe:pty:input", { id, data }),
+    reclaim: (id) => ipcRenderer.send("crowe:pty:reclaim", { id }),
     resize: (size) => ipcRenderer.send("crowe:pty:resize", size),
-    close: (id) => ipcRenderer.invoke("crowe:pty:close", { id }),
+    close: (id, generation) => ipcRenderer.invoke("crowe:pty:close", { id, generation }),
     onData: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:pty:data", h); return () => ipcRenderer.removeListener("crowe:pty:data", h); },
+    // A shell an engine opened for itself, so the window can show it live.
+    onEngine: (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on("crowe:terminal:engine", h); return () => ipcRenderer.removeListener("crowe:terminal:engine", h); },
   },
   fs: {
     list: (dir) => ipcRenderer.invoke("crowe:fs:list", dir),
@@ -174,6 +177,7 @@ contextBridge.exposeInMainWorld("crowe", {
     devices: () => ipcRenderer.invoke("crowe:companion:devices"),
     addDevice: (name) => ipcRenderer.invoke("crowe:companion:addDevice", { name }),
     revokeDevice: (id) => ipcRenderer.invoke("crowe:companion:revokeDevice", { id }),
+    setTerminal: (id, on) => ipcRenderer.invoke("crowe:companion:setTerminal", { id, on }),
     audit: (limit) => ipcRenderer.invoke("crowe:companion:audit", { limit }),
     pairSvg: () => ipcRenderer.invoke("crowe:companion:pairSvg"),
     onEvent: (cb) => { const h = (_e, e) => cb(e); ipcRenderer.on("crowe:companion:event", h); return () => ipcRenderer.removeListener("crowe:companion:event", h); },

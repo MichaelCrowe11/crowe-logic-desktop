@@ -1,0 +1,13 @@
+@font-face{font-family:Inter;src:url('../assets/fonts/inter-var.woff2') format('woff2');font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('../assets/fonts/jetbrains-mono-var.woff2') format('woff2');font-display:swap}
+:root{color-scheme:dark;--bg:#0b0e12;--surface:#11151b;--raised:#171c24;--ink:#eceae4;--dim:#a3a097;--gold:#d2ad62;--line:rgba(255,255,255,.09)}
+*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:13px Inter,sans-serif}
+header{padding:16px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid var(--line);background:var(--surface)}
+header img{object-fit:contain}.context{color:var(--dim);border-left:1px solid var(--line);padding-left:24px;white-space:nowrap}.actions{margin-left:auto;display:flex;gap:8px}
+button{font:inherit;color:var(--ink);background:var(--raised);padding:8px 12px;border:1px solid var(--line);border-top-color:rgba(255,255,255,.16);border-radius:8px;cursor:pointer}button:hover{background:#262d38}button:disabled{opacity:.45;cursor:default}button.primary{color:var(--gold);border-color:#615236}
+button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}kbd{margin-left:8px;font:12px 'JetBrains Mono',monospace;color:var(--dim)}
+main{flex:1;min-height:0;margin:24px;display:flex;flex-direction:column;border:1px solid var(--line);border-top-color:rgba(255,255,255,.14);border-radius:12px;overflow:hidden;background:var(--surface)}
+.document-bar{display:flex;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);color:var(--dim)}#name{color:var(--ink)}
+textarea{flex:1;min-height:0;width:100%;resize:none;border:0;background:var(--surface);color:var(--ink);padding:24px;outline:0;font:14px/1.75 'JetBrains Mono',monospace;tab-size:2;caret-color:var(--gold)}textarea:focus{box-shadow:inset 2px 0 var(--gold)}
+footer{display:flex;justify-content:space-between;gap:24px;padding:0 24px 20px;color:var(--dim);font-size:12px}#status.error{color:#db7c66}#position{white-space:nowrap}
+@media(max-width:660px){header{gap:12px;padding:12px 16px}.context{display:none}header img{width:128px}main{margin:16px}kbd{display:none}textarea{padding:16px}footer{padding:0 16px 16px}}

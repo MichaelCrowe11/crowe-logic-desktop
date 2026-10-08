@@ -1,7 +1,7 @@
 # Building, signing, and releasing
 
 Everything here was verified on a machine on 2026-09-05 unless it says otherwise.
-Where something could not be verified, it says so and says why — a runbook that
+Where something could not be verified, it says so and says why, a runbook that
 quietly guesses is worse than one with a hole in it, because you find the hole
 during a release.
 
@@ -37,7 +37,7 @@ npm test
 
 Green baseline on macOS as of 2026-08-05 is **exit 0**. Several steps in the chain
 run under `electron`, not `node`, so a headless box needs a display server for
-them. If something is red before you start, note it before you change anything —
+them. If something is red before you start, note it before you change anything,
 attributing a pre-existing failure to your own diff wastes an afternoon.
 
 ## Version: one place, derived outward
@@ -48,7 +48,7 @@ The desktop version lives in `package.json`. The phone version lives in
 The store build number is `major * 10000 + minor * 100 + patch`. `0.24.0` becomes
 `2400`. It must be a single ascending integer because Play refuses a `versionCode`
 it has already seen and App Store Connect refuses a build number it has already
-seen — and both refusals arrive *after* the upload.
+seen, and both refusals arrive *after* the upload.
 
 - **Android** derives it live in `mobile/android/app/build.gradle`, so it cannot
   drift from `mobile/package.json`.
@@ -65,7 +65,7 @@ assert that rather than assume it.
 > The formula is written twice, in two languages. `scripts/test-version-parity.js`
 > compares the constants both sides use, anchors them to the number
 > `sync-version.js --check` actually reports, and asserts the guard equals the
-> carry — so widening both guards to 999 fails rather than silently encoding
+> carry, so widening both guards to 999 fails rather than silently encoding
 > `0.100.0` as `1.0.0`. It runs in `npm test`.
 
 ## Signing and submission
@@ -88,7 +88,7 @@ normal release build can sign and notarize without an environment override:
 # Normal distribution build
 npm run build:mac
 
-# Local packaging diagnosis only — never for distribution
+# Local packaging diagnosis only: never for distribution
 CROWE_SKIP_NOTARIZE=1 npm run build:mac
 ```
 
@@ -139,7 +139,7 @@ user's crash report arrives symbolicated instead of as addresses.
 The archive is signed with whatever identity the build machine has, which is a
 development one. **Export is where it gets re-signed for distribution.** With an
 App Store Connect API key, `xcodebuild` creates the Apple Distribution certificate
-and the store provisioning profile itself — this was demonstrated from a machine
+and the store provisioning profile itself, this was demonstrated from a machine
 with no distribution certificate in its keychain at all.
 
 The API key is read from the environment:
@@ -154,6 +154,35 @@ All three were set and the `.p8` files present as of 2026-08-05, so an export is
 reproducible here. **Actual submission to App Store Connect is a separate,
 outward-facing step and is Michael's call, not an automated one.**
 
+**Export fails with "Copy failed" when Homebrew rsync is on PATH.** Xcode's
+IPA step runs `/usr/bin/rsync`, which is Apple's openrsync, and openrsync
+spawns its server side by name through PATH. With `/opt/homebrew/bin` first,
+that server is rsync 3.5.0, which rejects the `-E` openrsync passes, and the
+step reports only `exportArchive Copy failed`. The real error is in
+`IDEDistributionPipeline.log` inside the `.xcdistributionlogs` bundle the
+failure names. Export with the system path ahead:
+
+```
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH xcodebuild -exportArchive ...
+```
+
+**The archive and the build number.** App Store Connect refuses a build number
+it has already seen, and the number derives from the version (0.26.6 is 2606),
+so a rebuild of the same version cannot be uploaded: bump the patch version
+and run `sync-version.js` first. The 0.26.7 upload on 2026-10-04 was exactly
+this case.
+
+**Screenshots can be replaced through the API** without touching the version's
+other fields: delete the `appScreenshots` in the set, create one per file
+(`fileName`, `fileSize`), PUT each `uploadOperations` chunk with the headers it
+specifies, then PATCH `uploaded: true` with the MD5 `sourceFileChecksum`, and
+PATCH the set's `relationships/appScreenshots` with the ids in display order.
+Submission goes through `reviewSubmissions` and `reviewSubmissionItems`; the
+older `appStoreVersionSubmissions` endpoint is deprecated. Whether the listing
+has actually changed is read back from `itunes.apple.com/lookup?bundleId=...`
+(`screenshotUrls`, `version`, `releaseNotes`), not from the API's `COMPLETE`
+state.
+
 ### Android
 
 Release signing reads `mobile/android/keystore.properties` (git-ignored) or the
@@ -166,9 +195,14 @@ CROWE_ANDROID_KEY_ALIAS
 CROWE_ANDROID_KEY_PASSWORD
 ```
 
-With none of it present the release build goes **unsigned** rather than failing.
-That is deliberate: an unsigned release still catches a packaging regression, and
-Play refuses it long before anyone could mistake it for shippable.
+With none of it present the build produces unsigned packaging evidence. A partial
+signing configuration fails instead of silently falling back to unsigned output.
+Set `CROWE_REQUIRE_ANDROID_SIGNING=1` for a distribution build.
+
+`node mobile/scripts/verify-android-artifacts.js` checks APK identity, version,
+SDK targets, non-debuggable status, bundle integrity and both signatures. CI uses
+`--allow-unsigned` only for packaging jobs without a keystore and labels their
+artifacts `unsigned-packaging-only`. These are not distribution candidates.
 
 `.gitignore` keeps the keystore and any `.jks` out of history. The keystore is the
 one secret that, leaked, lets someone else ship an update to your users.
@@ -176,7 +210,7 @@ one secret that, leaked, lets someone else ship an update to your users.
 **Verified gotcha: Android cannot be built on this Mac.** No JDK, no Gradle, no
 Android SDK. Installing the toolchain runs 4-6GB against a disk that has a
 documented history of filling up and killing sessions with `ENOSPC`. Build Android
-in CI — ubuntu runners already ship a JDK — or on a machine with headroom. The
+in CI, ubuntu runners already ship a JDK, or on a machine with headroom. The
 Gradle derivation has therefore never actually been executed; it has only been
 read.
 
@@ -188,8 +222,8 @@ npm run icons:check    # verify committed art matches the vectors
 ```
 
 `gen-mark.js` draws the house mark and everything derived from it. `make-icons.js`
-renders the raster ladder — `.ico` rungs, `.icns`, the iOS app icon, every Android
-mipmap — and `--check` holds the committed files against a fresh render.
+renders the raster ladder, `.ico` rungs, `.icns`, the iOS app icon, every Android
+mipmap, and `--check` holds the committed files against a fresh render.
 
 ### What the drift gate proves, and what it does not
 
@@ -201,13 +235,13 @@ was exact byte equality on the decoded bitmap, on the theory that this let it ru
 on a Linux CI box against art rendered on a Mac. That was never true: Skia does
 not rasterise antialiased vectors to identical bitmaps across platforms. The
 assumption survived while the ladder covered 14 files and broke the moment it
-covered 41 — every `.ico` rung, the iOS icon and every Android mipmap came back
+covered 41, every `.ico` rung, the iOS icon and every Android mipmap came back
 stale on Linux against art a Mac calls current.
 
 **It also measured `.icns` against a renderer that cannot write it.** `iconutil` is
 macOS-only, so the committed container holds macOS renders and CI was comparing
 them to a Linux rasterisation of the same vector. The `.icns` is now checked only
-where it can be authored. That does not put it beyond checking — a Mac holds it to
+where it can be authored. That does not put it beyond checking, a Mac holds it to
 the vectors in full, and a Mac is the only place it can be regenerated, so a
 drifted `.icns` cannot reach a release without the machine cutting that release
 saying so. The count drops from 42 rasters to 41 on Linux, so the total never
@@ -215,7 +249,7 @@ claims more than it looked at.
 
 Comparison is now a **shaped tolerance**, not equality. Renderer noise lives on the
 edges of shapes: a thin band of pixels whose coverage rounded the other way, each
-off by a little. A real change moves or recolours area — many pixels off by a lot.
+off by a little. A real change moves or recolours area, many pixels off by a lot.
 
 The threshold is **8%**, and it was measured rather than guessed. The first attempt
 was 3%, picked before any data existed, and it sat where no small raster could
@@ -234,7 +268,7 @@ rasters still correspond to the vectors they were rendered from.
 
 Tag-triggered. `.github/workflows/release.yml` fires on `v*` tags and on manual
 dispatch. `scripts/publish-r2.sh` pushes artifacts to R2 and reads
-`GITHUB_REF_NAME` for the version — correct there, because on a tag-triggered run
+`GITHUB_REF_NAME` for the version, correct there, because on a tag-triggered run
 that variable *is* the tag.
 
 Updates are served by a Cloudflare Worker, not by GitHub:
@@ -363,7 +397,7 @@ npm run verify:release -- 0.24.0 --full   # also downloads each artifact, ~0.5 G
 
 This exists because **a broken release fails silently**. A feed naming a file the
 bucket does not have reports nothing to anyone: the updater 404s in the background
-and the user simply stays on the old version forever. Nothing surfaces that — not
+and the user simply stays on the old version forever. Nothing surfaces that, not
 the build, not the publish, not the download page. It has nearly shipped twice.
 
 The checks run over the network, the way a client meets the release: fetch each
@@ -374,11 +408,11 @@ object exists.
 
 `.github/workflows/verify-release.yml` also runs this on a daily cron.
 
-**Gotcha, now fixed — worth knowing because the shape recurs.** The scheduled run
+**Gotcha, now fixed, worth knowing because the shape recurs.** The scheduled run
 was red every morning from
 2026-08-03 against a release that was healthy the whole time. `verify-release.js`
 resolved the version as `argv || GITHUB_REF_NAME || pkg.version`, and on a
-scheduled run `GITHUB_REF_NAME` is the *branch* — so it verified a release called
+scheduled run `GITHUB_REF_NAME` is the *branch*, so it verified a release called
 `main` and 404'd on everything. The lesson generalises: `GITHUB_REF_NAME` is a ref,
 not a version, and it only names a release on a tag-triggered run.
 
@@ -387,11 +421,18 @@ not a version, and it only names a release on a tag-triggered run.
 - **Do not bypass notarization for a release.** `CROWE_SKIP_NOTARIZE=1` exists for
   local packaging diagnosis only; those artifacts are not shippable.
 - **Android is unbuildable here.** No JDK, no SDK; installing them risks filling
-  the disk. Use CI.
+  the disk. Use CI. The Android workflow builds and signs the bundle but does
+  not upload it: no credential on this machine carries the `androidpublisher`
+  scope, so Play uploads, listing screenshots and rollouts are done in Play
+  Console by hand from the workflow artifact, or need a Play service-account
+  key that is not present here.
+- **`gen-store-frames.js` needs a python3 with brotli.** The foundry venv that
+  `python3` resolves to on PATH lacks it and fontTools cannot open the variable
+  woff2; run with `PATH=/opt/homebrew/bin:$PATH`.
 - **A stale screenshot is the product.** Store screenshots that show an old version
   string in the UI have to be recaptured on a version bump. Play also caps a phone
   screenshot at 2:1, and the iOS device capture is 2.17:1, so the iOS set is
-  refused by Play — `gen-store-frames.js` insets the same captures on a 1080x1920
+  refused by Play, `gen-store-frames.js` insets the same captures on a 1080x1920
   canvas rather than cropping them.
 - **Every path in the app's own in-app browser returns 200** on the chat surfaces
   it points at, so a URL loading proves nothing about content existing.

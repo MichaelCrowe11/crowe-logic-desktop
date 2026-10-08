@@ -29,8 +29,17 @@ const stamp = dev ? String(Date.now()) : version;
 // Files copied verbatim: [from, to]. The renderer's own sources come first
 // because everything else exists to serve them.
 const COPY = [
+  ["node_modules/@xterm/xterm/lib/xterm.js", "xterm.js"],
+  ["node_modules/@xterm/xterm/css/xterm.css", "xterm.css"],
+  ["node_modules/@xterm/addon-fit/lib/addon-fit.js", "addon-fit.js"],
+  ["mobile/src/crowe-keyboard.js", "crowe-keyboard.js"],
+  ["mobile/src/phone-mirror.js", "phone-mirror.js"],
+  ["mobile/src/phone-mirror.css", "phone-mirror.css"],
   ...["rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css"].map(f => ["renderer/" + f, f]),
   ["renderer/styles.css", "styles.css"],
+  ["renderer/account.js", "account.js"],
+  ["renderer/billing-portal.js", "billing-portal.js"],
+  ["renderer/look.css", "look.css"],
   ["renderer/theme-bootstrap.js", "theme-bootstrap.js"],
   ["renderer/adopted-styles.js", "adopted-styles.js"],
   ["renderer/mark-geometry.js", "mark-geometry.js"],
@@ -41,6 +50,9 @@ const COPY = [
   ["renderer/activity.js", "activity.js"],
   ["renderer/renderer.js", "renderer.js"],
   ["assets/mark-simple.svg", "assets/mark-simple.svg"],
+  ["assets/gate-glyph.svg", "assets/gate-glyph.svg"],
+  ["assets/gate-glyph-dark.svg", "assets/gate-glyph-dark.svg"],
+  ["assets/icon.svg", "assets/icon.svg"],
   ["assets/mark-simple-dark.svg", "assets/mark-simple-dark.svg"],
   ["assets/wordmark-motion.svg", "assets/wordmark-motion.svg"],
   ["assets/wordmark-motion-sm.svg", "assets/wordmark-motion-sm.svg"],
@@ -55,7 +67,10 @@ const COPY = [
   ["mobile/src/vault.js", "vault.js"],
   ["mobile/src/mobile-bridge.js", "mobile-bridge.js"],
   ["mobile/src/mobile-ui.js", "mobile-ui.js"],
+  ["mobile/src/cloud-ai.js", "cloud-ai.js"],
   ["mobile/src/speak.js", "speak.js"],
+  ["mobile/src/playground.js", "playground.js"],
+  ["mobile/src/native-chrome.js", "native-chrome.js"],
   ["mobile/src/share-inbox.js", "share-inbox.js"],
   ["mobile/src/connectors.js", "connectors.js"],
 ];
@@ -63,9 +78,11 @@ const COPY = [
 // Assets whose query string gets the build stamp, so a reinstall over an older
 // build never serves a stale stylesheet out of the webview's HTTP cache.
 const BUSTED = [
+  "account.js", "billing-portal.js",
+  "crowe-keyboard.js", "phone-mirror.js", "phone-mirror.css", "xterm.js", "xterm.css", "addon-fit.js",
   "rooms-web.js", "council.js", "council-ui.js", "rooms-local.js", "council.css",
-  "styles.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
-  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "speak.js", "share-inbox.js", "connectors.js",
+  "styles.css", "look.css", "theme-bootstrap.js", "adopted-styles.js", "mobile.css", "grow-schema.js", "vault.js", "mobile-bridge.js",
+  "mark-geometry.js", "mark.js", "activity.js", "first-run.js", "messages.js", "marks.js", "renderer.js", "mobile-ui.js", "native-chrome.js", "cloud-ai.js", "speak.js", "playground.js", "share-inbox.js", "connectors.js",
 ];
 
 const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -75,8 +92,8 @@ const HEAD = `  <meta name="viewport" content="width=device-width, initial-scale
   <meta name="apple-mobile-web-app-title" content="Crowe Logic" />
   <meta name="format-detection" content="telephone=no" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#F4F0E7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/icon.png" />`;
 
@@ -111,40 +128,45 @@ function buildIndex() {
   // native, whole-body request and arrives in one piece. The other half of
   // that fix lives on the gateway: its CORS allowlist carries the phone's
   // capacitor:// and https://localhost origins (control plane 0.2.18).
+  // The Playground and cloud voices talk to the crowe-ai Worker (the BASE in
+  // src/cloud-ai.js), which is not under crowelogic.com; without it here the
+  // page refuses the fetch before it leaves the device and the pane reports
+  // "Load failed" with nothing in the Worker's log.
   const csp = "connect-src 'self';";
   if (!html.includes(csp)) throw new Error(`index.html no longer carries the CSP connect-src this build widens (${csp})`);
-  html = html.replace(csp, "connect-src 'self' https://*.crowelogic.com;");
+  const cloud = fs.readFileSync(path.join(__dirname, "..", "src", "cloud-ai.js"), "utf8").match(/const BASE = "(https:\/\/[^"]+)"/);
+  if (!cloud) throw new Error("src/cloud-ai.js no longer declares the Worker BASE this CSP must allow");
+  const checkout = fs.readFileSync(path.join(__dirname, "..", "src", "mobile-bridge.js"), "utf8").match(/const CHECKOUT_URL = "(https:\/\/[^"]+)"/);
+  if (!checkout) throw new Error("mobile-bridge.js must declare the checkout URL allowed by the phone CSP");
+  html = html.replace(csp, `connect-src 'self' https://*.crowelogic.com ${new URL(cloud[1]).origin} ${new URL(checkout[1]).origin};`);
 
   must(html, '<meta charset="utf-8" />', "the charset meta");
   html = html.replace('<meta charset="utf-8" />', `<meta charset="utf-8" />\n${HEAD}`);
 
-  // xterm ships from node_modules, which is not part of the app bundle, and the
-  // pane it drives has no PTY behind it on a phone anyway. The bridge installs a
-  // stand-in window.Terminal so initTerm() still runs and the pane explains
-  // itself instead of throwing.
+  // Bundle xterm for the authenticated mirror of the desktop-owned PTY.
   must(html, '<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />', "the xterm stylesheet");
-  html = html.replace('  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />\n', "");
-  for (const tag of ['<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>',
-                     '<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>']) {
+  html = html.replace('../node_modules/@xterm/xterm/css/xterm.css', 'xterm.css');
+  for (const [tag, file] of [['<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>', 'xterm.js'],
+                     ['<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>', 'addon-fit.js']]) {
     must(html, tag, "an xterm script tag");
-    html = html.replace(`  ${tag}\n`, "");
+    html = html.replace(tag, `<script src="${file}"></script>`);
   }
 
   must(html, '<link rel="stylesheet" href="styles.css" />', "the stylesheet link");
   html = html.replace('<link rel="stylesheet" href="styles.css" />',
-    '<link rel="stylesheet" href="styles.css" />\n  <link rel="stylesheet" href="mobile.css" />');
+    '<link rel="stylesheet" href="styles.css" />\n  <link rel="stylesheet" href="mobile.css" />\n  <link rel="stylesheet" href="phone-mirror.css" />');
 
   // The bridge has to be installed before any renderer script reads
   // window.crowe, and mark-geometry.js is the first of them.
   must(html, '<script src="mark-geometry.js"></script>', "the mark-geometry script tag");
   html = html.replace('<script src="mark-geometry.js"></script>',
-    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="mark-geometry.js"></script>');
+    '<script src="rooms-web.js"></script>\n  <script src="grow-schema.js"></script>\n  <script src="vault.js"></script>\n  <script src="mobile-bridge.js"></script>\n  <script src="crowe-keyboard.js"></script>\n  <script src="phone-mirror.js"></script>\n  <script src="mark-geometry.js"></script>');
 
   // The phone chrome mirrors controls the renderer wires up on load, so it goes
   // after renderer.js rather than before it.
   must(html, '<script src="renderer.js"></script>', "the renderer script tag");
   html = html.replace('<script src="renderer.js"></script>',
-    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="speak.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
+    '<script src="renderer.js"></script>\n  <script src="mobile-ui.js"></script>\n  <script src="native-chrome.js"></script>\n  <script src="cloud-ai.js"></script>\n  <script src="speak.js"></script>\n  <script src="playground.js"></script>\n  <script src="share-inbox.js"></script>\n  <script src="connectors.js"></script>');
 
   // The desktop's plan surfaces come out, the way the xterm tags do. plan.js
   // sells a subscription through Stripe, which is the app store's business on
@@ -163,7 +185,7 @@ function buildIndex() {
 const MANIFEST = {
   name: "Crowe Logic",
   short_name: "Crowe Logic",
-  description: "Agentic reasoning and cultivation console over the CroweLM gateway.",
+  description: "Chat and a paired-computer workspace over the CroweLM gateway.",
   start_url: "index.html",
   display: "standalone",
   orientation: "portrait",

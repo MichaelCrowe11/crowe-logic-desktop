@@ -477,8 +477,8 @@ async function main() {
   for (const [out, src, size] of [
     ["tray.png", "mark-tray.svg", 44],
     ["tray-light.png", "mark-tray-light.svg", 44],
-    ["mark.png", "mark.svg", 512],
-    ["avatar.png", "mark.svg", 1024],
+    ["mark.png", "gate-glyph.svg", 512],
+    ["avatar.png", "gate-glyph.svg", 1024],
   ]) {
     put(path.join(ASSETS, out), await render(win, path.join(ASSETS, src), size), `${size}, from ${src}`);
   }
