@@ -72,3 +72,12 @@ test("editor command preserves paths containing spaces, quotes and shell substit
   const command = editorCommand({ executable: process.execPath, appPath: script, packaged: false });
   assert.deepEqual(JSON.parse(execSync(command, { encoding: "utf8" })), ["--session-draft"]);
 });
+
+test("packaged editor command uses the bundled app runtime", () => {
+  assert.equal(editorCommand({
+    executable: "/Applications/Crowe Logic.app/Contents/MacOS/Crowe Logic",
+    appPath: "/resources/app.asar",
+    packaged: true,
+    platform: "darwin",
+  }), "'/Applications/Crowe Logic.app/Contents/MacOS/Crowe Logic' '--session-draft'");
+});

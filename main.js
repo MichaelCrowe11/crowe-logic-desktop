@@ -2587,9 +2587,9 @@ function companionInstance() {
         if (!pty) throw Object.assign(new Error("This build has no terminal."), { status: 503 });
         await draftBridge.start();
         const id = `phone-${crypto.randomUUID().slice(0, 8)}`;
-        const editorScript = path.join(__dirname, "bin", "crowe-session-editor.py").replace(/app\.asar([/\\])/, "app.asar.unpacked$1");
+        const editor = require("./session-editor").editorCommand({ executable: process.execPath, appPath: __dirname, packaged: app.isPackaged });
         const s = terminalSessions.create(id, st => spawnShell(cols, rows, {
-          ...draftBridge.env(st), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || `python3 ${JSON.stringify(editorScript)}`,
+          ...draftBridge.env(st), CROWE_VISUAL_EDITOR: process.env.CROWE_VISUAL_EDITOR || editor,
         }), { cols, rows, cwd: CWD, label: label || `${device.name} shell`, openedBy: device });
         journalWrite({ event_type: "PHONE_SHELL_OPENED", tool_id: "terminal", output_summary: `${device.name} opened a shell in ${CWD}` });
         return s;
