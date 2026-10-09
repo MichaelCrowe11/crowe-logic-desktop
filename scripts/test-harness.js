@@ -834,6 +834,35 @@ test("the verifier is not the model that did the work", () => {
   assert.strictEqual(H.verifierModel(makeCtx(), "fallback"), "fallback");
 });
 
+
+test("explicit engine does not fall back on plan, unknown-model, or provider errors", async () => {
+  for (const error of ["HTTP 403: Model 'gpt-6-astra' requires pro plan or higher", "HTTP 404: unknown model", "HTTP 400: unavailable engine"]) {
+    const asked = [];
+    const ctx = makeCtx();
+    const deps = makeDeps(async (_s,_n,_m,_t,model) => { asked.push(model); return {error}; });
+    deps.model = "gpt-6-astra";
+    const out = await H.runAgent(ctx,[{role:"user",content:"inspect this code"}],deps);
+    assert.deepStrictEqual(asked,["gpt-6-astra"]);
+    assert.strictEqual(out.stop,"error");
+    assert.strictEqual(deps.ofType("plan").length,0);
+  }
+});
+test("explicit engine stays pinned through mutation and verification", async () => {
+  const asked = [];
+  const ctx = makeCtx({verifier:true});
+  ctx.getCatalog = () => [{model:"other-checker",role:"verifier",featured:true}];
+  const deps = makeDeps(async (stage,n,_m,_t,model) => {
+    asked.push([stage,model]);
+    return stage === "verify" ? reply([call("submit_verdict",{status:"pass",summary:"file checked",checks:[]})])
+      : n === 0 ? reply([call("write_file",{path:"selected.txt",content:"selected engine"})]) : {...reply([],"Saved."),reportedModel:model};
+  });
+  deps.model = "gpt-6-astra";
+  const out = await H.runAgent(ctx,[{role:"user",content:"create selected.txt"}],deps);
+  assert(asked.some(([stage])=>stage === "verify"));
+  assert(asked.every(([,model])=>model === "gpt-6-astra"));
+  assert.strictEqual(out.verdict.independent,false);
+  assert(deps.ofType("model_response").some(e=>e.reportedModel === "gpt-6-astra"));
+});
 // ─── Journal ─────────────────────────────────────────────────────────────────
 test("every turn leaves a receipt trail", async () => {
   const ctx = makeCtx({ verifier: false });
@@ -985,23 +1014,31 @@ test("a streamed burst arrives as deltas with a receipt marked streamed", async 
   assert.strictEqual(bursts[0].streamed, true);
   assert.strictEqual(bursts[0].text, "Hello world.");
 });
-test("a retry after a partial stream takes the fragment back first", async () => {
+test("an interrupted stream preserves its text and engine without retry", async () => {
   const ctx = makeCtx();
   let calls = 0;
   const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
-    calls += 1;
-    if (calls === 1) { onDelta("half a sen"); return { error: "HTTP 502: bad gateway" }; }
-    onDelta("the whole answer.");
-    return { content: "the whole answer.", tool_calls: [], usage: {}, elapsedMs: 4, streamed: 17 };
+    calls++;
+    onDelta("half a sentence");
+    return { error: "HTTP 502: bad gateway", reportedModel:"kimi-k3", usage:{prompt_tokens:9,completion_tokens:3} };
   });
   const out = await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
-  assert.strictEqual(out.text, "the whole answer.");
-  const reset = deps.ofType("stream_reset")[0];
-  assert.ok(reset, "a stream_reset must be sent for the partial");
-  assert.strictEqual(reset.chars, 10);
-  const seq = deps.events.filter((e) => e.type === "assistant_delta" || e.type === "stream_reset").map((e) => e.type);
-  assert.ok(seq.indexOf("stream_reset") < seq.lastIndexOf("assistant_delta"),
-    "the reset precedes the retry's deltas, or the fragment stays on screen ahead of the whole");
+  assert.strictEqual(out.text, "half a sentence");
+  assert.strictEqual(out.stop, "error");
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(deps.ofType("stream_reset").length, 0);
+  assert.strictEqual(deps.ofType("model_response")[0].reportedModel, "kimi-k3");
+  assert.strictEqual(deps.ofType("telemetry")[0].completionTokens, 3);
+});
+test("stopping a stream preserves its partial text and responder", async () => {
+  const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
+    onDelta("Stopped answer");
+    return { error:"stopped", aborted:true, reportedModel:"kimi-k3" };
+  });
+  const out = await H.runAgent(makeCtx(), [{role:"user",content:"hi"}], deps);
+  assert.strictEqual(out.text,"Stopped answer");
+  assert.strictEqual(out.stop,"aborted");
+  assert.strictEqual(deps.ofType("model_response")[0].reportedModel,"kimi-k3");
 });
 
 // ─── Authoring workflows from chat ───────────────────────────────────────────

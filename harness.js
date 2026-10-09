@@ -2154,7 +2154,7 @@ async function buildSystemPrompt(ctx, cap) {
   const tokens = turnTokenCap(cfg);
   const verifies = cfg.verifier !== false && (tier === "edit" || tier === "execute");
   return [
-    "You are Crowe Logic, the operator: an agent working inside the user's workspace with real tools. You act, verify, and report; you do not guess.",
+    "You are the AI engine running inside the Crowe Logic operator harness, with real workspace tools. Crowe Logic and CroweLM are the instruments and tools, not foundation model identities. You act, verify, and report; you do not guess.",
     "",
     "## Environment",
     `- OS: ${process.platform} (${os.release()}), shell: ${process.env.SHELL || "/bin/zsh"}`,
@@ -2496,16 +2496,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    into a failed turn. Backoff with jitter first, fall back second. */
 async function chatWithRetry(deps, msgs, tools, model, signal, state, onDelta) {
   for (let attempt = 0; ; attempt++) {
-    let sent = 0;
-    const sink = onDelta ? (chunk) => { sent += String(chunk).length; onDelta(chunk); } : undefined;
+    let partial = "";
+    const sink = onDelta ? (chunk) => { partial += String(chunk); onDelta(chunk); } : undefined;
     const r = await deps.gatewayChat(msgs, tools, signal, model, sink);
-    /* A failed call that already streamed has shown the user a half-sentence.
-       Whatever happens next - a retry here, a model fallback in the caller -
-       repeats the answer from the top, so the partial has to be taken back
-       first or the transcript keeps attempt one's fragment ahead of attempt
-       two's whole. An abort is the exception: the operator stopped it, and the
-       fragment plus "stopped" is the honest record of that. */
-    if (r && r.error && !r.aborted && sent) deps.send({ type: "stream_reset", chars: sent });
+    // Visible output belongs to this attempt. Preserve it and stop on failure;
+    // retrying would replace evidence and could repeat an already executed turn.
+    if (r && (r.error || r.aborted) && (partial || r.content))
+      return { ...r, content: r.content || partial, streamed: partial.length || r.streamed, partial: true };
     if (!r || !r.error || r.aborted) return r;
     if (attempt >= TRANSIENT_RETRIES || !isTransient(r.error)) return r;
     const wait = Math.round(RETRY_BASE_MS * 2 ** attempt * (1 + Math.random()));
@@ -2558,6 +2555,14 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
     msgs = compactMessages(msgs, state);
     const r = await chatWithRetry(deps, msgs, opts.tools, ref.model, controller.signal, state,
       opts.silent ? undefined : (chunk) => deps.send({ type: "assistant_delta", text: chunk }));
+    if (r && r.partial) {
+      if (r.content) text += (text ? "\n\n" : "") + r.content;
+      meterCall(state, deps, r);
+      deps.send({ type: "model_response", requestedModel: ref.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", stage: opts.stage, harness: "desktop" });
+      if (r.aborted) { stop = "aborted"; break; }
+      deps.send({ type: "error", text: r.error });
+      return { text, stop: "error", error: r.error, msgs };
+    }
     if (r && r.aborted) { stop = "aborted"; break; }
     if (r.error) {
       // Plan gate: the gateway refused the model for this account's plan. The
@@ -2566,7 +2571,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       const gate = planGateOf(r.error);
       if (gate) {
         const free = freeModel(ctx.getCatalog ? ctx.getCatalog() : []);
-        if (!ref.planGated && ref.model !== free) {
+        if (!deps.model && !ref.planGated && ref.model !== free) {
           ref.planGated = true; ref.model = free; route.fallback = free;
           deps.send({ type: "plan", model: free, blocked: gate.model, required: gate.required, text: planNotice(free, gate.required) });
           deps.send({ type: "route", expert: opts.stage === "verify" ? "verifier" : "operator", model: free, reason: `${gate.model} needs a ${gate.required} plan, using ${free}` });
@@ -2579,7 +2584,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       }
       // Fallback-first: a routed expert that errors must never sink the turn.
       // Drop to the default model once and retry this same round.
-      if (!ref.fellBack && ref.model !== route.fallback) {
+      if (!deps.model && !ref.fellBack && ref.model !== route.fallback) {
         ref.fellBack = true; ref.model = route.fallback;
         deps.send({ type: "route", expert: opts.stage === "verify" ? "verifier" : "operator", model: ref.model, reason: `${route.model} unavailable, using ${ref.model}` });
         state.journal({ event_type: "MODEL_FALLBACK", tool_id: ref.model, output_summary: summarize(r.error) });
@@ -2589,6 +2594,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       return { text, stop: "error", error: r.error, msgs };
     }
     meterCall(state, deps, r);
+    deps.send({ type: "model_response", requestedModel: ref.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", stage: opts.stage, harness: "desktop" });
     if (r.content) {
       text += (text ? "\n\n" : "") + r.content;
       // streamed marks a burst the deltas already delivered: surfaces keep the
@@ -2698,14 +2704,14 @@ function shouldVerify(cfg, state, deps, stop) {
   return true;
 }
 async function verifyTurn(ctx, deps, route, state, request, claim, executorModel) {
-  const model = verifierModel(ctx, route.fallback);
+  const model = deps.model || verifierModel(ctx, route.fallback);
   // Separate context always; separate weights only when the catalog offers some.
   // Where it cannot, the check is still worth running and the receipt says why it
   // is worth less, rather than implying an independence that is not there.
   const independent = Boolean(executorModel) && model !== executorModel;
   const vroute = { ...route, expert: "verifier", verify: true, fallback: route.fallback };
   state.stage = "verify";
-  deps.send({ type: "route", expert: "verifier", model, reason: "independent check of a mutating turn" });
+  deps.send({ type: "route", expert: "verifier", model, reason: deps.model ? "verification pass with the selected engine" : "independent check of a mutating turn" });
   let verdict = null;
   /* Isolation, and it is the point of the whole pass: the verifier gets the
      request, the list of what changed, and the operator's claim marked as a
@@ -2774,6 +2780,7 @@ async function runAgent(ctx, messages, deps) {
     route.reason = `${route.reason} · pinned ${deps.model}`;
     route.model = deps.model;
   }
+  if (deps.model) { route.fallback = deps.model; delete route.planLimited; }
   // A room hands each seat a tier; the gate reads the lower of it and the app's autonomy.
   if (deps.tier) route.tierCap = deps.tier;
   const state = newState(ctx, cfg, deps, route);

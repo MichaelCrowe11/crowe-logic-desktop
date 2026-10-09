@@ -16,7 +16,7 @@
   <title>Crowe Logic</title>
   <link rel="icon" type="image/svg+xml" href="../assets/icon.svg" />
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
-  <link rel="stylesheet" href="styles.css?v=1791364364051" />
+  <link rel="stylesheet" href="styles.css?v=1791509826069" />
   <!-- Before every other script: xterm and the logotype inliner both write
        styles at runtime, and this is what lets them do it under the policy
        above. -->
@@ -279,7 +279,8 @@
           </div>
           <div class="composer-caption">
             <span class="composer-meta">
-              <span id="model-badge" class="composer-model">CroweLM</span>
+              <label class="engine-picker" for="engine-select">Engine <select id="engine-select" aria-label="Engine for this conversation"><option value="">Auto routing</option></select></label>
+              <span id="model-badge" class="composer-model" aria-live="polite"></span>
               <span id="composer-status" class="composer-status" role="status" aria-live="polite" data-state="ready">Ready</span>
             </span>
             <span id="composer-help" class="composer-help">Enter to send, Shift+Enter for a new line</span>
@@ -490,14 +491,14 @@
   <script src="rooms-local.js"></script>
   <script src="council-ui.js"></script>
   <script src="billing-portal.js"></script>
-  <script src="preview-shim.js?v=1791364364051"></script>
-  <script src="mark-geometry.js?v=1791364364051"></script>
-  <script src="mark.js?v=1791364364051"></script>
-  <script src="messages.js?v=1791364364051"></script>
-  <script src="marks.js?v=1791364364051"></script>
-  <script src="first-run.js?v=1791364364051"></script>
-  <script src="activity.js?v=1791364364051"></script>
-<script src="renderer.js?v=1791364364051"></script>
+  <script src="preview-shim.js?v=1791509826069"></script>
+  <script src="mark-geometry.js?v=1791509826069"></script>
+  <script src="mark.js?v=1791509826069"></script>
+  <script src="messages.js?v=1791509826069"></script>
+  <script src="marks.js?v=1791509826069"></script>
+  <script src="first-run.js?v=1791509826069"></script>
+  <script src="activity.js?v=1791509826069"></script>
+<script src="renderer.js?v=1791509826069"></script>
   <script src="account.js"></script>
   <script src="plan.js"></script>
 </body>

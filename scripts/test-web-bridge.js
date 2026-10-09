@@ -135,6 +135,21 @@ const okText = (body) => async () => new Response(body, { status: 200 });
   console.log("web bridge");
   const desktop = loadPreloadSurface();
 
+  await check("main chat surfaces stream errors and premature EOF", async () => {
+    for (const body of [
+      'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+      'data: {"error":{"message":"Stream interrupted"}}\ndata: [DONE]\n',
+    ]) {
+      const { crowe: web } = loadWebSurface({ fetchImpl: async (url) => String(url).includes("/chat/completions")
+        ? new Response(body, { status: 200 }) : new Response("{}", { status: 200 }) });
+      let failed = false;
+      try { await web.agent.run([{ role: "user", content: "hello" }]); }
+      catch (e) { failed = /completion|interrupted/.test(e.message); }
+      assert(failed, "broken main-chat stream was treated as success");
+    }
+    return "error event and EOF both fail visibly";
+  });
+
   await check("every desktop bridge method exists on the web bridge", () => {
     const { crowe: web } = loadWebSurface();
     const missing = methodPaths(desktop).filter((p) => {
@@ -234,47 +249,39 @@ const okText = (body) => async () => new Response(body, { status: 200 });
 
   // ─── Run control ──────────────────────────────────────────────────────────
 
-  await check("a second run under one id does not lose its stop", async () => {
-    // The regression needs run one to finish AFTER run two has registered, so
-    // that run one's finally is what removes run two's controller. An earlier
-    // draft of this check let run one finish first, which is not a race at all
-    // — it passed against the broken bridge and proved nothing.
-    let aborted = false;
-    const gate = (() => {
-      let resolve;
-      const promise = new Promise((r) => { resolve = r; });
-      return { promise, open: resolve };
-    })();
-
-    let call = 0;
-    const fetchImpl = async (url, init = {}) => {
+  await check("a concurrent run is refused and stop still reaches the active run", async () => {
+    let aborted = false, release, calls = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    const { crowe: web } = loadWebSurface({ fetchImpl: async (url, init = {}) => {
       if (!String(url).includes("/chat/completions")) return new Response("{}", { status: 200 });
-      call += 1;
-      if (call === 1) {
-        // Run one: held open until run two has registered, then completes.
-        await gate.promise;
-        return new Response("data: [DONE]\n", { status: 200 });
-      }
-      // Run two: never resolves on its own, so only an abort can end it.
-      init.signal.addEventListener("abort", () => { aborted = true; });
-      await new Promise(() => {});
-      return new Response("", { status: 200 });
-    };
-
-    const { crowe: web } = loadWebSurface({ fetchImpl });
+      calls++;
+      init.signal.addEventListener("abort", () => { aborted = true; release(); });
+      await gate;
+      return new Response("data: [DONE]\n", { status: 200 });
+    }});
     const first = web.agent.run([{ role: "user", content: "one" }], "main");
-    await new Promise((r) => setTimeout(r, 10));       // run one is in flight
-    const second = web.agent.run([{ role: "user", content: "two" }], "main");
-    await new Promise((r) => setTimeout(r, 10));       // run two has registered
-    gate.open();                                       // run one finishes, runs finally
-    await first.catch(() => {});
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const second = await web.agent.run([{ role: "user", content: "two" }], "main");
+    assert(second.done === false && /already running/.test(second.error), "concurrent run was not refused");
+    await web.agent.stop("main"); await first;
+    assert(aborted && calls === 1, "stop did not reach the original run, or a second request escaped");
+    return "one request, original controller stopped";
+  });
 
-    await web.agent.stop("main");
-    await new Promise((r) => setTimeout(r, 10));
-    second.catch(() => {});
-    assert(aborted, "run one's finally removed run two's controller, so stop() aborted nothing");
-    return "stop still reaches it";
+  await check("an explicit engine stays with its conversation and responder evidence", async () => {
+    const edge = fakeEdge(["one answer"]), events = [];
+    const { crowe: web } = loadWebSurface({ fetchImpl: edge });
+    const first = await web.sessions.new();
+    await web.sessions.update(first.id, {model:"gpt-6-astra",name:"First",brief:"Be concise"});
+    web.agent.onEvent(ev => events.push(ev));
+    const result = await web.agent.run([{role:"user",content:"Hello"}], "main", {model:"gpt-6-astra",sessionId:first.id,requestId:"request-one"});
+    await web.sessions.new();
+    const restored = await web.sessions.load(first.id);
+    assert(edge.calls[0].model === "gpt-6-astra" && restored.model === "gpt-6-astra", "selected engine drifted");
+    assert(events.every(ev => ev.requestId === "request-one" && ev.sessionId === first.id), "uncorrelated event");
+    assert(result.engine.responses[0].reportedModel === "", "missing responder was invented");
+    assert(restored.messages.at(-1).engine.requestedModel === "gpt-6-astra", "per-answer selection was lost");
+    return "request, saved choice and evidence agree";
   });
 
   // ─── Named agents ─────────────────────────────────────────────────────────
@@ -509,7 +516,7 @@ const okText = (body) => async () => new Response(body, { status: 200 });
     // the parity walk above; this is the one place the renderer has to hand
     // the brief to agent.run and give the person somewhere to write it.
     const src = read("renderer/renderer.js");
-    assert(/runOpts\.brief\s*=\s*sessionMeta\.brief/.test(src), "renderer does not pass the session brief to agent.run");
+    assert(/const requestedBrief = sessionMeta\.brief/.test(src) && /runOpts\.brief\s*=\s*requestedBrief/.test(src), "renderer does not pass the session brief to agent.run");
     assert(/window\.crowe\.sessions\.update\(/.test(src), "renderer never calls sessions.update");
     assert(/class="sess-meta"/.test(src) || /className\s*=\s*"sess-meta"/.test(src), "no session name/brief editor in the drawer");
     for (const bridge of ["renderer/web-bridge.js", "mobile/src/mobile-bridge.js", "main.js"]) {

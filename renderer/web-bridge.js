@@ -260,7 +260,7 @@
     list: async () =>
       readJSON(KEY_SESSIONS, [])
         .filter((s) => s && s.kind !== "room")
-        .map(({ id, title, updatedAt, name }) => ({ id, title, updatedAt, name: name || "" })),
+        .map(({ id, title, updatedAt, name, model }) => ({ id, title, updatedAt, name: name || "", model: model || "" })),
     get: async (id) => readJSON(KEY_SESSIONS, []).find((s) => s && s.id === id && s.kind !== "room") || null,
     put: async (record) => {
       const all = readJSON(KEY_SESSIONS, []).filter((s) => !s || s.id !== record.id);
@@ -291,7 +291,7 @@
       const c = await r.json();
       const own = (c.chat && c.chat.crowe) || {};
       return { id: c.id, serverId: c.id, title: own.title || c.title || (c.chat && c.chat.title) || "Untitled",
-        name: own.name || "", brief: own.brief || "",
+        name: own.name || "", brief: own.brief || "", model: own.model || "",
         updatedAt: Number(c.updated_at || 0) * 1000, messages: Array.isArray(own.messages) ? own.messages : [] };
     },
     put: async (record) => {
@@ -302,7 +302,7 @@
       // `crowe` so nothing is lost to that choice.
       const chat = {
         title: record.name || record.title,
-        crowe: { messages: record.messages, updatedAt: record.updatedAt, title: record.title, name: record.name || "", brief: record.brief || "" },
+        crowe: { messages: record.messages, updatedAt: record.updatedAt, title: record.title, name: record.name || "", brief: record.brief || "", model: record.model || "" },
       };
       const url = record.serverId
         ? `${OWUI}/v1/chats/${encodeURIComponent(record.serverId)}`
@@ -340,24 +340,26 @@
   let currentSession = null;
   const newSessionId = () => "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
 
-  async function persistSession(messages) {
+  async function persistSession(messages, targetSession) {
     if (!messages || !messages.length) return;
     const s = await store();
     const firstUser = messages.find((m) => m.role === "user");
     const title = String((firstUser && firstUser.content) || "Untitled").replace(/\s+/g, " ").slice(0, 60);
-    const existing = currentSession ? await s.get(currentSession).catch(() => null) : null;
+    const sid = targetSession || currentSession || newSessionId();
+    const existing = await s.get(sid).catch(() => null);
     // Read-merge-write: the name and the brief were set before this run and
     // must outlive it. A write of {id, title, messages} alone would drop them,
     // which is the one way a session could stop being an agent by being used.
     const record = {
-      id: currentSession || newSessionId(),
+      id: sid,
       serverId: existing && existing.serverId ? existing.serverId : (s.kind === "remote" && existing ? existing.id : undefined),
       title, updatedAt: Date.now(), messages,
       name: (existing && existing.name) || "",
       brief: (existing && existing.brief) || "",
+      model: (existing && existing.model) || "",
     };
     const saved = await s.put(record);
-    currentSession = saved.id;
+    if (!currentSession || currentSession === sid) currentSession = saved.id;
   }
 
   /* What a session may be told about itself. A name replaces the auto title in
@@ -366,7 +368,7 @@
      hands it to the harness as `persona`, the phone as its own system line).
      Allowlisted, so nothing else rides in through this door, and capped, so a
      brief cannot quietly become the whole context window. */
-  const SESSION_FIELDS = { name: 80, brief: 4000 };
+  const SESSION_FIELDS = { name: 80, brief: 4000, model: 160 };
   function sessionPatch(patch) {
     const out = {};
     for (const key of Object.keys(SESSION_FIELDS)) {
@@ -390,7 +392,7 @@
       const rec = await s.get(id);
       if (!rec) return null;
       currentSession = rec.id;
-      return { id: rec.id, title: rec.title, name: rec.name || "", brief: rec.brief || "",
+      return { id: rec.id, title: rec.title, name: rec.name || "", brief: rec.brief || "", model: rec.model || "",
         updatedAt: rec.updatedAt, messages: rec.messages || [] };
     },
     // Name and brief for a session, before or after it has any messages. A
@@ -409,7 +411,7 @@
       const saved = await s.put(record);
       // A remote store mints the id on first write; the current thread follows it.
       if (currentSession === id || !currentSession) currentSession = saved.id;
-      return { ok: true, id: saved.id, name: saved.name || "", brief: saved.brief || "" };
+      return { ok: true, id: saved.id, name: saved.name || "", brief: saved.brief || "", model: saved.model || "" };
     },
     // As on the desktop, a new session is an id and nothing else until the
     // first run writes into it; an empty record in the rail is a row that
@@ -485,7 +487,7 @@
     if (!r.ok) throw new Error(`Catalog unavailable (${r.status}).`);
     const body = await r.json();
     catalogFacts = ((body && body.data) || []).map(m => ({ ...m, engine: m.engine || m.base_model || m.id }));
-    return catalogFacts.map((m) => laneRow(m.id));
+    return catalogFacts.map(m => Object.assign(laneRow(m.id), { engine: m.engine || m.name || m.id, provider: m.provider || "" }));
   }
 
   /* -------------------------------------------------------------------- run */
@@ -576,15 +578,17 @@
     let usage = null;
     let gotModel = "";
     let text = "";
+    let completed = false;
 
     const frame = (line) => {
       if (!line.startsWith("data:")) return;
       const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") return;
+      if (payload === "[DONE]") { completed = true; return; }
+      if (!payload) return;
       let chunk;
-      try { chunk = JSON.parse(payload); } catch (_) { return; }
+      try { chunk = JSON.parse(payload); } catch (_) { throw new Error("The response contained an unreadable stream frame."); }
       if (chunk.model) gotModel = chunk.model;
-      if (isolated && chunk.error) throw new Error("Council model stream failed.");
+      if (chunk.error) throw new Error(isolated ? "Council model stream failed." : String(chunk.error.message || chunk.error));
       if (chunk.usage) usage = chunk.usage;
       const delta = ((chunk.choices || [])[0] || {}).delta || {};
       if (delta.content) {
@@ -617,6 +621,7 @@
       }
     }
 
+    if (!completed) throw new Error("The response ended before completion. Try again.");
     return {
       text, model: gotModel,
       usage: usage
@@ -626,11 +631,17 @@
   }
 
   async function agentRun(messages, id = "main", options = {}) {
+    messages = messages.map(m => ({ ...m }));
     const model = options.model || "crowelm-apex";
+    if (!/^[A-Za-z0-9@][A-Za-z0-9_.:/-]{0,159}$/.test(model)) return { done: false, error: "Invalid engine selection.", text: "" };
+    if (controllers.has(id)) return { done: false, error: "This conversation is already running.", text: "" };
+    const targetSession = options.sessionId || currentSession || newSessionId();
+    if (id === "main" && !currentSession) currentSession = targetSession;
+    const engine = { requestedModel: options.model || "", requestId: options.requestId || "", responses: [] };
     const controller = new AbortController();
     controllers.set(id, controller);
 
-    const send = (ev) => emit(Object.assign({ agentId: id }, ev));
+    const send = (ev) => emit(Object.assign({}, ev, { agentId: id, requestId: options.requestId || "", sessionId: targetSession }));
     let text = "";
 
     // The desktop passes the farm's own records on every turn (renderer.js:637,
@@ -654,6 +665,7 @@
     for (const m of messages) wire.push({ role: m.role, content: m.content });
 
     try {
+      send({ type: "route", model, expert: "operator", reason: options.model ? "selected engine" : "default route" });
       const out = await streamCompletion({
         model,
         messages: wire,
@@ -662,6 +674,8 @@
         onDelta: (piece) => { text += piece; send({ type: "assistant_delta", text: piece }); },
       });
 
+      const evidence = { type: "model_response", requestedModel: model, reportedModel: out.model || "", stage: "execute", harness: "web" };
+      engine.responses.push(evidence); send(evidence);
       if (out.usage) {
         send({
           type: "telemetry",
@@ -682,9 +696,9 @@
       // Rooms carry their own record and never come through this path with the
       // "main" id. A failed write must not fail a run that already answered.
       if (id === "main") {
-        try { await persistSession([...messages, { role: "assistant", content: text }]); } catch (_) {}
+        try { await persistSession([...messages, { role: "assistant", content: text, engine }], targetSession); } catch (_) {}
       }
-      return { text };
+      return { done: true, text, engine };
     } catch (err) {
       if (err && err.name === "AbortError") return { text, aborted: true };
       send({ type: "error", text: err.message || String(err) });

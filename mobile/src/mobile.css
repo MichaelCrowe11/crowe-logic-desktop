@@ -939,3 +939,6 @@ body.mobile .m-pg-img { display: block; width: 100%; border-radius: 12px; }
 
 /* The computer's switch for sending gates to the phone; the phone has nothing to switch. */
 body.mobile label.chk:has(#cfg-phone-gates) { display: none; }
+
+/* Conversation metadata remains editable without iOS focus zoom. */
+body.mobile .sess-meta input, body.mobile .sess-meta textarea { font-size:16px; }
