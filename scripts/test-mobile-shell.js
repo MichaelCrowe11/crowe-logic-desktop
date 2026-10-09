@@ -948,6 +948,67 @@ const tests = [
       return out;`,
     expect: { log: true, copy: true, share: true, clear: true, hasHeader: true, pending: true, testBtn: true, pendingSaysWhy: true, voice: true, voiceOptions: "phone,neural", voiceStored: "neural,phone" },
   },
+  {
+    name: "engine choice persists per conversation, pins the request and rejects stale events",
+    body: `const realFetch = window.fetch, realOn = window.crowe.agent.onEvent;
+      const oldConfig = await window.crowe.getConfig();
+      const catalog = {models:[{model:"gpt-6-astra",engine:"GPT-6 Astra"},{model:"glm-5.3",engine:"GLM 5.3"},{model:"crowelm",engine:"CroweLM"}]};
+      let release, started, listener, wire;
+      const began = new Promise(r => { started = r; });
+      const held = new Promise(r => { release = r; });
+      window.fetch = async (url, init = {}) => {
+        if (String(url).includes("/api/gateway/catalog")) return new Response(JSON.stringify(catalog));
+        if (String(url).includes("/api/gateway/chat")) {
+          wire = JSON.parse(init.body); started(); await held;
+          return new Response(JSON.stringify({content:"Engine fixture answered.",model:"gpt-6-astra",usage:{}}),{headers:{"content-type":"application/json"}});
+        }
+        if (String(url).startsWith("http") && !String(url).startsWith(location.origin)) return new Response("{}",{status:200});
+        return realFetch(url, init);
+      };
+      window.crowe.agent.onEvent = fn => { listener = fn; return realOn(fn); };
+      try {
+        await window.crowe.setConfig({token:"header."+btoa(JSON.stringify({email:"fixture@example.com",crowe_tier:"pro",exp:9999999999}))+".sig"});
+        setTextPace("instant"); await refreshAuth(); setSpace("chat"); switchPane("chat");
+        learnCatalogNames(catalog); await newChat();
+        const pick = document.getElementById("engine-select");
+        pick.value = "gpt-6-astra"; pick.dispatchEvent(new Event("change")); await __settle(80);
+        const first = sessionId;
+        const selected = pick.value === "gpt-6-astra" && (await window.crowe.sessions.load(first)).model === "gpt-6-astra";
+        const box = __box(pick), thumb = box.height >= 44 && box.left >= 0 && box.right <= innerWidth;
+        const enginesOnly = ![...pick.options].some(o => o.value === "crowelm");
+        const originalContext = growContext; let contextStarted, contextRelease;
+        const contextReady = new Promise(r => { contextStarted=r; }), contextWait = new Promise(r => { contextRelease=r; });
+        growContext = async () => { contextStarted(); await contextWait; return ""; };
+        const preparing = send("Prepare then stop."); await contextReady; document.getElementById("stop").click(); contextRelease(); await preparing;
+        growContext = originalContext;
+        const stoppedPreparation = !wire && !!document.querySelector(".stopped");
+        const turn = send("Reply briefly."); await Promise.race([began, new Promise((_, reject) => setTimeout(() => reject(new Error("No request: " + document.getElementById("composer-status").textContent + " running=" + running + " gate=" + sendGate + " saving=" + engineSaving + " changing=" + sessionChanging)), 7000))]);
+        const locked = pick.disabled;
+        await newChat(); const heldSession = sessionId === first;
+        const oldMeta = JSON.stringify(sessionMeta); await startRepoTask({number:1,title:"held",kind:"issue"},{full:"fixture/repo"},"readonly","/fixture");
+        const taskHeld = JSON.stringify(sessionMeta) === oldMeta && sessionId === first;
+        listener({type:"assistant_delta",agentId:"main",text:"WRONG REQUEST",sessionId:first,requestId:"old"});
+        listener({type:"assistant_delta",agentId:"main",text:"MISSING IDS"});
+        release(); await turn;
+        const clean = !document.getElementById("transcript").textContent.includes("WRONG REQUEST") && !document.getElementById("transcript").textContent.includes("MISSING IDS");
+        const receipt = [...document.querySelectorAll(".engine-receipt")].at(-1)?.textContent || "";
+        await newChat(); pick.value="glm-5.3"; pick.dispatchEvent(new Event("change")); await __settle(80);
+        await loadSession(first);
+        const restored = pick.value === "gpt-6-astra" && [...document.querySelectorAll(".engine-receipt")].at(-1)?.textContent === receipt;
+        await window.crowe.sessions.update(first,{model:"retired-engine"}); await loadSession(first);
+        const unavailable = pick.value === "retired-engine" && pick.selectedOptions[0].disabled;
+        await window.crowe.sessions.update(first,{model:"gpt-6-astra"}); await loadSession(first);
+        if (window.__keepEngineScreenshot) await __settle(150);
+        return {selected, thumb, enginesOnly, locked, heldSession, clean, restored, unavailable, stoppedPreparation, taskHeld,
+          exactRequest:wire.model === "gpt-6-astra", reported:receipt.includes("Gateway reported: GPT-6 Astra"), unlocked:!pick.disabled};
+      } finally {
+        release(); window.fetch = realFetch; window.crowe.agent.onEvent = realOn;
+        await window.crowe.setConfig({token:"",textPace:oldConfig.textPace}); await refreshAuth();
+        setTextPace(oldConfig.textPace); if (!window.__keepEngineScreenshot) { await newChat(); __tap("Home"); } else { drawer.classList.add("hidden"); document.body.classList.add("sidebar-collapsed"); }
+      }`,
+    expect: {selected:true,thumb:true,enginesOnly:true,locked:true,heldSession:true,clean:true,restored:true,unavailable:true,exactRequest:true,reported:true,unlocked:true,stoppedPreparation:true,taskHeld:true},
+  },
+
 ];
 
 function compare(actual, expected) {
@@ -982,6 +1043,8 @@ app.whenReady().then(async () => {
        still there, and four checks fail for reasons that have nothing to do
        with the checkout under test. Start clean every time. */
     await win.webContents.session.clearStorageData({ storages: ["localstorage", "indexdb", "cookies"] });
+    // UI fixtures use only this checkout and explicit mocked responses.
+    win.webContents.session.webRequest.onBeforeRequest({urls:["https://*/*"]}, (_details, done) => done({cancel:true}));
     const pageErrors = [];
     // Electron 43 passes an event object here and deprecates the old positional
     // (event, level, message). Both are read so this file does not start
@@ -997,12 +1060,14 @@ app.whenReady().then(async () => {
     await win.loadURL(url + "?t=" + Date.now());
     await new Promise((r) => setTimeout(r, 2500));
     await win.webContents.executeJavaScript(PRELUDE);
+    if (process.env.MOBILE_SCREENSHOT) await win.webContents.executeJavaScript("window.__keepEngineScreenshot = true");
 
-    for (const t of tests) {
+    for (const t of tests.filter(t => !process.env.MOBILE_TEST_FILTER || t.name.includes(process.env.MOBILE_TEST_FILTER))) {
       let bad;
       try {
         const actual = await win.webContents.executeJavaScript(`(async () => { ${t.body} })()`);
         bad = compare(actual, t.expect);
+        if (process.env.MOBILE_SCREENSHOT && t.name.startsWith("engine choice")) fs.writeFileSync(process.env.MOBILE_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
       } catch (error) {
         bad = [`threw: ${error && error.message ? error.message : error}`];
       }

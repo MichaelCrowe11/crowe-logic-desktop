@@ -780,42 +780,84 @@ function setComposerStatus(text, state = "ready") {
     }, state === "error" ? 8000 : 4000);
   }
 }
-/* The model label under the composer is wired, not painted. At rest it names
-   the configured model, resolved through the catalog so an id reads as a name;
-   while a turn runs it follows the router's choice, then returns. */
-let configuredModelLabel = "CroweLM";
-let catalogNames = new Map();
-function modelLabel(id) {
-  if (!id || id === "crowelm") return "CroweLM";
-  return catalogNames.get(id) || id;
-}
+/* Crowe is the instrument. Catalog model IDs select the engine inside it. */
+let configuredModelId = "crowelm";
+let catalogNames = new Map(), engineModels = [];
+let engineSaving = false, sessionChanging = false, engineCatalogError = "";
+function modelLabel(id) { return id ? (catalogNames.get(id) || id) : "Auto routing"; }
 function setModelBadge(id) {
   const badge = $("model-badge");
   if (!badge) return;
-  const label = id ? modelLabel(id) : configuredModelLabel;
-  badge.textContent = label;
-  badge.title = id ? `Answering with ${label}` : `Configured engine: ${label}. The router may pick a specialist for a turn.`;
+  badge.textContent = id ? `Requested: ${modelLabel(id)}` : "";
+  badge.title = "The requested route is separate from the gateway's responder report.";
 }
-let configuredModelId = "crowelm";
 function refreshModelBadge(config) {
   configuredModelId = (config && config.model) || "crowelm";
-  configuredModelLabel = modelLabel(configuredModelId);
-  if (!running) setModelBadge("");
+  drawEnginePicker();
 }
-/* Names come from the catalog when a surface that needs the catalog has
-   already fetched it (Home, Deployments). The label never fetches on its own:
-   on the web mirror the catalog is a network call, and a label is not worth
-   one at boot. Until then an id is shown as an id, which is still the truth. */
 function learnCatalogNames(cat) {
-  const models = Array.isArray(cat) ? cat : (cat && cat.models) || [];
-  if (!models.length) return;
-  catalogNames = new Map(models.filter((m) => m && (m.model || m.id))
-    .map((m) => [m.model || m.id, m.display || m.name || m.model || m.id]));
-  configuredModelLabel = modelLabel(configuredModelId);
-  if (!running) setModelBadge("");
+  const rows = Array.isArray(cat) ? cat : (cat && cat.models) || [];
+  if (!rows.length) return;
+  const models = rows.map(m => Array.isArray(m) ? { model:m[0], name:m.engine || m[1], engine:m.engine, available:m[4] } : m)
+    .filter(m => m && (m.model || m.id));
+  catalogNames = new Map(models.map(m => [m.model || m.id, m.engine || m.display || m.name || m.model || m.id]));
+  engineModels = models.filter(m => !/^crowelm(?:-|$)/i.test(m.model || m.id) && !m.agent && !m.info);
+  engineCatalogError = "";
+  drawEnginePicker();
+}
+function drawEnginePicker() {
+  const el = $("engine-select"); if (!el) return;
+  const selected = sessionMeta.model || "";
+  el.replaceChildren(new Option("Auto routing", ""));
+  const seen = new Set();
+  for (const m of engineModels) {
+    const id = m.model || m.id; if (seen.has(id)) continue; seen.add(id);
+    const option = new Option(`${modelLabel(id)}${m.available === false ? " (unavailable)" : ""}`, id);
+    option.disabled = m.available === false;
+    el.add(option);
+  }
+  if (selected && !seen.has(selected)) {
+    const missing = new Option(`${modelLabel(selected)} (unavailable)`, selected);
+    missing.disabled = true; el.add(missing);
+  }
+  el.value = selected;
+  el.disabled = running || sendGate || engineSaving || sessionChanging;
+  el.title = engineCatalogError || "Choose the engine for this conversation. Explicit choices never switch automatically.";
+}
+async function loadEngineCatalog() {
+  try { learnCatalogNames(await window.crowe.catalog.get()); }
+  catch { engineCatalogError = "Engine catalog unavailable. Your saved selection is preserved."; drawEnginePicker(); }
+}
+async function ensureChatSession() {
+  if (!sessionId) { const r = await window.crowe.sessions.new(); if (!r || !r.id) throw new Error("Could not create the conversation."); sessionId = r.id; }
+  return sessionId;
+}
+$("engine-select")?.addEventListener("change", async (event) => {
+  if (running || sendGate || engineSaving || sessionChanging) { drawEnginePicker(); return; }
+  const model = event.target.value;
+  engineSaving = true; drawEnginePicker();
+  try {
+    const sid = await ensureChatSession();
+    const r = await window.crowe.sessions.update(sid, { model });
+    if (!r || !r.ok) throw new Error(r?.error || "Could not save the engine choice.");
+    if (sessionId === sid) { sessionId = r.id || sid; sessionMeta.model = model; }
+  } catch (e) { setComposerStatus(e.message, "error"); }
+  finally { engineSaving = false; drawEnginePicker(); }
+});
+$("engine-select")?.addEventListener("focus", () => { if (!engineModels.length) loadEngineCatalog(); });
+function addEngineReceipt(body, evidence) {
+  if (!evidence) return;
+  const rows = evidence.responses || [];
+  const last = [...rows].reverse().find(r => !r.stage || r.stage === "execute");
+  const receipt = document.createElement("div"); receipt.className = "engine-receipt";
+  const requested = evidence.requestedModel ? modelLabel(evidence.requestedModel) : "Auto routing";
+  const reported = last && (last.upstreamModel || last.reportedModel);
+  receipt.textContent = `Selected: ${requested} · ${reported ? "Gateway reported: " + modelLabel(reported) : "Responder unconfirmed"}`;
+  body.appendChild(receipt);
 }
 function setRunning(on) {
   running = on;
+  drawEnginePicker();
   $("send").classList.toggle("hidden", on);
   $("stop").classList.toggle("hidden", !on);
   $("hud-status").textContent = on ? "running" : "idle";
@@ -831,7 +873,7 @@ function setRunning(on) {
 }
 function addStopped(body) { const e = document.createElement("div"); e.className = "stopped"; e.textContent = "stopped by you"; body.appendChild(e); }
 function addRouteNode(body, ev) {
-  const label = ev.expert && ev.expert !== "operator" ? `${ev.expert} · ${ev.model}` : (ev.model || "operator");
+  const label = ev.expert && ev.expert !== "operator" ? `${ev.expert} · ${modelLabel(ev.model)}` : modelLabel(ev.model);
   const el = document.createElement("div"); el.className = "routecard";
   el.innerHTML = `<span class="rc-dot"></span><span class="rc-label">routed to ${esc(label)}</span>`;
   body.appendChild(el); scrollBottom();
@@ -839,22 +881,30 @@ function addRouteNode(body, ev) {
 // opts.role pins the expert for this turn. Surfaces built around one specialty
 // pass it so the routing matches what the surface says it does, instead of
 // depending on the operator happening to use the right vocabulary.
-let sendGate = false;
+let sendGate = false, activeSend = null;
 async function send(text, opts = {}) {
-  if (!text.trim() || running || sendGate) return;
+  if (!text.trim() || running || sendGate || engineSaving || sessionChanging) return;
   // The gate holds across the sign-in check: `running` is not set until after
   // it, and two submits in that gap (a double keypress, a click and an Enter)
   // would both pass the guard above and start two turns from one prompt.
-  sendGate = true;
+  sendGate = true; drawEnginePicker();
+  const requestedModel = sessionMeta.model || "";
+  const requestedBrief = sessionMeta.brief || "";
+  let requestedSession;
+  const requestId = "turn-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   try {
     // Re-validate live: a token that expired since launch must not eat the turn.
     if (!(await refreshAuth())) { showSignInPrompt(); setComposerStatus("Sign in to send", "note"); return; }
-  } finally { sendGate = false; }
+    requestedSession = await ensureChatSession();
+  } catch (e) { setComposerStatus(e.message, "error"); return; }
+  finally { sendGate = false; drawEnginePicker(); }
   // maxlength only governs typing. Dictation, quick-open and the Home and
   // Cultivation composers all append past it, and main would then cut the text
   // at the cap without a word. Refuse here, keep the draft, say why.
   if (text.length > INPUT_MAX_CHARS) { setComposerStatus(`Over the ${INPUT_MAX_CHARS.toLocaleString()} character limit`, "error"); return; }
   addUser(text); messages.push({ role: "user", content: text });
+  const turnMessages = messages.map(m => ({ ...m }));
+  const engineEvidence = { requestedModel, requestId, responses: [] };
   input.value = ""; syncComposerInput();
   const body = addAssistant(expertWorker(opts.role)); let runText = "";
   const mark = body._mark; if (mark) mark.setState("reasoning");
@@ -913,13 +963,14 @@ async function send(text, opts = {}) {
     curText += (burst && curText ? "\n\n" : "") + txt;
     if (!typerOn) { typerOn = true; lastFrame = 0; requestAnimationFrame(typeTick); }
   };
+  const acceptedSend = { cancelled: false }; activeSend = acceptedSend;
   showThinking(body); setRunning(true);
   const off = window.crowe.agent.onEvent((ev) => {
     /* The transcript is the "main" agent's and only its. Panels and workflow
        nodes run under their own ids on the same channel, so without this the
        chat would draw a workflow node's approval card and the user would be
        answering for an action they are not looking at. */
-    if (ev.agentId && ev.agentId !== "main") return;
+    if (ev.agentId !== "main" || ev.requestId !== requestId || ev.sessionId !== requestedSession) return;
     // A streamed burst has already arrived character by character; the closing
     // assistant event is its receipt, not more text to append.
     if (ev.type === "assistant") { if (!ev.streamed) { runText += (runText ? "\n\n" : "") + ev.text; pushText(ev.text, true); } }
@@ -976,6 +1027,9 @@ async function send(text, opts = {}) {
       addNotice(body, `Stopped at this turn's ${ev.limit || "ceiling"}: ${spent}. Raise it in Settings if this turn needed more.`, "budget");
     }
     else if (ev.type === "retry") { $("hud-status").textContent = `retrying (${ev.attempt}/${ev.of})`; }
+    else if (ev.type === "model_response") {
+      engineEvidence.responses.push({ requestedModel:ev.requestedModel || "", reportedModel:ev.reportedModel || "", upstreamModel:ev.upstreamModel || "", stage:ev.stage || "execute", harness:ev.harness || "" });
+    }
     else if (ev.type === "route") {
       addRouteNode(body, ev); showThinking(body, "reasoning");
       // The avatar follows the routing: a cultivation turn wears the grower's
@@ -996,13 +1050,15 @@ async function send(text, opts = {}) {
   // the Cultivation surface. Read fresh each turn rather than pinned into
   // `messages`, so the expert sees the grow as it is now and the saved
   // transcript stays a conversation instead of a stale snapshot of the store.
-  const runOpts = {};
+  const runOpts = { model: requestedModel, requestId, sessionId: requestedSession };
   if (opts.role) runOpts.role = opts.role;
   // The session's standing brief rides every turn of that session.
-  if (sessionMeta.brief) runOpts.brief = sessionMeta.brief;
-  const gc = await growContext(); if (gc) runOpts.context = gc;
+  if (requestedBrief) runOpts.brief = requestedBrief;
   let result = null;
-  try { result = await window.crowe.agent.run(messages, "main", runOpts); }
+  try {
+    const gc = await growContext(); if (gc) runOpts.context = gc;
+    result = acceptedSend.cancelled ? { done:false, stopped:true } : await window.crowe.agent.run(turnMessages, "main", runOpts);
+  }
   catch (err) {
     /* The bridge itself failed: the IPC call rejected, or the web mirror lost
        the network. No event reached the transcript, so say it here, where a
@@ -1010,10 +1066,12 @@ async function send(text, opts = {}) {
     finishSaid(); settleThinking(body, "fail");
     addError(body, `The run did not complete: ${(err && err.message) || err}`);
   }
-  finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; setModelBadge(""); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); setRunning(false); }
+  finally { off(); if (mark) mark.rest(); $("hud-model").textContent = "CroweLM"; setModelBadge(""); spentCost = runCost; sessionCost += runCost; runCost = 0; $("hud-cost").textContent = fmtCost(sessionCost); }
+  try {
   /* The main process refuses a run without throwing: an empty message set, or
      an entitlement the gateway would not honour. It answers with done:false and
      the reason; show the reason instead of an empty settled bubble. */
+  if (result?.stopped && !body.querySelector(".stopped")) addStopped(body);
   if (result && result.done === false && !body.querySelector(".err, .stopped")) {
     finishSaid(); settleThinking(body, "fail");
     addError(body, result.error || result.text || "The run was refused.");
@@ -1033,7 +1091,7 @@ async function send(text, opts = {}) {
     settleHeader();
     if (mark) { if (mark.done) mark.done(); else mark.ping(); }
   }
-  if (runText) { messages.push({ role: "assistant", content: runText }); attachCopyButton(body.closest(".msg"), runText); }
+  if (runText) { messages.push({ role: "assistant", content: runText, engine: result?.engine || engineEvidence }); attachCopyButton(body.closest(".msg"), runText); }
   else if (!body.querySelector(".said, .err, .stopped")) {
     // No prose came back. If tools ran, the work is in the workspace (or, on
     // the phone, in the log) and that is what to say. If nothing ran at all,
@@ -1046,13 +1104,16 @@ async function send(text, opts = {}) {
       ? `<p class="said hint">${phone ? "Done." : "Done. See the workspace."}</p>`
       : '<p class="said hint">The model returned no text. Send it again.</p>';
   }
+  if (!runText) messages.push({ role: "assistant", content: "", engine: result?.engine || engineEvidence });
   // After the fallback above, so the mark lands beside the hint when the cards
   // have just gone; before the colophon, which the mark never follows.
   follow.end(!body.querySelector(".err, .stopped"));
+  addEngineReceipt(body, result?.engine || engineEvidence);
   addColophon(body, acts, runTok, spentCost);
   refreshStatus();
+  } finally { if (activeSend === acceptedSend) activeSend = null; setRunning(false); }
 }
-$("stop").addEventListener("click", () => { setComposerStatus("Stopping", "note"); window.crowe.agent.stop(); });
+$("stop").addEventListener("click", () => { if (activeSend) activeSend.cancelled = true; setComposerStatus("Stopping", "note"); window.crowe.agent.stop(); });
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 // isComposing: Enter inside an IME composition commits the candidate; it must
 // not send half a sentence in another script.
@@ -2937,7 +2998,8 @@ function resetWelcome() { transcript.innerHTML = WELCOME_HTML; bindChips(); live
    from the rail's `current` row after a first turn on a thread that was
    never explicitly created (the desktop mints the id at persist time). */
 let sessionId = null;
-let sessionMeta = { name: "", brief: "" };
+let sessionMeta = { name: "", brief: "", model: "" };
+queueMicrotask(loadEngineCatalog);
 function drawSessionMeta(host) {
   const box = document.createElement("div");
   box.className = "sess-meta";
@@ -2949,13 +3011,17 @@ function drawSessionMeta(host) {
   nameEl.value = sessionMeta.name || "";
   briefEl.value = sessionMeta.brief || "";
   const save = async () => {
+    if (running || sendGate || engineSaving || sessionChanging) return;
     const patch = { name: nameEl.value.trim(), brief: briefEl.value.trim() };
     if (patch.name === (sessionMeta.name || "") && patch.brief === (sessionMeta.brief || "")) return;
-    // A thread that was never explicitly created has no id yet; make one now so
-    // the agent exists before its first turn does.
-    if (!sessionId) { const made = await window.crowe.sessions.new(); sessionId = made && made.id ? made.id : sessionId; }
-    const r = await window.crowe.sessions.update(sessionId, patch);
-    if (r && r.ok) { sessionMeta = { name: r.name || "", brief: r.brief || "" }; if (r.id) sessionId = r.id; renderSessions(); }
+    engineSaving = true; drawEnginePicker();
+    try {
+      const sid = await ensureChatSession();
+      const r = await window.crowe.sessions.update(sid, patch);
+      if (!r?.ok) throw new Error(r?.error || "Could not save the conversation.");
+      if (sessionId === sid) { sessionMeta = { ...sessionMeta, ...patch }; sessionId = r.id || sid; renderSessions(); }
+    } catch (e) { setComposerStatus(e.message, "error"); }
+    finally { engineSaving = false; drawEnginePicker(); }
   };
   nameEl.addEventListener("change", save);
   briefEl.addEventListener("change", save);
@@ -2963,10 +3029,22 @@ function drawSessionMeta(host) {
   nameEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nameEl.blur(); } });
   host.appendChild(box);
 }
-async function newChat() {
+async function newChat() { return createChat(); }
+async function createChat(metadata, tier) {
+  if (running || sendGate || engineSaving || sessionChanging) { setComposerStatus("Stop the current turn before changing conversations.", "note"); return; }
+  sessionChanging = true; drawEnginePicker();
+  try {
+  if (tier) await selAutonomy(tier);
   const made = await window.crowe.sessions.new();
+  if (!made?.id) throw new Error("Could not create the conversation.");
   sessionId = made && made.id ? made.id : null;
-  sessionMeta = { name: "", brief: "" };
+  sessionMeta = { name: "", brief: "", model: "" };
+  if (metadata) {
+    const saved = await window.crowe.sessions.update(sessionId, metadata);
+    if (!saved?.ok) throw new Error(saved?.error || "Could not save task details.");
+    sessionMeta = { ...sessionMeta, ...metadata };
+  }
+  drawEnginePicker();
   messages.length = 0;
   resetWelcome();
   input.value = ""; syncComposerInput(); input.focus();
@@ -2974,6 +3052,9 @@ async function newChat() {
   renderSessions();
   sessionCost = 0; runCost = 0;
   $("hud-cost").textContent = fmtCost(0); $("hud-tok").textContent = "0 / 0 tok"; $("hud-tps").textContent = "";
+  return sessionId;
+  } catch (e) { setComposerStatus(e.message, "error"); }
+  finally { sessionChanging = false; drawEnginePicker(); }
 }
 $("rail-new").addEventListener("click", newChat);
 $("sess-new").addEventListener("click", newChat);
@@ -2994,18 +3075,33 @@ async function renderSessions() {
     const sub = s.name && s.title && s.title !== "Untitled" ? `${esc(s.title)} · ${esc(when)}` : esc(when);
     row.innerHTML = `<div class="sess-main"><div class="sess-title">${esc(shown)}</div><div class="sess-when">${sub}</div></div><button class="sess-del" title="Delete">Delete</button>`;
     row.addEventListener("click", (e) => { if (e.target.closest(".sess-del")) return; loadSession(s.id); });
-    row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation(); await window.crowe.sessions.delete(s.id); renderSessions(); });
+    row.querySelector(".sess-del").addEventListener("click", async (e) => { e.stopPropagation();
+      if (running || sendGate || engineSaving || sessionChanging) return;
+      sessionChanging = true; drawEnginePicker();
+      try {
+        const removed = await window.crowe.sessions.delete(s.id);
+        if (removed?.ok === false || removed?.error) throw new Error(removed.error || "Could not delete the conversation.");
+        if (s.id === sessionId) { sessionId = null; sessionMeta = {name:"",brief:"",model:""}; messages.length = 0; resetWelcome(); }
+        renderSessions();
+      } catch (error) { setComposerStatus(error.message, "error"); }
+      finally { sessionChanging = false; drawEnginePicker(); } });
     el.appendChild(row);
   }
 }
 async function loadSession(id) {
+  if (running || sendGate || engineSaving || sessionChanging) { setComposerStatus("Stop the current turn before changing conversations.", "note"); return; }
+  sessionChanging = true; drawEnginePicker();
+  try {
   const r = await window.crowe.sessions.load(id);
-  if (!r || r.error) return;
+  if (!r || r.error) throw new Error(r?.error || "Could not load the conversation.");
   sessionId = id;
-  sessionMeta = { name: r.name || "", brief: r.brief || "" };
+  sessionMeta = { name: r.name || "", brief: r.brief || "", model: r.model || "" };
+  drawEnginePicker();
   messages.length = 0; for (const m of (r.messages || [])) messages.push(m);
   rebuildTranscript();
   renderSessions();
+  } catch (e) { setComposerStatus(e.message, "error"); }
+  finally { sessionChanging = false; drawEnginePicker(); }
 }
 /* A saved session is the messages: user and assistant text. The cards a turn
    drew while it ran (tool cards, approvals, verdicts, the Cloud browser card)
@@ -3015,7 +3111,7 @@ function rebuildTranscript() {
   let any = false;
   for (const m of messages) {
     if (m.role === "user") { addUser(m.content); any = true; }
-    else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
+    else if (m.role === "assistant" && m.content) { const b = addAssistant(); renderText(b, m.content); addEngineReceipt(b, m.engine); attachCopyButton(b.closest(".msg"), m.content); const s = b.querySelector(".said"); if (s) s.classList.remove("streaming"); any = true; }
   }
   if (!any) resetWelcome();
 }
@@ -3388,12 +3484,8 @@ function taskBrief(item, repo, cwd) {
   return `Working in ${repo.full}, checked out at ${cwd}. This session is about ${kind} #${item.number}: ${item.title}`.slice(0, 4000);
 }
 async function startRepoTask(item, repo, tier, cwd) {
-  await selAutonomy(tier);
-  await newChat();
-  if (sessionId) {
-    const r = await window.crowe.sessions.update(sessionId, { name: `${repo.full} #${item.number}`.slice(0, 80), brief: taskBrief(item, repo, cwd) });
-    if (r && r.ok) sessionMeta = { name: r.name || "", brief: r.brief || "" };
-  }
+  const made = await createChat({ name: `${repo.full} #${item.number}`.slice(0, 80), brief: taskBrief(item, repo, cwd) }, tier);
+  if (!made) return;
   const prompt = taskPrompt(item, repo, tier, cwd);
   setSpace("chat");
   input.value = prompt; syncComposerInput();

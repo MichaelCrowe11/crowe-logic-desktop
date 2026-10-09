@@ -834,6 +834,35 @@ test("the verifier is not the model that did the work", () => {
   assert.strictEqual(H.verifierModel(makeCtx(), "fallback"), "fallback");
 });
 
+
+test("explicit engine does not fall back on plan, unknown-model, or provider errors", async () => {
+  for (const error of ["HTTP 403: Model 'gpt-6-astra' requires pro plan or higher", "HTTP 404: unknown model", "HTTP 400: unavailable engine"]) {
+    const asked = [];
+    const ctx = makeCtx();
+    const deps = makeDeps(async (_s,_n,_m,_t,model) => { asked.push(model); return {error}; });
+    deps.model = "gpt-6-astra";
+    const out = await H.runAgent(ctx,[{role:"user",content:"inspect this code"}],deps);
+    assert.deepStrictEqual(asked,["gpt-6-astra"]);
+    assert.strictEqual(out.stop,"error");
+    assert.strictEqual(deps.ofType("plan").length,0);
+  }
+});
+test("explicit engine stays pinned through mutation and verification", async () => {
+  const asked = [];
+  const ctx = makeCtx({verifier:true});
+  ctx.getCatalog = () => [{model:"other-checker",role:"verifier",featured:true}];
+  const deps = makeDeps(async (stage,n,_m,_t,model) => {
+    asked.push([stage,model]);
+    return stage === "verify" ? reply([call("submit_verdict",{status:"pass",summary:"file checked",checks:[]})])
+      : n === 0 ? reply([call("write_file",{path:"selected.txt",content:"selected engine"})]) : {...reply([],"Saved."),reportedModel:model};
+  });
+  deps.model = "gpt-6-astra";
+  const out = await H.runAgent(ctx,[{role:"user",content:"create selected.txt"}],deps);
+  assert(asked.some(([stage])=>stage === "verify"));
+  assert(asked.every(([,model])=>model === "gpt-6-astra"));
+  assert.strictEqual(out.verdict.independent,false);
+  assert(deps.ofType("model_response").some(e=>e.reportedModel === "gpt-6-astra"));
+});
 // ─── Journal ─────────────────────────────────────────────────────────────────
 test("every turn leaves a receipt trail", async () => {
   const ctx = makeCtx({ verifier: false });

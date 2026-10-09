@@ -2154,7 +2154,7 @@ async function buildSystemPrompt(ctx, cap) {
   const tokens = turnTokenCap(cfg);
   const verifies = cfg.verifier !== false && (tier === "edit" || tier === "execute");
   return [
-    "You are Crowe Logic, the operator: an agent working inside the user's workspace with real tools. You act, verify, and report; you do not guess.",
+    "You are the AI engine running inside the Crowe Logic operator harness, with real workspace tools. Crowe Logic and CroweLM are the instruments and tools, not foundation model identities. You act, verify, and report; you do not guess.",
     "",
     "## Environment",
     `- OS: ${process.platform} (${os.release()}), shell: ${process.env.SHELL || "/bin/zsh"}`,
@@ -2566,7 +2566,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       const gate = planGateOf(r.error);
       if (gate) {
         const free = freeModel(ctx.getCatalog ? ctx.getCatalog() : []);
-        if (!ref.planGated && ref.model !== free) {
+        if (!deps.model && !ref.planGated && ref.model !== free) {
           ref.planGated = true; ref.model = free; route.fallback = free;
           deps.send({ type: "plan", model: free, blocked: gate.model, required: gate.required, text: planNotice(free, gate.required) });
           deps.send({ type: "route", expert: opts.stage === "verify" ? "verifier" : "operator", model: free, reason: `${gate.model} needs a ${gate.required} plan, using ${free}` });
@@ -2579,7 +2579,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       }
       // Fallback-first: a routed expert that errors must never sink the turn.
       // Drop to the default model once and retry this same round.
-      if (!ref.fellBack && ref.model !== route.fallback) {
+      if (!deps.model && !ref.fellBack && ref.model !== route.fallback) {
         ref.fellBack = true; ref.model = route.fallback;
         deps.send({ type: "route", expert: opts.stage === "verify" ? "verifier" : "operator", model: ref.model, reason: `${route.model} unavailable, using ${ref.model}` });
         state.journal({ event_type: "MODEL_FALLBACK", tool_id: ref.model, output_summary: summarize(r.error) });
@@ -2589,6 +2589,7 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
       return { text, stop: "error", error: r.error, msgs };
     }
     meterCall(state, deps, r);
+    deps.send({ type: "model_response", requestedModel: ref.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", stage: opts.stage, harness: "desktop" });
     if (r.content) {
       text += (text ? "\n\n" : "") + r.content;
       // streamed marks a burst the deltas already delivered: surfaces keep the
@@ -2698,14 +2699,14 @@ function shouldVerify(cfg, state, deps, stop) {
   return true;
 }
 async function verifyTurn(ctx, deps, route, state, request, claim, executorModel) {
-  const model = verifierModel(ctx, route.fallback);
+  const model = deps.model || verifierModel(ctx, route.fallback);
   // Separate context always; separate weights only when the catalog offers some.
   // Where it cannot, the check is still worth running and the receipt says why it
   // is worth less, rather than implying an independence that is not there.
   const independent = Boolean(executorModel) && model !== executorModel;
   const vroute = { ...route, expert: "verifier", verify: true, fallback: route.fallback };
   state.stage = "verify";
-  deps.send({ type: "route", expert: "verifier", model, reason: "independent check of a mutating turn" });
+  deps.send({ type: "route", expert: "verifier", model, reason: deps.model ? "verification pass with the selected engine" : "independent check of a mutating turn" });
   let verdict = null;
   /* Isolation, and it is the point of the whole pass: the verifier gets the
      request, the list of what changed, and the operator's claim marked as a
@@ -2774,6 +2775,7 @@ async function runAgent(ctx, messages, deps) {
     route.reason = `${route.reason} · pinned ${deps.model}`;
     route.model = deps.model;
   }
+  if (deps.model) { route.fallback = deps.model; delete route.planLimited; }
   // A room hands each seat a tier; the gate reads the lower of it and the app's autonomy.
   if (deps.tier) route.tierCap = deps.tier;
   const state = newState(ctx, cfg, deps, route);

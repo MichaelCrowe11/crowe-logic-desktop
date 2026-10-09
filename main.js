@@ -720,7 +720,7 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
        to keep working against both - so the branch keys on content-type, and
        everything below the branch returns the same shape either way. */
     if (resp.ok && onDelta && String(resp.headers.get("content-type") || "").includes("text/event-stream")) {
-      let content = "", usage = {}, gotModel = useModel, buf = "";
+      let content = "", usage = {}, gotModel = "", buf = "";
       const toolCalls = [];
       const handle = (payload) => {
         if (payload === "[DONE]") return;
@@ -753,13 +753,13 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
           if (line.startsWith("data:")) handle(line.slice(5).trim());
         }
       }
-      return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel,
+      return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel || useModel, reportedModel: gotModel,
                usage, elapsedMs: Date.now() - t0, streamed: content.length };
     }
     const text = await resp.text();
     let data; try { data = JSON.parse(text); } catch { data = { detail: text }; }
     if (!resp.ok) return { error: `HTTP ${resp.status}: ${(data.detail || text)}`.slice(0, 400) };
-    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel,
+    return { content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel, reportedModel: data.model || "",
              usage: data.usage || {}, elapsedMs: Date.now() - t0 };
   } catch (e) { return { error: `gateway unreachable: ${String(e).slice(0, 200)}`, aborted: e && e.name === "AbortError" }; }
 }
@@ -1455,8 +1455,14 @@ function stopAccountRuns() {
   return { ok: true, stopped: agentRuns.size };
 }
 ipcMain.handle("crowe:agent:stop-all", stopAccountRuns);
-ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "" }) => {
+ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed = false, workspaceId = "", role = "", context = "", brief = "", model = "", requestId = "", sessionId = "" }) => {
   messages = sanitizeAgentMessages(messages);
+  model = String(model || "");
+  if (model && !/^[A-Za-z0-9@][A-Za-z0-9_.:/-]{0,159}$/.test(model)) return { done: false, error: "Invalid engine selection.", text: "" };
+  requestId = String(requestId || "").slice(0, 160);
+  const targetSession = sessionId || currentSession || newSessionId();
+  if (id === "main" && !isSafeRecordId(targetSession)) return { done: false, error: "Invalid conversation.", text: "" };
+  if (id === "main" && !currentSession) currentSession = targetSession;
   if (!messages.length) return { done: false, error: "A turn needs a user message", text: "A turn needs a user message" };
   if (licensed) {
     const entitlement = await requireAgentEntitlement(workspaceId);
@@ -1479,18 +1485,20 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       requirePlane: false,
     });
     const meter = { in: 0, out: 0, model: "" };
+    const engine = { requestedModel: model, requestId, responses: [] };
     const send = (ev) => {
+      if (ev && ev.type === "model_response") engine.responses.push({ ...ev });
       if (ev && ev.type === "telemetry") {
         meter.in = Number(ev.promptTokens) || meter.in;
         meter.out = Number(ev.completionTokens) || meter.out;
       }
       // The routed deployment, so the usage row names what answered.
       if (ev && ev.type === "route" && ev.expert !== "verifier" && ev.model) meter.model = String(ev.model);
-      evt.sender.send("crowe:agent:event", { ...ev, agentId: id });
+      evt.sender.send("crowe:agent:event", { ...ev, agentId: id, requestId, sessionId: targetSession });
     };
 
     const turn = await runTurn({
-      plane, cfg, model: "",
+      plane, cfg, model,
       identity: { tenantId: cfg.tenantId || (user && user.email) || "local", workspaceId: String(workspaceId || "") },
       journal: journalWrite,
       run: async ({ ceiling }) => {
@@ -1504,6 +1512,7 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
           send,
           isAborted: () => run.aborted,
           setController: (c) => { run.controller = c; },
+          model,
           role: String(role || ""),
           agentId: String(id || "main"),
           // Per-turn situational state from the renderer - today the cultivation
@@ -1525,9 +1534,9 @@ ipcMain.handle("crowe:agent:run", async (evt, { messages, id = "main", licensed 
       return { done: false, error: turn.decision.reason, text: turn.decision.reason };
     }
     if (id === "main") {
-      try { persistSession([...messages, { role: "assistant", content: turn.text || "" }]); } catch {}
+      try { persistSession([...messages, { role: "assistant", content: turn.text || "", engine }], targetSession); } catch {}
     }
-    return { done: true, text: turn.text || "" };
+    return { done: true, text: turn.text || "", engine };
   } finally {
     agentRuns.delete(id);
     agentMissions.delete(id);
@@ -2027,24 +2036,42 @@ function readSession(id) {
   if (!isSafeRecordId(id)) return null;
   try { return JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); } catch { return null; }
 }
-function persistSession(messages) {
+function persistSession(messages, targetSession) {
   if (!messages || !messages.length) return;
-  if (!currentSession) currentSession = newSessionId();
+  if (!currentSession && !targetSession) currentSession = newSessionId();
+  const sid = targetSession || currentSession;
+  if (!isSafeRecordId(sid)) return;
   const firstUser = messages.find((m) => m.role === "user");
   const title = String(firstUser?.content || "Untitled").replace(/\s+/g, " ").slice(0, 60);
   // Read-merge-write: a session's name and brief are set outside the run and
   // must outlive it. Writing {id, title, messages} alone here would drop them,
   // which is the one way a session could stop being an agent by being used.
-  const prior = readSession(currentSession) || {};
-  fs.writeFileSync(path.join(sessionsDir(), currentSession + ".json"),
-    JSON.stringify({ id: currentSession, title, updatedAt: Date.now(), messages,
-      name: prior.name || "", brief: prior.brief || "" }, null, 2));
+  const prior = readSession(sid) || {};
+  // IPC sanitization intentionally strips non-message fields before inference.
+  // Restore existing receipts from our stored matching history for persistence,
+  // including when the message cap retained only a suffix of that history.
+  const previous = (prior.messages || []).filter(m => m.role !== "assistant" || m.content);
+  const meaningful = messages.filter(m => m.role !== "assistant" || m.content);
+  for (let n = Math.min(previous.length, meaningful.length); n > 0; n--) {
+    const start = previous.length - n;
+    if (!meaningful.slice(0, n).every((m, i) => m.role === previous[start + i].role && m.content === previous[start + i].content)) continue;
+    let i = 0;
+    messages = messages.map(m => {
+      if (m.role === "assistant" && !m.content) return m;
+      const old = i < n ? previous[start + i] : null; i++;
+      return !m.engine && old?.engine ? { ...m, engine: old.engine } : m;
+    });
+    break;
+  }
+  fs.writeFileSync(path.join(sessionsDir(), sid + ".json"),
+    JSON.stringify({ id: sid, title, updatedAt: Date.now(), messages,
+      name: prior.name || "", brief: prior.brief || "", model: prior.model || "" }, null, 2));
 }
 /* What a session may be told about itself, and how much. Allowlisted so
    nothing else rides in through this door; capped so a brief cannot quietly
    become the whole context window. Mirrored in web-bridge.js and
    mobile-bridge.js, which the bridge parity tests hold to this surface. */
-const SESSION_FIELDS = { name: 80, brief: 4000 };
+const SESSION_FIELDS = { name: 80, brief: 4000, model: 160 };
 function sessionPatch(patch) {
   const out = {};
   for (const key of Object.keys(SESSION_FIELDS)) {
@@ -2057,13 +2084,13 @@ function sessionPatch(patch) {
 ipcMain.handle("crowe:sessions:list", () => {
   try {
     return fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json")).map((f) => {
-      try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8")); if (d.kind === "room") return null; return { id: d.id, title: d.title, name: d.name || "", updatedAt: d.updatedAt, current: d.id === currentSession }; } catch { return null; }
+      try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), f), "utf8")); if (d.kind === "room") return null; return { id: d.id, title: d.title, name: d.name || "", model: d.model || "", updatedAt: d.updatedAt, current: d.id === currentSession }; } catch { return null; }
     }).filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
   } catch { return []; }
 });
 ipcMain.handle("crowe:sessions:load", (_e, id) => {
   if (!isSafeRecordId(id)) return { error: "invalid session id" };
-  try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "" }; }
+  try { const d = JSON.parse(fs.readFileSync(path.join(sessionsDir(), id + ".json"), "utf8")); currentSession = id; return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "", model: d.model || "" }; }
   catch (e) { return { error: String(e) }; }
 });
 ipcMain.handle("crowe:sessions:new", () => { currentSession = newSessionId(); return { id: currentSession }; });
@@ -2078,7 +2105,7 @@ ipcMain.handle("crowe:sessions:update", (_e, { id, patch } = {}) => {
   const next = { ...prior, ...fields, id: sid, updatedAt: Date.now() };
   try { fs.writeFileSync(path.join(sessionsDir(), sid + ".json"), JSON.stringify(next, null, 2)); } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
   if (!currentSession) currentSession = sid;
-  return { ok: true, id: sid, name: next.name || "", brief: next.brief || "" };
+  return { ok: true, id: sid, name: next.name || "", brief: next.brief || "", model: next.model || "" };
 });
 ipcMain.handle("crowe:sessions:delete", (_e, id) => {
   if (!isSafeRecordId(id)) return { ok: false, error: "invalid session id" };

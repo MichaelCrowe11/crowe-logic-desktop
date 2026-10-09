@@ -259,4 +259,20 @@ check(!/\sstyle=["']/.test(renderer), "dynamic renderer markup must not contain 
 check(/liftMotionStyle/.test(renderer) && /croweAdoptStyle/.test(renderer), "the logotype's style block must be adopted, not inlined");
 check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not write style attributes, which the policy blocks");
 
+// Exercise the real persistence body after IPC has stripped renderer metadata.
+{
+  const source = mainSrc.slice(mainSrc.indexOf("function persistSession("), mainSrc.indexOf("/* What a session may be told"));
+  let saved;
+  const evidence = {requestedModel:"gpt-6-astra",responses:[{reportedModel:"gpt-6-astra"}]};
+  const history = [{role:"user",content:"one"},{role:"assistant",content:"answer",engine:evidence},
+    {role:"user",content:"cancelled"},{role:"assistant",content:"",engine:{requestedModel:"glm-5.3"}}];
+  const persist = new Function("fs","path","readSession","sessionsDir","isSafeRecordId",
+    'let currentSession="s-fixture"; const newSessionId=()=>"s-new"; '+source+'; return persistSession;')(
+    {writeFileSync:(_path, data)=>{saved=JSON.parse(data);}},path,()=>({messages:history,model:"glm-5.3"}),()=>"/fixture",isSafeRecordId);
+  persist([{role:"user",content:"one"},{role:"assistant",content:"answer"},{role:"user",content:"cancelled"},
+    {role:"user",content:"next"},{role:"assistant",content:"new answer",engine:{requestedModel:"glm-5.3"}}],"s-fixture");
+  check(saved.messages[1].engine.requestedModel === "gpt-6-astra", "an omitted empty turn must not erase earlier engine receipts");
+  check(saved.model === "glm-5.3", "saving history must preserve the conversation's current engine");
+}
+
 console.log(`electron-security: ${checks} checks passed`);

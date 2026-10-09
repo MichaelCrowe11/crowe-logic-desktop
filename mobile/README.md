@@ -62,7 +62,7 @@ that belongs in the lockfile of an app that ships to a store.
 
 **Real.** Chat and the agent loop against the CroweLM gateway, with streaming,
 the same role routing as the desktop (cultivation, coding, reasoning,
-long-context), the model catalog, Crowe ID sign-in, workspace licensing, the
+long-context), a per-conversation Engine selector using the gateway model catalog, Crowe ID sign-in, workspace licensing, the
 cost and token HUD, and provider keys. Since 1.1 the developer chrome (route card, tool cards' bodies,
 colophon, tier picker, copy buttons, HUD strip) is off by default; Settings →
 **Show usage and routing details** turns it on, and a failed turn is one
@@ -87,7 +87,9 @@ held in memory for the session only.
 camera button beside it opens the camera. The picture is downsized on the
 phone (1280 px on the long edge, JPEG) and rides inside the next message as an
 image part; that turn goes to CroweLM Vision whatever the words would have
-routed to, with a brief that asks for what is visible before any verdict on
+routed to when Auto routing is selected. An explicit engine stays selected for
+photos too; an unsupported engine returns its error without switching. The vision
+brief asks for what is visible before any verdict on
 contamination. A free Crowe ID is told Vision needs a plan instead of being
 handed to a text model. Photos are never written into the saved session.
 
@@ -95,6 +97,20 @@ handed to a text model. Photos are never written into the saved session.
 There is no PTY on iOS or Android, no workspace folder to point at, and no way
 to spawn a plugin server. Those panes state that rather than showing an empty
 list, and the Settings rows that configure them are hidden.
+
+## Engine selection
+
+Crowe Logic and CroweLM are the instruments and tools. The model chosen in
+**Engine** runs inside them. The choice belongs to the conversation and is
+restored when it is reopened. Auto routing keeps the existing expert routing.
+Explicit choices are preserved across tool rounds and verification; an unavailable
+or plan-restricted engine returns an error without selecting a different one.
+
+Each answer records its requested engine separately from the model reported by
+the gateway. A missing responder report is shown as unconfirmed. This is gateway
+metadata, not a claim of independently verified upstream identity. The phone uses
+its mobile tool loop; the desktop uses the Node harness. A shared selector does
+not make their tool capabilities identical.
 
 ## Crowe ID sign-in
 

@@ -843,7 +843,7 @@
      `error` object on a frame is the gateway saying the upstream failed after
      the headers were out, and it is surfaced as an error, not as an answer. */
   function sseAccumulator(useModel, onDelta) {
-    let content = "", usage = {}, gotModel = useModel, gatewayError = null;
+    let content = "", usage = {}, gotModel = "", gatewayError = null;
     const toolCalls = [];
     const handle = (payload) => {
       if (payload === "[DONE]") return;
@@ -867,7 +867,7 @@
       feedText(text) { for (const raw of String(text || "").split("\n")) { const line = raw.trim(); if (line.startsWith("data:")) handle(line.slice(5).trim()); } },
       get content() { return content; },
       get error() { return gatewayError; },
-      result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel, usage }; },
+      result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel || useModel, reportedModel: gotModel, usage }; },
     };
   }
   async function gatewayChat(messages, tools, signal, model, onDelta, _retried) {
@@ -879,7 +879,7 @@
     const headers = { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` };
     const body = JSON.stringify({ model: useModel, messages, tools: tools || undefined, stream: onDelta ? true : undefined });
     const done = (data, streamed) => ({
-      content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel,
+      content: data.content || "", tool_calls: data.tool_calls || [], model: data.model || useModel, reportedModel: data.reportedModel ?? data.model ?? "",
       usage: data.usage || {}, elapsedMs: Date.now() - t0, streamed,
     });
 
@@ -1499,7 +1499,7 @@
       ].join("\n")
       : "";
     return [
-      "You are Crowe Logic, running on the user's phone.",
+      "You are the AI engine running inside the Crowe Logic phone instrument. Crowe Logic and CroweLM are the instruments and tools, not foundation model identities.",
       machine,
       attached,
       route.vision ? "\n" + VISION_BRIEF + (isOwner() ? "\n" + VISION_REASONING_BRIEF : "") : "",
@@ -1586,15 +1586,22 @@
     } catch { /* diagnostics never get in the way */ }
   }
   const runs = new Map();
+  const pendingRuns = new Map();
 
-  async function runAgent(messages, id, opts) {
+  async function runAgent(messages, id, opts = {}, accepted) {
     await ready;
-    const run = { aborted: false, controller: null };
+    if (runs.has(id)) return { done: false, error: "This conversation is already running.", text: "" };
+    const selectedModel = String(opts.model || "");
+    if (selectedModel && !/^[A-Za-z0-9@][A-Za-z0-9_.:/-]{0,159}$/.test(selectedModel)) return { done: false, error: "Invalid engine selection.", text: "" };
+    const engine = accepted?.engine || { requestedModel: selectedModel, requestId: opts.requestId || "", responses: [] };
+    const run = accepted || { aborted: false, controller: null };
+    if (run.aborted) return { done: false, stopped: true, text: "", engine };
     runs.set(id, run);
     const send = (ev) => {
+      if (ev.type === "model_response") engine.responses.push({ ...ev, stage: "execute" });
       if (ev && (ev.type === "route" || ev.type === "error" || ev.type === "final" || ev.type === "plan" || ev.type === "photos" || ev.type === "vision_regions"))
         diag("run:" + ev.type, ev.type === "photos" ? { count: (ev.names || []).length } : ev.type === "vision_regions" ? { regions: (ev.regions || []).length } : { text: String(ev.text || ev.note || ev.model || "").slice(0, 200), expert: ev.expert, model: ev.model });
-      emit({ ...ev, agentId: id });
+      emit({ ...ev, agentId: id, requestId: opts.requestId || "", sessionId: opts.sessionId || "" });
     };
     diag("run:start", { id, messages: Array.isArray(messages) ? messages.length : 0, role: String(opts && opts.role || ""), user: currentUser() ? "signed in" : "signed out" });
     const meter = { in: 0, out: 0, ms: 0, cost: 0 };
@@ -1603,6 +1610,10 @@
 
     try {
       const route = routeTurn(messages, String(opts.role || ""));
+      if (selectedModel) {
+        route.model = selectedModel; route.reason = "selected engine";
+        delete route.planLimited;
+      }
       /* A photo changes the turn: it rides inside the user message as an image
          part and the turn goes to CroweLM Vision, whatever the words would have
          routed to. Decided here, before the route is announced, so the rail
@@ -1612,18 +1623,18 @@
       const photos = [...phoneImages.entries()];
       if (photos.length) {
         phoneImages.clear(); phoneNotify();
-        if (planBlocks(VISION_MODEL)) {
-          const need = minPlanFor(VISION_MODEL) || "personal";
-          const err = `Crowe Vision reads photos on the ${need} plan and higher. This Crowe ID is on the ${sessionPlan() || "free"} plan, so the photo was not sent. Sign in with an account that has a plan.`;
+        if (planBlocks(selectedModel || VISION_MODEL)) {
+          const need = minPlanFor(selectedModel || VISION_MODEL) || "personal";
+          const err = `${selectedModel || "Crowe Vision"} reads photos on the ${need} plan and higher. This Crowe ID is on the ${sessionPlan() || "free"} plan, so the photo was not sent. Sign in with an account that has a plan.`;
           send({ type: "error", text: err }); send({ type: "final", note: "vision needs a plan" });
-          return { done: false, error: err, text };
+          return { done: false, error: err, text, engine };
         }
         msgs = messages.slice();
         const i = msgs.map((m) => m && m.role).lastIndexOf("user");
         const ask = String((i >= 0 && msgs[i].content) || "").trim() || PHOTO_DEFAULT_ASK;
         const parts = [{ type: "text", text: ask }, ...photos.map(([, p]) => ({ type: "image_url", image_url: { url: p.dataUrl } }))];
         if (i >= 0) msgs[i] = { ...msgs[i], content: parts }; else msgs.push({ role: "user", content: parts });
-        Object.assign(route, { expert: "vision", model: VISION_MODEL, vision: true,
+        Object.assign(route, { expert: "vision", model: selectedModel || VISION_MODEL, vision: true,
           reason: `vision · ${photos.length === 1 ? "a photo" : photos.length + " photos"} attached` });
         delete route.planLimited;
         send({ type: "photos", names: photos.map(([n]) => n), thumbs: photos.map(([, p]) => p.dataUrl) });
@@ -1644,11 +1655,11 @@
       convo.push(...compact(msgs));
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
+        if (run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text, engine }; }
         if (budget && meter.cost >= budget) {
           send({ type: "budget", spent: meter.cost, ceiling: budget, stage: "answer", stopped: true });
           send({ type: "final", note: "turn budget reached" });
-          return { done: true, text };
+          return { done: true, text, engine };
         }
 
         run.controller = new AbortController();
@@ -1675,12 +1686,12 @@
                  tps: r.elapsedMs ? Math.round(((r.usage?.completion_tokens || 0) / r.elapsedMs) * 1000) : 0,
                  lastMs: r.elapsedMs || 0, cost: meter.cost, budget });
         }
-        if (r.aborted || run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text }; }
+        if (r.aborted || run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text, engine }; }
         if (r.error) {
           // Plan gate: refused for this account's plan. Once, to the free
           // model; a second refusal there is the account's answer.
           const gate = planGateOf(r.error);
-          if (gate && !planGated && route.model !== freeModel() && !route.vision) {
+          if (gate && !selectedModel && !planGated && route.model !== freeModel() && !route.vision) {
             planGated = true; route.model = freeModel();
             send({ type: "plan", model: route.model, blocked: gate.model, required: gate.required, text: planNotice(route.model, gate.required) });
             send({ type: "route", expert: route.expert, model: route.model, reason: `${gate.model} needs a ${gate.required} plan, using ${route.model}` });
@@ -1694,9 +1705,10 @@
           // not the transcript.
           if (said.kind !== "message") { try { console.error("[crowe] turn failed:", said.raw); } catch { /* no console */ } }
           diag("run:error-raw", { kind: said.kind, raw: said.raw });
-          send({ type: "error", text: said.text, kind: said.kind }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: said.text, text };
+          send({ type: "error", text: said.text, kind: said.kind }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: said.text, text, engine };
         }
 
+        send({ type: "model_response", requestedModel: route.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", harness: "mobile" });
         if (r.content) {
           send({ type: "assistant", text: r.content, streamed: Boolean(r.streamed) });
           text += (text ? "\n\n" : "") + r.content;
@@ -1710,12 +1722,12 @@
              transcript fill the silence with a generic line. */
           if (route.vision && !(text || "").trim()) {
             if (!emptyRetried) { emptyRetried = true; diag("run:empty-vision-retry", { round }); continue; }
-            const msg = "CroweLM Vision returned nothing for this photo, twice. Try again in a moment, or a closer photo of the block face in even light.";
+            const msg = `${selectedModel || "The vision engine"} returned nothing for this photo, twice. Try again in a moment, or a closer photo of the block face in even light.`;
             diag("run:empty-vision", { round });
             send({ type: "error", text: msg }); send({ type: "final", note: "empty completion" });
-            return { done: false, error: msg, text };
+            return { done: false, error: msg, text, engine };
           }
-          send({ type: "final", note: "answered" }); return { done: true, text };
+          send({ type: "final", note: "answered" }); return { done: true, text, engine };
         }
 
         // Every call gets an id and every id gets an answer, even when Stop lands
@@ -1739,7 +1751,7 @@
         }
       }
       send({ type: "final", note: `stopped after ${MAX_ROUNDS} rounds` });
-      return { done: true, text };
+      return { done: true, text, engine };
     } finally {
       runs.delete(id);
     }
@@ -1749,20 +1761,30 @@
   let currentSession = null;
   const newSessionId = () => "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   async function sessionIndex() { return (await store.get("sessions")) || []; }
-  async function persistSession(messages) {
+  let sessionWrites = Promise.resolve();
+  function withSessionWrite(write) {
+    const next = sessionWrites.then(write);
+    sessionWrites = next.catch(() => {});
+    return next;
+  }
+  function persistSession(messages, targetSession) {
+    return withSessionWrite(() => writeSession(messages, targetSession));
+  }
+  async function writeSession(messages, targetSession) {
     if (!messages || !messages.length) return;
-    if (!currentSession) currentSession = newSessionId();
+    if (!currentSession && !targetSession) currentSession = newSessionId();
+    const sid = targetSession || currentSession;
     const firstUser = messages.find((m) => m.role === "user");
     const title = String(firstUser?.content || "Untitled").replace(/\s+/g, " ").slice(0, 60);
     const updatedAt = Date.now();
     // Read-merge-write: the name and brief were set outside the run and must
     // outlive it. A write of {id, title, messages} alone would drop them.
-    const prior = (await store.get(`session:${currentSession}`)) || {};
+    const prior = (await store.get(`session:${sid}`)) || {};
     const name = prior.name || "";
     const brief = prior.brief || "";
-    await store.set(`session:${currentSession}`, { id: currentSession, title, updatedAt, messages, name, brief });
-    const index = (await sessionIndex()).filter((s) => s.id !== currentSession);
-    index.unshift({ id: currentSession, title, name, updatedAt });
+    await store.set(`session:${sid}`, { id: sid, title, updatedAt, messages, name, brief, model: prior.model || "" });
+    const index = (await sessionIndex()).filter((s) => s.id !== sid);
+    index.unshift({ id: sid, title, name, model: prior.model || "", updatedAt });
     // 200 threads is more history than a phone has any use for, and Preferences
     // is not a database — trimming here keeps the list read cheap.
     const keep = index.slice(0, 200);
@@ -2022,7 +2044,15 @@
 
     agent: {
       run: async (messages, id = "main", options = {}) => {
+        id = String(id || "main"); options = options || {};
+        if (pendingRuns.has(id)) return { done: false, error: "This conversation is already running.", text: "" };
+        const accepted = { aborted: false, controller: null, engine: {requestedModel:String(options.model || ""), requestId:options.requestId || "", responses:[]} };
+        pendingRuns.set(id, accepted);
+        try {
+        if (Array.isArray(messages)) messages = messages.map(m => ({ ...m }));
         const generation = authGeneration;
+        const targetSession = options.sessionId || currentSession || newSessionId();
+        if (id === "main" && !currentSession) currentSession = targetSession;
         if (options && options.licensed) {
           const gate = await requireAgentEntitlement(options.workspaceId);
           if (!gate.ok) return { done: false, error: gate.error, text: gate.error };
@@ -2033,24 +2063,25 @@
         if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
         // Saved before the turn, so a phone that iOS kills mid-reply still has
         // the question when it comes back.
-        if (id === "main") { try { await persistSession(messages); } catch { /* not worth failing a turn over */ } }
+        if (id === "main") { try { await persistSession(messages, targetSession); } catch { /* not worth failing a turn over */ } }
         if (generation !== authGeneration) return { done: false, error: "Signed out before the turn started.", text: "" };
         let result;
         try {
-          result = await runAgent(messages.slice(), String(id || "main"), options || {});
+          result = await runAgent(messages.slice(), String(id || "main"), { ...options, sessionId: targetSession }, accepted);
         } catch (e) {
           const text = `This turn hit an error and stopped: ${String(e && e.message || e).slice(0, 200)}`;
           diag("run:threw", text);
-          emit({ type: "error", text, agentId: String(id || "main") });
-          emit({ type: "final", note: "error", agentId: String(id || "main") });
-          result = { done: false, error: text, text: "" };
+          emit({ type: "error", text, agentId: String(id || "main"), requestId: options.requestId || "", sessionId: targetSession });
+          emit({ type: "final", note: "error", agentId: String(id || "main"), requestId: options.requestId || "", sessionId: targetSession });
+          result = { done: false, error: text, text: "", engine: accepted.engine };
         }
-        if (id === "main" && generation === authGeneration) { try { await persistSession([...messages, { role: "assistant", content: result.text || "" }]); } catch { /* history is not worth failing a turn over */ } }
-        return { done: Boolean(result.done), text: result.text || "", error: result.error };
+        if (id === "main" && generation === authGeneration) { try { await persistSession([...messages, { role: "assistant", content: result.text || "", engine: result.engine }], targetSession); } catch { /* history is not worth failing a turn over */ } }
+        return { done: Boolean(result.done), text: result.text || "", error: result.error, engine: result.engine, stopped: result.stopped };
+        } finally { pendingRuns.delete(id); }
       },
       // A question about a turn that has stopped is answered "no" for it.
-      stop: (id = "main") => { const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true }; },
-      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true, stopped: runs.size }; },
+      stop: (id = "main") => { const pending = pendingRuns.get(id); if (pending) pending.aborted = true; const r = runs.get(id); if (r) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true }; },
+      stopAll: () => { window.CroweLocalRooms?.stopAll(); for (const pending of pendingRuns.values()) pending.aborted = true; for (const r of runs.values()) { r.aborted = true; try { r.controller?.abort(); } catch { /* already finished */ } } dismissApprovals(); return { ok: true, stopped: runs.size }; },
       onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
     },
     chat: async (messages) => gatewayChat(messages, null, undefined, undefined, undefined),
@@ -2088,6 +2119,7 @@
             Promise.resolve(revoke).catch(() => {});
           } catch { /* a missing native network plugin must not prevent local sign-out */ }
         }
+        await sessionWrites;
         for (const id of (await sessionIndex()).map((x) => x.id)) { try { await store.remove(`session:${id}`); } catch { /* gone */ } }
         try { await store.remove("sessions"); await store.remove("diag"); } catch { /* gone */ }
         diagBuf = null;
@@ -2433,33 +2465,33 @@
         const d = await store.get(`session:${id}`);
         if (!d) return { error: "no such session" };
         currentSession = id;
-        return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "" };
+        return { messages: d.messages || [], title: d.title, name: d.name || "", brief: d.brief || "", model: d.model || "" };
       },
       new: () => { currentSession = newSessionId(); return { id: currentSession }; },
       // Name and brief for a session, before or after it has messages. Same
       // allowlist and caps as main.js and web-bridge.js, which the parity test
       // holds; a session that is only an id so far gets a record here.
-      update: async (id, patch) => {
+      update: (id, patch) => withSessionWrite(async () => {
         const sid = String(id || currentSession || newSessionId());
         const fields = {};
-        for (const [key, cap] of [["name", 80], ["brief", 4000]]) {
+        for (const [key, cap] of [["name", 80], ["brief", 4000], ["model", 160]]) {
           if (patch && Object.prototype.hasOwnProperty.call(patch, key)) fields[key] = String(patch[key] == null ? "" : patch[key]).slice(0, cap);
         }
         const prior = (await store.get(`session:${sid}`)) || { id: sid, title: "Untitled", updatedAt: Date.now(), messages: [] };
         const next = { ...prior, ...fields, id: sid, updatedAt: Date.now() };
-        await store.set(`session:${sid}`, next);
+        if (!await store.set(`session:${sid}`, next)) return { ok: false, error: "Could not save this conversation." };
         const index = (await sessionIndex()).filter((s) => s.id !== sid);
-        index.unshift({ id: sid, title: next.title, name: next.name || "", updatedAt: next.updatedAt });
+        index.unshift({ id: sid, title: next.title, name: next.name || "", model: next.model || "", updatedAt: next.updatedAt });
         await store.set("sessions", index.slice(0, 200));
         if (!currentSession) currentSession = sid;
-        return { ok: true, id: sid, name: next.name || "", brief: next.brief || "" };
-      },
-      delete: async (id) => {
+        return { ok: true, id: sid, name: next.name || "", brief: next.brief || "", model: next.model || "" };
+      }),
+      delete: (id) => withSessionWrite(async () => {
         await store.remove(`session:${id}`);
         await store.set("sessions", (await sessionIndex()).filter((s) => s.id !== id));
         if (currentSession === id) currentSession = null;
         return { ok: true };
-      },
+      }),
     },
 
     grow: {
@@ -2562,8 +2594,8 @@
         if (!catalogCache.models.length) {
           const cached = await store.get("catalog");
           if (cached && Array.isArray(cached.models)) catalogCache = cached;
-          fetchCatalog();
-        } else if (Date.now() - catalogCache.at > 3600000) fetchCatalog();
+          await fetchCatalog();
+        } else if (Date.now() - catalogCache.at > 3600000) await fetchCatalog();
         return { models: catalogCache.models, at: catalogCache.at, resolved: resolveRoles(), defaultModel: config.model || "crowelm" };
       },
     },

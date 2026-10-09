@@ -97,9 +97,9 @@ const PRELUDE = `
     };
     // gapMs spaces the events out, for a check that has to look at the turn
     // while it is still running rather than at what it left behind.
-    window.crowe.agent.run = async (messages, id) => {
+    window.crowe.agent.run = async (messages, id, options = {}) => {
       for (const ev of script(id || "main")) {
-        listeners.slice().forEach((f) => f({ agentId: id || "main", ...ev }));
+        listeners.slice().forEach((f) => f({ agentId: id || "main", requestId: options.requestId, sessionId: options.sessionId, ...ev }));
         await new Promise((r) => setTimeout(r, gapMs));
       }
       return {};
@@ -311,18 +311,15 @@ const tests = [
     expect: { wideOk: true, wideSameRow: true, narrowOk: true, narrowSameRow: false, narrowStretched: true, badgeInCaption: true },
   },
   {
-    // The label was a painted string for a long time. It must follow the
-    // configured model at rest and the router's choice during a turn, and an id
-    // the catalog does not know must still be shown rather than swallowed.
-    name: "the model label follows the configured model at rest and the routed model during a turn",
-    body: `const badge = $("model-badge");
-      await refreshModelBadge(await window.crowe.getConfig());
-      const rest = badge.textContent;
+    name: "the engine selector owns the saved choice and route labels are explicitly requested",
+    body: `const badge = $("model-badge"), picker = $("engine-select");
+      refreshModelBadge(await window.crowe.getConfig());
+      setModelBadge(""); const rest = badge.textContent;
       setModelBadge("zz-unknown-model"); const routed = badge.textContent;
       setModelBadge(""); const back = badge.textContent;
-      return { restNamed: rest.length > 0 && rest === configuredModelLabel, routed, back: back === rest,
+      return { savedChoice: picker.value === (sessionMeta.model || ""), rest, routed, back,
         inCaption: !!badge.closest(".composer-caption"), titled: badge.title.length > 0 };`,
-    expect: { restNamed: true, routed: "zz-unknown-model", back: true, inCaption: true, titled: true },
+    expect: { savedChoice:true, rest:"", routed:"Requested: zz-unknown-model", back:"", inCaption:true, titled:true },
   },
   {
     // Ready is the resting state and is not drawn; running, error and note are.

@@ -217,6 +217,86 @@ function methodPaths(surface) {
      error anyone sees. */
 
   console.log("agent loop");
+  await check("an explicit engine survives tool rounds, session changes, and reload with request evidence", async () => {
+    const bodies = [], events = [];
+    let release, entered; const ready = new Promise(r => entered = r);
+    const bridge = loadMobileSurface(async (url, init = {}) => {
+      if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status:200 });
+      const body = JSON.parse(init.body); bodies.push(body);
+      if (bodies.length === 1) { entered(); await new Promise(r => release = r); }
+      const data = bodies.length === 1 ? { model:"gpt-6-astra", content:"", tool_calls:[{ id:"clock", type:"function", function:{ name:"fixture_read", arguments:"{}" } }] }
+        : { model:"gpt-6-astra", content:"The fixture says noon." };
+      return new Response(JSON.stringify(data), { status:200, headers:{"content-type":"application/json"} });
+    });
+    loadMobileSurface.lastWindow.croweConnectors = {
+      tools: async () => [{type:"function",function:{name:"fixture_read",parameters:{type:"object",properties:{}}}}],
+      owns: n => n === "fixture_read", act: async () => "noon"
+    };
+    await bridge.setConfig({ token:"header."+Buffer.from('{"email":"grower@example.com","tier":"pro","exp":9999999999}').toString("base64")+".sig" });
+    const a = await bridge.sessions.new();
+    await bridge.sessions.update(a.id, { model:"gpt-6-astra", name:"First", brief:"Be precise." });
+    bridge.agent.onEvent(e => events.push(e));
+    const run = bridge.agent.run([{role:"user",content:"Inspect the cultivation fixture."}], "main", {model:"gpt-6-astra",sessionId:a.id,requestId:"request-a"});
+    await ready;
+    const b = await bridge.sessions.new(); await bridge.sessions.update(b.id, {model:"glm-5.3",name:"Second"});
+    release(); const result = await run;
+    assert(result.done && bodies.length === 2, "tool round did not complete");
+    assert(bodies.every(b => b.model === "gpt-6-astra"), "specialist routing changed the selected engine");
+    assert(bodies[1].messages.some(m => m.role === "tool" && m.tool_call_id === "clock" && m.content === "noon"), "tool result did not reach the chosen engine");
+    assert(events.every(e => e.requestId === "request-a" && e.sessionId === a.id), "event lost its request identity");
+    const first = await bridge.sessions.load(a.id), second = await bridge.sessions.load(b.id);
+    assert(first.model === "gpt-6-astra" && first.name === "First" && first.brief === "Be precise.", "session choice or metadata was lost");
+    assert(first.messages.at(-1).engine.responses.at(-1).reportedModel === "gpt-6-astra", "responder evidence was not saved");
+    assert(second.model === "glm-5.3" && second.messages.length === 0, "late completion overwrote another conversation");
+    delete loadMobileSurface.lastWindow.croweConnectors;
+  });
+  await check("explicit plan rejection and unavailable engines never fall back; missing responder stays unknown", async () => {
+    for (const status of [403,404,503,200]) {
+      const asked = [];
+      const bridge = loadMobileSurface(async (url, init = {}) => {
+        if (!String(url).includes("/api/gateway/chat")) return new Response("{}",{status:200});
+        asked.push(JSON.parse(init.body).model);
+        return new Response(JSON.stringify(status === 200 ? {content:"hello"} : {detail:status === 403 ? "Model 'gpt-6-astra' requires pro plan or higher" : "unavailable"}),{status,headers:{"content-type":"application/json"}});
+      });
+      await bridge.setConfig({token:"header."+Buffer.from('{"email":"grower@example.com","exp":9999999999}').toString("base64")+".sig"});
+      const out = await bridge.agent.run([{role:"user",content:"hello"}],"main",{model:"gpt-6-astra",requestId:"test"});
+      assert(asked.length === 1 && asked[0] === "gpt-6-astra", `${status}: engine was substituted`);
+      assert(out.done === (status === 200), `${status}: wrong outcome`);
+      if (status === 200) assert(out.engine.responses[0].reportedModel === "", "request was fabricated into responder evidence");
+    }
+  });
+
+  await check("Stop during the initial save prevents the selected engine from starting", async () => {
+    const prefs = new Map(); let release, entered, calls = 0;
+    const began = new Promise(r => { entered = r; });
+    const held = new Promise(r => { release = r; });
+    const bridge = loadMobileSurface(async url => {
+      if (String(url).includes("/api/gateway/chat")) calls++;
+      return new Response("{}",{status:200});
+    },{Plugins:{Preferences:{
+      get:async ({key}) => ({value:prefs.get(key)||null}),
+      set:async ({key,value}) => { if (key.startsWith("session:") && !prefs.has(key)) { entered(); await held; } prefs.set(key,value); },
+      remove:async ({key}) => {prefs.delete(key);}
+    }}});
+    await bridge.setConfig({token:"a.b.c"});
+    const pending = bridge.agent.run([{role:"user",content:"hello"}],"main",{model:"gpt-6-astra"});
+    await began; bridge.agent.stop(); release();
+    const out = await pending;
+    assert(out.stopped && !out.done && calls === 0, "Stop during preparation still started a request");
+    const next = await bridge.agent.run([{role:"user",content:"next"}],"main",{model:"gpt-6-astra"});
+    assert(calls === 1 && !next.stopped, "cancelled preparation stranded the run lock");
+  });
+  await check("an empty photo reply preserves both responder receipts on disk", async () => {
+    const bridge = loadMobileSurface(async url => new Response(JSON.stringify(String(url).includes("/api/gateway/chat") ? {model:"gpt-6-astra",content:""} : {}),{headers:{"content-type":"application/json"}}));
+    await bridge.setConfig({token:"header."+Buffer.from('{"email":"fixture@example.com","tier":"pro","exp":9999999999}').toString("base64")+".sig"});
+    loadMobileSurface.lastWindow.crowePhone.addImage("block.jpg","data:image/jpeg;base64,/9j/AAAA");
+    const session = await bridge.sessions.new();
+    const out = await bridge.agent.run([{role:"user",content:"Describe this photo"}],"main",{model:"gpt-6-astra",sessionId:session.id});
+    const saved = await bridge.sessions.load(session.id);
+    assert(!out.done && out.engine.responses.length === 2, "empty photo discarded collected evidence");
+    assert(saved.messages.at(-1).engine.responses.length === 2, "photo evidence was not durable");
+  });
+
   await check("a plan-gate 403 falls to the free model once, with a plain notice and no error", async () => {
     const asked = [];
     const bridge = loadMobileSurface(async (url, init = {}) => {

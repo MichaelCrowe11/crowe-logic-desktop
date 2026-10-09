@@ -478,8 +478,9 @@
     installSpaces: null,
     agent: {
       onEvent(fn) { agentListeners.push(fn); return () => { agentListeners = agentListeners.filter((f) => f !== fn); }; },
-      async run(messages, id) {
-        const emit = emitAs(id || "main");
+      async run(messages, id, options = {}) {
+        const rawEmit = emitAs(id || "main");
+        const emit = ev => rawEmit({ ...ev, requestId:options.requestId || "", sessionId:options.sessionId || "" });
         const last = (messages || []).filter((m) => m.role === "user").pop();
         const asked = (last && last.content) || "";
         // The compose brief gets a compose answer. Without this branch the shim
@@ -628,6 +629,7 @@
         { id: "c", title: "Wire the catalog into per-turn routing", updatedAt: Date.now() - 86400e3, current: false },
         { id: "d", title: "Design the four-space shell", updatedAt: Date.now() - 3 * 86400e3, current: false },
       ]; },
+      async update(id, patch) { return { ok:true, id, ...patch }; },
       async load() { return { messages: [] }; }, async new() { return { id: "x" }; }, async delete() { return { ok: true }; },
     },
     /* The phone companion. Reported as off and refusing to start: the preview
