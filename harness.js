@@ -2496,16 +2496,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    into a failed turn. Backoff with jitter first, fall back second. */
 async function chatWithRetry(deps, msgs, tools, model, signal, state, onDelta) {
   for (let attempt = 0; ; attempt++) {
-    let sent = 0;
-    const sink = onDelta ? (chunk) => { sent += String(chunk).length; onDelta(chunk); } : undefined;
+    let partial = "";
+    const sink = onDelta ? (chunk) => { partial += String(chunk); onDelta(chunk); } : undefined;
     const r = await deps.gatewayChat(msgs, tools, signal, model, sink);
-    /* A failed call that already streamed has shown the user a half-sentence.
-       Whatever happens next - a retry here, a model fallback in the caller -
-       repeats the answer from the top, so the partial has to be taken back
-       first or the transcript keeps attempt one's fragment ahead of attempt
-       two's whole. An abort is the exception: the operator stopped it, and the
-       fragment plus "stopped" is the honest record of that. */
-    if (r && r.error && !r.aborted && sent) deps.send({ type: "stream_reset", chars: sent });
+    // Visible output belongs to this attempt. Preserve it and stop on failure;
+    // retrying would replace evidence and could repeat an already executed turn.
+    if (r && (r.error || r.aborted) && (partial || r.content))
+      return { ...r, content: r.content || partial, streamed: partial.length || r.streamed, partial: true };
     if (!r || !r.error || r.aborted) return r;
     if (attempt >= TRANSIENT_RETRIES || !isTransient(r.error)) return r;
     const wait = Math.round(RETRY_BASE_MS * 2 ** attempt * (1 + Math.random()));
@@ -2558,6 +2555,14 @@ async function runBlock(ctx, msgs, deps, route, state, opts) {
     msgs = compactMessages(msgs, state);
     const r = await chatWithRetry(deps, msgs, opts.tools, ref.model, controller.signal, state,
       opts.silent ? undefined : (chunk) => deps.send({ type: "assistant_delta", text: chunk }));
+    if (r && r.partial) {
+      if (r.content) text += (text ? "\n\n" : "") + r.content;
+      meterCall(state, deps, r);
+      deps.send({ type: "model_response", requestedModel: ref.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", stage: opts.stage, harness: "desktop" });
+      if (r.aborted) { stop = "aborted"; break; }
+      deps.send({ type: "error", text: r.error });
+      return { text, stop: "error", error: r.error, msgs };
+    }
     if (r && r.aborted) { stop = "aborted"; break; }
     if (r.error) {
       // Plan gate: the gateway refused the model for this account's plan. The

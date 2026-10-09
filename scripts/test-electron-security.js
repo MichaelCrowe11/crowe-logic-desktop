@@ -275,4 +275,32 @@ check(!/\.setAttribute\(\s*["']style["']/.test(renderer), "the renderer must not
   check(saved.model === "glm-5.3", "saving history must preserve the conversation's current engine");
 }
 
-console.log(`electron-security: ${checks} checks passed`);
+(async () => {
+  const source = mainSrc.slice(mainSrc.indexOf("async function gatewayChat("), mainSrc.indexOf("// ─── MCP client:"));
+  for (const [body, error] of [
+    ['data: {"model":"kimi-k3","choices":[{"delta":{"content":"part"}}]}\n', true],
+    ['data: {"error":{"message":"Interrupted"}}\ndata: [DONE]\n', true],
+    ['data: {"choices":[{"delta":{"content":"complete"}}]}\ndata: [DONE]', false],
+  ]) {
+    let calls = 0;
+    const gateway = new Function("loadConfig", "fetch", "refreshToken", "TextDecoder", source + "; return gatewayChat;")(
+      () => ({token:"fixture",baseUrl:"https://example.invalid",model:"default"}),
+      async (_url, init) => { calls++; check(JSON.parse(init.body).model === "kimi-k3", "stream failure must keep the selected engine");
+        return new Response(body, {status:200,headers:{"content-type":"text/event-stream"}}); },
+      async () => null, TextDecoder);
+    const out = await gateway([{role:"user",content:"hello"}],null,false,undefined,"kimi-k3",() => {});
+    check(Boolean(out.error) === error, "desktop must distinguish interrupted and completed streams");
+    check(calls === 1, "a stream failure must never silently retry another engine");
+  }
+  {
+    let reads=0;
+    const gateway = new Function("loadConfig", "fetch", "refreshToken", "TextDecoder", source + "; return gatewayChat;")(
+      () => ({token:"fixture",baseUrl:"https://example.invalid"}),
+      async () => ({ok:true,headers:new Headers({"content-type":"text/event-stream"}),body:{getReader:()=>({
+        async read() { if (reads++) throw new Error("socket closed"); return {done:false,value:new TextEncoder().encode('data: {"model":"kimi-k3","choices":[{"delta":{"content":"retained"}}]}\n')}; }, releaseLock() {}
+      })}}), async () => null, TextDecoder);
+    const out=await gateway([],null,false,undefined,"kimi-k3",()=>{});
+    check(Boolean(out.error) && out.content === "retained" && out.reportedModel === "kimi-k3", "a broken socket preserves partial text and responder evidence");
+  }
+  console.log(`electron-security: ${checks} checks passed`);
+})().catch(error => { console.error(error); process.exitCode = 1; });

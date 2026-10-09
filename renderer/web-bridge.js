@@ -578,15 +578,17 @@
     let usage = null;
     let gotModel = "";
     let text = "";
+    let completed = false;
 
     const frame = (line) => {
       if (!line.startsWith("data:")) return;
       const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") return;
+      if (payload === "[DONE]") { completed = true; return; }
+      if (!payload) return;
       let chunk;
-      try { chunk = JSON.parse(payload); } catch (_) { return; }
+      try { chunk = JSON.parse(payload); } catch (_) { throw new Error("The response contained an unreadable stream frame."); }
       if (chunk.model) gotModel = chunk.model;
-      if (isolated && chunk.error) throw new Error("Council model stream failed.");
+      if (chunk.error) throw new Error(isolated ? "Council model stream failed." : String(chunk.error.message || chunk.error));
       if (chunk.usage) usage = chunk.usage;
       const delta = ((chunk.choices || [])[0] || {}).delta || {};
       if (delta.content) {
@@ -619,6 +621,7 @@
       }
     }
 
+    if (!completed) throw new Error("The response ended before completion. Try again.");
     return {
       text, model: gotModel,
       usage: usage

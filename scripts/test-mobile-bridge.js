@@ -746,6 +746,31 @@ function methodPaths(surface) {
     return "six-second reply survives the iOS request budget; native SSE body is read";
   });
 
+  await check("a truncated stream keeps its partial answer and engine receipt but fails the turn", async () => {
+    const bridge = loadMobileSurface(async (url) => String(url).includes("/api/gateway/chat")
+      ? new Response('data: {"model":"kimi-k3","choices":[{"delta":{"content":"Partial answer"}}]}\n', { status: 200, headers: { "content-type": "text/event-stream" } })
+      : new Response("{}", { status: 200 }));
+    await bridge.setConfig({ token: "a.b.c" });
+    const made = await bridge.sessions.new();
+    await bridge.sessions.update(made.id, { model: "kimi-k3" });
+    const result = await bridge.agent.run([{ role: "user", content: "hello" }], "main", { model: "kimi-k3", sessionId: made.id, requestId: "truncated-test" });
+    assert(result.done === false && result.error && result.text === "Partial answer", "truncated response was completed or lost");
+    assert(result.engine.responses[0]?.reportedModel === "kimi-k3", "partial engine receipt was lost");
+    const restored = await bridge.sessions.load(made.id);
+    assert(restored.messages.at(-1).content === "Partial answer", "partial answer was not persisted");
+    return "partial text and receipt kept; no false completion";
+  });
+
+  await check("a stream completion marker without a trailing newline is accepted", async () => {
+    const bridge = loadMobileSurface(async (url) => String(url).includes("/api/gateway/chat")
+      ? new Response('data: {"choices":[{"delta":{"content":"Complete"}}]}\ndata: [DONE]', { status: 200, headers: { "content-type": "text/event-stream" } })
+      : new Response("{}", { status: 200 }));
+    await bridge.setConfig({ token: "a.b.c" });
+    const result = await bridge.agent.run([{ role: "user", content: "hello" }], "main", { model: "kimi-k3" });
+    assert(result.done && result.text === "Complete", "final frame without newline was dropped");
+    return "EOF residue handled";
+  });
+
   await check("reminders schedule through the system and come back in order; the camera roll keeps a verdict per lot", async () => {
     const scheduled = [], cancelled = []; const prefs = new Map();
     const cap = { Plugins: {

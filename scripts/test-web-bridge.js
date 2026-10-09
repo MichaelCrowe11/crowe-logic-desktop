@@ -135,6 +135,21 @@ const okText = (body) => async () => new Response(body, { status: 200 });
   console.log("web bridge");
   const desktop = loadPreloadSurface();
 
+  await check("main chat surfaces stream errors and premature EOF", async () => {
+    for (const body of [
+      'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+      'data: {"error":{"message":"Stream interrupted"}}\ndata: [DONE]\n',
+    ]) {
+      const { crowe: web } = loadWebSurface({ fetchImpl: async (url) => String(url).includes("/chat/completions")
+        ? new Response(body, { status: 200 }) : new Response("{}", { status: 200 }) });
+      let failed = false;
+      try { await web.agent.run([{ role: "user", content: "hello" }]); }
+      catch (e) { failed = /completion|interrupted/.test(e.message); }
+      assert(failed, "broken main-chat stream was treated as success");
+    }
+    return "error event and EOF both fail visibly";
+  });
+
   await check("every desktop bridge method exists on the web bridge", () => {
     const { crowe: web } = loadWebSurface();
     const missing = methodPaths(desktop).filter((p) => {

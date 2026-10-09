@@ -843,11 +843,12 @@
      `error` object on a frame is the gateway saying the upstream failed after
      the headers were out, and it is surfaced as an error, not as an answer. */
   function sseAccumulator(useModel, onDelta) {
-    let content = "", usage = {}, gotModel = "", gatewayError = null;
+    let content = "", usage = {}, gotModel = "", gatewayError = null, completed = false;
     const toolCalls = [];
     const handle = (payload) => {
-      if (payload === "[DONE]") return;
-      let d; try { d = JSON.parse(payload); } catch { return; }
+      if (payload === "[DONE]") { completed = true; return; }
+      if (!payload) return;
+      let d; try { d = JSON.parse(payload); } catch { gatewayError = "The response contained an unreadable stream frame."; return; }
       if (d && d.error) { gatewayError = d.error.type ? `${d.error.type}: ${d.error.message || ""}`.trim() : String(d.error.message || d.error); return; }
       const delta = (d.choices && d.choices[0] && d.choices[0].delta) || d.delta || d;
       const chunk = typeof delta.content === "string" ? delta.content : "";
@@ -866,7 +867,7 @@
       handle,
       feedText(text) { for (const raw of String(text || "").split("\n")) { const line = raw.trim(); if (line.startsWith("data:")) handle(line.slice(5).trim()); } },
       get content() { return content; },
-      get error() { return gatewayError; },
+      get error() { return gatewayError || (!completed ? "The response ended before completion. Try again." : null); },
       result() { return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel || useModel, reportedModel: gotModel, usage }; },
     };
   }
@@ -904,7 +905,7 @@
       catch {
         if (/^\s*data:/m.test(String(r.text || ""))) {
           const acc = sseAccumulator(useModel, null); acc.feedText(r.text);
-          if (acc.error) return { error: `HTTP ${r.status}: ${acc.error}`.slice(0, 400), content: acc.content };
+          if (acc.error) return { ...acc.result(), error: `HTTP ${r.status}: ${acc.error}`.slice(0, 400) };
           data = acc.result();
         } else data = { detail: r.text };
       }
@@ -925,7 +926,7 @@
       try {
         for (;;) {
           const { done: eof, value } = await reader.read();
-          if (eof) break;
+          if (eof) { buf += dec.decode(); acc.feedText(buf); break; }
           buf += dec.decode(value, { stream: true });
           let i;
           while ((i = buf.indexOf("\n")) >= 0) {
@@ -935,11 +936,11 @@
         }
       } catch (e) {
         diag("net:stream-broke", { name: e && e.name, message: String(e && e.message || e).slice(0, 160), got: acc.content.length });
-        if (e && e.name === "AbortError") return { error: "stopped", aborted: true, content: acc.content, streamed: acc.content.length };
-        return { error: `stream broke: ${String(e).slice(0, 160)}`, content: acc.content, streamed: acc.content.length };
+        if (e && e.name === "AbortError") return { ...acc.result(), error: "stopped", aborted: true, streamed: acc.content.length };
+        return { ...acc.result(), error: `stream broke: ${String(e).slice(0, 160)}`, streamed: acc.content.length };
       }
       diag("net:stream-end", { chars: acc.content.length, error: acc.error || "", ms: Date.now() - t0 });
-      if (acc.error) return { error: `gateway: ${acc.error}`.slice(0, 400), content: acc.content, streamed: acc.content.length };
+      if (acc.error) return { ...acc.result(), error: `gateway: ${acc.error}`.slice(0, 400), streamed: acc.content.length };
       return { ...acc.result(), elapsedMs: Date.now() - t0, streamed: acc.content.length };
     }
 
@@ -1686,6 +1687,8 @@
                  tps: r.elapsedMs ? Math.round(((r.usage?.completion_tokens || 0) / r.elapsedMs) * 1000) : 0,
                  lastMs: r.elapsedMs || 0, cost: meter.cost, budget });
         }
+        if ((r.error || r.aborted || run.aborted) && r.content) text += (text ? "\n\n" : "") + r.content;
+        if (r.reportedModel) send({ type: "model_response", requestedModel: route.model, reportedModel: r.reportedModel, upstreamModel: r.upstreamModel || "", harness: "mobile" });
         if (r.aborted || run.aborted) { send({ type: "stopped" }); send({ type: "final", note: "stopped" }); return { done: false, text, engine }; }
         if (r.error) {
           // Plan gate: refused for this account's plan. Once, to the free
@@ -1708,7 +1711,7 @@
           send({ type: "error", text: said.text, kind: said.kind }); send({ type: "final", note: "the gateway call failed" }); return { done: false, error: said.text, text, engine };
         }
 
-        send({ type: "model_response", requestedModel: route.model, reportedModel: r.reportedModel || "", upstreamModel: r.upstreamModel || "", harness: "mobile" });
+        if (!r.reportedModel) send({ type: "model_response", requestedModel: route.model, reportedModel: "", upstreamModel: r.upstreamModel || "", harness: "mobile" });
         if (r.content) {
           send({ type: "assistant", text: r.content, streamed: Boolean(r.streamed) });
           text += (text ? "\n\n" : "") + r.content;

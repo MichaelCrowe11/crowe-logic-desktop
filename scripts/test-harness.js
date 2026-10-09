@@ -1014,23 +1014,31 @@ test("a streamed burst arrives as deltas with a receipt marked streamed", async 
   assert.strictEqual(bursts[0].streamed, true);
   assert.strictEqual(bursts[0].text, "Hello world.");
 });
-test("a retry after a partial stream takes the fragment back first", async () => {
+test("an interrupted stream preserves its text and engine without retry", async () => {
   const ctx = makeCtx();
   let calls = 0;
   const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
-    calls += 1;
-    if (calls === 1) { onDelta("half a sen"); return { error: "HTTP 502: bad gateway" }; }
-    onDelta("the whole answer.");
-    return { content: "the whole answer.", tool_calls: [], usage: {}, elapsedMs: 4, streamed: 17 };
+    calls++;
+    onDelta("half a sentence");
+    return { error: "HTTP 502: bad gateway", reportedModel:"kimi-k3", usage:{prompt_tokens:9,completion_tokens:3} };
   });
   const out = await H.runAgent(ctx, [{ role: "user", content: "hi" }], deps);
-  assert.strictEqual(out.text, "the whole answer.");
-  const reset = deps.ofType("stream_reset")[0];
-  assert.ok(reset, "a stream_reset must be sent for the partial");
-  assert.strictEqual(reset.chars, 10);
-  const seq = deps.events.filter((e) => e.type === "assistant_delta" || e.type === "stream_reset").map((e) => e.type);
-  assert.ok(seq.indexOf("stream_reset") < seq.lastIndexOf("assistant_delta"),
-    "the reset precedes the retry's deltas, or the fragment stays on screen ahead of the whole");
+  assert.strictEqual(out.text, "half a sentence");
+  assert.strictEqual(out.stop, "error");
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(deps.ofType("stream_reset").length, 0);
+  assert.strictEqual(deps.ofType("model_response")[0].reportedModel, "kimi-k3");
+  assert.strictEqual(deps.ofType("telemetry")[0].completionTokens, 3);
+});
+test("stopping a stream preserves its partial text and responder", async () => {
+  const deps = makeDeps(async (_s, _n, _m, _t, _model, onDelta) => {
+    onDelta("Stopped answer");
+    return { error:"stopped", aborted:true, reportedModel:"kimi-k3" };
+  });
+  const out = await H.runAgent(makeCtx(), [{role:"user",content:"hi"}], deps);
+  assert.strictEqual(out.text,"Stopped answer");
+  assert.strictEqual(out.stop,"aborted");
+  assert.strictEqual(deps.ofType("model_response")[0].reportedModel,"kimi-k3");
 });
 
 // ─── Authoring workflows from chat ───────────────────────────────────────────

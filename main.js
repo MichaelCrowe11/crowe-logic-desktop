@@ -720,11 +720,13 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
        to keep working against both - so the branch keys on content-type, and
        everything below the branch returns the same shape either way. */
     if (resp.ok && onDelta && String(resp.headers.get("content-type") || "").includes("text/event-stream")) {
-      let content = "", usage = {}, gotModel = "", buf = "";
+      let content = "", usage = {}, gotModel = "", buf = "", completed = false, streamError = "";
       const toolCalls = [];
       const handle = (payload) => {
-        if (payload === "[DONE]") return;
-        let d; try { d = JSON.parse(payload); } catch { return; }
+        if (payload === "[DONE]") { completed = true; return; }
+        if (!payload) return;
+        let d; try { d = JSON.parse(payload); } catch { streamError = "The response contained an unreadable stream frame."; return; }
+        if (d.error) { streamError = String(d.error.message || d.error); return; }
         // The gateway's non-stream reply is its own shape ({content, tool_calls}),
         // so accept its delta both ways: OpenAI-style choices[0].delta, or the
         // same flat shape sliced thin. One handler, both dialects.
@@ -743,16 +745,23 @@ async function gatewayChat(messages, tools, _retried, signal, model, onDelta) {
       };
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-          if (line.startsWith("data:")) handle(line.slice(5).trim());
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) { buf += dec.decode(); const line = buf.trim(); if (line.startsWith("data:")) handle(line.slice(5).trim()); break; }
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+            if (line.startsWith("data:")) handle(line.slice(5).trim());
+          }
         }
-      }
+      } catch (error) {
+        return { error: error && error.name === "AbortError" ? "stopped" : "The response connection was interrupted. Try again.",
+          aborted: error && error.name === "AbortError", content, streamed: content.length,
+          model: gotModel || useModel, reportedModel: gotModel, usage };
+      } finally { reader.releaseLock(); }
+      if (streamError || !completed) return { error: streamError || "The response ended before completion. Try again.", content, streamed: content.length, model: gotModel || useModel, reportedModel: gotModel, usage };
       return { content, tool_calls: toolCalls.filter(Boolean), model: gotModel || useModel, reportedModel: gotModel,
                usage, elapsedMs: Date.now() - t0, streamed: content.length };
     }
