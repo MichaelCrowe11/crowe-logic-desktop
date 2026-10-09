@@ -361,6 +361,7 @@ const tests = [
     name: "a run the bridge rejects is said in the transcript and the caption, and the composer recovers",
     body: `const agent = window.crowe.agent; const origRun = agent.run; const origAuth = refreshAuth;
       const msgs0 = document.querySelectorAll(".msg").length; const mem0 = messages.length;
+      const priorHistory = JSON.stringify(messages); const requestedModel = sessionMeta.model || "";
       try { agent.run = async () => { throw new Error("bridge down (harness)"); }; } catch (e) {}
       if (agent.run === origRun) throw new Error("agent.run could not be stubbed");
       refreshAuth = async () => true;
@@ -373,11 +374,15 @@ const tests = [
       const out = { bubbles: added.length, saidInTranscript: errText.includes("bridge down (harness)"),
         caption: st.textContent, captionState: st.dataset.state, running, busy: document.querySelector(".composer-frame").getAttribute("aria-busy"),
         sendBack: !$("send").classList.contains("hidden"), stopGone: $("stop").classList.contains("hidden"),
-        memoryKept: messages.length === mem0 + 1 };
+        memoryKept: JSON.stringify(messages.slice(0, mem0)) === priorHistory,
+        userTurnKept: messages[mem0]?.role === "user" && messages[mem0]?.content === "harness: bridge failure",
+        failedTurnReceipt: messages.length === mem0 + 2 && messages[mem0 + 1]?.role === "assistant"
+          && messages[mem0 + 1]?.content === "" && messages[mem0 + 1]?.engine?.requestedModel === requestedModel
+          && !!messages[mem0 + 1]?.engine?.requestId && messages[mem0 + 1]?.engine?.responses?.length === 0 };
       added.forEach((m) => m.remove()); messages.length = mem0; setComposerStatus("Ready");
       return out;`,
     expect: { bubbles: 2, saidInTranscript: true, caption: "Failed", captionState: "error", running: false, busy: "false",
-      sendBack: true, stopGone: true, memoryKept: true },
+      sendBack: true, stopGone: true, memoryKept: true, userTurnKept: true, failedTurnReceipt: true },
   },
   {
     // Stop replaces Send in place: same box, same corners, same row as the
