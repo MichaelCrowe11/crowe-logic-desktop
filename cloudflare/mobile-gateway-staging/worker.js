@@ -13,8 +13,18 @@ const CATALOG = [
   { model: "crowelm-grower", label: "CroweLM Grower", role: "cultivation", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" },
   { model: "crowelm-coder", label: "CroweLM Coder", role: "coding", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" },
   { model: "gpt-6-sol", label: "GPT-6 Sol", role: "reasoning", featured: true, available: true, gateway_tool_calling: true, min_plan: "pro" },
-  { model: "crowelm-kb", label: "CroweLM Knowledge", role: "long-context", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" },
-  { model: "crowelm-vision", label: "CroweLM Vision", role: "vision", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" }
+  { model: "crowelm-kb", label: "CroweLM KB", role: "long-context", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "crowelm-vision", label: "CroweLM Vision", role: "vision", featured: true, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "crowelm-apex", label: "CroweLM Apex", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "crowelm-titan", label: "CroweLM Titan", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "crowelm-reason", label: "CroweLM Reason", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "crowelm-kernel", label: "CroweLM Kernel", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "free" },
+  { model: "gpt-6-luna", label: "GPT-6 Luna", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" },
+  { model: "gpt-6-astra", label: "GPT-6 Astra", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" },
+  { model: "glm-5.3-flash", label: "GLM 5.3 Flash", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" },
+  { model: "glm-5.3", label: "GLM 5.3", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" },
+  { model: "deepseek-v4-pro", label: "DeepSeek V4 Pro", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" },
+  { model: "kimi-k2.7-code", label: "Kimi K2.7 Code", role: "frontier", featured: false, available: true, gateway_tool_calling: true, min_plan: "pro" }
 ];
 
 function json(body, status = 200, extra = {}) {
