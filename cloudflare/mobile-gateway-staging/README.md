@@ -25,7 +25,7 @@ Cloudflare accepted and deployed the Worker, and the version metadata confirms t
 Before production cutover, validate from a network that can reach the staging URL:
 1. `GET /health` returns `ok: true`.
 2. `GET /health/upstream` reaches the model Worker and returns its health response.
-3. `GET /api/gateway/catalog` returns the six model entries and expected role/plan metadata.
+3. `GET /api/gateway/catalog` returns the 16 model entries and expected role/plan metadata.
 4. No bearer token on `POST /api/gateway/chat` returns HTTP 401.
 5. A valid Crowe ID token can complete a non-streaming chat, streaming chat, tool-call round trip, and image prompt.
 6. A token without the required tier receives the upstream plan denial; invalid/expired tokens receive HTTP 401.
