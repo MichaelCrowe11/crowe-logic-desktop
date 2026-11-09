@@ -1719,6 +1719,83 @@ function methodPaths(surface) {
     return "Crowe ID pairs, machine token stays private, prompt names the cloud computer";
   });
 
+  await check("the cloud terminal answers phone-mirror's session protocol from a WebSocket", async () => {
+    const prefs = new Map(), posts = [], sockets = [];
+    class FakeWS {
+      constructor(url) { this.url = url; this.sent = []; sockets.push(this); setTimeout(() => this.onmessage && this.onmessage({ data: '{"type":"ready"}' }), 0); }
+      send(d) { this.sent.push(typeof d === "string" ? d : Buffer.from(d).toString()); }
+      close() { this.closedByUs = true; setTimeout(() => this.onclose && this.onclose({}), 0); }
+      out(text) { this.onmessage({ data: new TextEncoder().encode(text).buffer }); }
+      drop() { this.onclose && this.onclose({}); }
+    }
+    const capacitor = { getPlatform: () => "ios", Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      CapacitorHttp: { request: async (opts) => {
+        posts.push(opts);
+        if (opts.url.endsWith("/v1/pair")) return { status: 200, data: JSON.stringify({ url: "https://computer.crowelogic.com", token: "ccm_test" }) };
+        if (opts.url.endsWith("/v1/terminal/ticket")) {
+          const b = JSON.parse(opts.data);
+          return { status: 200, data: JSON.stringify({ url: `wss://computer.crowelogic.com/v1/terminal?ticket=t-${posts.length}`, session: b.session }) };
+        }
+        return { status: 200, data: "{}" };
+      } },
+    } };
+    const bridge = loadMobileSurface(() => Promise.reject(new TypeError("offline")), capacitor);
+    const win = loadMobileSurface.lastWindow;
+    win.WebSocket = FakeWS;
+    await bridge.setConfig({ token: "a.b.c" });
+    await bridge.remote.pairCloud();
+    const tr = win.croweMirrorTransport;
+    assert(tr.cloud() === true, "transport does not report cloud mode");
+    const list0 = await tr.call("/sessions/list");
+    assert(list0.data.canOpen && list0.data.sessions.length === 0 && list0.data.host === "Crowe cloud computer", `list was ${JSON.stringify(list0)}`);
+    const opened = await tr.call("/sessions/open", { cols: 50, rows: 30, operationId: "op-12345678" });
+    assert(opened.ok && opened.data.id === "term-1" && opened.data.controller.lease === 1, `open was ${JSON.stringify(opened)}`);
+    const ticketPost = posts.find((o) => o.url.endsWith("/v1/terminal/ticket"));
+    assert(ticketPost.headers.Authorization === "Bearer ccm_test" && JSON.parse(ticketPost.data).cols === 50, "the ticket was not bought with the machine token and size");
+    const ws = sockets[0];
+    assert(ws.sent[0] === '{"type":"resize","cols":50,"rows":30}', `first frame was ${ws.sent[0]}`);
+    const p = { sessionId: "term-1", generation: opened.data.generation };
+    const first = await tr.call("/sessions/poll", { ...p, after: -1, wait: 0 });
+    assert(first.data.snapshot === "" && first.data.seq === 0, "the first poll did not start from a snapshot");
+    // A waiting poll resolves as soon as output lands.
+    const waiting = tr.call("/sessions/poll", { ...p, after: 0, wait: 4000 });
+    setTimeout(() => ws.out("root@cloud:~# "), 5);
+    const got = await waiting;
+    assert(got.data.events.length === 1 && got.data.events[0].data === "root@cloud:~# " && got.data.seq === 1, `poll got ${JSON.stringify(got.data)}`);
+    await tr.call("/sessions/input", { ...p, lease: 1, inputId: "i1", data: "ls\r" });
+    assert(ws.sent.includes("ls\r"), "input did not reach the socket as bytes");
+    await tr.call("/sessions/resize", { ...p, lease: 1, cols: 60, rows: 20 });
+    assert(ws.sent.includes('{"type":"resize","cols":60,"rows":20}'), "resize was not sent");
+    const rz = await tr.call("/sessions/poll", { ...p, after: 1, wait: 0 });
+    assert(rz.data.events[0].type === "resize" && rz.data.events[0].cols === 60, "resize did not reach the screen");
+    // Drop: the next poll reconnects with a fresh ticket and resyncs from the replay as a snapshot.
+    ws.drop();
+    const again = tr.call("/sessions/poll", { ...p, after: 2, wait: 0 });
+    await new Promise((r) => setTimeout(r, 20));
+    assert(sockets.length === 2, "no reconnect after a drop");
+    const re = await again;
+    assert(re.data.snapshot !== null, "a reconnect did not resync with a snapshot");
+    sockets[1].out("REPLAYED");
+    const after = await tr.call("/sessions/poll", { ...p, after: re.data.seq, wait: 0 });
+    assert(after.data.events.some((e) => e.data === "REPLAYED"), "output after reconnect was lost");
+    assert((await tr.call("/draft/get", { ...p, draftId: "x" })).error, "drafts should be refused in cloud mode");
+    // Three at most, then close frees a slot and ends the shell.
+    await tr.call("/sessions/open", { cols: 80, rows: 24 }); await tr.call("/sessions/open", { cols: 80, rows: 24 });
+    const fourth = await tr.call("/sessions/open", { cols: 80, rows: 24 });
+    assert(fourth.error && fourth.status === 429, "a fourth terminal opened");
+    await tr.call("/sessions/close", p);
+    assert(sockets[1].sent.some((d) => d.includes("exit\r")), "close did not end the shell");
+    const gone = await tr.call("/sessions/poll", { ...p, after: 0, wait: 0 });
+    assert(gone.status === 410, "a closed session still answered");
+    assert((await tr.call("/sessions/list")).data.sessions.length === 2, "the closed terminal is still listed");
+    return "list/open/poll/input/resize/reconnect/close, cap of three";
+  });
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");
   process.exit(failures ? 1 : 0);
 })();

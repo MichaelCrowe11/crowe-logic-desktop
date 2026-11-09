@@ -444,10 +444,168 @@
     async call(route, body = {}) {
       await ready;
       if (!/^\/(sessions\/(list|poll|open|close|control|renew|release|input|resize)|draft\/(get|save|return))$/.test(route)) return { error: "Unknown session operation." };
+      if (isCloudRemote()) return cloudTerminal.call(route, body);
       return remoteCall(route, body, "session connection");
     },
+    // phone-mirror.js reads this to drop the desktop-only parts (drafts, grants).
+    cloud: () => isCloudRemote(),
     storage: store,
   };
+
+  /* ─── The cloud terminal ───────────────────────────────────────────────────
+     The Crowe cloud computer serves a real PTY over a WebSocket
+     (wss://computer.crowelogic.com/v1/terminal, opened with a 60-second
+     single-use ticket that the machine token buys). phone-mirror.js speaks the
+     desktop companion's session protocol (list/open/poll/input/resize/close),
+     so this adapter answers that protocol here, on the phone, from the socket:
+     output becomes numbered events, a poll that is already caught up waits for
+     the next frame (no network round trip), and a reconnect, whose first frames
+     are the computer's replay of the screen, is handed over as a snapshot.
+     Frames: binary = bytes, text JSON = {type:"resize"|"ready"|"exit"|"closing"}. */
+  const cloudTerminal = (() => {
+    const NAMES = ["term-1", "term-2", "term-3"];
+    const DEVICE = "this-phone";
+    const SNAP_MAX = 256 * 1024;
+    const sessions = new Map();
+    let generations = 0;
+    const meta = (t) => ({
+      id: t.id, generation: t.generation, label: t.label, cwd: "~", cols: t.cols, rows: t.rows,
+      origin: "phone", openedBy: "this phone", mine: true, busy: false, held: false,
+      controller: { deviceId: DEVICE, name: "this phone", lease: 1 }, draft: null,
+    });
+    function wake(t) { const w = t.waiters.splice(0); for (const f of w) f(); }
+    function push(t, item) {
+      t.seq += 1; t.events.push({ seq: t.seq, ...item });
+      if (t.events.length > 2000) t.events.splice(0, t.events.length - 2000);
+      if (item.type === "data") { t.screen += item.data; if (t.screen.length > SNAP_MAX) t.screen = t.screen.slice(-SNAP_MAX); }
+      wake(t);
+    }
+    async function connect(t) {
+      if (t.ws || t.closed) return;
+      t.connecting = true;
+      try {
+        const r = await nativePost(`${CLOUD_COMPUTER}/v1/terminal/ticket`,
+          { "Content-Type": "application/json", Authorization: `Bearer ${config.remoteToken}` },
+          JSON.stringify({ session: t.id, cols: t.cols, rows: t.rows }));
+        let data = null; try { data = JSON.parse((r && r.text) || "null"); } catch { /* below */ }
+        if (!r || !r.ok || !data || !data.url) throw Object.assign(new Error((data && data.detail) || `the terminal ticket was refused (HTTP ${r ? r.status : "?"})`), { status: r && r.status });
+        if (!String(data.url).startsWith("wss://computer.crowelogic.com/")) throw new Error("the cloud computer answered with an unexpected terminal address");
+        const WS = window.WebSocket || (typeof WebSocket !== "undefined" ? WebSocket : null);
+        if (!WS) throw new Error("this webview has no WebSocket");
+        // The upgrade answers once the computer is up: a few seconds warm, up to a
+        // minute or two when a sleeping computer has to be scheduled again.
+        const ws = new WS(data.url);
+        ws.binaryType = "arraybuffer";
+        t.ws = ws; t.decoder = new TextDecoder();
+        if (t.everConnected) {
+          // A gap in the numbering makes the next poll take a snapshot: the
+          // computer replays its buffer, so the screen is rebuilt, not doubled.
+          t.seq += 1; t.events = []; t.screen = ""; t.replaying = true;
+        }
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { try { ws.close(); } catch { /* gone */ } reject(new Error("the cloud terminal did not answer")); }, 120000);
+          ws.onmessage = (e) => {
+            if (typeof e.data === "string") {
+              let m = null; try { m = JSON.parse(e.data); } catch { return; }
+              if (m && m.type === "ready") {
+                clearTimeout(timer); t.everConnected = true; t.ready = true;
+                try { ws.send(JSON.stringify({ type: "resize", cols: t.cols, rows: t.rows })); } catch { /* next resize retries */ }
+                resolve();
+              } else if (m && (m.type === "exit" || m.type === "closing")) {
+                t.note = m.reason || (m.type === "exit" ? "the shell exited" : "the terminal closed");
+                if (m.type === "exit" || /exited|no typing/.test(t.note)) t.ended = true;
+              } else if (m && m.type === "error") t.note = m.message || "terminal error";
+              return;
+            }
+            const text = t.decoder.decode(new Uint8Array(e.data), { stream: true });
+            if (text) push(t, { type: "data", data: text });
+          };
+          ws.onclose = () => {
+            clearTimeout(timer);
+            t.ws = null; t.ready = false;
+            if (t.ended) { t.closed = true; sessions.delete(t.id); }
+            wake(t);
+            reject(new Error(t.note || "the cloud terminal closed"));
+          };
+          ws.onerror = () => { /* onclose follows and reports */ };
+        });
+        t.failures = 0;
+      } finally { t.connecting = false; }
+    }
+    function current(body) {
+      const t = sessions.get(String(body.sessionId || ""));
+      if (!t || t.closed) return { gone: { error: "The terminal session ended. Open a new one.", status: 410 } };
+      if (body.generation !== undefined && body.generation !== t.generation) return { gone: { error: "Select the current session before changing it.", status: 409 } };
+      return { t };
+    }
+    async function ensure(t) {
+      if (t.ws && t.ready) return null;
+      if (t.connecting) { await new Promise((r) => setTimeout(r, 300)); return t.ws && t.ready ? null : { error: "Reconnecting to the cloud terminal.", status: 503 }; }
+      if ((t.failures || 0) >= 5) return { error: t.note || "The cloud terminal is not answering. Close it and open a new one.", status: 503 };
+      try { await connect(t); return null; } catch (e) { t.failures = (t.failures || 0) + 1; return { error: e.message, status: e.status || 503 }; }
+    }
+    async function call(route, body) {
+      if (!config.remoteToken) return { error: "No machine is paired with this phone. Settings → Remote machine." };
+      if (route.startsWith("/draft/")) return { error: "Drafts are a desktop feature; the cloud terminal has none.", status: 404 };
+      if (route === "/sessions/list") {
+        const open = [...sessions.values()].filter((t) => !t.closed);
+        return { ok: true, data: { protocol: 3, deviceId: DEVICE, host: "Crowe cloud computer", device: "this phone",
+          terminal: true, canOpen: open.length < NAMES.length, sessions: open.map(meta) } };
+      }
+      if (route === "/sessions/open") {
+        const id = NAMES.find((n) => !sessions.has(n));
+        if (!id) return { error: "Three cloud terminals are open. Close one first.", status: 429 };
+        const t = { id, generation: `g${++generations}`, label: `Cloud ${id.slice(5)}`, cols: Number(body.cols) || 80, rows: Number(body.rows) || 24,
+          seq: 0, events: [], screen: "", waiters: [], ws: null, ready: false };
+        sessions.set(id, t);
+        const failed = await ensure(t);
+        if (failed) { sessions.delete(id); return failed; }
+        return { ok: true, data: meta(t) };
+      }
+      const { t, gone } = current(body);
+      if (gone) return gone;
+      if (route === "/sessions/poll") {
+        const failed = await ensure(t);
+        if (failed) return failed;
+        const after = Number(body.after);
+        const first = t.events.length ? t.events[0].seq : t.seq + 1;
+        let snapshot = !Number.isInteger(after) || after < first - 1 || after > t.seq;
+        if (!snapshot && after === t.seq && Number(body.wait) > 0) {
+          await new Promise((r) => { const timer = setTimeout(r, Math.min(8000, Number(body.wait))); t.waiters.push(() => { clearTimeout(timer); r(); }); });
+          if (t.closed) return { error: "The terminal session ended. Open a new one.", status: 410 };
+          // A reconnect during the wait opened a gap; the client must resync.
+          snapshot = after < (t.events.length ? t.events[0].seq : t.seq + 1) - 1;
+        }
+        return { ok: true, data: { ...meta(t), seq: t.seq, snapshot: snapshot ? t.screen : null, events: snapshot ? [] : t.events.filter((e) => e.seq > after) } };
+      }
+      if (route === "/sessions/control" || route === "/sessions/renew" || route === "/sessions/release") return { ok: true, data: meta(t) };
+      if (route === "/sessions/input") {
+        const failed = await ensure(t);
+        if (failed) return failed;
+        try { t.ws.send(new TextEncoder().encode(String(body.data ?? ""))); } catch { return { error: "The cloud terminal dropped. Reconnecting.", status: 503 }; }
+        return { ok: true, data: meta(t) };
+      }
+      if (route === "/sessions/resize") {
+        const cols = Math.max(20, Math.min(300, Math.floor(Number(body.cols) || 0)));
+        const rows = Math.max(5, Math.min(120, Math.floor(Number(body.rows) || 0)));
+        if (!cols || !rows) return { error: "bad size", status: 400 };
+        t.cols = cols; t.rows = rows;
+        if (t.ws && t.ready) { try { t.ws.send(JSON.stringify({ type: "resize", cols, rows })); } catch { /* sent again after reconnect */ } }
+        push(t, { type: "resize", cols, rows });
+        return { ok: true, data: meta(t) };
+      }
+      if (route === "/sessions/close") {
+        t.closed = true; t.ended = true; sessions.delete(t.id);
+        // Stop what is running and leave the shell, so closing really ends it.
+        try { if (t.ws && t.ready) t.ws.send(new TextEncoder().encode("\u0003exit\r")); } catch { /* closing anyway */ }
+        const ws = t.ws; setTimeout(() => { try { ws && ws.close(); } catch { /* gone */ } }, 300);
+        wake(t);
+        return { ok: true, data: { ok: true } };
+      }
+      return { error: "Unknown session operation.", status: 404 };
+    }
+    return { call, _sessions: sessions };
+  })();
 
   /* Pairing by link, which is how a person who is not the author of this app
      will ever do it. Typing a tailnet address and a 48-character token on a

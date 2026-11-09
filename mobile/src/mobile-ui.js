@@ -273,6 +273,7 @@
     // the ready config instead of capturing the not-yet-synced CSS class.
     const cfg = await window.crowe.getConfig().catch(() => null);
     const paired = Boolean(cfg?.remote?.configured);
+    const cloudPaired = paired && Boolean(cfg?.remote?.cloud);
     const sessions = window.crowe?.sessions?.list ? await window.crowe.sessions.list().catch(() => []) : [];
     const hour = new Date().getHours();
     const greeting = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -291,9 +292,9 @@
       '</section>',
       '<section class="m-h-group" id="m-gates" aria-label="Authority gates" aria-live="polite"></section>',
       `<section class="m-h-group" aria-label="Your computer"><h2 class="m-h-label">Your computer</h2><div class="m-h-card">`,
-      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${paired ? "Paired" : "Not paired"}</b><span>${paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
+      `<div class="m-h-status"><i class="m-h-dot${paired ? " on" : ""}" aria-hidden="true"></i><div><b>${cloudPaired ? "Crowe cloud computer" : paired ? "Paired" : "Not paired"}</b><span>${cloudPaired ? "Your private Linux machine. It wakes when you use it; files in ~/persist are kept." : paired ? "Reachable while it is awake and on your private Tailscale network." : "Chat works without it. Pair to read files and run commands on your own computer. It has to be awake and on your private Tailscale network."}</span></div></div>`,
       paired ? homeMode() : '',
-      paired ? '<button type="button" class="primary m-h-cta" id="m-home-mirror">Shared terminal and drafts</button>' : '',
+      paired ? `<button type="button" class="primary m-h-cta" id="m-home-mirror">${cloudPaired ? "Cloud terminal" : "Shared terminal and drafts"}</button>` : '',
       `<button type="button" class="${paired ? "ghost" : "primary"} m-h-cta" id="m-home-pair">${paired ? "Connection settings" : "Pair computer"}</button>`,
       '<details class="m-h-more"><summary>How pairing works</summary><p>Turn on Phone companion in Crowe Logic on your computer. Both devices need the same private Tailscale network, and the computer has to be awake. Open Shared terminal to watch a desktop session, take control, or edit its Control+G draft. The desktop app must stay running. Drafts return to the prompt for you to submit. File tools and commands have activity receipts; terminal keystrokes and draft contents are not logged.</p></details>',
       '</div></section>',
@@ -308,7 +309,7 @@
         if (typeof addPanel !== "function") return;
         const existing = document.querySelector('.phone-mirror')?.closest('.workspace-panel');
         if (existing && typeof focusPanel === "function") focusPanel(existing.dataset.id);
-        else await addPanel("terminal", { title: "Shared terminal" });
+        else await addPanel("terminal", { title: cloudPaired ? "Cloud terminal" : "Shared terminal" });
       }, 0);
     });
     $("m-home-chat").addEventListener("click", () => { __tapTab("Chat"); const i = $("input"); if (i) i.focus(); });
