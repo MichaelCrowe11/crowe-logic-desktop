@@ -49,7 +49,7 @@ export default {
     if (request.method !== "POST") return json({ detail: "method not allowed" }, 405);
 
     const authorization = request.headers.get("authorization") || "";
-    if (!/^Bearer\s+\\S+/i.test(authorization)) {
+    if (!/^Bearer\s+\S+/i.test(authorization)) {
       return json({ detail: "Crowe ID sign-in is required." }, 401);
     }
 
