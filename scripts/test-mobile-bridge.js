@@ -160,7 +160,9 @@ function methodPaths(surface) {
     // desktop to grow here either — it already has the engine this is standing
     // in for.
     const ALLOWED_EXTRA = ["remote.status", "remote.pair", "remote.run", "remote.activity", "mobile.openExternal", "auth.deleteAccount",
-      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note", "gates.list", "gates.decide"];
+      "intents.take", "reminders.list", "reminders.add", "reminders.pending", "reminders.remove", "camera.list", "camera.add", "diag.list", "diag.clear", "diag.note", "gates.list", "gates.decide",
+      // The Crowe cloud computer is the phone's other machine: paired with the Crowe ID, not a scanned code.
+      "remote.pairCloud", "remote.unpairCloud"];
     const extra = methodPaths(mobile).filter((p) => !methodPaths(desktop).includes(p) && !ALLOWED_EXTRA.includes(p));
     assert(!extra.length, `undeclared mobile-only methods: ${extra.join(", ")}`);
   });
@@ -1590,6 +1592,131 @@ function methodPaths(surface) {
     assert(/window\.croweKeyboard\?\.captureSpeech/.test(ui) && /begin\(Speech, "composer"/.test(ui), "the composer must use the shared speech permission lifecycle");
     assert(/perm\.speechRecognition !== "granted"/.test(keyboard), "shared dictation must stop on denied permission");
     return "iOS guarded";
+  });
+
+  await check("compose_message shows the exact draft and only opens the phone's composer", async () => {
+    const draft = "Running 10 min late, start without me.";
+    const bridge = loadMobileSurface(fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "compose_message", arguments: JSON.stringify({ channel: "text", to: ["+1 (602) 555-0100"], body: draft }) } }] } }],
+      [{ delta: { content: "It is ready in Messages for you to send." } }],
+    ]));
+    const win = loadMobileSurface.lastWindow;
+    win.location = {};
+    const asked = [];
+    win.__croweApprove = async (spec) => { asked.push(spec); return true; };
+    await bridge.setConfig({ token: "a.b.c", autonomy: "edit" });
+    const seen = [];
+    const off = await bridge.agent.onEvent((ev) => seen.push(ev));
+    await bridge.agent.run([{ role: "user", content: "text Sam I am late" }]);
+    off();
+    assert(asked.length === 1 && asked[0].kind === "message", `the draft was not put to the user: ${JSON.stringify(asked)}`);
+    assert(asked[0].detail.includes(draft) && asked[0].detail.includes("+16025550100"), "the confirm did not show the exact text and recipient");
+    assert(win.location.href === `sms:+16025550100?body=${encodeURIComponent(draft)}`, `opened ${win.location.href}`);
+    const tr = seen.find((e) => e.type === "tool_result");
+    assert(tr && /has not been sent/.test(String(tr.result)), `the model was told ${JSON.stringify(tr && tr.result)}`);
+
+    // Declined: nothing opens, and the model hears it was refused.
+    const bridge2 = loadMobileSurface(fakeGateway([
+      [{ delta: { tool_calls: [{ index: 0, id: "c2", function: { name: "compose_message", arguments: JSON.stringify({ channel: "email", to: ["sam@example.com"], subject: "Late", body: draft }) } }] } }],
+      [{ delta: { content: "Okay, not sent." } }],
+    ]));
+    const win2 = loadMobileSurface.lastWindow;
+    win2.location = {};
+    win2.__croweApprove = async () => false;
+    await bridge2.setConfig({ token: "a.b.c", autonomy: "edit" });
+    const seen2 = [];
+    const off2 = await bridge2.agent.onEvent((ev) => seen2.push(ev));
+    await bridge2.agent.run([{ role: "user", content: "email Sam" }]);
+    off2();
+    assert(!win2.location.href, "a declined draft still opened Mail");
+    const tr2 = seen2.find((e) => e.type === "tool_result");
+    assert(tr2 && /refused/.test(String(tr2.result)), "a declined draft was not reported as refused");
+    return "confirm shows the exact text; composer opens only after yes; never claims sent";
+  });
+
+  await check("compose targets: iOS and Android sms forms, mailto, and bad recipients refused", () => {
+    loadMobileSurface();
+    const t = loadMobileSurface.lastWindow.__croweComposeTarget;
+    assert(typeof t === "function", "composeTarget seam missing");
+    assert(t({ channel: "text", to: ["+1 602 555 0100"], body: "hi there" }, "ios").url === "sms:+16025550100&body=hi%20there", "iOS single sms form");
+    assert(t({ channel: "text", to: ["6025550100", "6025550101"], body: "x" }, "ios").url === "sms:/open?addresses=6025550100,6025550101&body=x", "iOS multi sms form");
+    assert(t({ channel: "text", to: [], body: "x" }, "android").url === "sms:?body=x", "Android sms without recipient");
+    const m = t({ channel: "email", to: ["a@b.co"], subject: "Hi & bye", body: "line1\nline2" }, "ios");
+    assert(m.url === "mailto:a%40b.co?subject=Hi%20%26%20bye&body=line1%0Aline2", `mailto was ${m.url}`);
+    assert(t({ channel: "text", to: ["sam@example.com"], body: "x" }, "ios").error, "an email address passed as a phone number");
+    assert(t({ channel: "email", to: ["not an address"], body: "x" }, "ios").error, "a bad email address passed");
+    assert(t({ channel: "fax", body: "x" }, "ios").error && t({ channel: "text", body: "  " }, "ios").error, "bad channel or empty body passed");
+    return "url forms match the confirmed text";
+  });
+
+  await check("compose_message is offered above Plan only", async () => {
+    const names = async (autonomy) => {
+      const bodies = [];
+      const bridge = loadMobileSurface(async (url, init = {}) => {
+        if (!String(url).includes("/api/gateway/chat")) return new Response("{}", { status: 200 });
+        bodies.push(JSON.parse(init.body || "{}"));
+        return new Response('data: {"delta":{"content":"ok"}}\ndata: [DONE]\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+      });
+      await bridge.setConfig({ token: "a.b.c", autonomy });
+      await bridge.agent.run([{ role: "user", content: "hi" }]);
+      return (bodies[0].tools || []).map((x) => x.function && x.function.name);
+    };
+    assert(!(await names("plan")).includes("compose_message"), "Plan was offered compose_message");
+    assert((await names("readonly")).includes("compose_message"), "Read was not offered compose_message");
+    return "plan: no; read and up: yes";
+  });
+
+  await check("the Crowe cloud computer pairs with the Crowe ID and the prompt says what it is", async () => {
+    const prefs = new Map();
+    const seen = [];
+    const capacitor = { getPlatform: () => "ios", Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs.has(key) ? prefs.get(key) : null }),
+        set: async ({ key, value }) => { prefs.set(key, value); },
+        remove: async ({ key }) => { prefs.delete(key); },
+      },
+      CapacitorHttp: { request: async (opts) => {
+        seen.push(opts);
+        if (opts.url === "https://computer.crowelogic.com/v1/pair" && opts.method === "POST") {
+          return { status: 200, data: JSON.stringify({ url: "https://computer.crowelogic.com", token: "ccm_test", deeplink: "x" }) };
+        }
+        if (opts.url === "https://computer.crowelogic.com/health") return { status: 200, data: '{"status":"ok"}' };
+        if (String(opts.url).includes("/api/gateway/chat")) return { status: 200, data: 'data: {"choices":[{"delta":{"content":"ok"}}]}\ndata: [DONE]\n' };
+        return { status: 200, data: "{}" };
+      } },
+    } };
+    const bridge = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), capacitor);
+    await bridge.setConfig({ token: "a.b.c", autonomy: "execute" });
+    const r = await bridge.remote.pairCloud();
+    assert(r.ok && r.reachable && r.host === "https://computer.crowelogic.com", `pairCloud answered ${JSON.stringify(r)}`);
+    const pair = seen.find((o) => o.url.endsWith("/v1/pair"));
+    assert(pair.headers.Authorization === "Bearer a.b.c", "pairing did not carry the Crowe ID token");
+    const health = seen.find((o) => o.url.endsWith("/health"));
+    assert(health.headers.Authorization === "Bearer ccm_test", "the machine token was not used against the computer");
+    const cfg = await bridge.getConfig();
+    assert(cfg.remote.cloud === true && !JSON.stringify(cfg).includes("ccm_test"), "config leaked the machine token or missed the cloud flag");
+    await bridge.agent.run([{ role: "user", content: "what can you run?" }]);
+    const chat = seen.filter((o) => String(o.url).includes("/api/gateway/chat")).pop();
+    const sys = (chat.data.messages || []).filter((m) => m.role === "system").map((m) => m.content).join("\n");
+    assert(/Crowe cloud computer/.test(sys) && /~\/persist/.test(sys) && !/Tailscale/.test(sys), "the prompt still describes a desktop over Tailscale");
+    const tools = (chat.data.tools || []).map((t) => t.function.name);
+    assert(tools.includes("run_command") && tools.includes("write_file"), `cloud tools missing: ${tools}`);
+
+    // 402 from the plan gate becomes a readable upgrade note, and nothing is saved.
+    const prefs2 = new Map();
+    const bridge2 = loadMobileSurface(() => Promise.reject(new TypeError("Failed to fetch")), { getPlatform: () => "ios", Plugins: {
+      Preferences: {
+        get: async ({ key }) => ({ value: prefs2.has(key) ? prefs2.get(key) : null }),
+        set: async ({ key, value }) => { prefs2.set(key, value); },
+        remove: async ({ key }) => { prefs2.delete(key); },
+      },
+      CapacitorHttp: { request: async () => ({ status: 402, data: JSON.stringify({ detail: "The cloud computer needs the pro plan or higher." }) }) },
+    } });
+    await bridge2.setConfig({ token: "a.b.c" });
+    const r2 = await bridge2.remote.pairCloud();
+    assert(r2.upgrade && /pro plan/.test(r2.error), `402 answered ${JSON.stringify(r2)}`);
+    assert(!(await bridge2.getConfig()).remote.configured, "a refused pairing was saved");
+    return "Crowe ID pairs, machine token stays private, prompt names the cloud computer";
   });
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall mobile bridge checks passed");

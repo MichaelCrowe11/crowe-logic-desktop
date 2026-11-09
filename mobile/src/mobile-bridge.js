@@ -162,7 +162,7 @@
       version: BUILD.version, platform: PLATFORM, mobile: true,
       // The paired machine, never its token. publicConfig is what the renderer
       // reads and what a panel could print; the credential stays in the bridge.
-      remote: { configured: remoteConfigured(), host: remoteBase() },
+      remote: { configured: remoteConfigured(), host: remoteBase(), cloud: isCloudRemote() },
     };
   }
 
@@ -216,6 +216,13 @@
      the token endpoint taught us about. */
   const remoteBase = () => String(config.remoteUrl || "").replace(/\/$/, "");
   const remoteConfigured = () => Boolean(remoteBase());
+  /* The Crowe cloud computer: a private Linux sandbox per Crowe ID, at the root
+     of its own host because pairAddress() keeps only the origin. It answers the
+     same /health, /run, /read_file, /write_file and /audit as the desktop
+     companion, so every tool below works against it unchanged. It is paired
+     with the user's own Crowe ID (POST /v1/pair), never with a pasted secret. */
+  const CLOUD_COMPUTER = "https://computer.crowelogic.com";
+  const isCloudRemote = () => remoteBase() === CLOUD_COMPUTER;
 
   // ─── Files the user hands the phone ────────────────────────────────────────
   /* iOS and Android do not give an app the filesystem; they give it a document
@@ -390,7 +397,10 @@
     }
     return window.confirm([spec.title, spec.reason, spec.detail, spec.question].filter(Boolean).join("\n\n"));
   }
-  const machineName = () => { try { return new URL(remoteBase()).hostname.split(".")[0]; } catch { return "your computer"; } };
+  const machineName = () => {
+    if (isCloudRemote()) return "your Crowe cloud computer";
+    try { return new URL(remoteBase()).hostname.split(".")[0]; } catch { return "your computer"; }
+  };
 
   function persistenceRisk(text) {
     const s = String(text || "");
@@ -415,6 +425,7 @@
          is worth saying: the machine is only reachable while it is awake and on
          the tailnet, which is the honest limit of the whole feature. Naming it
          beats a stack trace the user cannot act on. */
+      if (base === CLOUD_COMPUTER) return { error: "The Crowe cloud computer did not answer. Check the connection and try again; it wakes on the next request.", offline: true };
       return { error: `${base} did not answer. The machine may be asleep, quit, or off the tailnet.`, offline: true };
     }
     if (!r) return { error: "the remote call needs the installed app" };
@@ -1245,7 +1256,7 @@
     type: "function",
     function: {
       name: "run_command",
-      description: "Run a shell command on the paired desktop machine and return its exit code, stdout and stderr. This is a real shell on a real machine, so prefer reading over writing, and say what you are about to run.",
+      description: "Run a shell command on the paired machine (the user's desktop, or their Crowe cloud computer) and return its exit code, stdout and stderr. This is a real shell on a real machine, so prefer reading over writing, and say what you are about to run.",
       parameters: {
         type: "object",
         properties: {
@@ -1261,7 +1272,7 @@
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a text file from the paired desktop machine, or a file the user attached from this phone (path phone:<name>).",
+      description: "Read a text file from the paired machine, or a file the user attached from this phone (path phone:<name>).",
       parameters: {
         type: "object",
         properties: {
@@ -1276,7 +1287,7 @@
     type: "function",
     function: {
       name: "write_file",
-      description: "Write a text file, replacing it entirely: on the paired desktop machine, or the app's copy of a phone attachment (path phone:<name>). Read it first unless you are creating it.",
+      description: "Write a text file, replacing it entirely: on the paired machine, or the app's copy of a phone attachment (path phone:<name>). Read it first unless you are creating it.",
       parameters: {
         type: "object",
         properties: {
@@ -1288,11 +1299,68 @@
     },
   };
 
+  /* Messages leave through the phone's own Messages and Mail apps, never from
+     a server. The model drafts; the user sees the exact recipients and text in
+     a confirm, and then the system compose sheet, where nothing goes out until
+     they tap Send themselves. Two human steps, no third-party account, and no
+     way for a reply to be sent in the user's name behind their back. */
+  const COMPOSE_MESSAGE = {
+    type: "function",
+    function: {
+      name: "compose_message",
+      description: "Draft a text message (SMS or iMessage) or an email and open it in the phone's Messages or Mail app for the user to review and send. Nothing is sent by this tool: the user confirms the exact text, then taps Send themselves. Use it only when the user asked to message someone, and include the full text you propose.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel: { type: "string", enum: ["text", "email"], description: "text opens Messages (SMS or iMessage); email opens Mail." },
+          to: { type: "array", items: { type: "string" }, description: "Phone numbers (for text) or email addresses (for email). May be empty if the user will pick the recipient." },
+          subject: { type: "string", description: "Email subject. Ignored for text." },
+          body: { type: "string", description: "The exact message text." },
+        },
+        required: ["channel", "body"],
+      },
+    },
+  };
+  const MESSAGE_BODY_MAX = 4000;
+  /* Pure: what the user will be shown, and the URL the OS composer opens. The
+     URL carries exactly the text in `preview`, so what was confirmed is what
+     lands in the sheet. Exposed for scripts/test-mobile-shell.js. */
+  function composeTarget(args, platform) {
+    const channel = String(args && args.channel || "").toLowerCase() === "email" ? "email" : (String(args && args.channel || "").toLowerCase() === "text" ? "text" : "");
+    if (!channel) return { error: "channel must be text or email" };
+    const body = String(args.body ?? "");
+    if (!body.trim()) return { error: "the message is empty" };
+    if (body.length > MESSAGE_BODY_MAX) return { error: `the message is over ${MESSAGE_BODY_MAX} characters` };
+    const to = (Array.isArray(args.to) ? args.to : (args.to ? [args.to] : [])).map((x) => String(x).trim()).filter(Boolean).slice(0, 10);
+    if (channel === "text") {
+      const bad = to.find((n) => !/^\+?[0-9 ().-]{3,20}$/.test(n));
+      if (bad) return { error: `${bad} is not a phone number. Ask the user for the number` };
+      const nums = to.map((n) => n.replace(/[^0-9+]/g, ""));
+      const q = `body=${encodeURIComponent(body)}`;
+      // iOS reads sms:<numbers>&body=, Android sms:<numbers>?body=; iOS takes
+      // several recipients only through /open?addresses=.
+      const url = platform === "ios"
+        ? (nums.length > 1 ? `sms:/open?addresses=${nums.join(",")}&${q}` : `sms:${nums[0] || ""}&${q}`)
+        : `sms:${nums.join(",")}?${q}`;
+      return { channel, to: nums, body, url, preview: `To: ${nums.join(", ") || "(you choose in Messages)"}\n\n${body}` };
+    }
+    const bad = to.find((e) => !/^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(e));
+    if (bad) return { error: `${bad} is not an email address` };
+    const subject = String(args.subject ?? "").slice(0, 300);
+    const parts = [];
+    if (subject) parts.push(`subject=${encodeURIComponent(subject)}`);
+    parts.push(`body=${encodeURIComponent(body)}`);
+    const url = `mailto:${to.map(encodeURIComponent).join(",")}?${parts.join("&")}`;
+    return { channel, to, subject, body, url, preview: `To: ${to.join(", ") || "(you choose in Mail)"}${subject ? `\nSubject: ${subject}` : ""}\n\n${body}` };
+  }
+  window.__croweComposeTarget = composeTarget;
+
   // The tier the user picked in the composer decides whether the model may
   // write. Plan and Read look at the log; Edit and Execute may add to it.
   const mayWrite = () => config.autonomy === "edit" || config.autonomy === "execute";
   function toolsForTurn() {
     const tools = [OPEN_URL];
+    if (config.autonomy !== "plan") tools.push(COMPOSE_MESSAGE);
 
     /* The tier ladder means the same thing here as it does on the desktop, and
        it is the whole safety story for a shell you are carrying in a pocket:
@@ -1375,6 +1443,21 @@
       if (Browser) await Browser.open({ url }).catch(() => {});
       else window.open(url, "_blank", "noopener");
       return { text: `opened ${url}`, status: "ok" };
+    }
+
+    if (name === "compose_message") {
+      if (config.autonomy === "plan") return { text: "refused: drafting messages needs a tier above Plan", status: "error" };
+      const t = composeTarget(args || {}, PLATFORM);
+      if (t.error) return { text: `refused: ${t.error}`, status: "error" };
+      const app = t.channel === "text" ? "Messages" : "Mail";
+      const ok = await approve({
+        kind: "message", title: t.channel === "text" ? "Open this text in Messages?" : "Open this email in Mail?",
+        reason: `Check the recipients and every word. ${app} opens with exactly this, and nothing is sent until you tap Send there.`,
+        detail: t.preview.slice(0, 4400), confirm: `Open in ${app}`,
+      });
+      if (!ok) return { text: "refused: the user declined the draft. Ask what to change", status: "error" };
+      try { window.location.href = t.url; } catch { return { text: `refused: this device could not open ${app}`, status: "error" }; }
+      return { text: `opened ${app} with the draft for the user to review and send. It has not been sent; do not say it was`, status: "ok" };
     }
 
     /* The machine tools. Each re-checks the tier rather than trusting that it
@@ -1469,8 +1552,16 @@
        answered "I cannot run anything on your computer" while holding a working
        run_command. A prompt that contradicts the tool list wins, every time. */
     const machine = remoteConfigured() ? [
-      `This phone is paired with a machine at ${remoteBase()}, reached privately over Tailscale. It is the`,
-      "user's own desktop, and it is a real one: the same files and the same shell they would sit down to.",
+      ...(isCloudRemote() ? [
+        "This phone is paired with the user's Crowe cloud computer: a private Linux machine (Debian, with",
+        "bash, python3, node, git and curl, internet access, 1 GB RAM) that belongs to this Crowe ID alone.",
+        "It is not their desktop and cannot see their own computer's files. Home is /home/user; anything",
+        "saved under ~/persist is kept, everything else resets after about ten idle minutes, so put work",
+        "the user wants to keep in ~/persist. Commands stop after 600 seconds.",
+      ] : [
+        `This phone is paired with a machine at ${remoteBase()}, reached privately over Tailscale. It is the`,
+        "user's own desktop, and it is a real one: the same files and the same shell they would sit down to.",
+      ]),
       config.autonomy === "plan"
         ? "The tier is Plan, so you may not touch that machine at all this turn. Say so if asked, and plan instead."
         : [
@@ -2351,6 +2442,40 @@
         await saveConfig(patch);
         announceRemote();
         return { ok: true, ...(await remoteStatus()) };
+      },
+      /* The Crowe cloud computer, paired with the signed-in Crowe ID. The
+         computer mints a machine token for this phone (kept like any other
+         pairing token, never shown) and checks the plan; nothing is typed. */
+      pairCloud: async () => {
+        await ready;
+        if (!config.token) return { error: 'Sign in with Crowe ID first.' };
+        const call = () => nativePost(`${CLOUD_COMPUTER}/v1/pair`, { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
+          JSON.stringify({ label: PLATFORM === "android" ? "android" : "iphone" }));
+        let r;
+        try {
+          r = await call();
+          if (r && r.status === 401 && await refreshToken()) r = await call();
+        } catch { return { error: "The Crowe cloud computer did not answer. Try again in a moment." }; }
+        if (!r) return { error: "the cloud computer needs the installed app" };
+        let data = null;
+        try { data = JSON.parse(r.text || "null"); } catch { /* reported below */ }
+        if (r.status === 402) return { error: (data && data.detail) || "The cloud computer needs a Pro plan or higher.", upgrade: true };
+        if (!r.ok || !data || !data.token) return { error: (data && data.detail) || `pairing failed (HTTP ${r.status})` };
+        const where = pairAddress(data.url || CLOUD_COMPUTER);
+        if (where.error || where.url !== CLOUD_COMPUTER) return { error: "the cloud computer answered with an unexpected address" };
+        await saveConfig({ remoteUrl: CLOUD_COMPUTER, remoteToken: String(data.token) });
+        announceRemote();
+        return { ok: true, cloud: true, ...(await remoteStatus()) };
+      },
+      unpairCloud: async () => {
+        await ready;
+        if (config.token) {
+          try {
+            await CapHttp.request({ url: `${CLOUD_COMPUTER}/v1/pair`, method: "DELETE", headers: { Authorization: `Bearer ${config.token}` }, responseType: "text", connectTimeout: 8000, readTimeout: 8000 });
+          } catch { /* still forget it locally below */ }
+        }
+        if (isCloudRemote()) { await saveConfig({ remoteUrl: "", remoteToken: "" }); announceRemote(); }
+        return { ok: true };
       },
       // This phone's receipts from the paired machine: what it ran, read,
       // wrote, and was refused. Read-only, and the machine filters to this

@@ -1027,7 +1027,7 @@
   remoteSection.className = "key-manager";
   remoteSection.innerHTML = [
     '<div class="settings-section-head"><div><b>Remote machine</b>',
-    "<span>A machine this phone may drive. On your desktop, open Crowe Logic → Settings → Phone companion and scan the code, or enter its tailnet address by hand. ",
+    "<span>A machine this phone may drive. Use your Crowe cloud computer (a private Linux machine for your Crowe ID, Pro plan and up), or on your desktop open Crowe Logic → Settings → Phone companion and scan the code, or enter its tailnet address by hand. ",
     "Traffic stays inside your own Tailscale network, and the tier in the composer still decides: Read reads files, Edit writes them, Execute runs commands.</span></div>",
     '<span id="m-remote-state" class="badge">Not paired</span></div>',
     // The example is a MagicDNS name on the companion's port, deliberately:
@@ -1042,6 +1042,8 @@
     '<label>Address <input id="m-remote-url" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://mac.tail1234.ts.net:8787" /></label>',
     '<label>Token <input id="m-remote-token" type="password" placeholder="paste to update; blank keeps current" /></label>',
     '<button id="m-remote-pair" class="ghost sm" type="button">Pair and test</button>',
+    '<button id="m-cloud-pair" class="ghost sm" type="button">Use Crowe cloud computer</button>',
+    '<button id="m-cloud-unpair" class="ghost sm" type="button" hidden>Disconnect cloud computer</button>',
   ].join("");
   const tokenRow = $("cfg-token") && $("cfg-token").closest("label");
   if (tokenRow && tokenRow.parentNode) tokenRow.parentNode.insertBefore(remoteSection, tokenRow.nextSibling);
@@ -1440,8 +1442,11 @@
   function paintRemote(s) {
     const badge = remoteBadge();
     if (!badge) return;
+    const cloud = Boolean(s && s.configured && s.host === "https://computer.crowelogic.com");
+    const un = document.getElementById("m-cloud-unpair");
+    if (un) un.hidden = !cloud;
     if (!s || !s.configured) { badge.textContent = "Not paired"; return; }
-    badge.textContent = s.reachable ? "Reachable" : (s.error ? "No answer" : `HTTP ${s.status}`);
+    badge.textContent = s.reachable ? (cloud ? "Cloud computer" : "Reachable") : (s.error ? "No answer" : `HTTP ${s.status}`);
   }
   // The address is safe to show; the token is not, and is never read back.
   (async () => {
@@ -1466,6 +1471,38 @@
         if (r && r.error) { if (badge) badge.textContent = r.error; return; }
         paintRemote(r);
       } finally { pairBtn.disabled = false; }
+    });
+  }
+
+  /* The Crowe cloud computer pairs with the signed-in Crowe ID: no address to
+     type and no token to paste. The address is shown once paired; the token
+     is not, same as a desktop pairing. */
+  const cloudBtn = document.getElementById("m-cloud-pair");
+  if (cloudBtn) {
+    cloudBtn.addEventListener("click", async () => {
+      const badge = remoteBadge();
+      if (badge) badge.textContent = "Setting up";
+      cloudBtn.disabled = true;
+      try {
+        const r = await window.crowe.remote.pairCloud();
+        if (r && r.error) { if (badge) badge.textContent = r.error; return; }
+        const urlEl = document.getElementById("m-remote-url");
+        if (urlEl) urlEl.value = (r && r.host) || "https://computer.crowelogic.com";
+        paintRemote(r);
+      } finally { cloudBtn.disabled = false; }
+    });
+  }
+  const cloudOff = document.getElementById("m-cloud-unpair");
+  if (cloudOff) {
+    cloudOff.addEventListener("click", async () => {
+      if (!window.confirm("Disconnect the Crowe cloud computer from this phone? Files in ~/persist stay there for when you reconnect.")) return;
+      cloudOff.disabled = true;
+      try {
+        await window.crowe.remote.unpairCloud();
+        const urlEl = document.getElementById("m-remote-url");
+        if (urlEl) urlEl.value = "";
+        paintRemote({ configured: false });
+      } finally { cloudOff.disabled = false; }
     });
   }
 
