@@ -7,7 +7,7 @@ This Worker adapts the published mobile app's existing API contract without chan
 - Worker: `crowe-mobile-gateway-staging`
 - Staging URL: `https://crowe-mobile-gateway-staging.yellow-block-3adc.workers.dev`
 - Upstream: Cloudflare service binding `MODELS_EDGE` -> `crowe-models-edge`
-- Production API route: unchanged (`api.crowelogic.com` remains on its current Worker)
+- Canary route now active: `api.crowelogic.com/api/gateway/*` -> `crowe-mobile-gateway-staging` (route ID `6acdd22fab0a47dc9b028b2dee7baaf7`). The broader `api.crowelogic.com/*` route remains on `crowe-holding-page`; all non-gateway paths are unchanged.
 
 ## App contract
 
@@ -33,4 +33,4 @@ Before production cutover, validate from a network that can reach the staging UR
 
 Voice is not restored by this adapter: the existing model Worker still returns HTTP 503 for `/v1/voice/session`.
 
-Do not move the production `api.crowelogic.com/*` route until these checks pass and rollback is prepared.
+Do not change the broader `api.crowelogic.com/*` route until these checks pass and rollback is prepared. To roll back the canary only, delete Worker route ID `6acdd22fab0a47dc9b028b2dee7baaf7`; the broad holding-page route remains in place.
