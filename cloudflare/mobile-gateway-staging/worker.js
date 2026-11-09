@@ -43,7 +43,7 @@ function normalizeCompletion(data, requestedModel) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
@@ -70,7 +70,7 @@ export default {
     if (request.method !== "POST") return json({ detail: "method not allowed" }, 405);
 
     const authorization = request.headers.get("authorization") || "";
-    if (!/^Bearer\s+\S+/i.test(authorization)) {
+    if (!/^Bearer\\s+\\S+/i.test(authorization)) {
       return json({ detail: "Crowe ID sign-in is required." }, 401);
     }
 
