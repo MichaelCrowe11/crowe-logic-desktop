@@ -75,6 +75,10 @@
     // Shells this phone opened; older desktops do not mark them in the list.
     const mineIds = new Set();
     const payload = () => ({ sessionId: selected?.id, generation: selected?.generation });
+    // The Crowe cloud computer: same screen, keyboard, resize and paste review;
+    // no desktop drafts and no per-device grant, so those parts stay out of the way.
+    const cloud = () => Boolean(transport.cloud && transport.cloud());
+    if (cloud()) for (const b of root.querySelectorAll('[data-view="draft"], [data-view="review"]')) b.hidden = true;
     const own = () => selected?.origin === "phone" && selected?.mine;
     const engine = () => selected?.origin === "engine";
     function status(text) { $("[data-status]").textContent = text; if (root.dataset.screenName === "term") { $("[data-notice-text]").textContent = text; $("[data-notice]").hidden = false; } }
@@ -277,7 +281,7 @@
     async function openShell() {
       if (opening || !canOpen) return;
       const currentEpoch = epoch;
-      opening = true; controls(); status("Opening a shell on your computer");
+      opening = true; controls(); status(cloud() ? "Opening a shell on your Crowe cloud computer" : "Opening a shell on your computer");
       try {
         const wasHosts = !selected;
         if (wasHosts) { screen("term"); view("terminal"); }
