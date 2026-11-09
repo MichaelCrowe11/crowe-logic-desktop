@@ -122,6 +122,14 @@ export default {
 
     if (!upstream.ok) {
       const message = data?.error?.message || data?.message || data?.detail || "Model request failed.";
+      if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
+        console.warn("mobile_gateway_auth_rejection", {
+          status: upstream.status,
+          reason: String(message).slice(0, 220),
+          model: String(payload.model || "").slice(0, 80),
+          bearer_present: Boolean(authorization)
+        });
+      }
       return new Response(JSON.stringify({ detail: message, error: data?.error || undefined }), { status: upstream.status, headers: { ...Object.fromEntries(headers), "content-type": "application/json; charset=utf-8" } });
     }
 
