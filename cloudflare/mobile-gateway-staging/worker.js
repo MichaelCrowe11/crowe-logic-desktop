@@ -38,7 +38,18 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
     if (url.pathname === "/health" || url.pathname === "/") {
-      return json({ ok: true, service: "crowe-mobile-gateway-staging", upstream: MODEL_EDGE, production_cutover: false });
+      return json({ ok: true, service: "crowe-mobile-gateway-staging", upstream: "crowe-models-edge", inference_checked: false, production_cutover: false });
+    }
+
+    if (url.pathname === "/health/upstream" && request.method === "GET") {
+      try {
+        const target = new Request("https://crowe-models-edge.internal/health", { method: "GET" });
+        const upstream = env.MODELS_EDGE ? await env.MODELS_EDGE.fetch(target) : await fetch(MODEL_EDGE + "/health");
+        const body = await upstream.text();
+        return new Response(body, { status: upstream.status, headers: { ...CORS, "content-type": upstream.headers.get("content-type") || "application/json" } });
+      } catch {
+        return json({ ok: false, detail: "The model Worker service binding is unavailable." }, 502);
+      }
     }
 
     if (url.pathname === "/api/gateway/catalog" && request.method === "GET") {
@@ -66,7 +77,7 @@ export default {
     const upstreamUrl = MODEL_EDGE + "/v1/chat/completions";
     let upstream;
     try {
-      upstream = await fetch(upstreamUrl, {
+      const upstreamRequest = new Request("https://crowe-models-edge.internal/v1/chat/completions", {
         method: "POST",
         headers: {
           "authorization": authorization,
@@ -76,6 +87,9 @@ export default {
         body: JSON.stringify(payload),
         redirect: "manual"
       });
+      upstream = env.MODELS_EDGE
+        ? await env.MODELS_EDGE.fetch(upstreamRequest)
+        : await fetch(upstreamUrl, upstreamRequest);
     } catch {
       return json({ detail: "The model gateway could not be reached." }, 502);
     }
