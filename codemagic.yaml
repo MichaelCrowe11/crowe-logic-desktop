@@ -1,0 +1,134 @@
+# Codemagic: iPhone app -> TestFlight (internal testers only; never App Store review).
+#
+# Apple side (done Nov 9, 2026): Apple Distribution certificate 47AYZCBQWB (expires Nov 9, 2027)
+# and App Store profiles "Crowe Logic AppStore Codemagic" (com.crowelogic.mobile) and
+# "Crowe Logic Share AppStore Codemagic" (com.crowelogic.mobile.share), both carrying the
+# App Group group.com.crowelogic.mobile. No push entitlement is used.
+#
+# Two ways to sign; both use the App Store Connect API key added in Codemagic under
+# Team settings > Team integrations > Developer Portal as `crowe_app_store_connect`.
+#
+#   ios-testflight (Code signing identities, set up once in the Codemagic UI):
+#     Team settings > codemagic.yaml settings > Code signing identities
+#       - iOS certificates: upload the Apple Distribution .p12 (47AYZCBQWB) with its password.
+#       - iOS provisioning profiles: Fetch from Developer Portal (App Store profiles) and pick
+#         both "... AppStore Codemagic" profiles. ios_signing finds them by bundle id, including
+#         com.crowelogic.mobile.* for the CroweShare extension.
+#
+#   ios-testflight-api-signing (nothing uploaded in the UI; Codemagic's REST API has no
+#   code-signing upload, but it can create variable groups):
+#     An environment variable group `ios_distribution_key` holding CERTIFICATE_PRIVATE_KEY
+#     (secure) = the PEM private key of certificate 47AYZCBQWB. The build fetches the matching
+#     certificate and both profiles from Apple with that key. It never creates or revokes
+#     anything in Apple's portal (no --create), so a missing profile fails the build instead.
+#
+# Builds are started by hand or through the Codemagic API; there are no push triggers, so
+# nothing reaches TestFlight unless someone starts a workflow on a branch.
+workflows:
+  ios-testflight:
+    name: iOS TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations: &integrations
+      app_store_connect: crowe_app_store_connect
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.crowelogic.mobile   # also fetches com.crowelogic.mobile.* (CroweShare)
+      vars: &vars
+        BUNDLE_ID: com.crowelogic.mobile
+        MARKETING_VERSION: 0.26.22
+        XCODE_PROJECT: mobile/ios/App/App.xcodeproj
+        XCODE_SCHEME: App
+      node: 22          # Capacitor 8 CLI needs Node 22+; matches the repo's CI
+      xcode: latest
+    cache: &cache
+      cache_paths:
+        - $HOME/.npm
+    scripts:
+      - &install
+        name: Install dependencies
+        script: |
+          # Root: build-www.js copies xterm from the root node_modules. --ignore-scripts skips
+          # Electron's binary download and native rebuilds, which the phone build never uses.
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix mobile ci --no-audit --no-fund
+      - &version
+        name: Set version (repo convention, build = major*10000 + minor*100 + patch)
+        script: |
+          npm --prefix mobile version "$MARKETING_VERSION" --no-git-tag-version --allow-same-version
+          node mobile/scripts/sync-version.js
+          grep -m1 -E "MARKETING_VERSION = " "$XCODE_PROJECT/project.pbxproj"
+      - &bridge
+        name: Mobile bridge checks
+        script: node scripts/test-mobile-bridge.js
+      - &web
+        name: Build web assets and sync Capacitor
+        script: |
+          cd mobile
+          node scripts/build-www.js
+          npx cap sync ios
+      - &buildnum
+        name: Build number (never below the derived one, always above TestFlight's latest)
+        script: |
+          DERIVED=$(node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);console.log(a*10000+b*100+c)' "$MARKETING_VERSION")
+          APP_ID=$(app-store-connect apps list --bundle-id-identifier "$BUNDLE_ID" --strict-match-identifier --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);console.log(a[0]?a[0].id:"")})')
+          LATEST=0
+          if [ -n "$APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_ID" --platform IOS 2>/dev/null || echo 0)
+          fi
+          LATEST=${LATEST:-0}
+          BUILD=$(( LATEST + 1 > DERIVED ? LATEST + 1 : DERIVED ))
+          echo "derived $DERIVED, latest TestFlight $LATEST, using $BUILD"
+          cd mobile/ios/App && agvtool new-version -all "$BUILD"
+      - name: Use signing profiles
+        script: xcode-project use-profiles
+      - &ipa
+        name: Build ipa
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --config Release
+    artifacts: &artifacts
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing: &publishing
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true    # internal testers only: no beta_groups, so no external review
+        submit_to_app_store: false
+
+  ios-testflight-api-signing:
+    name: iOS TestFlight (signing key from variable group)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations: *integrations
+    environment:
+      groups:
+        - ios_distribution_key   # CERTIFICATE_PRIVATE_KEY (secure)
+      vars: *vars
+      node: 22
+      xcode: latest
+    cache: *cache
+    scripts:
+      - *install
+      - *version
+      - *bridge
+      - *web
+      - *buildnum
+      - name: Fetch signing files from Apple (read-only) and use them
+        script: |
+          keychain initialize
+          # Non-strict match also picks com.crowelogic.mobile.share. No --create: this never
+          # makes new certificates or profiles in the Apple Developer portal.
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
+            --type IOS_APP_STORE \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY
+          keychain add-certificates
+          xcode-project use-profiles
+      - *ipa
+    artifacts: *artifacts
+    publishing: *publishing
