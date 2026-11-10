@@ -1,0 +1,82 @@
+# Codemagic: iPhone app -> TestFlight (internal testers only; never App Store review).
+#
+# One-time setup (Codemagic UI, by the account owner):
+#   1. Team settings > Team integrations > Developer Portal: add the App Store Connect API key
+#      under the name `crowe_app_store_connect` (the name below must match exactly).
+#   2. Team settings > codemagic.yaml settings > Code signing identities:
+#      - iOS certificates: Generate certificate, type Apple Distribution, using that key.
+#      - iOS provisioning profiles: Fetch profiles, App Store profiles for
+#        com.crowelogic.mobile AND com.crowelogic.mobile.share (the share extension).
+#        Both App IDs need the App Groups capability with group.com.crowelogic.mobile.
+#
+# Builds are started by hand or through the Codemagic API; there are no push triggers, so
+# nothing reaches TestFlight unless someone starts this workflow on a branch.
+workflows:
+  ios-testflight:
+    name: iOS TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: crowe_app_store_connect
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.crowelogic.mobile   # also fetches com.crowelogic.mobile.* (CroweShare)
+      vars:
+        BUNDLE_ID: com.crowelogic.mobile
+        MARKETING_VERSION: 0.26.22
+        XCODE_PROJECT: mobile/ios/App/App.xcodeproj
+        XCODE_SCHEME: App
+      node: 22          # Capacitor 8 CLI needs Node 22+; matches the repo's CI
+      xcode: latest
+    cache:
+      cache_paths:
+        - $HOME/.npm
+    scripts:
+      - name: Install dependencies
+        script: |
+          # Root: build-www.js copies xterm from the root node_modules. --ignore-scripts skips
+          # Electron's binary download and native rebuilds, which the phone build never uses.
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix mobile ci --no-audit --no-fund
+      - name: Set version (repo convention, build = major*10000 + minor*100 + patch)
+        script: |
+          npm --prefix mobile version "$MARKETING_VERSION" --no-git-tag-version --allow-same-version
+          node mobile/scripts/sync-version.js
+          grep -m1 -E "MARKETING_VERSION = " "$XCODE_PROJECT/project.pbxproj"
+      - name: Mobile bridge checks
+        script: node scripts/test-mobile-bridge.js
+      - name: Build web assets and sync Capacitor
+        script: |
+          cd mobile
+          node scripts/build-www.js
+          npx cap sync ios
+      - name: Build number (never below the derived one, always above TestFlight's latest)
+        script: |
+          DERIVED=$(node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);console.log(a*10000+b*100+c)' "$MARKETING_VERSION")
+          APP_ID=$(app-store-connect apps list --bundle-id-identifier "$BUNDLE_ID" --strict-match-identifier --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s);console.log(a[0]?a[0].id:"")})')
+          LATEST=0
+          if [ -n "$APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_ID" --platform IOS 2>/dev/null || echo 0)
+          fi
+          LATEST=${LATEST:-0}
+          BUILD=$(( LATEST + 1 > DERIVED ? LATEST + 1 : DERIVED ))
+          echo "derived $DERIVED, latest TestFlight $LATEST, using $BUILD"
+          cd mobile/ios/App && agvtool new-version -all "$BUILD"
+      - name: Use signing profiles
+        script: xcode-project use-profiles
+      - name: Build ipa
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --config Release
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true    # internal testers only: no beta_groups, so no external review
+        submit_to_app_store: false
